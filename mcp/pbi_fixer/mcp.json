@@ -1,0 +1,8 @@
+{
+    "pbi-fixer": {
+        "command": "python",
+        "args": ["-m", "mcp.pbi_fixer.server"],
+        "cwd": "${workspaceFolder}",
+        "env": {}
+    }
+}
