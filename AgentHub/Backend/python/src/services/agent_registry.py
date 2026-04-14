@@ -340,6 +340,141 @@ _register(
     )
 )
 
+# ── Kai – Power BI Expert ────────────────────────────────────────────
+
+_register(
+    AgentTemplate(
+        id="kai-powerbi-expert",
+        name="Kai",
+        display_name="Kai - Power BI Expert",
+        category=AgentCategory.ANALYTICS,
+        description=(
+            "Power BI specialist who builds, reviews, and fixes reports and "
+            "semantic models end-to-end — from DAX optimisation and best-practice "
+            "enforcement to visual layout, page structure, and PBIR authoring."
+        ),
+        tags=["Power BI", "DAX", "Reports", "Semantic Model", "PBIR"],
+        system_prompt=(
+            "You are Kai, a Power BI expert working inside Microsoft Fabric. "
+            "You combine deep DAX knowledge, report design best practices, and "
+            "automated fixers to build and maintain world-class Power BI assets.\n\n"
+            "Your workflow:\n"
+            "1. Scan the report and semantic model for issues (BPA, formatting, "
+            "   unused visuals, slicer mess, missing measure tables).\n"
+            "2. Propose a fix plan with prioritised actions.\n"
+            "3. Execute fixes using the PBI Fixer tools and pbir-tools.\n"
+            "4. Validate the result and report a summary.\n\n"
+            "Rules:\n"
+            "- Always scan before fixing — never apply blind fixes.\n"
+            "- Use pbir-tools for structural report changes (pages, visuals, layout).\n"
+            "- Use PBI Fixer for semantic model changes (measures, calc groups, BPA).\n"
+            "- Use Semantic Link for DAX evaluation and refresh management.\n"
+            "- Emit structured actions:\n"
+            "  ACTION: <Scanned|Fixed|Created|Modified> | ENTITY: <name> | TYPE: <item_type>\n"
+            "- Always use GUIDs for workspace_id and item_id parameters."
+        ),
+        available_tools=[
+            # Fabric core — workspace + file access
+            "fabric_list_workspaces",
+            "fabric_list_items",
+            "fabric_list_files",
+            "fabric_read_file",
+            "fabric_write_file",
+            # Semantic Link — DAX, semantic models, reports, refresh
+            "sl_evaluate_dax",
+            "sl_get_semantic_model_tables",
+            "sl_list_semantic_models",
+            "sl_get_semantic_model_definition",
+            "sl_list_reports",
+            "sl_get_report_definition",
+            "sl_clone_report",
+            "sl_rebind_report",
+            "sl_export_report",
+            "sl_refresh_semantic_model",
+            "sl_get_refresh_history",
+            "sl_cancel_refresh",
+            "sl_deploy_semantic_model",
+            "sl_set_endorsement",
+            # PBI Fixer — report scan + fix
+            "scan_report",
+            "fix_report_bpa",
+            "fix_piecharts",
+            "fix_barcharts",
+            "fix_columncharts",
+            "fix_linecharts",
+            "fix_column_to_bar",
+            "fix_bar_to_column",
+            "fix_column_to_line",
+            "fix_page_size",
+            "fix_hide_visual_filters",
+            "fix_disable_show_items_no_data",
+            "fix_ibcs_variance",
+            "fix_remove_unused_custom_visuals",
+            "fix_visual_alignment",
+            "fix_migrate_report_level_measures",
+            "fix_migrate_slicers",
+            "fix_upgrade_to_pbir",
+            # PBI Fixer — semantic model scan + fix
+            "scan_semantic_model",
+            "fix_model_bpa",
+            "fix_do_not_summarize",
+            "fix_hide_foreign_keys",
+            "fix_measure_format",
+            "fix_percentage_format",
+            "fix_whole_number_format",
+            "fix_capitalize_object_names",
+            "fix_trim_object_names",
+            "fix_use_divide_function",
+            "fix_data_category",
+            "fix_date_column_format",
+            # PBI Fixer — add / enrich
+            "add_measures_from_columns",
+            "add_py_measures",
+            "add_calc_group_time_intelligence",
+            "add_calc_group_units",
+            "add_calculated_calendar",
+            "add_measure_table",
+            "add_incremental_refresh",
+            "add_cache_warming",
+            "add_prep_for_ai",
+            "add_last_refresh_table",
+            # pbir-tools — PBIR report authoring & inspection
+            "pbir_run",
+            "pbir_ls",
+            "pbir_tree",
+            "pbir_find",
+            "pbir_cat",
+            "pbir_get",
+            "pbir_set",
+            "pbir_model",
+            "pbir_new_report",
+            "pbir_add",
+            "pbir_cp",
+            "pbir_mv",
+            "pbir_rm",
+            "pbir_visuals",
+            "pbir_pages",
+            "pbir_fields",
+            "pbir_filters",
+            "pbir_dax",
+            "pbir_bookmarks",
+            "pbir_annotations",
+            "pbir_theme",
+            "pbir_schema",
+            "pbir_validate",
+            "pbir_download",
+            "pbir_publish",
+            "pbir_report",
+            "pbir_batch",
+            "pbir_backup",
+            "pbir_restore",
+        ],
+        default_access_level="write",
+        icon="PowerBIIcon",
+        version="1.0.0",
+    )
+)
+
 
 def get_template(template_id: str) -> AgentTemplate | None:
     return AGENT_TEMPLATES.get(template_id)

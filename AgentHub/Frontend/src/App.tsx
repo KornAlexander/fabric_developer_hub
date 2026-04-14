@@ -1,5 +1,5 @@
 import React from "react";
-import { Route, Router, Switch } from "react-router-dom";
+import { Route, Router, Switch, useParams } from "react-router-dom";
 import { History } from "history";
 import { WorkloadClientAPI } from "@ms-fabric/workload-client";
 import { AgentHubLayout } from "./components/AgentHub/AgentHubLayout";
@@ -19,6 +19,11 @@ export interface ContextProps {
     workspaceObjectId?: string
 }
 
+function ItemEditorRoute({ workloadClient }: { workloadClient: WorkloadClientAPI }) {
+    const { itemObjectId } = useParams<{ itemObjectId: string }>();
+    return <AgentHubLayout workloadClient={workloadClient} itemObjectId={itemObjectId} />;
+}
+
 export function App({ history, workloadClient }: AppProps) {
     return <Router history={history}>
         <Switch>
@@ -27,9 +32,9 @@ export function App({ history, workloadClient }: AppProps) {
                 <AgentHubLayout workloadClient={workloadClient} />
             </Route>
 
-            {/* Legacy item editor route — redirects to AgentHub */}
+            {/* Item editor route — Fabric navigates here when opening an existing item */}
             <Route path="/sample-workload-editor/:itemObjectId">
-                <AgentHubLayout workloadClient={workloadClient} />
+                <ItemEditorRoute workloadClient={workloadClient} />
             </Route>
 
             {/* Default: redirect to AgentHub */}

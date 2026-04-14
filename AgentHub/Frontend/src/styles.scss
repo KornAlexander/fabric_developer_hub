@@ -662,22 +662,19 @@ html, body, #root {
     gap: 16px;
 }
 
-.agenthub-topnav {
-    display: flex;
-    gap: 20px;
-    margin-left: 16px;
+/* Hamburger button — hidden on desktop, shown ≤ 768px */
+.hamburger-btn {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 4px;
+    color: #323130;
+    border-radius: 4px;
 
-    span {
-        font-size: 14px;
-        color: #605e5c;
-        cursor: pointer;
-        padding: 4px 0;
-        &:hover { color: #323130; }
-        &.is-active {
-            color: #0078d4;
-            font-weight: 600;
-        }
-    }
+    &:hover { background: #f3f2f1; }
 }
 
 .agenthub-topbar-right {
@@ -1473,4 +1470,54 @@ html, body, #root {
     align-items: center;
     gap: 12px;
     margin-top: 8px;
+}
+
+/* ── Sidebar backdrop (mobile overlay) ────────────────────────── */
+.sidebar-backdrop {
+    display: none;
+}
+
+/* ── Responsive: ≤ 768px ─────────────────────────────────────── */
+@media (max-width: 768px) {
+    .hamburger-btn {
+        display: flex;
+    }
+
+    .agenthub-sidebar {
+        position: fixed;
+        top: 48px;           /* below topbar */
+        left: 0;
+        bottom: 0;
+        z-index: 100;
+        transform: translateX(-100%);
+        transition: transform 0.2s ease;
+        box-shadow: none;
+
+        &.sidebar--open {
+            transform: translateX(0);
+            box-shadow: 4px 0 16px rgba(0, 0, 0, 0.15);
+        }
+    }
+
+    .sidebar-backdrop {
+        display: block;
+        position: fixed;
+        inset: 0;
+        top: 48px;
+        z-index: 99;
+        background: rgba(0, 0, 0, 0.3);
+    }
+
+    .agenthub-main {
+        padding: 16px;
+    }
+
+    .dashboard-header-row {
+        flex-direction: column;
+        gap: 12px;
+    }
+
+    .agent-cards-grid {
+        grid-template-columns: 1fr;
+    }
 }

@@ -2,7 +2,7 @@ import logging
 from typing import Dict, Type
 from models.authentication_models import AuthorizationContext
 from items.base_item import ItemBase
-from items.item1 import Item1
+from items.agenthub_item import AgentHubItem
 from constants.workload_constants import WorkloadConstants
 from exceptions.exceptions import UnexpectedItemTypeException
 
@@ -17,7 +17,7 @@ class ItemFactory:
         """Create an instance of the specified item type."""
         self.logger.info(f"Creating item of type {item_type}")
         if item_type == WorkloadConstants.ItemTypes.ITEM1:
-            return Item1(auth_context)
+            return AgentHubItem(auth_context)
         else:
             self.logger.error(f"Unexpected item type: {item_type}")
             raise UnexpectedItemTypeException(f"Items of type {item_type} are not supported")

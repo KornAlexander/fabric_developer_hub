@@ -18,14 +18,20 @@ import {
     TableBody,
     TableCell,
     TableCellLayout,
+    MessageBar,
+    MessageBarBody,
+    MessageBarTitle,
+    MessageBarActions,
 } from "@fluentui/react-components";
 import {
     Add24Regular,
     ArrowRight16Regular,
     ArrowSync24Regular,
+    PlugConnected24Regular,
 } from "@fluentui/react-icons";
 import { WorkloadClientAPI } from "@ms-fabric/workload-client";
 import * as api from "../../controller/AgentHubApi";
+import { useItemContext } from "./ItemContext";
 
 interface DashboardPageProps {
     workloadClient: WorkloadClientAPI;
@@ -48,8 +54,10 @@ function statusLabel(status: string): string {
 export function DashboardPage({ workloadClient }: DashboardPageProps) {
     const [jobs, setJobs] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
+    const [creating, setCreating] = useState(false);
     const history = useHistory();
     const match = useRouteMatch();
+    const { itemObjectId, workspaceObjectId, createItem, itemLoading } = useItemContext();
 
     const githubToken = sessionStorage.getItem("github_token") || "";
 
@@ -92,6 +100,45 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
                     New Task
                 </Button>
             </div>
+
+            {/* Fabric Item Persistence Banner */}
+            {!itemObjectId && workspaceObjectId && (
+                <MessageBar intent="warning" style={{ marginBottom: 16 }}>
+                    <MessageBarBody>
+                        <MessageBarTitle>Not connected to Fabric</MessageBarTitle>
+                        Settings and configuration are stored in this session only. Create a workspace item to persist them.
+                    </MessageBarBody>
+                    <MessageBarActions>
+                        <Button
+                            appearance="primary"
+                            icon={<PlugConnected24Regular />}
+                            size="small"
+                            disabled={creating}
+                            onClick={async () => {
+                                setCreating(true);
+                                try {
+                                    await createItem("AgentHub", "AgentHub configuration and settings");
+                                } catch (e) {
+                                    console.error("Failed to create item:", e);
+                                } finally {
+                                    setCreating(false);
+                                }
+                            }}
+                        >
+                            {creating ? "Creating..." : "Create AgentHub Item"}
+                        </Button>
+                    </MessageBarActions>
+                </MessageBar>
+            )}
+
+            {itemObjectId && (
+                <MessageBar intent="success" style={{ marginBottom: 16 }}>
+                    <MessageBarBody>
+                        <MessageBarTitle>Connected to Fabric</MessageBarTitle>
+                        Settings are persisted as a workspace item.
+                    </MessageBarBody>
+                </MessageBar>
+            )}
 
             {/* Active Agents */}
             <div className="dashboard-section">

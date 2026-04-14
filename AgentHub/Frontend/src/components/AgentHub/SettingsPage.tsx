@@ -11,9 +11,11 @@ import {
     Option,
     Switch,
     Spinner,
+    Badge,
 } from "@fluentui/react-components";
 import { Save24Regular } from "@fluentui/react-icons";
 import { WorkloadClientAPI } from "@ms-fabric/workload-client";
+import { useItemContext } from "./ItemContext";
 
 declare const process: { env: Record<string, string | undefined> };
 const BE = process.env.WORKLOAD_BE_URL || 'http://localhost:5000';
@@ -30,18 +32,36 @@ interface SettingsPageProps {
 const PREFERRED_DEFAULT = "claude-opus-4.6";
 
 export function SettingsPage({ workloadClient }: SettingsPageProps) {
+    const { itemObjectId, settings: itemSettings, saveSettings, itemLoading } = useItemContext();
+
     const [workspaceId] = useState(() => {
         const urlParams = new URLSearchParams(window.location.search);
         return urlParams.get("ws") || sessionStorage.getItem("workspace_id") || "(auto-detected from Fabric)";
     });
-    const [defaultModel, setDefaultModel] = useState(sessionStorage.getItem("default_model") || "gpt-4o");
-    const [maxRounds, setMaxRounds] = useState(sessionStorage.getItem("max_rounds") || "15");
-    const [verboseDefault, setVerboseDefault] = useState(sessionStorage.getItem("verbose_default") !== "false");
+    const [defaultModel, setDefaultModel] = useState(
+        itemSettings?.defaultModel || sessionStorage.getItem("default_model") || "gpt-4o"
+    );
+    const [maxRounds, setMaxRounds] = useState(
+        itemSettings ? String(itemSettings.maxRounds) : (sessionStorage.getItem("max_rounds") || "15")
+    );
+    const [verboseDefault, setVerboseDefault] = useState(
+        itemSettings ? itemSettings.verboseDefault : (sessionStorage.getItem("verbose_default") !== "false")
+    );
     const [saved, setSaved] = useState(false);
+    const [saving, setSaving] = useState(false);
     const [models, setModels] = useState<ModelInfo[]>([]);
     const [loadingModels, setLoadingModels] = useState(false);
 
     const githubToken = sessionStorage.getItem("github_token") || "";
+
+    // Sync local state when item settings load
+    useEffect(() => {
+        if (itemSettings) {
+            setDefaultModel(itemSettings.defaultModel);
+            setMaxRounds(String(itemSettings.maxRounds));
+            setVerboseDefault(itemSettings.verboseDefault);
+        }
+    }, [itemSettings]);
 
     useEffect(() => {
         if (githubToken) loadModels();
@@ -80,11 +100,15 @@ export function SettingsPage({ workloadClient }: SettingsPageProps) {
     }
 
     function handleSave() {
-        sessionStorage.setItem("default_model", defaultModel);
-        sessionStorage.setItem("max_rounds", maxRounds);
-        sessionStorage.setItem("verbose_default", String(verboseDefault));
-        setSaved(true);
-        setTimeout(() => setSaved(false), 2000);
+        setSaving(true);
+        saveSettings({
+            defaultModel,
+            maxRounds: parseInt(maxRounds, 10) || 15,
+            verboseDefault,
+        }).then(() => {
+            setSaved(true);
+            setTimeout(() => setSaved(false), 2000);
+        }).finally(() => setSaving(false));
     }
 
     return (
@@ -137,10 +161,19 @@ export function SettingsPage({ workloadClient }: SettingsPageProps) {
                     appearance="primary"
                     icon={<Save24Regular />}
                     onClick={handleSave}
+                    disabled={saving || itemLoading}
                 >
-                    Save Settings
+                    {saving ? "Saving..." : "Save Settings"}
                 </Button>
                 {saved && <Text size={200} style={{ color: "#0ea50e" }}>Settings saved!</Text>}
+                <Badge
+                    appearance="outline"
+                    color={itemObjectId ? "success" : "warning"}
+                    size="small"
+                    style={{ marginLeft: 8 }}
+                >
+                    {itemObjectId ? "Persisted to Fabric item" : "Session only"}
+                </Badge>
             </div>
         </div>
     );

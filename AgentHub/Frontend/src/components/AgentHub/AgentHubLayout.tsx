@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useMemo, useState, useCallback } from "react";
 import { Route, Switch, useHistory, useRouteMatch } from "react-router-dom";
 import "../../styles.scss";
 import {
@@ -17,6 +17,8 @@ import {
     Chat24Regular,
     Alert24Regular,
     PersonCircle32Regular,
+    Navigation24Regular,
+    Dismiss24Regular,
 } from "@fluentui/react-icons";
 import { WorkloadClientAPI } from "@ms-fabric/workload-client";
 import { DashboardPage } from "./DashboardPage";
@@ -25,15 +27,23 @@ import { AgentsPage } from "./AgentsPage";
 import { SettingsPage } from "./SettingsPage";
 import { JobDetailPage } from "./JobDetailPage";
 import { useGitHubAuth } from "./useGitHubAuth";
+import { ItemProvider } from "./ItemContext";
 
 interface AgentHubLayoutProps {
     workloadClient: WorkloadClientAPI;
+    itemObjectId?: string;
 }
 
-export function AgentHubLayout({ workloadClient }: AgentHubLayoutProps) {
+export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId }: AgentHubLayoutProps) {
     const history = useHistory();
     const match = useRouteMatch();
     const auth = useGitHubAuth();
+
+    // Extract workspaceObjectId from ?ws= query param (set by index.worker.ts)
+    const workspaceObjectId = useMemo(() => {
+        const params = new URLSearchParams(window.location.search);
+        return params.get("ws") || sessionStorage.getItem("workspace_id") || null;
+    }, []);
 
     const currentPath = history.location.pathname;
     let activePage = "home";
@@ -105,18 +115,30 @@ export function AgentHubLayout({ workloadClient }: AgentHubLayoutProps) {
     }
 
     // ── Main layout (sidebar + top bar + content) ─────────────────
+    const [sidebarOpen, setSidebarOpen] = useState(false);
+    const toggleSidebar = useCallback(() => setSidebarOpen(prev => !prev), []);
+    const closeSidebar = useCallback(() => setSidebarOpen(false), []);
+
+    function navTo(page: string) {
+        nav(page);
+        closeSidebar();
+    }
+
     return (
+        <ItemProvider
+            workloadClient={workloadClient}
+            workspaceObjectId={workspaceObjectId}
+            routeItemObjectId={routeItemObjectId || null}
+        >
         <div className="agenthub-root">
-            {/* Top bar */}
+            {/* Top bar — utility only, no page links */}
             <div className="agenthub-topbar">
                 <div className="agenthub-topbar-left">
+                    <button className="hamburger-btn" onClick={toggleSidebar} aria-label="Toggle navigation">
+                        {sidebarOpen ? <Dismiss24Regular /> : <Navigation24Regular />}
+                    </button>
                     <BrainCircuit24Regular style={{ color: "#0078d4" }} />
                     <Text weight="bold" size={400}>AgentHub</Text>
-                    <nav className="agenthub-topnav">
-                        <span className={activePage === "home" ? "is-active" : ""} onClick={() => nav("home")}>Home</span>
-                        <span className={activePage === "orchestrator" ? "is-active" : ""} onClick={() => nav("orchestrator")}>Orchestrator</span>
-                        <span className={activePage === "agents" ? "is-active" : ""} onClick={() => nav("agents")}>Agents</span>
-                    </nav>
                 </div>
                 <div className="agenthub-topbar-right">
                     <Alert24Regular className="topbar-icon" />
@@ -128,8 +150,11 @@ export function AgentHubLayout({ workloadClient }: AgentHubLayoutProps) {
             </div>
 
             <div className="agenthub-body">
+                {/* Sidebar overlay backdrop (mobile only) */}
+                {sidebarOpen && <div className="sidebar-backdrop" onClick={closeSidebar} />}
+
                 {/* Sidebar */}
-                <aside className="agenthub-sidebar">
+                <aside className={`agenthub-sidebar ${sidebarOpen ? "sidebar--open" : ""}`}>
                     <div className="agenthub-sidebar-brand">
                         <div className="agenthub-brand-icon"><BrainCircuit24Regular /></div>
                         <div>
@@ -139,14 +164,14 @@ export function AgentHubLayout({ workloadClient }: AgentHubLayoutProps) {
                     </div>
 
                     <nav className="agenthub-sidenav">
-                        <SideNavItem icon={<Home24Regular />} label="Home" active={activePage === "home"} onClick={() => nav("home")} />
-                        <SideNavItem icon={<BrainCircuit24Regular />} label="Orchestrator" active={activePage === "orchestrator"} onClick={() => nav("orchestrator")} />
-                        <SideNavItem icon={<Bot24Regular />} label="Agents" active={activePage === "agents"} onClick={() => nav("agents")} />
-                        <SideNavItem icon={<Settings24Regular />} label="Settings" active={activePage === "settings"} onClick={() => nav("settings")} />
+                        <SideNavItem icon={<Home24Regular />} label="Home" active={activePage === "home"} onClick={() => navTo("home")} />
+                        <SideNavItem icon={<BrainCircuit24Regular />} label="Orchestrator" active={activePage === "orchestrator"} onClick={() => navTo("orchestrator")} />
+                        <SideNavItem icon={<Bot24Regular />} label="Agents" active={activePage === "agents"} onClick={() => navTo("agents")} />
+                        <SideNavItem icon={<Settings24Regular />} label="Settings" active={activePage === "settings"} onClick={() => navTo("settings")} />
                     </nav>
 
                     <div className="agenthub-sidebar-footer">
-                        <div className="sidenav-footer-item" onClick={auth.signOut}>
+                        <div className="sidenav-footer-item" onClick={() => { auth.signOut(); closeSidebar(); }}>
                             <SignOut24Regular /> <Text size={200}>Sign out ({auth.githubUser})</Text>
                         </div>
                         <div className="sidenav-footer-item">
@@ -171,6 +196,7 @@ export function AgentHubLayout({ workloadClient }: AgentHubLayoutProps) {
                 </main>
             </div>
         </div>
+        </ItemProvider>
     );
 }
 
