@@ -1,5 +1,5 @@
-# Use Microsoft-approved Python image based on CBL-Mariner
-FROM mcr.microsoft.com/cbl-mariner/base/python:3 AS builder
+# Use Microsoft-approved Python image based on Azure Linux
+FROM mcr.microsoft.com/azurelinux/base/python:3.12 AS builder
 
 WORKDIR /app
 
@@ -10,21 +10,19 @@ RUN tdnf update -y && \
 
 # Copy requirements first for better caching
 COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY src/ ./src/
 
 # Final production image
-FROM mcr.microsoft.com/cbl-mariner/base/python:3 AS production
+FROM mcr.microsoft.com/azurelinux/base/python:3.12 AS production
 
 WORKDIR /app
 
 # Install only production dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application files
 COPY src/ ./src/

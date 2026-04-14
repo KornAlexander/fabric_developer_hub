@@ -1,6 +1,9 @@
+import os
+
+
 class WorkloadConstants:
     """Constants for the workload."""
-    WORKLOAD_NAME = "Org.FabricClawHub"
+    WORKLOAD_NAME = os.environ.get("WORKLOAD_NAME", "Org.FabricClawHub")
 
     class ItemTypes:
         """Nested class containing item type constants."""

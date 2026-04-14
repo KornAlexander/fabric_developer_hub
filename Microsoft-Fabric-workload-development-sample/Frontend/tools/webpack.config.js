@@ -8,9 +8,6 @@ const fs = require("fs").promises;
 console.log('******************** Build: Environment Variables *******************');
 console.log('process.env.WORKLOAD_NAME: ' + process.env.WORKLOAD_NAME);
 console.log('process.env.WORKLOAD_BE_URL: ' + process.env.WORKLOAD_BE_URL);
-console.log('process.env.DEV_AAD_CONFIG_AUDIENCE: ' + process.env.DEV_AAD_CONFIG_AUDIENCE);
-console.log('process.env.DEV_AAD_CONFIG_APPID: ' + process.env.DEV_AAD_CONFIG_APPID);
-console.log('process.env.DEV_AAD_CONFIG_REDIRECT_URI: ' + process.env.DEV_AAD_CONFIG_REDIRECT_URI);
 console.log('*********************************************************************');
 
 module.exports = {
@@ -108,26 +105,22 @@ module.exports = {
                 
                     const devParameters = {
                         name: process.env.WORKLOAD_NAME,
-                        url: "http://127.0.0.1:60006",
-                        devAADAppConfig: {
-                            audience: process.env.DEV_AAD_CONFIG_AUDIENCE,
-                            appId: process.env.DEV_AAD_CONFIG_APPID,
-                            redirectUri: process.env.DEV_AAD_CONFIG_REDIRECT_URI
-                        }
+                        url: "http://127.0.0.1:60006"
                     };
                 
                     res.end(JSON.stringify({ extension: devParameters }));
                 });
 
                 devServer.app.get('/manifests_new', async function (req, res) {
-                    const filePath = path.resolve(__dirname, '../validation/ManifestPackageRelease.1.0.0.nupkg');
+                    // Serve the single backend-generated manifest package
+                    const filePath = path.resolve(__dirname, '../../Backend/python/bin/Debug/ManifestPackage.1.0.0.nupkg');
                     try {
                         // Check if the file exists
                         await fs.access(filePath);
                         
                         res.status(200).set({
                             'Content-Type': 'application/octet-stream',
-                            'Content-Disposition': `attachment; filename="ManifestPackageRelease.1.0.0.nupkg"`,
+                            'Content-Disposition': `attachment; filename="ManifestPackage.1.0.0.nupkg"`,
                             'Access-Control-Allow-Origin': '*',
                             'Access-Control-Allow-Methods': 'GET',
                             'Access-Control-Allow-Headers': 'Content-Type, Authorization'
@@ -135,8 +128,8 @@ module.exports = {
                         
                         res.sendFile(filePath);
                     } catch (err) {
-                        console.error(`❌ File not found: ${err.message}`);
-                        res.status(404).json({ error: "File not found" });
+                        console.error(`❌ ManifestPackage not found. Run: cd Backend/python && python tools/manifest_package_generator.py --version 1.0.0`);
+                        res.status(404).json({ error: "ManifestPackage not found. Generate it from Backend/python first." });
                     }
                 });
                 return middlewares;

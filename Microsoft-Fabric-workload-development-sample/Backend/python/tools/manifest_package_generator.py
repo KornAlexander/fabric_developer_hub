@@ -262,6 +262,9 @@ class ManifestPackageGenerator:
                 print(f"⚠️  Frontend package directory not found: {self.frontend_package_dir}")
                 return
             
+            # Normalize target path — nuspec uses backslashes from Windows
+            target = target.replace('\\', '/')
+            
             if pattern == '*':
                 # Add all files in Package directory (non-recursive)
                 for file_path in self.frontend_package_dir.glob('*'):
@@ -376,8 +379,8 @@ class ManifestPackageGenerator:
             # Step 3: Create the .nupkg file
             print("📦 Creating .nupkg file...")
             with zipfile.ZipFile(nupkg_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                # Add nuspec to root of package
-                zipf.write(nuspec_path, self.nuspec_file.name)
+                # NOTE: Do NOT add the .nuspec to the zip — Fabric DevGateway
+                # only accepts entries under BE/ and FE/ directories.
                 
                 # Add BE files
                 zipf.write(temp_path / "WorkloadManifest.xml", "BE/WorkloadManifest.xml")

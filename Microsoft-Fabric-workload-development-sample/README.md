@@ -79,6 +79,48 @@ After you have completed the initial guides on spinning up your sample workload,
 
 After developing your Fabric Workload according to the [certification requirements](https://learn.microsoft.com/en-us/fabric/workload-development-kit/publish-workload-requirements), you can publish it to the Workload Hub which will allow every Fabric user a chance to easily start a trial experience and then buy your workload. An in-depth description of how to publish a workload can be found [here](https://learn.microsoft.com/en-us/fabric/workload-development-kit/publish-workload-flow).
 
+# Running the Workload
+
+All configuration is in a single `.env` file at the project root. Copy `.env.example` and fill in your values before running.
+
+## Option 1: Local dev (hot reload)
+
+First, generate the manifest package (required once, or after manifest/asset changes). The DevGateway uses this to register your workload with Fabric:
+
+```bash
+cd Backend/python
+python tools/manifest_package_generator.py --version 1.0.0
+```
+
+Then start the services:
+
+```bash
+# Terminal 1 — Backend
+cd Backend/python
+python src/main.py
+
+# Terminal 2 — Frontend
+cd Frontend
+npm start
+
+# Terminal 3 — DevGateway (registers workload with Fabric)
+.\DevGateway\Microsoft.Fabric.Workload.DevGateway.exe -DevMode:LocalConfigFilePath "workload-dev-mode.json"
+```
+
+Backend runs on http://localhost:5000, frontend on http://localhost:60006.
+
+## Option 2: Docker Compose
+
+Runs all four services — manifest generation, backend, frontend, and DevGateway — in a single command:
+
+```bash
+docker compose up --build
+```
+
+The `manifest-generator` service runs once to produce the `.nupkg`, then the backend and frontend start. Once the backend is healthy, the DevGateway container launches and prompts you to authenticate via device-code flow.
+
+Frontend has hot reload via volume mounts. Backend restarts require rebuilding the container.
+
 # Resources
 
 Here are all the resources included and referenced. These documents provide additional information and can serve as a reference:

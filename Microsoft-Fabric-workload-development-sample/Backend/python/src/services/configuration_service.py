@@ -6,6 +6,13 @@ from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, field
 from enum import Enum
 
+from dotenv import load_dotenv
+
+# Load the single root .env (Microsoft-Fabric-workload-development-sample/.env)
+# before anything reads os.environ.
+_root_env = Path(__file__).resolve().parents[3] / ".env"
+load_dotenv(_root_env, override=False)
+
 logger = logging.getLogger(__name__)
 
 class Environment(Enum):
@@ -168,6 +175,7 @@ class ConfigurationService:
             'CLIENT_ID': 'ClientId',
             'CLIENT_SECRET': 'ClientSecret',
             'AUDIENCE': 'Audience',
+            'GITHUB_CLIENT_ID': 'GitHubClientId',
         }
         
         # Support ASP.NET Core style environment variables (with __ as separator)
