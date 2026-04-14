@@ -1,0 +1,24 @@
+version: '3.8'
+services:
+  fabric-backend:
+    build:
+      context: .
+      target: production
+      dockerfile: Dockerfile
+    ports:
+      - "5000:5000"
+    environment:
+      - PYTHON_ENVIRONMENT=Development
+      - PUBLISHER_TENANT_ID=${PUBLISHER_TENANT_ID}
+      - CLIENT_ID=${CLIENT_ID}
+      - CLIENT_SECRET=${CLIENT_SECRET}
+      - AUDIENCE=${AUDIENCE}
+    volumes:
+      - ./src/appsettings.json:/app/src/appsettings.json:ro
+      - ./src/appsettings.Development.json:/app/src/appsettings.Development.json:ro
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health').read()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s

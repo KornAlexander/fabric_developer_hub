@@ -1,0 +1,12 @@
+# Test dependencies
+pytest==7.4.3
+pytest-asyncio==0.21.1
+pytest-cov==4.1.0
+pytest-mock==3.12.0
+pytest-xdist==3.5.0  # For parallel test execution
+pytest-timeout==2.2.0  # For test timeouts
+pytest-watch==4.2.0  # For watch mode (optional)
+faker==20.1.0  # For generating test data
+
+# Platform-specific color support (optional but recommended)
+colorama==0.4.6  # For Windows color support

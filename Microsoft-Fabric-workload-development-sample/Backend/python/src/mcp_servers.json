@@ -1,0 +1,9 @@
+{
+  "servers": {
+    "fabric": {
+      "command": "${PYTHON}",
+      "args": ["${SRC_DIR}/services/fabric_mcp_server.py"],
+      "requires_auth": true
+    }
+  }
+}
