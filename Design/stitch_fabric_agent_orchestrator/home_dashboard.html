@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>AgentHub | Home</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "outline-variant": "#c0c7d4",
+                        "on-secondary-container": "#656464",
+                        "secondary": "#5f5e5e",
+                        "on-tertiary": "#ffffff",
+                        "on-secondary-fixed-variant": "#474746",
+                        "on-error-container": "#93000a",
+                        "on-surface": "#1a1c1c",
+                        "secondary-container": "#e4e2e1",
+                        "inverse-on-surface": "#f1f0ef",
+                        "surface-bright": "#faf9f8",
+                        "secondary-fixed-dim": "#c8c6c5",
+                        "secondary-fixed": "#e4e2e1",
+                        "primary-fixed-dim": "#a3c9ff",
+                        "on-primary": "#ffffff",
+                        "tertiary-fixed-dim": "#ffb689",
+                        "on-primary-fixed-variant": "#004883",
+                        "on-primary-container": "#ffffff",
+                        "surface-tint": "#0060ab",
+                        "on-secondary": "#ffffff",
+                        "on-background": "#1a1c1c",
+                        "on-primary-fixed": "#001c39",
+                        "surface-container-lowest": "#ffffff",
+                        "surface": "#faf9f8",
+                        "inverse-primary": "#a3c9ff",
+                        "error": "#ba1a1a",
+                        "on-tertiary-fixed": "#311300",
+                        "surface-container-highest": "#e3e2e1",
+                        "primary-container": "#0078d4",
+                        "primary": "#005faa",
+                        "surface-container": "#efeeed",
+                        "inverse-surface": "#2f3130",
+                        "on-tertiary-fixed-variant": "#743500",
+                        "primary-fixed": "#d3e3ff",
+                        "surface-container-low": "#f4f3f2",
+                        "error-container": "#ffdad6",
+                        "outline": "#717783",
+                        "surface-variant": "#e3e2e1",
+                        "on-surface-variant": "#404752",
+                        "surface-container-high": "#e9e8e7",
+                        "on-secondary-fixed": "#1b1c1c",
+                        "on-error": "#ffffff",
+                        "surface-dim": "#dadad9",
+                        "tertiary-fixed": "#ffdbc8",
+                        "on-tertiary-container": "#ffffff",
+                        "tertiary-container": "#bc5b00",
+                        "tertiary": "#974700",
+                        "background": "#faf9f8"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    "fontFamily": {
+                        "headline": ["Inter"],
+                        "body": ["Inter"],
+                        "label": ["Inter"]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .tonal-transition { transition: background-color 0.3s ease; }
+    </style>
+</head>
+<body class="bg-surface font-body text-on-surface">
+<!-- Context Bar -->
+<header class="flex justify-between items-center px-5 w-full sticky top-0 z-50 bg-surface h-12 border-b border-outline-variant/10 tonal-transition shrink-0">
+    <div class="flex items-center gap-3">
+        <span class="text-base font-semibold text-on-surface tracking-tight">AgentHub</span>
+        <div class="h-3.5 w-px bg-outline-variant/30"></div>
+        <div class="flex items-center gap-1.5 text-on-surface-variant">
+            <span class="material-symbols-outlined text-[18px]" style="font-variation-settings: 'FILL' 1;">home</span>
+            <span class="text-xs font-medium text-on-surface">Home</span>
+        </div>
+    </div>
+    <div class="flex items-center gap-4 flex-1 max-w-md mx-8">
+        <div class="relative w-full">
+            <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant text-[16px]">search</span>
+            <input class="w-full bg-surface-container-low border-none rounded-lg py-1.5 pl-9 pr-4 text-xs focus:ring-1 focus:ring-primary/20 placeholder:text-on-surface-variant/50" placeholder="Search agents, jobs, or resources..." type="text"/>
+        </div>
+    </div>
+    <div class="flex items-center gap-2">
+        <button class="p-1.5 text-on-surface-variant hover:bg-surface-container-low rounded-lg transition-colors">
+            <span class="material-symbols-outlined text-[20px]">notifications</span>
+        </button>
+        <button class="p-1.5 text-on-surface-variant hover:bg-surface-container-low rounded-lg transition-colors">
+            <span class="material-symbols-outlined text-[20px]">help</span>
+        </button>
+        <div class="w-7 h-7 rounded-full overflow-hidden border border-outline-variant/20 ml-1">
+            <div class="w-full h-full bg-primary-container flex items-center justify-center text-white text-[10px] font-bold">LO</div>
+        </div>
+    </div>
+</header>
+<!-- SideNavBar -->
+<aside class="fixed left-0 top-12 h-[calc(100vh-3rem)] w-64 bg-[#f4f3f2] dark:bg-gray-800 flex flex-col py-6 z-40 hidden md:flex">
+<div class="px-6 mb-8">
+<div class="flex items-center gap-3">
+<div class="w-8 h-8 bg-primary rounded-lg flex items-center justify-center text-white font-bold">F</div>
+<div>
+<div class="text-sm font-bold text-[#1a1c1c] dark:text-white">AgentHub</div>
+<div class="text-[10px] text-secondary uppercase tracking-widest font-bold">Fabric Enterprise</div>
+</div>
+</div>
+</div>
+<nav class="flex-grow">
+<a class="relative flex items-center bg-[#ffffff] dark:bg-gray-700 text-[#1a1c1c] dark:text-white before:content-[''] before:absolute before:left-0 before:w-1 before:h-6 before:bg-[#005faa] before:rounded-full py-3 px-6 transition-all duration-200 ease-in-out" href="#">
+<span class="material-symbols-outlined mr-3" data-icon="home">home</span>
+<span class="text-sm font-medium">Home</span>
+</a>
+<a class="flex items-center text-[#404752] dark:text-gray-400 py-3 px-6 hover:bg-gray-200/50 dark:hover:bg-gray-700/50 transition-all duration-200 ease-in-out" href="#">
+<span class="material-symbols-outlined mr-3" data-icon="account_tree">account_tree</span>
+<span class="text-sm">Orchestrator</span>
+</a>
+<a class="flex items-center text-[#404752] dark:text-gray-400 py-3 px-6 hover:bg-gray-200/50 dark:hover:bg-gray-700/50 transition-all duration-200 ease-in-out" href="#">
+<span class="material-symbols-outlined mr-3" data-icon="smart_toy">smart_toy</span>
+<span class="text-sm">Agents</span>
+</a>
+<a class="flex items-center text-[#404752] dark:text-gray-400 py-3 px-6 hover:bg-gray-200/50 dark:hover:bg-gray-700/50 transition-all duration-200 ease-in-out" href="#">
+<span class="material-symbols-outlined mr-3" data-icon="settings">settings</span>
+<span class="text-sm">Settings</span>
+</a>
+</nav>
+<div class="px-6 pt-6 border-t border-outline-variant/10">
+<a class="flex items-center text-[#404752] py-2 hover:text-primary transition-colors" href="#">
+<span class="material-symbols-outlined mr-3 text-sm" data-icon="contact_support">contact_support</span>
+<span class="text-sm">Support</span>
+</a>
+<a class="flex items-center text-[#404752] py-2 hover:text-primary transition-colors" href="#">
+<span class="material-symbols-outlined mr-3 text-sm" data-icon="chat_bubble">chat_bubble</span>
+<span class="text-sm">Feedback</span>
+</a>
+</div>
+</aside>
+<!-- Main Content Stage -->
+<main class="md:ml-64 min-h-screen bg-surface-bright p-8">
+<!-- Header Section -->
+<header class="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-12">
+<div>
+<h1 class="text-4xl font-light text-on-surface tracking-tight mb-2">Agent <span class="font-bold">Dashboard</span></h1>
+<p class="text-on-surface-variant max-w-lg">Monitor, orchestrate, and deploy enterprise-grade AI agents across your Fabric ecosystem.</p>
+</div>
+<button class="bg-gradient-to-br from-primary to-primary-container text-white px-6 py-3 rounded-md flex items-center gap-2 font-medium shadow-sm hover:opacity-90 active:scale-95 transition-all">
+<span class="material-symbols-outlined" data-icon="add_circle">add_circle</span>
+                Create New Job
+            </button>
+</header>
+<!-- Bento Grid: Active Agents -->
+<section class="mb-12">
+<div class="flex items-center justify-between mb-6">
+<h2 class="text-xl font-semibold tracking-tight">Active Agents</h2>
+<div class="flex gap-2">
+<span class="bg-surface-container-high text-on-surface-variant text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider">4 Running</span>
+<span class="bg-surface-container-high text-on-surface-variant text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider">1 Waiting</span>
+<span class="bg-error-container text-on-error-container text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider">1 Error</span>
+</div>
+</div>
+<div class="overflow-x-auto rounded-xl pb-2" style="scrollbar-width: thin; scrollbar-color: #e3e2e1 transparent;">
+<div class="flex gap-6 min-w-max">
+<!-- Agent Card 1: Running -->
+<div class="bg-surface-container-lowest p-6 rounded-xl border border-outline-variant/10 shadow-sm flex flex-col justify-between group hover:border-primary/30 transition-all w-[360px] shrink-0">
+<div class="flex justify-between items-start mb-4">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 bg-primary-fixed rounded-lg flex items-center justify-center text-primary">
+<span class="material-symbols-outlined" data-icon="data_exploration">data_exploration</span>
+</div>
+<div>
+<h3 class="font-bold text-on-surface">Xi - Data Engineer</h3>
+<p class="text-[10px] text-on-surface-variant font-medium tracking-wide uppercase">Core Orchestrator</p>
+</div>
+</div>
+<span class="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-green-100 text-green-700 text-[11px] font-bold">
+<span class="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></span>
+                            Running
+                        </span>
+</div>
+<div class="space-y-4">
+<div>
+<label class="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest block mb-1">Current Goal</label>
+<p class="text-sm font-medium">Optimizing Pipeline X for Q4 Reporting</p>
+</div>
+<div class="bg-surface-container-low p-3 rounded-lg">
+<label class="text-[10px] font-bold text-secondary uppercase tracking-widest block mb-1">Current Step</label>
+<p class="text-sm text-on-surface">Refining SQL scripts for delta lake ingestion</p>
+</div>
+</div>
+<div class="mt-6 flex justify-between items-center border-t border-outline-variant/10 pt-4">
+<div class="flex -space-x-2">
+<img alt="Resource" class="w-6 h-6 rounded-full border-2 border-white" data-alt="Modern geometric icon symbolizing cloud computing resources" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBpJ6-omGJSryhAEMdPnl9s2ceuiWly0I7r6zOr90T4U0hRGBTBvr_c2FniNisan07D7uXJt37pvClC2POY1e3Mh-YnhDrlnlg_vIVmk4JkYlEJPHHsGSIXGE2O3shmhAtwHyD8KaBA8ckXvYrQV1dPH4B_fYVVrdk3_j7-jV9E9N-0eIjY3gsQZ6C9YvvBkCgnYDJzd24fnH83449vHVVnanHOwKw-qAq4e8GPjnA6jqBmNEXwyo9QMCssN6x_OSu-4gA_lQkxew"/>
+<img alt="Resource" class="w-6 h-6 rounded-full border-2 border-white" data-alt="Vector icon representing a database cluster" src="https://lh3.googleusercontent.com/aida-public/AB6AXuD-RahGvEho6aEX7zO5QHzr8yhWcl1DYci67W6GIRyeRgb7BKj6X2fQNxEkanGA3Ko23_CmAxWhKG3Yv-JNT_XnqWwy7u34zidfG1ntsPvAEt-E25cYDkKp1QuDGnGVEhnumAmB--yV0XiPLH8o5Tv1oAznwk7Jjv6LCjOsyvAq1cqsJM__BDE6XJnudPiDMjKL-LMZES0hmCY8vDwWNfGvEHzTDeUJWnia_hdDD-UQdxNebEVSXE33E0boicu6E3-4MyefNw0DnA"/>
+</div>
+<button class="text-primary text-xs font-bold flex items-center hover:underline">
+                            Details <span class="material-symbols-outlined text-sm ml-1" data-icon="arrow_forward">arrow_forward</span>
+</button>
+</div>
+</div>
+<!-- Agent Card 2: Waiting -->
+<div class="bg-surface-container-lowest p-6 rounded-xl border border-outline-variant/10 shadow-sm flex flex-col justify-between group hover:border-primary/30 transition-all w-[360px] shrink-0">
+<div class="flex justify-between items-start mb-4">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 bg-secondary-container rounded-lg flex items-center justify-center text-secondary">
+<span class="material-symbols-outlined" data-icon="analytics">analytics</span>
+</div>
+<div>
+<h3 class="font-bold text-on-surface">Atlas - Analyst</h3>
+<p class="text-[10px] text-on-surface-variant font-medium tracking-wide uppercase">Revenue Ops</p>
+</div>
+</div>
+<span class="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-secondary-container text-on-secondary-container text-[11px] font-bold">
+<span class="w-1.5 h-1.5 bg-secondary rounded-full"></span>
+                            Waiting
+                        </span>
+</div>
+<div class="space-y-4">
+<div>
+<label class="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest block mb-1">Current Goal</label>
+<p class="text-sm font-medium">Monthly Churn Forecasting</p>
+</div>
+<div class="bg-surface-container-low p-3 rounded-lg opacity-60">
+<label class="text-[10px] font-bold text-secondary uppercase tracking-widest block mb-1">Current Step</label>
+<p class="text-sm text-on-surface italic">Awaiting API Key validation from User...</p>
+</div>
+</div>
+<div class="mt-6 flex justify-between items-center border-t border-outline-variant/10 pt-4">
+<span class="text-[11px] text-secondary font-medium">Idle for 12m</span>
+<button class="text-primary text-xs font-bold flex items-center hover:underline">
+                            Resume <span class="material-symbols-outlined text-sm ml-1" data-icon="play_arrow">play_arrow</span>
+</button>
+</div>
+</div>
+<!-- Agent Card 3: Error -->
+<div class="bg-surface-container-lowest p-6 rounded-xl border border-outline-variant/10 shadow-sm flex flex-col justify-between group hover:border-error/30 transition-all w-[360px] shrink-0">
+<div class="flex justify-between items-start mb-4">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 bg-error-container rounded-lg flex items-center justify-center text-error">
+<span class="material-symbols-outlined" data-icon="security">security</span>
+</div>
+<div>
+<h3 class="font-bold text-on-surface">Sentinel - Security</h3>
+<p class="text-[10px] text-on-surface-variant font-medium tracking-wide uppercase">Compliance Bot</p>
+</div>
+</div>
+<span class="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-error-container text-on-error-container text-[11px] font-bold">
+<span class="material-symbols-outlined text-sm" data-icon="warning">warning</span>
+                            Error
+                        </span>
+</div>
+<div class="space-y-4">
+<div>
+<label class="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest block mb-1">Current Goal</label>
+<p class="text-sm font-medium">Audit logs for suspicious access</p>
+</div>
+<div class="bg-error-container/20 p-3 rounded-lg">
+<label class="text-[10px] font-bold text-error uppercase tracking-widest block mb-1">Exception</label>
+<p class="text-sm text-error font-mono">IndexOutOfBounds: row 402...</p>
+</div>
+</div>
+<div class="mt-6 flex justify-between items-center border-t border-outline-variant/10 pt-4">
+<span class="text-[11px] text-error font-medium">Failed 2m ago</span>
+<button class="text-error text-xs font-bold flex items-center hover:underline">
+                            Restart <span class="material-symbols-outlined text-sm ml-1" data-icon="refresh">refresh</span>
+</button>
+</div>
+</div>
+<!-- Agent Card 4: Running -->
+<div class="bg-surface-container-lowest p-6 rounded-xl border border-outline-variant/10 shadow-sm flex flex-col justify-between group hover:border-primary/30 transition-all w-[360px] shrink-0">
+<div class="flex justify-between items-start mb-4">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 bg-primary-fixed rounded-lg flex items-center justify-center text-primary">
+<span class="material-symbols-outlined">hub</span>
+</div>
+<div>
+<h3 class="font-bold text-on-surface">Nova - Research Assistant</h3>
+<p class="text-[10px] text-on-surface-variant font-medium tracking-wide uppercase">Knowledge Ops</p>
+</div>
+</div>
+<span class="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-green-100 text-green-700 text-[11px] font-bold">
+<span class="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></span>
+                            Running
+                        </span>
+</div>
+<div class="space-y-4">
+<div>
+<label class="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest block mb-1">Current Goal</label>
+<p class="text-sm font-medium">Competitive analysis for Edge Computing</p>
+</div>
+<div class="bg-surface-container-low p-3 rounded-lg">
+<label class="text-[10px] font-bold text-secondary uppercase tracking-widest block mb-1">Current Step</label>
+<p class="text-sm text-on-surface">Scraping market reports and synthesizing trends</p>
+</div>
+</div>
+<div class="mt-6 flex justify-between items-center border-t border-outline-variant/10 pt-4">
+<div class="flex -space-x-2">
+<div class="w-6 h-6 rounded-full bg-primary-fixed flex items-center justify-center text-primary text-[9px] font-bold border-2 border-white">N</div>
+</div>
+<button class="text-primary text-xs font-bold flex items-center hover:underline">
+                            Details <span class="material-symbols-outlined text-sm ml-1">arrow_forward</span>
+</button>
+</div>
+</div>
+<!-- Agent Card 5: Running -->
+<div class="bg-surface-container-lowest p-6 rounded-xl border border-outline-variant/10 shadow-sm flex flex-col justify-between group hover:border-primary/30 transition-all w-[360px] shrink-0">
+<div class="flex justify-between items-start mb-4">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 bg-primary-fixed rounded-lg flex items-center justify-center text-primary">
+<span class="material-symbols-outlined">speed</span>
+</div>
+<div>
+<h3 class="font-bold text-on-surface">Apex - Optimizer</h3>
+<p class="text-[10px] text-on-surface-variant font-medium tracking-wide uppercase">Cost Engineering</p>
+</div>
+</div>
+<span class="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-green-100 text-green-700 text-[11px] font-bold">
+<span class="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></span>
+                            Running
+                        </span>
+</div>
+<div class="space-y-4">
+<div>
+<label class="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest block mb-1">Current Goal</label>
+<p class="text-sm font-medium">Cost reduction in Azure Subscription B</p>
+</div>
+<div class="bg-surface-container-low p-3 rounded-lg">
+<label class="text-[10px] font-bold text-secondary uppercase tracking-widest block mb-1">Current Step</label>
+<p class="text-sm text-on-surface">Analyzing idle compute across dev environments</p>
+</div>
+</div>
+<div class="mt-6 flex justify-between items-center border-t border-outline-variant/10 pt-4">
+<div class="flex -space-x-2">
+<div class="w-6 h-6 rounded-full bg-primary-fixed flex items-center justify-center text-primary text-[9px] font-bold border-2 border-white">A</div>
+</div>
+<button class="text-primary text-xs font-bold flex items-center hover:underline">
+                            Details <span class="material-symbols-outlined text-sm ml-1">arrow_forward</span>
+</button>
+</div>
+</div>
+<!-- Agent Card 6: Running -->
+<div class="bg-surface-container-lowest p-6 rounded-xl border border-outline-variant/10 shadow-sm flex flex-col justify-between group hover:border-primary/30 transition-all w-[360px] shrink-0">
+<div class="flex justify-between items-start mb-4">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 bg-primary-fixed rounded-lg flex items-center justify-center text-primary">
+<span class="material-symbols-outlined">sync_alt</span>
+</div>
+<div>
+<h3 class="font-bold text-on-surface">StreamSync - Integrator</h3>
+<p class="text-[10px] text-on-surface-variant font-medium tracking-wide uppercase">Data Pipelines</p>
+</div>
+</div>
+<span class="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-green-100 text-green-700 text-[11px] font-bold">
+<span class="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></span>
+                            Running
+                        </span>
+</div>
+<div class="space-y-4">
+<div>
+<label class="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest block mb-1">Current Goal</label>
+<p class="text-sm font-medium">Real-time sync between Salesforce and Lakehouse</p>
+</div>
+<div class="bg-surface-container-low p-3 rounded-lg">
+<label class="text-[10px] font-bold text-secondary uppercase tracking-widest block mb-1">Current Step</label>
+<p class="text-sm text-on-surface">Streaming CDC events from Opportunity table</p>
+</div>
+</div>
+<div class="mt-6 flex justify-between items-center border-t border-outline-variant/10 pt-4">
+<div class="flex -space-x-2">
+<div class="w-6 h-6 rounded-full bg-primary-fixed flex items-center justify-center text-primary text-[9px] font-bold border-2 border-white">S</div>
+</div>
+<button class="text-primary text-xs font-bold flex items-center hover:underline">
+                            Details <span class="material-symbols-outlined text-sm ml-1">arrow_forward</span>
+</button>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- Recent Successes Section -->
+<section>
+<h2 class="text-xl font-semibold tracking-tight mb-6">Recent Jobs</h2>
+<div class="bg-surface-container-lowest rounded-xl border border-outline-variant/10 shadow-sm overflow-hidden">
+<table class="w-full text-left border-collapse">
+<thead>
+<tr class="bg-surface-container-low border-b border-outline-variant/10">
+<th class="px-6 py-4 text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">Agent Name</th>
+<th class="px-6 py-4 text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">Completed Task</th>
+<th class="px-6 py-4 text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">Duration</th>
+<th class="px-6 py-4 text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">Status</th>
+<th class="px-6 py-4"></th>
+</tr>
+</thead>
+<tbody class="divide-y divide-outline-variant/5">
+<tr class="hover:bg-surface-container-low/50 transition-colors">
+<td class="px-6 py-4">
+<div class="flex items-center gap-3">
+<span class="material-symbols-outlined text-primary text-sm" data-icon="check_circle">check_circle</span>
+<span class="text-sm font-semibold">Xi - Data Engineer</span>
+</div>
+</td>
+<td class="px-6 py-4 text-sm text-on-surface">Data cleansing for Spark Cluster #204</td>
+<td class="px-6 py-4 text-sm text-on-surface-variant">4m 22s</td>
+<td class="px-6 py-4">
+<span class="bg-secondary-container text-on-secondary-container px-2 py-0.5 rounded-full text-[10px] font-bold">100% SUCCESS</span>
+</td>
+<td class="px-6 py-4 text-right">
+<button class="text-primary-container material-symbols-outlined hover:bg-primary-fixed p-1 rounded-full" data-icon="more_vert">more_vert</button>
+</td>
+</tr>
+<tr class="hover:bg-surface-container-low/50 transition-colors">
+<td class="px-6 py-4">
+<div class="flex items-center gap-3">
+<span class="material-symbols-outlined text-primary text-sm" data-icon="check_circle">check_circle</span>
+<span class="text-sm font-semibold">Nova - Research Assistant</span>
+</div>
+</td>
+<td class="px-6 py-4 text-sm text-on-surface">Market trend summary for 'Edge Computing'</td>
+<td class="px-6 py-4 text-sm text-on-surface-variant">12m 45s</td>
+<td class="px-6 py-4">
+<span class="bg-secondary-container text-on-secondary-container px-2 py-0.5 rounded-full text-[10px] font-bold">100% SUCCESS</span>
+</td>
+<td class="px-6 py-4 text-right">
+<button class="text-primary-container material-symbols-outlined hover:bg-primary-fixed p-1 rounded-full" data-icon="more_vert">more_vert</button>
+</td>
+</tr>
+<tr class="hover:bg-surface-container-low/50 transition-colors">
+<td class="px-6 py-4">
+<div class="flex items-center gap-3">
+<span class="material-symbols-outlined text-primary text-sm" data-icon="check_circle">check_circle</span>
+<span class="text-sm font-semibold">Apex - Optimizer</span>
+</div>
+</td>
+<td class="px-6 py-4 text-sm text-on-surface">Cost reduction in Azure Subscription B</td>
+<td class="px-6 py-4 text-sm text-on-surface-variant">2h 12m</td>
+<td class="px-6 py-4">
+<span class="bg-secondary-container text-on-secondary-container px-2 py-0.5 rounded-full text-[10px] font-bold">98% SUCCESS</span>
+</td>
+<td class="px-6 py-4 text-right">
+<button class="text-primary-container material-symbols-outlined hover:bg-primary-fixed p-1 rounded-full" data-icon="more_vert">more_vert</button>
+</td>
+</tr>
+</tbody>
+</table>
+<div class="px-6 py-4 bg-surface-container-low/30 border-t border-outline-variant/10 text-center">
+<button class="text-primary text-xs font-bold uppercase tracking-widest hover:underline">View All History</button>
+</div>
+</div>
+</section>
+</main>
+<!-- Mobile Bottom Navigation Shell -->
+<nav class="md:hidden fixed bottom-0 left-0 right-0 bg-surface border-t border-outline-variant/20 flex justify-around py-3 z-50">
+<a class="flex flex-col items-center gap-1 text-primary" href="#">
+<span class="material-symbols-outlined" data-icon="home" style="font-variation-settings: 'FILL' 1;">home</span>
+<span class="text-[10px] font-bold">Home</span>
+</a>
+<a class="flex flex-col items-center gap-1 text-on-surface-variant" href="#">
+<span class="material-symbols-outlined" data-icon="account_tree">account_tree</span>
+<span class="text-[10px]">Orchestrator</span>
+</a>
+<a class="flex flex-col items-center gap-1 text-on-surface-variant" href="#">
+<span class="material-symbols-outlined" data-icon="smart_toy">smart_toy</span>
+<span class="text-[10px]">Agents</span>
+</a>
+<a class="flex flex-col items-center gap-1 text-on-surface-variant" href="#">
+<span class="material-symbols-outlined" data-icon="settings">settings</span>
+<span class="text-[10px]">Settings</span>
+</a>
+</nav>
+</body></html>

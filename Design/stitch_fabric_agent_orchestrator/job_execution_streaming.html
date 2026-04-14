@@ -1,0 +1,813 @@
+<!DOCTYPE html>
+<html class="light" lang="en">
+<head>
+    <meta charset="utf-8"/>
+    <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+    <title>AgentHub | Job Execution — Streaming Experience</title>
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet"/>
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+    <script>
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "outline-variant": "#c0c7d4",
+                        "on-secondary-container": "#656464",
+                        "secondary": "#5f5e5e",
+                        "on-tertiary": "#ffffff",
+                        "on-secondary-fixed-variant": "#474746",
+                        "on-error-container": "#93000a",
+                        "on-surface": "#1a1c1c",
+                        "secondary-container": "#e4e2e1",
+                        "inverse-on-surface": "#f1f0ef",
+                        "surface-bright": "#faf9f8",
+                        "secondary-fixed-dim": "#c8c6c5",
+                        "secondary-fixed": "#e4e2e1",
+                        "primary-fixed-dim": "#a3c9ff",
+                        "on-primary": "#ffffff",
+                        "tertiary-fixed-dim": "#ffb689",
+                        "on-primary-fixed-variant": "#004883",
+                        "on-primary-container": "#ffffff",
+                        "surface-tint": "#0060ab",
+                        "on-secondary": "#ffffff",
+                        "on-background": "#1a1c1c",
+                        "on-primary-fixed": "#001c39",
+                        "surface-container-lowest": "#ffffff",
+                        "surface": "#faf9f8",
+                        "inverse-primary": "#a3c9ff",
+                        "error": "#ba1a1a",
+                        "on-tertiary-fixed": "#311300",
+                        "surface-container-highest": "#e3e2e1",
+                        "primary-container": "#0078d4",
+                        "primary": "#005faa",
+                        "surface-container": "#efeeed",
+                        "inverse-surface": "#2f3130",
+                        "on-tertiary-fixed-variant": "#743500",
+                        "primary-fixed": "#d3e3ff",
+                        "surface-container-low": "#f4f3f2",
+                        "error-container": "#ffdad6",
+                        "outline": "#717783",
+                        "surface-variant": "#e3e2e1",
+                        "on-surface-variant": "#404752",
+                        "surface-container-high": "#e9e8e7",
+                        "on-secondary-fixed": "#1b1c1c",
+                        "on-error": "#ffffff",
+                        "surface-dim": "#dadad9",
+                        "tertiary-fixed": "#ffdbc8",
+                        "on-tertiary-container": "#ffffff",
+                        "tertiary-container": "#bc5b00",
+                        "tertiary": "#974700",
+                        "background": "#faf9f8"
+                    },
+                    borderRadius: {
+                        DEFAULT: "0.125rem",
+                        lg: "0.25rem",
+                        xl: "0.5rem",
+                        full: "0.75rem"
+                    },
+                    fontFamily: {
+                        headline: ["Inter"],
+                        body: ["Inter"],
+                        label: ["Inter"]
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .material-symbols-outlined.filled {
+            font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .tonal-transition { transition: background-color 0.2s ease; }
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(24px);
+        }
+
+        /* Streaming text animation */
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(6px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .stream-in {
+            animation: fadeInUp 0.3s ease-out forwards;
+        }
+
+        /* Typing cursor */
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0; }
+        }
+        .typing-cursor::after {
+            content: '▍';
+            color: #0078d4;
+            animation: blink 0.8s infinite;
+            font-weight: 300;
+        }
+
+        /* Thinking pulse */
+        @keyframes thinkPulse {
+            0%, 100% { opacity: 0.4; }
+            50% { opacity: 1; }
+        }
+        .think-pulse {
+            animation: thinkPulse 1.5s ease-in-out infinite;
+        }
+
+        /* Progress step connector */
+        .step-connector {
+            position: relative;
+        }
+        .step-connector::before {
+            content: '';
+            position: absolute;
+            left: 11px;
+            top: 28px;
+            bottom: -8px;
+            width: 2px;
+            background: #e4e2e1;
+        }
+        .step-connector.active::before {
+            background: linear-gradient(to bottom, #0078d4, #e4e2e1);
+        }
+        .step-connector.completed::before {
+            background: #0078d4;
+        }
+
+        /* Skeleton loading */
+        @keyframes shimmer {
+            0% { background-position: -200% 0; }
+            100% { background-position: 200% 0; }
+        }
+        .skeleton {
+            background: linear-gradient(90deg, #f4f3f2 25%, #efeeed 50%, #f4f3f2 75%);
+            background-size: 200% 100%;
+            animation: shimmer 1.5s ease-in-out infinite;
+            border-radius: 4px;
+        }
+
+        /* Smooth scroll for log */
+        .log-scroll {
+            scroll-behavior: smooth;
+        }
+        .log-scroll::-webkit-scrollbar {
+            width: 4px;
+        }
+        .log-scroll::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .log-scroll::-webkit-scrollbar-thumb {
+            background: #e3e2e1;
+            border-radius: 4px;
+        }
+
+        /* Fabric item type badges */
+        .fabric-badge-lakehouse { background: #e8f5e9; color: #2e7d32; }
+        .fabric-badge-warehouse { background: #e3f2fd; color: #1565c0; }
+        .fabric-badge-pipeline { background: #fff3e0; color: #e65100; }
+        .fabric-badge-notebook { background: #f3e5f5; color: #7b1fa2; }
+        .fabric-badge-report { background: #fce4ec; color: #c62828; }
+    </style>
+</head>
+
+<body class="bg-surface text-on-surface font-body selection:bg-primary-fixed selection:text-on-primary-fixed overflow-hidden h-screen flex flex-col">
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     TOP NAV BAR — Breadcrumb with Fabric-style navigation
+     ═══════════════════════════════════════════════════════════════════ -->
+<header class="flex justify-between items-center px-5 w-full sticky top-0 z-50 bg-surface h-12 border-b border-outline-variant/10 tonal-transition shrink-0">
+    <div class="flex items-center gap-3">
+        <span class="text-base font-semibold text-on-surface tracking-tight">AgentHub</span>
+        <div class="h-3.5 w-px bg-outline-variant/30"></div>
+        <div class="flex items-center gap-1.5 text-on-surface-variant">
+            <span class="material-symbols-outlined text-[18px]">home</span>
+            <span class="text-xs font-medium">Orchestrator</span>
+            <span class="material-symbols-outlined text-[14px]">chevron_right</span>
+            <span class="text-xs font-medium text-on-surface">Optimize Marketing Data Pipeline</span>
+        </div>
+    </div>
+    <div class="flex items-center gap-2">
+        <!-- Execution timer (live) -->
+        <div class="flex items-center gap-2 px-3 py-1 bg-surface-container-low rounded-lg mr-2">
+            <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+            <span class="text-[11px] font-mono font-semibold text-on-surface">02:34:18</span>
+        </div>
+        <button class="p-1.5 text-on-surface-variant hover:bg-surface-container-low rounded-lg transition-colors">
+            <span class="material-symbols-outlined text-[20px]">notifications</span>
+        </button>
+        <button class="p-1.5 text-on-surface-variant hover:bg-surface-container-low rounded-lg transition-colors">
+            <span class="material-symbols-outlined text-[20px]">help</span>
+        </button>
+        <div class="w-7 h-7 rounded-full overflow-hidden border border-outline-variant/20 ml-1">
+            <div class="w-full h-full bg-primary-container flex items-center justify-center text-white text-[10px] font-bold">LO</div>
+        </div>
+    </div>
+</header>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     MAIN LAYOUT: Collapsed Sidebar + Content + Details Panel
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="flex flex-1 overflow-hidden">
+
+    <!-- COLLAPSED SIDE NAV -->
+    <nav class="w-12 bg-surface-container-low flex flex-col items-center py-4 gap-3 shrink-0 border-r border-outline-variant/5">
+        <div class="w-8 h-8 bg-primary-container rounded-lg flex items-center justify-center text-white mb-4">
+            <span class="material-symbols-outlined text-[18px] filled">dataset</span>
+        </div>
+        <button class="p-2 text-on-surface-variant hover:bg-surface-container-high rounded-lg transition-all" title="Home">
+            <span class="material-symbols-outlined text-[20px]">home</span>
+        </button>
+        <button class="p-2 bg-surface-container-lowest text-primary rounded-lg shadow-sm relative" title="Orchestrator">
+            <span class="material-symbols-outlined text-[20px] filled">account_tree</span>
+            <div class="absolute left-0 top-1/4 bottom-1/4 w-[3px] bg-primary rounded-full"></div>
+        </button>
+        <button class="p-2 text-on-surface-variant hover:bg-surface-container-high rounded-lg transition-all" title="Agents">
+            <span class="material-symbols-outlined text-[20px]">smart_toy</span>
+        </button>
+        <button class="p-2 text-on-surface-variant hover:bg-surface-container-high rounded-lg transition-all" title="Settings">
+            <span class="material-symbols-outlined text-[20px]">settings</span>
+        </button>
+    </nav>
+
+    <!-- ═══════════════════════════════════════════════════════════════
+         CENTER: Streaming Reasoning & Actions
+         ═══════════════════════════════════════════════════════════════ -->
+    <div class="flex-1 flex flex-col overflow-hidden min-w-0">
+
+        <!-- Agent Identity Bar -->
+        <div class="px-6 py-4 bg-surface-container-lowest border-b border-outline-variant/5 flex items-center justify-between shrink-0">
+            <div class="flex items-center gap-4">
+                <div class="w-11 h-11 rounded-xl bg-gradient-to-br from-primary to-primary-container flex items-center justify-center shadow-md shadow-primary/10">
+                    <span class="material-symbols-outlined text-white text-2xl filled">terminal</span>
+                </div>
+                <div>
+                    <div class="flex items-center gap-2">
+                        <h1 class="text-lg font-bold tracking-tight">Data Pipeline Architect</h1>
+                        <span class="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-[10px] font-bold uppercase tracking-wider flex items-center gap-1">
+                            <span class="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span>
+                            Running
+                        </span>
+                    </div>
+                    <p class="text-xs text-on-surface-variant mt-0.5 max-w-xl truncate">Automate weekly ingestion of regional sales data, normalize schema for Gold-layer reporting</p>
+                </div>
+            </div>
+            <div class="flex items-center gap-2">
+                <button class="flex items-center gap-1.5 px-3 py-1.5 text-on-surface-variant bg-surface-container-low hover:bg-surface-container-high rounded-lg text-xs font-medium transition-colors">
+                    <span class="material-symbols-outlined text-[16px]">pause</span>
+                    Pause
+                </button>
+                <button class="flex items-center gap-1.5 px-3 py-1.5 text-error bg-error-container/30 hover:bg-error-container/50 rounded-lg text-xs font-medium transition-colors">
+                    <span class="material-symbols-outlined text-[16px]">stop</span>
+                    Terminate
+                </button>
+            </div>
+        </div>
+
+        <!-- Streaming Log Area -->
+        <div class="flex-1 overflow-y-auto log-scroll px-6 py-6 space-y-6 bg-surface">
+
+            <!-- ──── COMPLETED STEP 1 ──── -->
+            <div class="flex gap-4 stream-in" style="animation-delay: 0s;">
+                <div class="flex flex-col items-center step-connector completed">
+                    <div class="w-6 h-6 rounded-full bg-primary flex items-center justify-center shrink-0">
+                        <span class="material-symbols-outlined text-white text-[14px] filled">check</span>
+                    </div>
+                </div>
+                <div class="flex-1 pb-6">
+                    <div class="flex items-center justify-between mb-2">
+                        <div class="flex items-center gap-2">
+                            <span class="text-sm font-bold text-on-surface">Source Discovery</span>
+                            <span class="text-[10px] text-on-surface-variant font-mono bg-surface-container-low px-1.5 py-0.5 rounded">14:02:11</span>
+                        </div>
+                        <span class="text-[10px] text-emerald-600 font-medium">Completed in 32s</span>
+                    </div>
+                    <p class="text-sm text-on-surface-variant leading-relaxed mb-3">Scanning <code class="text-xs bg-surface-container-low px-1.5 py-0.5 rounded text-primary font-mono">OneLake://corporate-sales-raw</code> for recent parquet files. Identified 4 missing partitions for the 2024-Q3 period.</p>
+
+                    <!-- Fabric Items Touched -->
+                    <div class="flex flex-wrap gap-2 mb-3">
+                        <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold fabric-badge-lakehouse">
+                            <span class="material-symbols-outlined text-[12px]">database</span>
+                            corporate-sales-raw
+                        </span>
+                        <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold fabric-badge-lakehouse">
+                            <span class="material-symbols-outlined text-[12px]">database</span>
+                            regional_sales_east_v2
+                        </span>
+                    </div>
+
+                    <!-- Code output block -->
+                    <div class="p-3 rounded-lg bg-[#1e1e1e] font-mono text-[11px] text-emerald-400 leading-relaxed">
+                        <div class="flex items-center gap-2 mb-2 text-[10px] text-gray-500">
+                            <span class="material-symbols-outlined text-[12px]">terminal</span>
+                            Schema scan output
+                        </div>
+                        <div>&gt; Scanning schema metadata...</div>
+                        <div>&gt; Found: <span class="text-blue-300">regional_sales_east_v2.parquet</span> (142MB, 2.4M rows)</div>
+                        <div>&gt; Found: <span class="text-blue-300">regional_sales_west_v1.parquet</span> (98MB, 1.8M rows)</div>
+                        <div>&gt; Partitions Q3-2024: <span class="text-amber-300">4 missing</span> of 12 expected</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ──── COMPLETED STEP 2 ──── -->
+            <div class="flex gap-4 stream-in" style="animation-delay: 0.1s;">
+                <div class="flex flex-col items-center step-connector completed">
+                    <div class="w-6 h-6 rounded-full bg-primary flex items-center justify-center shrink-0">
+                        <span class="material-symbols-outlined text-white text-[14px] filled">check</span>
+                    </div>
+                </div>
+                <div class="flex-1 pb-6">
+                    <div class="flex items-center justify-between mb-2">
+                        <div class="flex items-center gap-2">
+                            <span class="text-sm font-bold text-on-surface">Schema Alignment</span>
+                            <span class="text-[10px] text-on-surface-variant font-mono bg-surface-container-low px-1.5 py-0.5 rounded">14:05:45</span>
+                        </div>
+                        <span class="text-[10px] text-emerald-600 font-medium">Completed in 1m 12s</span>
+                    </div>
+                    <p class="text-sm text-on-surface-variant leading-relaxed mb-3">Conflict detected in <code class="text-xs bg-surface-container-low px-1.5 py-0.5 rounded text-primary font-mono">currency</code> column type between East (String) and West (Enum). Resolving by casting to ISO-4217 compliant codes.</p>
+
+                    <!-- Agent Decision Card (Approval style, already approved) -->
+                    <div class="p-4 rounded-xl bg-primary/5 border border-primary/15 mb-3">
+                        <div class="flex items-center gap-2 mb-2">
+                            <span class="material-symbols-outlined text-primary text-[16px] filled">psychology</span>
+                            <span class="text-[11px] font-bold text-primary uppercase tracking-wider">Agent Decision</span>
+                            <span class="ml-auto inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-[10px] font-bold">
+                                <span class="material-symbols-outlined text-[12px]">check</span>
+                                Auto-approved
+                            </span>
+                        </div>
+                        <p class="text-sm text-on-surface leading-relaxed">"I will modify <code class="text-xs bg-white/60 px-1 py-0.5 rounded font-mono">gold_sales_data.sql</code> to include a COALESCE handler for currency mismatches to ensure downstream reporting consistency."</p>
+                    </div>
+
+                    <div class="flex flex-wrap gap-2">
+                        <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold fabric-badge-warehouse">
+                            <span class="material-symbols-outlined text-[12px]">warehouse</span>
+                            Gold_Sales_DW
+                        </span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ──── ACTIVE STEP 3 — WITH HUMAN-IN-THE-LOOP APPROVAL ──── -->
+            <div class="flex gap-4 stream-in" style="animation-delay: 0.2s;">
+                <div class="flex flex-col items-center step-connector active">
+                    <div class="w-6 h-6 rounded-full bg-primary-container flex items-center justify-center shrink-0 think-pulse">
+                        <span class="material-symbols-outlined text-white text-[14px]">sync</span>
+                    </div>
+                </div>
+                <div class="flex-1 pb-6">
+                    <div class="flex items-center justify-between mb-2">
+                        <div class="flex items-center gap-2">
+                            <span class="text-sm font-bold text-primary">Pipeline Synthesis</span>
+                            <span class="text-[10px] text-primary font-mono bg-primary/5 px-1.5 py-0.5 rounded">14:08:22</span>
+                        </div>
+                        <span class="text-[10px] text-primary font-medium flex items-center gap-1 think-pulse">
+                            <span class="material-symbols-outlined text-[12px]">hourglass_top</span>
+                            In progress...
+                        </span>
+                    </div>
+
+                    <!-- Streaming text with typing cursor -->
+                    <div class="text-sm text-on-surface-variant leading-relaxed mb-4">
+                        <p class="mb-2">Constructing Fabric Data Factory pipeline using the generated SQL transformation scripts. The pipeline will include 3 activities:</p>
+                        <ol class="list-decimal list-inside space-y-1 text-sm text-on-surface mb-2">
+                            <li>Copy Activity — ingest from OneLake raw to staging</li>
+                            <li>Dataflow Gen2 — apply schema transforms + COALESCE fix</li>
+                            <li class="typing-cursor">Stored Procedure — execute Gold-layer view refresh</li>
+                        </ol>
+                    </div>
+
+                    <!-- ★ APPROVAL CARD — Human-in-the-loop (Cowork pattern) ★ -->
+                    <div class="p-4 rounded-xl bg-amber-50 border border-amber-200/60 shadow-sm">
+                        <div class="flex items-start gap-3">
+                            <div class="p-1.5 bg-amber-100 rounded-lg shrink-0 mt-0.5">
+                                <span class="material-symbols-outlined text-amber-700 text-[18px]">shield_person</span>
+                            </div>
+                            <div class="flex-1">
+                                <div class="flex items-center gap-2 mb-1">
+                                    <span class="text-xs font-bold text-amber-800 uppercase tracking-wider">Approval Required</span>
+                                </div>
+                                <p class="text-sm text-amber-900 leading-relaxed mb-3">The agent wants to create a new Data Factory Pipeline <strong>"Marketing_Sales_ETL_v3"</strong> and schedule it to run every 6 hours. This will write to the production Gold layer.</p>
+                                <div class="flex items-center gap-2 mb-3">
+                                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold fabric-badge-pipeline">
+                                        <span class="material-symbols-outlined text-[12px]">conversion_path</span>
+                                        Marketing_Sales_ETL_v3
+                                    </span>
+                                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold fabric-badge-warehouse">
+                                        <span class="material-symbols-outlined text-[12px]">warehouse</span>
+                                        Gold_Sales_DW (production)
+                                    </span>
+                                </div>
+                                <div class="flex items-center gap-2">
+                                    <button class="flex items-center gap-1.5 px-4 py-2 bg-primary text-white rounded-lg text-xs font-bold hover:bg-primary/90 active:scale-[0.98] transition-all shadow-sm">
+                                        <span class="material-symbols-outlined text-[14px]">check</span>
+                                        Approve & Continue
+                                    </button>
+                                    <button class="flex items-center gap-1.5 px-4 py-2 bg-white text-on-surface border border-outline-variant/20 rounded-lg text-xs font-medium hover:bg-surface-container-low transition-colors">
+                                        <span class="material-symbols-outlined text-[14px]">edit</span>
+                                        Modify Plan
+                                    </button>
+                                    <button class="flex items-center gap-1.5 px-3 py-2 text-on-surface-variant text-xs font-medium hover:text-error transition-colors">
+                                        <span class="material-symbols-outlined text-[14px]">block</span>
+                                        Reject
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ──── UPCOMING STEP 4 (dimmed) ──── -->
+            <div class="flex gap-4 opacity-40">
+                <div class="flex flex-col items-center">
+                    <div class="w-6 h-6 rounded-full bg-surface-container-high flex items-center justify-center shrink-0">
+                        <span class="text-[10px] font-bold text-on-surface-variant">4</span>
+                    </div>
+                </div>
+                <div class="flex-1 pb-4">
+                    <span class="text-sm font-medium text-on-surface-variant">Validation & Testing</span>
+                    <p class="text-xs text-on-surface-variant/60 mt-1">Run sample data through the new pipeline and compare output checksums</p>
+                </div>
+            </div>
+
+            <!-- ──── UPCOMING STEP 5 (dimmed) ──── -->
+            <div class="flex gap-4 opacity-25">
+                <div class="flex flex-col items-center">
+                    <div class="w-6 h-6 rounded-full bg-surface-container-high flex items-center justify-center shrink-0">
+                        <span class="text-[10px] font-bold text-on-surface-variant">5</span>
+                    </div>
+                </div>
+                <div class="flex-1 pb-4">
+                    <span class="text-sm font-medium text-on-surface-variant">Generate Summary Report</span>
+                    <p class="text-xs text-on-surface-variant/60 mt-1">Create executive summary of changes and schedule confirmation</p>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- ═══ RICH PROMPT INPUT (Cowork-inspired) ═══ -->
+        <div class="px-6 py-3 bg-surface-container-lowest border-t border-outline-variant/10 shrink-0">
+            <!-- Context chips -->
+            <div class="flex items-center gap-2 mb-2">
+                <span class="text-[10px] text-on-surface-variant font-medium uppercase tracking-wider">Context:</span>
+                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-surface-container-low border border-outline-variant/10 text-on-surface-variant">
+                    <span class="material-symbols-outlined text-[12px]">database</span>
+                    corporate-sales-raw
+                    <button class="ml-0.5 hover:text-error"><span class="material-symbols-outlined text-[10px]">close</span></button>
+                </span>
+                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-surface-container-low border border-outline-variant/10 text-on-surface-variant">
+                    <span class="material-symbols-outlined text-[12px]">description</span>
+                    marketing_schema_v2.json
+                    <button class="ml-0.5 hover:text-error"><span class="material-symbols-outlined text-[10px]">close</span></button>
+                </span>
+                <button class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium text-primary hover:bg-primary/5 transition-colors">
+                    <span class="material-symbols-outlined text-[12px]">add</span>
+                    Add context
+                </button>
+            </div>
+            <!-- Input bar -->
+            <div class="relative flex items-center">
+                <div class="flex-1 flex items-center bg-surface-container-low rounded-xl px-4 py-2.5 focus-within:ring-2 focus-within:ring-primary/20 transition-all">
+                    <input class="flex-1 bg-transparent border-none text-sm focus:ring-0 focus:outline-none placeholder:text-on-surface-variant/50" placeholder="Ask the agent to adjust its approach, add a constraint, or ask about its reasoning..." type="text"/>
+                    <div class="flex items-center gap-1 ml-2">
+                        <button class="p-1 text-on-surface-variant hover:text-primary rounded transition-colors" title="Attach Fabric item">
+                            <span class="material-symbols-outlined text-[18px]">attach_file</span>
+                        </button>
+                        <button class="p-1.5 bg-primary rounded-lg text-white hover:bg-primary/90 active:scale-95 transition-all" title="Send">
+                            <span class="material-symbols-outlined text-[16px]">arrow_upward</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════
+         RIGHT SIDEBAR: Details Panel (Cowork-inspired)
+         ═══════════════════════════════════════════════════════════════ -->
+    <aside class="w-80 bg-surface-container-lowest border-l border-outline-variant/10 flex flex-col shrink-0 overflow-hidden">
+        <!-- Panel header -->
+        <div class="px-5 py-3.5 border-b border-outline-variant/5 flex items-center justify-between shrink-0">
+            <h2 class="text-sm font-bold text-on-surface">Details</h2>
+            <button class="p-1 text-on-surface-variant hover:bg-surface-container-low rounded transition-colors">
+                <span class="material-symbols-outlined text-[18px]">close</span>
+            </button>
+        </div>
+
+        <div class="flex-1 overflow-y-auto log-scroll">
+
+            <!-- ── PROGRESS SECTION ── -->
+            <div class="px-5 py-4 border-b border-outline-variant/5">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-xs font-bold text-on-surface uppercase tracking-wider">Progress</h3>
+                    <span class="text-[10px] font-bold text-primary bg-primary/10 px-2 py-0.5 rounded-full">3 / 5</span>
+                </div>
+                <div class="space-y-3">
+                    <!-- Step 1: Complete -->
+                    <div class="flex items-start gap-3">
+                        <div class="w-5 h-5 rounded-full bg-primary flex items-center justify-center shrink-0 mt-0.5">
+                            <span class="material-symbols-outlined text-white text-[12px] filled">check</span>
+                        </div>
+                        <div>
+                            <span class="text-xs font-medium text-on-surface">Discover & scan data sources</span>
+                            <span class="block text-[10px] text-on-surface-variant">4 parquet files found</span>
+                        </div>
+                    </div>
+                    <!-- Step 2: Complete -->
+                    <div class="flex items-start gap-3">
+                        <div class="w-5 h-5 rounded-full bg-primary flex items-center justify-center shrink-0 mt-0.5">
+                            <span class="material-symbols-outlined text-white text-[12px] filled">check</span>
+                        </div>
+                        <div>
+                            <span class="text-xs font-medium text-on-surface">Align schemas across regions</span>
+                            <span class="block text-[10px] text-on-surface-variant">1 conflict resolved (currency)</span>
+                        </div>
+                    </div>
+                    <!-- Step 3: In Progress -->
+                    <div class="flex items-start gap-3">
+                        <div class="w-5 h-5 rounded-full bg-amber-400 flex items-center justify-center shrink-0 mt-0.5 think-pulse">
+                            <span class="material-symbols-outlined text-white text-[12px]">more_horiz</span>
+                        </div>
+                        <div>
+                            <span class="text-xs font-semibold text-primary">Build Data Factory pipeline</span>
+                            <span class="block text-[10px] text-amber-600 font-medium">Awaiting approval</span>
+                        </div>
+                    </div>
+                    <!-- Step 4: Upcoming -->
+                    <div class="flex items-start gap-3 opacity-40">
+                        <div class="w-5 h-5 rounded-full bg-surface-container-high flex items-center justify-center shrink-0 mt-0.5">
+                            <span class="text-[9px] font-bold text-on-surface-variant">4</span>
+                        </div>
+                        <span class="text-xs font-medium text-on-surface-variant">Validate pipeline output</span>
+                    </div>
+                    <!-- Step 5: Upcoming -->
+                    <div class="flex items-start gap-3 opacity-40">
+                        <div class="w-5 h-5 rounded-full bg-surface-container-high flex items-center justify-center shrink-0 mt-0.5">
+                            <span class="text-[9px] font-bold text-on-surface-variant">5</span>
+                        </div>
+                        <span class="text-xs font-medium text-on-surface-variant">Generate summary report</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ── ARTIFACTS / OUTPUT SECTION ── -->
+            <div class="px-5 py-4 border-b border-outline-variant/5">
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-xs font-bold text-on-surface uppercase tracking-wider">Artifacts Created</h3>
+                    <div class="flex items-center gap-1">
+                        <button class="p-0.5 text-on-surface-variant hover:text-primary transition-colors" title="Download all">
+                            <span class="material-symbols-outlined text-[16px]">download</span>
+                        </button>
+                        <button class="p-0.5 text-on-surface-variant hover:text-primary transition-colors" title="Open in workspace">
+                            <span class="material-symbols-outlined text-[16px]">open_in_new</span>
+                        </button>
+                        <span class="text-[10px] text-on-surface-variant font-bold bg-surface-container-low px-1.5 py-0.5 rounded-full ml-1">3</span>
+                    </div>
+                </div>
+                <div class="space-y-2">
+                    <!-- Artifact 1 -->
+                    <div class="flex items-center gap-3 p-2.5 bg-surface-container-low rounded-lg hover:bg-surface-container-high transition-colors cursor-pointer group">
+                        <div class="w-8 h-8 rounded-lg flex items-center justify-center fabric-badge-warehouse shrink-0">
+                            <span class="material-symbols-outlined text-[16px]">warehouse</span>
+                        </div>
+                        <div class="flex-1 min-w-0">
+                            <div class="text-xs font-semibold text-on-surface truncate">Silver_Staging_Schema</div>
+                            <div class="text-[10px] text-on-surface-variant">4 table definitions updated</div>
+                        </div>
+                        <span class="material-symbols-outlined text-[14px] text-on-surface-variant opacity-0 group-hover:opacity-100 transition-opacity">open_in_new</span>
+                    </div>
+                    <!-- Artifact 2 -->
+                    <div class="flex items-center gap-3 p-2.5 bg-surface-container-low rounded-lg hover:bg-surface-container-high transition-colors cursor-pointer group">
+                        <div class="w-8 h-8 rounded-lg flex items-center justify-center fabric-badge-notebook shrink-0">
+                            <span class="material-symbols-outlined text-[16px]">code</span>
+                        </div>
+                        <div class="flex-1 min-w-0">
+                            <div class="text-xs font-semibold text-on-surface truncate">gold_sales_data.sql</div>
+                            <div class="text-[10px] text-on-surface-variant">COALESCE handler added</div>
+                        </div>
+                        <span class="material-symbols-outlined text-[14px] text-on-surface-variant opacity-0 group-hover:opacity-100 transition-opacity">open_in_new</span>
+                    </div>
+                    <!-- Artifact 3: In-progress skeleton -->
+                    <div class="flex items-center gap-3 p-2.5 bg-surface-container-low rounded-lg">
+                        <div class="w-8 h-8 rounded-lg flex items-center justify-center fabric-badge-pipeline shrink-0 opacity-60">
+                            <span class="material-symbols-outlined text-[16px]">conversion_path</span>
+                        </div>
+                        <div class="flex-1 min-w-0">
+                            <div class="text-xs font-semibold text-on-surface truncate opacity-60">Marketing_Sales_ETL_v3</div>
+                            <div class="text-[10px] text-amber-600 font-medium flex items-center gap-1">
+                                <span class="w-1 h-1 rounded-full bg-amber-400 think-pulse"></span>
+                                Pending approval
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ── SOURCES / CONTEXT SECTION ── -->
+            <div class="px-5 py-4 border-b border-outline-variant/5">
+                <h3 class="text-xs font-bold text-on-surface uppercase tracking-wider mb-3">Sources Referenced</h3>
+                <div class="space-y-2">
+                    <div class="flex items-center gap-2.5 p-2 rounded-lg hover:bg-surface-container-low transition-colors cursor-pointer">
+                        <span class="material-symbols-outlined text-[16px] text-emerald-600">database</span>
+                        <div class="flex-1 min-w-0">
+                            <div class="text-[11px] font-medium text-on-surface truncate">OneLake://corporate-sales-raw</div>
+                            <div class="text-[10px] text-on-surface-variant">Lakehouse &middot; 4 partitions scanned</div>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-2.5 p-2 rounded-lg hover:bg-surface-container-low transition-colors cursor-pointer">
+                        <span class="material-symbols-outlined text-[16px] text-blue-600">description</span>
+                        <div class="flex-1 min-w-0">
+                            <div class="text-[11px] font-medium text-on-surface truncate">marketing_schema_v2.json</div>
+                            <div class="text-[10px] text-on-surface-variant">User-provided context file</div>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-2.5 p-2 rounded-lg hover:bg-surface-container-low transition-colors cursor-pointer">
+                        <span class="material-symbols-outlined text-[16px] text-blue-600">warehouse</span>
+                        <div class="flex-1 min-w-0">
+                            <div class="text-[11px] font-medium text-on-surface truncate">Gold_Sales_DW</div>
+                            <div class="text-[10px] text-on-surface-variant">Warehouse &middot; Production target</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ── CHANGES & ACTIONS TABLE (merged from agent_activity_detail) ── -->
+            <div class="px-5 py-4 border-b border-outline-variant/5">
+                <div class="flex items-center justify-between mb-3">
+                    <div class="flex items-center gap-2">
+                        <span class="material-symbols-outlined text-on-surface-variant text-[16px]">history</span>
+                        <h3 class="text-xs font-bold text-on-surface uppercase tracking-wider">Changes & Actions</h3>
+                    </div>
+                    <div class="flex gap-1">
+                        <button class="text-[10px] font-bold text-primary px-2 py-0.5 bg-primary/5 rounded border border-primary/10">All</button>
+                        <button class="text-[10px] font-bold text-on-surface-variant px-2 py-0.5 hover:bg-surface-container-low rounded transition-colors">Items</button>
+                        <button class="text-[10px] font-bold text-on-surface-variant px-2 py-0.5 hover:bg-surface-container-low rounded transition-colors">Actions</button>
+                    </div>
+                </div>
+                <div class="space-y-1.5">
+                    <!-- Item: Silver Staging Schema -->
+                    <div class="flex items-center gap-3 p-2.5 bg-surface-container-low rounded-lg hover:bg-surface-container-high transition-colors">
+                        <span class="w-2 h-2 rounded-full bg-emerald-500 shrink-0"></span>
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-center gap-1.5">
+                                <span class="text-[10px] font-semibold text-on-surface-variant">Item</span>
+                                <span class="text-[11px] font-mono text-primary font-bold truncate">Silver Staging Schema</span>
+                            </div>
+                            <div class="text-[10px] text-on-surface-variant">4 table definitions updated</div>
+                        </div>
+                        <div class="text-right shrink-0">
+                            <div class="flex flex-col gap-0.5">
+                                <div class="flex items-center gap-1 text-[9px] text-on-surface-variant">
+                                    <span>85%</span>
+                                </div>
+                                <div class="w-12 bg-surface-container-high rounded-full h-1">
+                                    <div class="bg-emerald-500 h-1 rounded-full" style="width: 85%"></div>
+                                </div>
+                            </div>
+                        </div>
+                        <span class="text-[10px] text-on-surface-variant font-mono shrink-0">14:08</span>
+                    </div>
+                    <!-- Action: Ran a job -->
+                    <div class="flex items-center gap-3 p-2.5 bg-surface-container-low/50 rounded-lg hover:bg-surface-container-high transition-colors">
+                        <span class="w-2 h-2 rounded-full bg-primary shrink-0"></span>
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-center gap-1.5">
+                                <span class="text-[10px] font-semibold text-on-surface-variant">Action</span>
+                                <span class="text-[11px] font-mono text-on-surface truncate">Ran a job</span>
+                            </div>
+                            <div class="text-[10px] text-on-surface-variant">Validation: sales_raw_ingest</div>
+                        </div>
+                        <span class="px-1.5 py-0.5 rounded-full bg-secondary-container text-on-secondary-container text-[9px] font-medium shrink-0">Completed</span>
+                        <span class="text-[10px] text-on-surface-variant font-mono shrink-0">14:05</span>
+                    </div>
+                    <!-- Item: Sales Pipeline -->
+                    <div class="flex items-center gap-3 p-2.5 bg-surface-container-low rounded-lg hover:bg-surface-container-high transition-colors">
+                        <span class="w-2 h-2 rounded-full bg-emerald-500 shrink-0"></span>
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-center gap-1.5">
+                                <span class="text-[10px] font-semibold text-on-surface-variant">Item</span>
+                                <span class="text-[11px] font-mono text-primary font-bold truncate">Sales Pipeline</span>
+                            </div>
+                            <div class="text-[10px] text-on-surface-variant">Added 2 enrichment nodes</div>
+                        </div>
+                        <div class="text-right shrink-0">
+                            <div class="flex flex-col gap-0.5">
+                                <div class="flex items-center gap-1 text-[9px] text-on-surface-variant">
+                                    <span>40%</span>
+                                </div>
+                                <div class="w-12 bg-surface-container-high rounded-full h-1">
+                                    <div class="bg-primary h-1 rounded-full" style="width: 40%"></div>
+                                </div>
+                            </div>
+                        </div>
+                        <span class="text-[10px] text-on-surface-variant font-mono shrink-0">13:58</span>
+                    </div>
+                    <!-- Action: Deleted temporary file -->
+                    <div class="flex items-center gap-3 p-2.5 bg-surface-container-low/50 rounded-lg hover:bg-surface-container-high transition-colors">
+                        <span class="w-2 h-2 rounded-full bg-secondary shrink-0"></span>
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-center gap-1.5">
+                                <span class="text-[10px] font-semibold text-on-surface-variant">Action</span>
+                                <span class="text-[11px] font-mono text-on-surface truncate">Deleted temp file</span>
+                            </div>
+                            <div class="text-[10px] text-on-surface-variant">tmp_sales_202409.csv</div>
+                        </div>
+                        <span class="px-1.5 py-0.5 rounded-full bg-surface-container-highest text-on-surface-variant text-[9px] font-medium shrink-0">Cleanup</span>
+                        <span class="text-[10px] text-on-surface-variant font-mono shrink-0">13:50</span>
+                    </div>
+                    <!-- Action: Created SQL Connection -->
+                    <div class="flex items-center gap-3 p-2.5 bg-surface-container-low rounded-lg hover:bg-surface-container-high transition-colors">
+                        <span class="w-2 h-2 rounded-full bg-primary shrink-0"></span>
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-center gap-1.5">
+                                <span class="text-[10px] font-semibold text-on-surface-variant">Action</span>
+                                <span class="text-[11px] font-mono text-on-surface truncate">Created SQL Connection</span>
+                            </div>
+                            <div class="text-[10px] text-on-surface-variant">Finance_DB_Prod</div>
+                        </div>
+                        <span class="px-1.5 py-0.5 rounded-full bg-secondary-container text-on-secondary-container text-[9px] font-medium shrink-0">New Link</span>
+                        <span class="text-[10px] text-on-surface-variant font-mono shrink-0">13:42</span>
+                    </div>
+                    <!-- Action: Updated workspace config -->
+                    <div class="flex items-center gap-3 p-2.5 bg-surface-container-low/50 rounded-lg hover:bg-surface-container-high transition-colors">
+                        <span class="w-2 h-2 rounded-full bg-amber-500 shrink-0"></span>
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-center gap-1.5">
+                                <span class="text-[10px] font-semibold text-on-surface-variant">Action</span>
+                                <span class="text-[11px] font-mono text-on-surface truncate">Updated workspace config</span>
+                            </div>
+                            <div class="text-[10px] text-on-surface-variant">Adjusted compute limits</div>
+                        </div>
+                        <span class="px-1.5 py-0.5 rounded-full bg-secondary-container text-on-secondary-container text-[9px] font-medium shrink-0">Modified</span>
+                        <span class="text-[10px] text-on-surface-variant font-mono shrink-0">13:30</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ── SKILLS / CAPABILITIES ── -->
+            <div class="px-5 py-4 border-b border-outline-variant/5">
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-xs font-bold text-on-surface uppercase tracking-wider">Skills</h3>
+                    <span class="text-[10px] text-on-surface-variant font-bold bg-surface-container-low px-1.5 py-0.5 rounded-full">4</span>
+                </div>
+                <div class="flex flex-wrap gap-1.5">
+                    <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-primary/10 text-primary">
+                        <span class="material-symbols-outlined text-[12px]">database</span>
+                        OneLake Access
+                    </span>
+                    <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-primary/10 text-primary">
+                        <span class="material-symbols-outlined text-[12px]">code</span>
+                        SQL Generation
+                    </span>
+                    <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-primary/10 text-primary">
+                        <span class="material-symbols-outlined text-[12px]">conversion_path</span>
+                        Data Factory
+                    </span>
+                    <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-primary/10 text-primary">
+                        <span class="material-symbols-outlined text-[12px]">schema</span>
+                        Schema Analysis
+                    </span>
+                </div>
+            </div>
+
+            <!-- ── AGENTS INVOLVED ── -->
+            <div class="px-5 py-4">
+                <h3 class="text-xs font-bold text-on-surface uppercase tracking-wider mb-3">Agents</h3>
+                <div class="space-y-2">
+                    <div class="flex items-center gap-3 p-2 rounded-lg">
+                        <div class="w-7 h-7 rounded-full bg-gradient-to-br from-primary to-primary-container flex items-center justify-center">
+                            <span class="material-symbols-outlined text-white text-[14px] filled">terminal</span>
+                        </div>
+                        <div class="flex-1">
+                            <div class="text-[11px] font-semibold text-on-surface">Data Pipeline Architect</div>
+                            <div class="text-[10px] text-on-surface-variant">Lead orchestrator</div>
+                        </div>
+                        <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                    </div>
+                    <div class="flex items-center gap-3 p-2 rounded-lg">
+                        <div class="w-7 h-7 rounded-full bg-secondary-container flex items-center justify-center">
+                            <span class="material-symbols-outlined text-secondary text-[14px]">verified_user</span>
+                        </div>
+                        <div class="flex-1">
+                            <div class="text-[11px] font-semibold text-on-surface">Validation Lead</div>
+                            <div class="text-[10px] text-on-surface-variant">Queued for Step 4</div>
+                        </div>
+                        <span class="w-1.5 h-1.5 rounded-full bg-secondary"></span>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </aside>
+
+</div>
+
+</body>
+</html>

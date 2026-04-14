@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html class="light" lang="en">
+<head>
+    <meta charset="utf-8"/>
+    <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+    <title>AgentHub | Orchestrator — Step 1: Compose</title>
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet"/>
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+    <script>
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "outline-variant": "#c0c7d4",
+                        "on-secondary-container": "#656464",
+                        "secondary": "#5f5e5e",
+                        "on-tertiary": "#ffffff",
+                        "on-secondary-fixed-variant": "#474746",
+                        "on-error-container": "#93000a",
+                        "on-surface": "#1a1c1c",
+                        "secondary-container": "#e4e2e1",
+                        "inverse-on-surface": "#f1f0ef",
+                        "surface-bright": "#faf9f8",
+                        "secondary-fixed-dim": "#c8c6c5",
+                        "secondary-fixed": "#e4e2e1",
+                        "primary-fixed-dim": "#a3c9ff",
+                        "on-primary": "#ffffff",
+                        "tertiary-fixed-dim": "#ffb689",
+                        "on-primary-fixed-variant": "#004883",
+                        "on-primary-container": "#ffffff",
+                        "surface-tint": "#0060ab",
+                        "on-secondary": "#ffffff",
+                        "on-background": "#1a1c1c",
+                        "on-primary-fixed": "#001c39",
+                        "surface-container-lowest": "#ffffff",
+                        "surface": "#faf9f8",
+                        "inverse-primary": "#a3c9ff",
+                        "error": "#ba1a1a",
+                        "on-tertiary-fixed": "#311300",
+                        "surface-container-highest": "#e3e2e1",
+                        "primary-container": "#0078d4",
+                        "primary": "#005faa",
+                        "surface-container": "#efeeed",
+                        "inverse-surface": "#2f3130",
+                        "on-tertiary-fixed-variant": "#743500",
+                        "primary-fixed": "#d3e3ff",
+                        "surface-container-low": "#f4f3f2",
+                        "error-container": "#ffdad6",
+                        "outline": "#717783",
+                        "surface-variant": "#e3e2e1",
+                        "on-surface-variant": "#404752",
+                        "surface-container-high": "#e9e8e7",
+                        "on-secondary-fixed": "#1b1c1c",
+                        "on-error": "#ffffff",
+                        "surface-dim": "#dadad9",
+                        "tertiary-fixed": "#ffdbc8",
+                        "on-tertiary-container": "#ffffff",
+                        "tertiary-container": "#bc5b00",
+                        "tertiary": "#974700",
+                        "background": "#faf9f8"
+                    },
+                    borderRadius: {
+                        DEFAULT: "0.125rem",
+                        lg: "0.25rem",
+                        xl: "0.5rem",
+                        full: "0.75rem"
+                    },
+                    fontFamily: {
+                        headline: ["Inter"],
+                        body: ["Inter"],
+                        label: ["Inter"]
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .material-symbols-outlined.filled {
+            font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .tonal-transition { transition: background-color 0.2s ease; }
+
+        /* Fabric item badges */
+        .fabric-badge-lakehouse { background: #e8f5e9; color: #2e7d32; }
+        .fabric-badge-warehouse { background: #e3f2fd; color: #1565c0; }
+        .fabric-badge-pipeline { background: #fff3e0; color: #e65100; }
+        .fabric-badge-notebook { background: #f3e5f5; color: #7b1fa2; }
+
+        /* Suggestion hover */
+        .suggestion-card {
+            transition: all 0.2s ease;
+        }
+        .suggestion-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 16px rgba(0,0,0,0.06);
+        }
+
+        /* Prompt starter chips */
+        .prompt-chip {
+            transition: all 0.15s ease;
+        }
+        .prompt-chip:hover {
+            background: #005faa;
+            color: white;
+            border-color: #005faa;
+        }
+
+        /* Context pill animation */
+        @keyframes pillIn {
+            from { opacity: 0; transform: scale(0.9); }
+            to { opacity: 1; transform: scale(1); }
+        }
+        .pill-in { animation: pillIn 0.2s ease-out; }
+
+        /* Smooth scrollbar */
+        .smooth-scroll::-webkit-scrollbar { width: 4px; }
+        .smooth-scroll::-webkit-scrollbar-track { background: transparent; }
+        .smooth-scroll::-webkit-scrollbar-thumb { background: #e3e2e1; border-radius: 4px; }
+
+        /* Decomposition preview */
+        @keyframes slideUp {
+            from { opacity: 0; transform: translateY(12px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .slide-up {
+            animation: slideUp 0.3s ease-out forwards;
+        }
+    </style>
+</head>
+
+<body class="bg-surface text-on-surface font-body overflow-hidden h-screen flex flex-col">
+
+<!-- ═══ TOP NAV ═══ -->
+<header class="flex justify-between items-center px-5 w-full sticky top-0 z-50 bg-surface h-12 border-b border-outline-variant/10 tonal-transition shrink-0">
+    <div class="flex items-center gap-3">
+        <span class="text-base font-semibold text-on-surface tracking-tight">AgentHub</span>
+        <div class="h-3.5 w-px bg-outline-variant/30"></div>
+        <div class="flex items-center gap-1.5 text-on-surface-variant">
+            <span class="material-symbols-outlined text-[18px]" style="font-variation-settings: 'FILL' 1;">account_tree</span>
+            <span class="text-xs font-medium text-on-surface">Orchestrator</span>
+            <span class="material-symbols-outlined text-[14px]">chevron_right</span>
+            <span class="text-xs font-medium text-on-surface">New Job</span>
+        </div>
+    </div>
+    <div class="flex items-center gap-4 flex-1 max-w-md mx-8">
+        <div class="relative w-full">
+            <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant text-[16px]">search</span>
+            <input class="w-full bg-surface-container-low border-none rounded-lg py-1.5 pl-9 pr-4 text-xs focus:ring-1 focus:ring-primary/20 placeholder:text-on-surface-variant/50" placeholder="Search orchestrated jobs..." type="text"/>
+        </div>
+    </div>
+    <div class="flex items-center gap-2">
+        <button class="p-1.5 text-on-surface-variant hover:bg-surface-container-low rounded-lg transition-colors">
+            <span class="material-symbols-outlined text-[20px]">notifications</span>
+        </button>
+        <button class="p-1.5 text-on-surface-variant hover:bg-surface-container-low rounded-lg transition-colors">
+            <span class="material-symbols-outlined text-[20px]">help</span>
+        </button>
+        <div class="w-7 h-7 rounded-full overflow-hidden border border-outline-variant/20 ml-1">
+            <div class="w-full h-full bg-primary-container flex items-center justify-center text-white text-[10px] font-bold">LO</div>
+        </div>
+    </div>
+</header>
+
+<div class="flex flex-1 overflow-hidden">
+
+    <!-- ═══ SIDEBAR ═══ -->
+    <aside class="w-56 bg-surface-container-low flex flex-col py-5 shrink-0">
+        <div class="px-5 mb-8">
+            <div class="flex items-center gap-2.5">
+                <div class="w-8 h-8 bg-primary-container rounded-lg flex items-center justify-center text-white">
+                    <span class="material-symbols-outlined text-[16px] filled">dataset</span>
+                </div>
+                <div>
+                    <div class="text-sm font-bold text-on-surface leading-tight">AgentHub</div>
+                    <div class="text-[9px] text-on-surface-variant uppercase tracking-widest font-bold">Fabric Enterprise</div>
+                </div>
+            </div>
+        </div>
+        <nav class="flex-1 px-2.5 space-y-0.5">
+            <a class="flex items-center text-on-surface-variant py-2.5 px-3 hover:bg-surface-container-high/50 rounded-lg transition-all text-sm" href="#">
+                <span class="material-symbols-outlined mr-2.5 text-[20px]">home</span>
+                Home
+            </a>
+            <a class="relative flex items-center bg-surface-container-lowest text-on-surface py-2.5 px-3 rounded-lg shadow-sm font-medium text-sm" href="#">
+                <div class="absolute left-0 top-1/4 bottom-1/4 w-[3px] bg-primary rounded-full"></div>
+                <span class="material-symbols-outlined mr-2.5 text-[20px] filled" style="color: #005faa;">account_tree</span>
+                Orchestrator
+            </a>
+            <a class="flex items-center text-on-surface-variant py-2.5 px-3 hover:bg-surface-container-high/50 rounded-lg transition-all text-sm" href="#">
+                <span class="material-symbols-outlined mr-2.5 text-[20px]">smart_toy</span>
+                Agents
+            </a>
+            <a class="flex items-center text-on-surface-variant py-2.5 px-3 hover:bg-surface-container-high/50 rounded-lg transition-all text-sm" href="#">
+                <span class="material-symbols-outlined mr-2.5 text-[20px]">settings</span>
+                Settings
+            </a>
+        </nav>
+        <div class="px-2.5 pt-4 border-t border-outline-variant/10 space-y-0.5">
+            <a class="flex items-center text-on-surface-variant py-2 px-3 hover:bg-surface-container-high/50 rounded-lg transition-all text-xs" href="#">
+                <span class="material-symbols-outlined mr-2 text-[18px]">contact_support</span>
+                Support
+            </a>
+            <a class="flex items-center text-on-surface-variant py-2 px-3 hover:bg-surface-container-high/50 rounded-lg transition-all text-xs" href="#">
+                <span class="material-symbols-outlined mr-2 text-[18px]">chat_bubble</span>
+                Feedback
+            </a>
+        </div>
+    </aside>
+
+    <!-- ═══ MAIN CONTENT ═══ -->
+    <main class="flex-1 overflow-y-auto smooth-scroll bg-surface">
+        <div class="max-w-4xl mx-auto px-8 py-12 space-y-12">
+
+            <!-- ── HERO SECTION ── -->
+            <section class="text-center space-y-3">
+                <div class="inline-flex items-center justify-center w-14 h-14 bg-primary/8 text-primary rounded-2xl mb-2">
+                    <span class="material-symbols-outlined text-3xl filled">account_tree</span>
+                </div>
+                <h1 class="text-4xl font-light tracking-tight text-on-surface">Orchestrate your vision.</h1>
+                <p class="text-on-surface-variant text-base max-w-xl mx-auto">Describe what you need done. The orchestrator will decompose your goal into steps, select the right agents, and execute—with your approval at every critical decision.</p>
+            </section>
+
+            <!-- ═══ RICH PROMPT COMPOSER (Cowork-inspired) ═══ -->
+            <section class="max-w-3xl mx-auto">
+                <div class="bg-surface-container-lowest p-6 rounded-2xl shadow-[0_4px_24px_rgba(0,0,0,0.05)] border border-outline-variant/10 relative overflow-hidden">
+                    <!-- Decorative glow -->
+                    <div class="absolute -top-28 -right-28 w-72 h-72 bg-primary/5 rounded-full blur-3xl pointer-events-none"></div>
+
+                    <div class="relative z-10">
+                        <!-- Label -->
+                        <label class="block text-xs font-bold text-primary tracking-widest uppercase mb-3">New Task Description</label>
+
+                        <!-- Textarea -->
+                        <textarea class="w-full bg-transparent border-none text-xl font-medium focus:ring-0 focus:outline-none placeholder:text-on-surface-variant/40 resize-none h-28 leading-relaxed">Automate the weekly ingestion of regional sales data from our OneLake raw zone, normalize the schema for Gold-layer reporting, and generate SQL-based views for the Finance dashboard.</textarea>
+
+                        <!-- Attached context pills (Cowork pattern) -->
+                        <div class="flex flex-wrap items-center gap-2 mt-3 mb-4">
+                            <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-surface-container-low border border-outline-variant/15 text-on-surface pill-in fabric-badge-lakehouse">
+                                <span class="material-symbols-outlined text-[14px]">database</span>
+                                corporate-sales-raw
+                                <button class="ml-0.5 hover:text-error transition-colors"><span class="material-symbols-outlined text-[11px]">close</span></button>
+                            </span>
+                            <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-surface-container-low border border-outline-variant/15 text-on-surface pill-in fabric-badge-warehouse">
+                                <span class="material-symbols-outlined text-[14px]">warehouse</span>
+                                Gold_Sales_DW
+                                <button class="ml-0.5 hover:text-error transition-colors"><span class="material-symbols-outlined text-[11px]">close</span></button>
+                            </span>
+                            <button class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium text-primary hover:bg-primary/5 border border-dashed border-primary/30 transition-colors">
+                                <span class="material-symbols-outlined text-[14px]">add</span>
+                                Add Fabric item
+                            </button>
+                            <div class="h-3 w-px bg-outline-variant/20"></div>
+                            <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-surface-container-low border border-outline-variant/15 text-on-surface pill-in" style="background: #ede7f6; color: #5e35b1;">
+                                <span class="material-symbols-outlined text-[14px]">workspaces</span>
+                                Marketing Analytics
+                                <button class="ml-0.5 hover:text-error transition-colors"><span class="material-symbols-outlined text-[11px]">close</span></button>
+                            </span>
+                            <button class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium text-primary hover:bg-primary/5 border border-dashed border-primary/30 transition-colors">
+                                <span class="material-symbols-outlined text-[14px]">add</span>
+                                Add workspace
+                            </button>
+                        </div>
+
+                        <!-- Action bar -->
+                        <div class="pt-4 border-t border-outline-variant/10 space-y-3">
+                            <!-- Settings row -->
+                            <div class="flex items-center gap-2">
+                                <button class="flex items-center gap-1.5 text-on-surface-variant text-xs font-medium px-2.5 py-1.5 rounded-lg bg-surface-container-low hover:bg-surface-container-high transition-colors">
+                                    <span class="material-symbols-outlined text-[16px]">shield_person</span>
+                                    Require approvals
+                                    <span class="w-7 h-4 bg-primary rounded-full relative inline-block ml-1">
+                                        <span class="absolute right-0.5 top-0.5 w-3 h-3 bg-white rounded-full shadow-sm"></span>
+                                    </span>
+                                </button>
+                                <button class="flex items-center gap-1.5 text-on-surface-variant text-xs font-medium px-2.5 py-1.5 rounded-lg bg-surface-container-low hover:bg-surface-container-high transition-colors">
+                                    <span class="material-symbols-outlined text-[16px]">fork_right</span>
+                                    Branch out
+                                    <span class="w-7 h-4 bg-primary rounded-full relative inline-block ml-1">
+                                        <span class="absolute right-0.5 top-0.5 w-3 h-3 bg-white rounded-full shadow-sm"></span>
+                                    </span>
+                                </button>
+                            </div>
+                            <!-- Workspace & Branch config (shown when Branch out is ON) -->
+                            <div class="bg-surface-container-low/60 rounded-xl p-3 space-y-2.5">
+                                <div class="flex items-center gap-2">
+                                    <div class="flex-1">
+                                        <label class="block text-[10px] font-bold text-on-surface-variant uppercase tracking-wider mb-1">Source workspace</label>
+                                        <div class="relative">
+                                            <span class="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-on-surface-variant text-[14px]">workspaces</span>
+                                            <select class="w-full bg-surface-container-lowest border border-outline-variant/15 rounded-lg py-1.5 pl-8 pr-8 text-xs font-medium text-on-surface appearance-none cursor-pointer focus:ring-1 focus:ring-primary/20">
+                                                <option selected>Marketing Analytics</option>
+                                                <option>Finance Reporting</option>
+                                                <option>Sales Operations</option>
+                                                <option>Data Engineering — Prod</option>
+                                                <option>HR People Analytics</option>
+                                            </select>
+                                            <span class="material-symbols-outlined absolute right-2 top-1/2 -translate-y-1/2 text-on-surface-variant text-[14px] pointer-events-none">expand_more</span>
+                                        </div>
+                                    </div>
+                                    <div class="flex-1">
+                                        <label class="block text-[10px] font-bold text-on-surface-variant uppercase tracking-wider mb-1">Branch name</label>
+                                        <div class="relative">
+                                            <span class="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-on-surface-variant text-[14px]">fork_right</span>
+                                            <input class="w-full bg-surface-container-lowest border border-outline-variant/15 rounded-lg py-1.5 pl-8 pr-3 text-xs font-medium text-on-surface focus:ring-1 focus:ring-primary/20" value="agent/sales-ingestion-pipeline" />
+                                        </div>
+                                    </div>
+                                </div>
+                                <p class="text-[10px] text-on-surface-variant/70 flex items-center gap-1">
+                                    <span class="material-symbols-outlined text-[12px]">info</span>
+                                    Changes will be applied in a new branch. Merge to source workspace when ready.
+                                </p>
+                            </div>
+                            <!-- Destination workspace (always shown) -->
+                            <div class="flex items-center gap-3">
+                                <div class="flex-1">
+                                    <label class="block text-[10px] font-bold text-on-surface-variant uppercase tracking-wider mb-1">Destination workspace</label>
+                                    <div class="relative">
+                                        <span class="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-on-surface-variant text-[14px]">target</span>
+                                        <select class="w-full bg-surface-container-lowest border border-outline-variant/15 rounded-lg py-1.5 pl-8 pr-8 text-xs font-medium text-on-surface appearance-none cursor-pointer focus:ring-1 focus:ring-primary/20">
+                                            <option selected>Marketing Analytics — Dev</option>
+                                            <option>Marketing Analytics</option>
+                                            <option>Finance Reporting</option>
+                                            <option>Sales Operations</option>
+                                            <option>Data Engineering — Prod</option>
+                                            <option>HR People Analytics</option>
+                                        </select>
+                                        <span class="material-symbols-outlined absolute right-2 top-1/2 -translate-y-1/2 text-on-surface-variant text-[14px] pointer-events-none">expand_more</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <!-- Actions row -->
+                            <div class="flex items-center justify-between">
+                                <div class="flex items-center gap-3">
+                                    <button class="flex items-center gap-1.5 text-on-surface-variant hover:text-primary text-xs font-medium transition-colors px-2 py-1 rounded hover:bg-primary/5">
+                                        <span class="material-symbols-outlined text-[16px]">attach_file</span>
+                                        Upload file
+                                    </button>
+                                    <button class="flex items-center gap-1.5 text-on-surface-variant hover:text-primary text-xs font-medium transition-colors px-2 py-1 rounded hover:bg-primary/5">
+                                        <span class="material-symbols-outlined text-[16px]">history</span>
+                                        Recent prompts
+                                    </button>
+                                </div>
+                                <button class="bg-primary text-white px-6 py-2.5 rounded-xl font-bold flex items-center gap-2 shadow-lg shadow-primary/15 hover:bg-primary/90 hover:-translate-y-0.5 active:translate-y-0 transition-all">
+                                    Generate Plan
+                                    <span class="material-symbols-outlined text-[18px]">auto_awesome</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ── PROMPT STARTERS (Cowork pattern) ── -->
+                <div class="mt-5 flex flex-wrap justify-center items-center gap-2">
+                    <span class="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest mr-1">Try:</span>
+                    <button class="prompt-chip px-3 py-1.5 bg-surface-container-low rounded-full text-xs font-medium text-on-surface-variant border border-outline-variant/10">Ingest marketing logs weekly</button>
+                    <button class="prompt-chip px-3 py-1.5 bg-surface-container-low rounded-full text-xs font-medium text-on-surface-variant border border-outline-variant/10">Audit all agent connections</button>
+                    <button class="prompt-chip px-3 py-1.5 bg-surface-container-low rounded-full text-xs font-medium text-on-surface-variant border border-outline-variant/10">Rotate API keys</button>
+                    <button class="prompt-chip px-3 py-1.5 bg-surface-container-low rounded-full text-xs font-medium text-on-surface-variant border border-outline-variant/10">Clean staging data</button>
+                    <button class="prompt-chip px-3 py-1.5 bg-surface-container-low rounded-full text-xs font-medium text-on-surface-variant border border-outline-variant/10">Sync CRM to Lakehouse</button>
+                </div>
+            </section>
+
+            <!-- ═══ DISCOVERY & RECOMMENDATIONS (merged: 6 cards from new_job_orchestration) ═══ -->
+            <section class="space-y-5">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center gap-2 text-primary">
+                        <span class="material-symbols-outlined text-[20px] filled">insights</span>
+                        <h3 class="text-xs font-bold uppercase tracking-[0.15em]">Discovery & Recommendations</h3>
+                    </div>
+                    <button class="text-xs font-bold text-on-surface-variant hover:text-primary transition-colors">View all suggestions</button>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <!-- Card 1: Optimize Sales Pipeline -->
+                    <button class="suggestion-card flex flex-col p-5 bg-surface-container-lowest rounded-xl border border-outline-variant/8 text-left">
+                        <div class="p-2.5 bg-amber-50 text-amber-600 rounded-xl w-fit mb-4">
+                            <span class="material-symbols-outlined">bolt</span>
+                        </div>
+                        <h4 class="font-bold text-sm mb-1.5">Optimize Sales Pipeline</h4>
+                        <p class="text-xs text-on-surface-variant leading-relaxed flex-1">High latency detected in yesterday's sync job. Recommend re-partitioning the source.</p>
+                        <div class="mt-4 flex items-center text-primary text-xs font-bold">
+                            Start Optimization <span class="material-symbols-outlined ml-1 text-[14px]">arrow_forward</span>
+                        </div>
+                    </button>
+                    <!-- Card 2: Review Security Permissions -->
+                    <button class="suggestion-card flex flex-col p-5 bg-surface-container-lowest rounded-xl border border-outline-variant/8 text-left">
+                        <div class="p-2.5 bg-blue-50 text-blue-600 rounded-xl w-fit mb-4">
+                            <span class="material-symbols-outlined">security</span>
+                        </div>
+                        <h4 class="font-bold text-sm mb-1.5">Review Security Permissions</h4>
+                        <p class="text-xs text-on-surface-variant leading-relaxed flex-1">Audit access for the new Gold Layer schema. 12 unauthorized attempts flagged.</p>
+                        <div class="mt-4 flex items-center text-primary text-xs font-bold">
+                            Begin Audit <span class="material-symbols-outlined ml-1 text-[14px]">arrow_forward</span>
+                        </div>
+                    </button>
+                    <!-- Card 3: Audit Data Lineage -->
+                    <button class="suggestion-card flex flex-col p-5 bg-surface-container-lowest rounded-xl border border-outline-variant/8 text-left">
+                        <div class="p-2.5 bg-purple-50 text-purple-600 rounded-xl w-fit mb-4">
+                            <span class="material-symbols-outlined">account_tree</span>
+                        </div>
+                        <h4 class="font-bold text-sm mb-1.5">Audit Data Lineage</h4>
+                        <p class="text-xs text-on-surface-variant leading-relaxed flex-1">Trace 'Customer_ID' across all transforms to ensure GDPR compliance standards.</p>
+                        <div class="mt-4 flex items-center text-primary text-xs font-bold">
+                            Map Lineage <span class="material-symbols-outlined ml-1 text-[14px]">arrow_forward</span>
+                        </div>
+                    </button>
+                    <!-- Card 4: Fix Schema Drift -->
+                    <button class="suggestion-card flex flex-col p-5 bg-surface-container-lowest rounded-xl border border-outline-variant/8 text-left">
+                        <div class="p-2.5 bg-emerald-50 text-emerald-600 rounded-xl w-fit mb-4">
+                            <span class="material-symbols-outlined">warning</span>
+                        </div>
+                        <h4 class="font-bold text-sm mb-1.5">Fix Schema Drift</h4>
+                        <p class="text-xs text-on-surface-variant leading-relaxed flex-1">Upstream 'Marketing_API' added 3 new fields. Pipelines currently ignoring them.</p>
+                        <div class="mt-4 flex items-center text-primary text-xs font-bold">
+                            Remediate Drift <span class="material-symbols-outlined ml-1 text-[14px]">arrow_forward</span>
+                        </div>
+                    </button>
+                    <!-- Card 5: Optimize Tenant Costs -->
+                    <button class="suggestion-card flex flex-col p-5 bg-surface-container-lowest rounded-xl border border-outline-variant/8 text-left">
+                        <div class="p-2.5 bg-rose-50 text-rose-600 rounded-xl w-fit mb-4">
+                            <span class="material-symbols-outlined">payments</span>
+                        </div>
+                        <h4 class="font-bold text-sm mb-1.5">Optimize Tenant Costs</h4>
+                        <p class="text-xs text-on-surface-variant leading-relaxed flex-1">Identified $450/day in idle warehouse compute for the dev environment.</p>
+                        <div class="mt-4 flex items-center text-primary text-xs font-bold">
+                            Apply Savings <span class="material-symbols-outlined ml-1 text-[14px]">arrow_forward</span>
+                        </div>
+                    </button>
+                    <!-- Card 6: Create Custom Agent -->
+                    <button class="suggestion-card flex flex-col p-5 bg-surface-container-lowest rounded-xl border border-outline-variant/8 text-left bg-gradient-to-br from-primary/5 to-transparent">
+                        <div class="p-2.5 bg-primary text-white rounded-xl w-fit mb-4">
+                            <span class="material-symbols-outlined">add</span>
+                        </div>
+                        <h4 class="font-bold text-sm mb-1.5">Create Custom Agent</h4>
+                        <p class="text-xs text-on-surface-variant leading-relaxed flex-1">Can't find what you need? Build a specialized agent for your specific domain.</p>
+                        <div class="mt-4 flex items-center text-primary text-xs font-bold">
+                            Go to Studio <span class="material-symbols-outlined ml-1 text-[14px]">arrow_forward</span>
+                        </div>
+                    </button>
+                </div>
+            </section>
+
+        </div>
+    </main>
+
+</div>
+
+</body>
+</html>

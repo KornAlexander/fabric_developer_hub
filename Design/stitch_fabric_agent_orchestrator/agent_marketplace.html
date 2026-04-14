@@ -1,0 +1,675 @@
+<!DOCTYPE html>
+<html class="light" lang="en">
+<head>
+    <meta charset="utf-8"/>
+    <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+    <title>AgentHub | Agents & Skills</title>
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet"/>
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+    <script>
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "outline-variant": "#c0c7d4",
+                        "on-secondary-container": "#656464",
+                        "secondary": "#5f5e5e",
+                        "on-tertiary": "#ffffff",
+                        "on-secondary-fixed-variant": "#474746",
+                        "on-error-container": "#93000a",
+                        "on-surface": "#1a1c1c",
+                        "secondary-container": "#e4e2e1",
+                        "inverse-on-surface": "#f1f0ef",
+                        "surface-bright": "#faf9f8",
+                        "secondary-fixed-dim": "#c8c6c5",
+                        "secondary-fixed": "#e4e2e1",
+                        "primary-fixed-dim": "#a3c9ff",
+                        "on-primary": "#ffffff",
+                        "tertiary-fixed-dim": "#ffb689",
+                        "on-primary-fixed-variant": "#004883",
+                        "on-primary-container": "#ffffff",
+                        "surface-tint": "#0060ab",
+                        "on-secondary": "#ffffff",
+                        "on-background": "#1a1c1c",
+                        "on-primary-fixed": "#001c39",
+                        "surface-container-lowest": "#ffffff",
+                        "surface": "#faf9f8",
+                        "inverse-primary": "#a3c9ff",
+                        "error": "#ba1a1a",
+                        "on-tertiary-fixed": "#311300",
+                        "surface-container-highest": "#e3e2e1",
+                        "primary-container": "#0078d4",
+                        "primary": "#005faa",
+                        "surface-container": "#efeeed",
+                        "inverse-surface": "#2f3130",
+                        "on-tertiary-fixed-variant": "#743500",
+                        "primary-fixed": "#d3e3ff",
+                        "surface-container-low": "#f4f3f2",
+                        "error-container": "#ffdad6",
+                        "outline": "#717783",
+                        "surface-variant": "#e3e2e1",
+                        "on-surface-variant": "#404752",
+                        "surface-container-high": "#e9e8e7",
+                        "on-secondary-fixed": "#1b1c1c",
+                        "on-error": "#ffffff",
+                        "surface-dim": "#dadad9",
+                        "tertiary-fixed": "#ffdbc8",
+                        "on-tertiary-container": "#ffffff",
+                        "tertiary-container": "#bc5b00",
+                        "tertiary": "#974700",
+                        "background": "#faf9f8"
+                    },
+                    borderRadius: {
+                        DEFAULT: "0.125rem",
+                        lg: "0.25rem",
+                        xl: "0.5rem",
+                        full: "0.75rem"
+                    },
+                    fontFamily: {
+                        headline: ["Inter"],
+                        body: ["Inter"],
+                        label: ["Inter"]
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .material-symbols-outlined.filled {
+            font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .tonal-transition { transition: background-color 0.2s ease; }
+
+        .smooth-scroll::-webkit-scrollbar { width: 4px; }
+        .smooth-scroll::-webkit-scrollbar-track { background: transparent; }
+        .smooth-scroll::-webkit-scrollbar-thumb { background: #e3e2e1; border-radius: 4px; }
+
+        .tab-active {
+            color: #005faa;
+            border-bottom: 2px solid #005faa;
+        }
+        .agent-card:hover { box-shadow: 0 4px 20px rgba(0,0,0,0.06); }
+        .skill-pill:hover { transform: translateY(-1px); box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateX(16px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+        .slide-in { animation: slideIn 0.25s ease-out; }
+    </style>
+</head>
+
+<body class="bg-surface text-on-surface font-body overflow-hidden h-screen flex flex-col">
+
+<!-- ═══ TOP NAV ═══ -->
+<header class="flex justify-between items-center px-5 w-full sticky top-0 z-50 bg-surface h-12 border-b border-outline-variant/10 tonal-transition shrink-0">
+    <div class="flex items-center gap-3">
+        <span class="text-base font-semibold text-on-surface tracking-tight">AgentHub</span>
+        <div class="h-3.5 w-px bg-outline-variant/30"></div>
+        <div class="flex items-center gap-1.5 text-on-surface-variant">
+            <span class="material-symbols-outlined text-[18px] filled" style="color: #005faa;">smart_toy</span>
+            <span class="text-xs font-medium text-on-surface">Agents & Skills</span>
+        </div>
+    </div>
+    <div class="flex items-center gap-4 flex-1 max-w-md mx-8">
+        <div class="relative w-full">
+            <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant text-[16px]">search</span>
+            <input class="w-full bg-surface-container-low border-none rounded-lg py-1.5 pl-9 pr-4 text-xs focus:ring-1 focus:ring-primary/20 placeholder:text-on-surface-variant/50" placeholder="Search agents, skills, or capabilities..." type="text"/>
+        </div>
+    </div>
+    <div class="flex items-center gap-2">
+        <button class="p-1.5 text-on-surface-variant hover:bg-surface-container-low rounded-lg transition-colors">
+            <span class="material-symbols-outlined text-[20px]">notifications</span>
+        </button>
+        <button class="p-1.5 text-on-surface-variant hover:bg-surface-container-low rounded-lg transition-colors">
+            <span class="material-symbols-outlined text-[20px]">help</span>
+        </button>
+        <div class="w-7 h-7 rounded-full overflow-hidden border border-outline-variant/20 ml-1">
+            <div class="w-full h-full bg-primary-container flex items-center justify-center text-white text-[10px] font-bold">LO</div>
+        </div>
+    </div>
+</header>
+
+<div class="flex flex-1 overflow-hidden">
+
+    <!-- ═══ SIDEBAR ═══ -->
+    <aside class="w-56 bg-surface-container-low flex flex-col py-5 shrink-0">
+        <div class="px-5 mb-8">
+            <div class="flex items-center gap-2.5">
+                <div class="w-8 h-8 bg-primary-container rounded-lg flex items-center justify-center text-white">
+                    <span class="material-symbols-outlined text-[16px] filled">dataset</span>
+                </div>
+                <div>
+                    <div class="text-sm font-bold text-on-surface leading-tight">AgentHub</div>
+                    <div class="text-[9px] text-on-surface-variant uppercase tracking-widest font-bold">Fabric Enterprise</div>
+                </div>
+            </div>
+        </div>
+        <nav class="flex-1 px-2.5 space-y-0.5">
+            <a class="flex items-center text-on-surface-variant py-2.5 px-3 hover:bg-surface-container-high/50 rounded-lg transition-all text-sm" href="#">
+                <span class="material-symbols-outlined mr-2.5 text-[20px]">home</span>
+                Home
+            </a>
+            <a class="flex items-center text-on-surface-variant py-2.5 px-3 hover:bg-surface-container-high/50 rounded-lg transition-all text-sm" href="#">
+                <span class="material-symbols-outlined mr-2.5 text-[20px]">account_tree</span>
+                Orchestrator
+            </a>
+            <a class="relative flex items-center bg-surface-container-lowest text-on-surface py-2.5 px-3 rounded-lg shadow-sm font-medium text-sm" href="#">
+                <div class="absolute left-0 top-1/4 bottom-1/4 w-[3px] bg-primary rounded-full"></div>
+                <span class="material-symbols-outlined mr-2.5 text-[20px] filled" style="color: #005faa;">smart_toy</span>
+                Agents
+            </a>
+            <a class="flex items-center text-on-surface-variant py-2.5 px-3 hover:bg-surface-container-high/50 rounded-lg transition-all text-sm" href="#">
+                <span class="material-symbols-outlined mr-2.5 text-[20px]">settings</span>
+                Settings
+            </a>
+        </nav>
+        <div class="px-2.5 pt-4 border-t border-outline-variant/10 space-y-0.5">
+            <a class="flex items-center text-on-surface-variant py-2 px-3 hover:bg-surface-container-high/50 rounded-lg transition-all text-xs" href="#">
+                <span class="material-symbols-outlined mr-2 text-[18px]">contact_support</span>
+                Support
+            </a>
+            <a class="flex items-center text-on-surface-variant py-2 px-3 hover:bg-surface-container-high/50 rounded-lg transition-all text-xs" href="#">
+                <span class="material-symbols-outlined mr-2 text-[18px]">chat_bubble</span>
+                Feedback
+            </a>
+        </div>
+    </aside>
+
+    <!-- ═══ MAIN CONTENT ═══ -->
+    <main class="flex-1 overflow-hidden flex flex-col bg-surface">
+
+        <!-- ── Sub-navigation tabs ── -->
+        <div class="px-8 pt-6 pb-0 border-b border-outline-variant/10 bg-surface shrink-0">
+            <div class="flex items-end justify-between mb-0">
+                <div>
+                    <h1 class="text-2xl font-light tracking-tight text-on-surface mb-1">Agents & Skills</h1>
+                    <p class="text-xs text-on-surface-variant mb-4">Build, compose, and manage AI agents from modular skills. Powered by <span class="text-primary font-medium">skills-for-fabric</span>.</p>
+                </div>
+                <div class="flex items-center gap-2 mb-4">
+                    <button class="flex items-center gap-1.5 px-3 py-1.5 text-on-surface-variant bg-surface-container-lowest border border-outline-variant/15 rounded-lg text-xs font-medium hover:bg-surface-container-low transition-colors">
+                        <span class="material-symbols-outlined text-[16px]">sync</span>
+                        Check updates
+                    </button>
+                    <button class="flex items-center gap-1.5 px-4 py-1.5 bg-gradient-to-br from-primary to-primary-container text-white rounded-lg text-xs font-bold shadow-sm hover:scale-[1.02] active:scale-[0.98] transition-all">
+                        <span class="material-symbols-outlined text-[16px]">add</span>
+                        Create Agent
+                    </button>
+                </div>
+            </div>
+            <div class="flex gap-6">
+                <button class="tab-active pb-2.5 text-sm font-semibold transition-colors">My Agents</button>
+                <button class="pb-2.5 text-sm font-medium text-on-surface-variant hover:text-on-surface border-b-2 border-transparent transition-colors">Skill Library</button>
+                <button class="pb-2.5 text-sm font-medium text-on-surface-variant hover:text-on-surface border-b-2 border-transparent transition-colors flex items-center gap-1.5">
+                    Marketplace
+                    <span class="bg-primary/10 text-primary text-[9px] font-bold px-1.5 py-0.5 rounded-full">12 new</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- ── Content area (split: list + detail panel) ── -->
+        <div class="flex-1 flex overflow-hidden">
+
+            <!-- ── Agent list ── -->
+            <div class="flex-1 overflow-y-auto smooth-scroll p-6 space-y-4">
+
+                <!-- Stats bar -->
+                <div class="flex items-center gap-6 mb-2">
+                    <div class="flex items-center gap-1.5 text-xs text-on-surface-variant">
+                        <span class="material-symbols-outlined text-[14px]">smart_toy</span>
+                        <span class="font-bold text-on-surface">4</span> agents
+                    </div>
+                    <div class="flex items-center gap-1.5 text-xs text-on-surface-variant">
+                        <span class="material-symbols-outlined text-[14px]">extension</span>
+                        <span class="font-bold text-on-surface">8</span> skills installed
+                    </div>
+                    <div class="flex items-center gap-1.5 text-xs text-on-surface-variant">
+                        <span class="material-symbols-outlined text-[14px]">check_circle</span>
+                        <span class="font-bold text-emerald-600">All healthy</span>
+                    </div>
+                    <div class="ml-auto flex items-center gap-2">
+                        <span class="text-[10px] text-on-surface-variant font-medium uppercase tracking-wider">Sort:</span>
+                        <select class="text-xs bg-transparent border-none text-on-surface font-medium focus:ring-0 cursor-pointer pr-6">
+                            <option>Last used</option>
+                            <option>Name</option>
+                            <option>Skills count</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- ═══ AGENT CARD 1 — FabricDataEngineer (selected) ═══ -->
+                <div class="agent-card bg-surface-container-lowest p-5 rounded-xl border-2 border-primary/30 transition-all cursor-pointer relative">
+                    <div class="absolute top-0 right-0 w-24 h-24 bg-primary/3 rounded-bl-[40px] pointer-events-none"></div>
+                    <div class="flex items-start gap-4 relative z-10">
+                        <div class="w-11 h-11 rounded-xl bg-blue-50 flex items-center justify-center shrink-0">
+                            <span class="material-symbols-outlined text-blue-600 text-[22px]">engineering</span>
+                        </div>
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-center gap-2 mb-1">
+                                <h3 class="text-sm font-bold text-on-surface">FabricDataEngineer</h3>
+                                <span class="text-[9px] font-bold uppercase tracking-widest bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded">Microsoft</span>
+                                <span class="flex items-center gap-0.5 text-[9px] font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded">
+                                    <span class="w-1.5 h-1.5 bg-emerald-500 rounded-full"></span>
+                                    Active
+                                </span>
+                            </div>
+                            <p class="text-xs text-on-surface-variant leading-relaxed mb-3">Medallion architectures, ETL/ELT pipelines, data migration, quality checks. Combines Spark and SQL authoring with consumption skills.</p>
+                            <div class="flex flex-wrap gap-1.5">
+                                <span class="skill-pill inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-blue-50 text-blue-700 border border-blue-100 transition-all cursor-default">
+                                    <span class="material-symbols-outlined text-[11px]">edit_note</span>
+                                    spark-authoring
+                                </span>
+                                <span class="skill-pill inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-blue-50 text-blue-700 border border-blue-100 transition-all cursor-default">
+                                    <span class="material-symbols-outlined text-[11px]">edit_note</span>
+                                    sqldw-authoring
+                                </span>
+                                <span class="skill-pill inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-100 transition-all cursor-default">
+                                    <span class="material-symbols-outlined text-[11px]">query_stats</span>
+                                    spark-consumption
+                                </span>
+                                <span class="skill-pill inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-100 transition-all cursor-default">
+                                    <span class="material-symbols-outlined text-[11px]">query_stats</span>
+                                    sqldw-consumption
+                                </span>
+                            </div>
+                        </div>
+                        <div class="text-right shrink-0">
+                            <div class="text-[10px] text-on-surface-variant">4 skills</div>
+                            <div class="text-[10px] text-on-surface-variant/60 mt-0.5">Used 2h ago</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ═══ AGENT CARD 2 — FabricAdmin ═══ -->
+                <div class="agent-card bg-surface-container-lowest p-5 rounded-xl border border-outline-variant/8 hover:border-primary/20 transition-all cursor-pointer">
+                    <div class="flex items-start gap-4">
+                        <div class="w-11 h-11 rounded-xl bg-purple-50 flex items-center justify-center shrink-0">
+                            <span class="material-symbols-outlined text-purple-600 text-[22px]">admin_panel_settings</span>
+                        </div>
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-center gap-2 mb-1">
+                                <h3 class="text-sm font-bold text-on-surface">FabricAdmin</h3>
+                                <span class="text-[9px] font-bold uppercase tracking-widest bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded">Microsoft</span>
+                                <span class="flex items-center gap-0.5 text-[9px] font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded">
+                                    <span class="w-1.5 h-1.5 bg-emerald-500 rounded-full"></span>
+                                    Active
+                                </span>
+                            </div>
+                            <p class="text-xs text-on-surface-variant leading-relaxed mb-3">Capacity planning, governance enforcement, security validation, cost optimization, and observability across workspaces.</p>
+                            <div class="flex flex-wrap gap-1.5">
+                                <span class="skill-pill inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-blue-50 text-blue-700 border border-blue-100 transition-all cursor-default">
+                                    <span class="material-symbols-outlined text-[11px]">edit_note</span>
+                                    sqldw-authoring
+                                </span>
+                                <span class="skill-pill inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-100 transition-all cursor-default">
+                                    <span class="material-symbols-outlined text-[11px]">query_stats</span>
+                                    sqldw-consumption
+                                </span>
+                                <span class="skill-pill inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-50 text-amber-700 border border-amber-100 transition-all cursor-default">
+                                    <span class="material-symbols-outlined text-[11px]">build</span>
+                                    check-updates
+                                </span>
+                            </div>
+                        </div>
+                        <div class="text-right shrink-0">
+                            <div class="text-[10px] text-on-surface-variant">3 skills</div>
+                            <div class="text-[10px] text-on-surface-variant/60 mt-0.5">Used 1d ago</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ═══ AGENT CARD 3 — Custom: RealtimeAnalytics ═══ -->
+                <div class="agent-card bg-surface-container-lowest p-5 rounded-xl border border-outline-variant/8 hover:border-primary/20 transition-all cursor-pointer">
+                    <div class="flex items-start gap-4">
+                        <div class="w-11 h-11 rounded-xl bg-teal-50 flex items-center justify-center shrink-0">
+                            <span class="material-symbols-outlined text-teal-600 text-[22px]">stream</span>
+                        </div>
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-center gap-2 mb-1">
+                                <h3 class="text-sm font-bold text-on-surface">RealtimeAnalytics</h3>
+                                <span class="text-[9px] font-bold uppercase tracking-widest bg-surface-container-high text-on-surface-variant px-1.5 py-0.5 rounded">Custom</span>
+                                <span class="flex items-center gap-0.5 text-[9px] font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded">
+                                    <span class="w-1.5 h-1.5 bg-emerald-500 rounded-full"></span>
+                                    Active
+                                </span>
+                            </div>
+                            <p class="text-xs text-on-surface-variant leading-relaxed mb-3">User-created agent for KQL-based real-time monitoring paired with Spark ingestion and Power BI dashboarding.</p>
+                            <div class="flex flex-wrap gap-1.5">
+                                <span class="skill-pill inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-blue-50 text-blue-700 border border-blue-100 transition-all cursor-default">
+                                    <span class="material-symbols-outlined text-[11px]">edit_note</span>
+                                    eventhouse-authoring
+                                </span>
+                                <span class="skill-pill inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-100 transition-all cursor-default">
+                                    <span class="material-symbols-outlined text-[11px]">query_stats</span>
+                                    eventhouse-consumption
+                                </span>
+                                <span class="skill-pill inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-blue-50 text-blue-700 border border-blue-100 transition-all cursor-default">
+                                    <span class="material-symbols-outlined text-[11px]">edit_note</span>
+                                    spark-authoring
+                                </span>
+                                <span class="skill-pill inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-100 transition-all cursor-default">
+                                    <span class="material-symbols-outlined text-[11px]">query_stats</span>
+                                    powerbi-consumption
+                                </span>
+                            </div>
+                        </div>
+                        <div class="text-right shrink-0">
+                            <div class="text-[10px] text-on-surface-variant">4 skills</div>
+                            <div class="text-[10px] text-on-surface-variant/60 mt-0.5">Used 5h ago</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ═══ AGENT CARD 4 — Custom: SalesReporter (cloned, draft) ═══ -->
+                <div class="agent-card bg-surface-container-lowest p-5 rounded-xl border border-outline-variant/8 hover:border-primary/20 transition-all cursor-pointer">
+                    <div class="flex items-start gap-4">
+                        <div class="w-11 h-11 rounded-xl bg-amber-50 flex items-center justify-center shrink-0">
+                            <span class="material-symbols-outlined text-amber-600 text-[22px]">bar_chart</span>
+                        </div>
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-center gap-2 mb-1">
+                                <h3 class="text-sm font-bold text-on-surface">SalesReporter</h3>
+                                <span class="text-[9px] font-bold uppercase tracking-widest bg-surface-container-high text-on-surface-variant px-1.5 py-0.5 rounded">Custom</span>
+                                <span class="flex items-center gap-0.5 text-[9px] font-bold text-on-surface-variant bg-surface-container-high px-1.5 py-0.5 rounded">
+                                    <span class="w-1.5 h-1.5 bg-on-surface-variant/40 rounded-full"></span>
+                                    Draft
+                                </span>
+                            </div>
+                            <p class="text-xs text-on-surface-variant leading-relaxed mb-3">Cloned from FabricDataEngineer. Customized for weekly sales report generation with Power BI semantic model queries.</p>
+                            <div class="flex flex-wrap gap-1.5">
+                                <span class="skill-pill inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-100 transition-all cursor-default">
+                                    <span class="material-symbols-outlined text-[11px]">query_stats</span>
+                                    powerbi-consumption
+                                </span>
+                                <span class="skill-pill inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-100 transition-all cursor-default">
+                                    <span class="material-symbols-outlined text-[11px]">query_stats</span>
+                                    sqldw-consumption
+                                </span>
+                                <span class="skill-pill inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-blue-50 text-blue-700 border border-blue-100 transition-all cursor-default">
+                                    <span class="material-symbols-outlined text-[11px]">edit_note</span>
+                                    powerbi-authoring
+                                </span>
+                            </div>
+                        </div>
+                        <div class="text-right shrink-0">
+                            <div class="text-[10px] text-on-surface-variant">3 skills</div>
+                            <div class="text-[10px] text-on-surface-variant/60 mt-0.5">Created today</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Create new agent prompt card -->
+                <div class="border-2 border-dashed border-outline-variant/20 rounded-xl p-6 flex items-center justify-center gap-3 hover:border-primary/30 hover:bg-primary/3 transition-all cursor-pointer group">
+                    <div class="w-10 h-10 rounded-xl bg-primary/8 text-primary flex items-center justify-center group-hover:scale-110 transition-transform">
+                        <span class="material-symbols-outlined text-[22px]">add</span>
+                    </div>
+                    <div>
+                        <div class="text-sm font-semibold text-on-surface">Create a new agent</div>
+                        <div class="text-xs text-on-surface-variant">Compose from existing skills or start from scratch</div>
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- ═══ DETAIL PANEL (Agent editor for FabricDataEngineer) ═══ -->
+            <div class="w-[420px] border-l border-outline-variant/10 bg-surface-container-lowest overflow-y-auto smooth-scroll shrink-0 slide-in">
+                <div class="p-6 space-y-6">
+
+                    <!-- Agent header -->
+                    <div class="flex items-start justify-between">
+                        <div class="flex items-center gap-3">
+                            <div class="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center">
+                                <span class="material-symbols-outlined text-blue-600 text-[24px]">engineering</span>
+                            </div>
+                            <div>
+                                <h2 class="text-base font-bold text-on-surface">FabricDataEngineer</h2>
+                                <div class="flex items-center gap-2 mt-0.5">
+                                    <span class="text-[9px] font-bold uppercase tracking-widest bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded">Microsoft</span>
+                                    <span class="text-[10px] text-on-surface-variant">v1.0.3</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-1">
+                            <button class="p-1.5 text-on-surface-variant hover:bg-surface-container-low rounded-lg transition-colors" title="Clone agent">
+                                <span class="material-symbols-outlined text-[18px]">content_copy</span>
+                            </button>
+                            <button class="p-1.5 text-on-surface-variant hover:bg-surface-container-low rounded-lg transition-colors" title="More options">
+                                <span class="material-symbols-outlined text-[18px]">more_vert</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Description -->
+                    <div>
+                        <p class="text-xs text-on-surface-variant leading-relaxed">Medallion architectures (Bronze → Silver → Gold), ETL/ELT pipelines, data migration, and data quality checks. Built on Spark and SQL authoring + consumption skills for end-to-end data engineering workflows.</p>
+                    </div>
+
+                    <!-- Personas -->
+                    <div>
+                        <label class="block text-[10px] font-bold text-on-surface-variant uppercase tracking-wider mb-2">Personas</label>
+                        <div class="flex gap-2">
+                            <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-medium bg-surface-container-low border border-outline-variant/10 text-on-surface">
+                                <span class="material-symbols-outlined text-[12px]">code</span>
+                                Developer
+                            </span>
+                            <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-medium bg-surface-container-low border border-outline-variant/10 text-on-surface">
+                                <span class="material-symbols-outlined text-[12px]">database</span>
+                                Data Engineer
+                            </span>
+                        </div>
+                    </div>
+
+                    <!-- ═══ SKILLS COMPOSITION ═══ -->
+                    <div>
+                        <div class="flex items-center justify-between mb-3">
+                            <label class="text-[10px] font-bold text-on-surface-variant uppercase tracking-wider">Skills (4)</label>
+                            <button class="flex items-center gap-1 text-primary text-[10px] font-bold hover:underline">
+                                <span class="material-symbols-outlined text-[14px]">add</span>
+                                Add skill
+                            </button>
+                        </div>
+
+                        <div class="space-y-2">
+                            <!-- Skill 1 — spark-authoring -->
+                            <div class="flex items-center gap-3 p-3 bg-surface-container-low rounded-xl border border-outline-variant/8 group/skill hover:border-blue-200 transition-colors">
+                                <div class="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center shrink-0">
+                                    <span class="material-symbols-outlined text-blue-600 text-[16px]">edit_note</span>
+                                </div>
+                                <div class="flex-1 min-w-0">
+                                    <div class="flex items-center gap-1.5">
+                                        <span class="text-xs font-semibold text-on-surface">spark-authoring-cli</span>
+                                        <span class="text-[9px] bg-blue-50 text-blue-600 px-1 py-0.5 rounded font-medium">Authoring</span>
+                                    </div>
+                                    <p class="text-[10px] text-on-surface-variant mt-0.5 truncate">Build Fabric Spark and Data Engineering workflows</p>
+                                </div>
+                                <div class="flex items-center gap-0.5 opacity-0 group-hover/skill:opacity-100 transition-opacity">
+                                    <button class="p-1 text-on-surface-variant hover:text-primary rounded transition-colors" title="Configure skill">
+                                        <span class="material-symbols-outlined text-[14px]">settings</span>
+                                    </button>
+                                    <button class="p-1 text-on-surface-variant hover:text-error rounded transition-colors" title="Remove skill">
+                                        <span class="material-symbols-outlined text-[14px]">close</span>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- Skill 2 — sqldw-authoring -->
+                            <div class="flex items-center gap-3 p-3 bg-surface-container-low rounded-xl border border-outline-variant/8 group/skill hover:border-blue-200 transition-colors">
+                                <div class="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center shrink-0">
+                                    <span class="material-symbols-outlined text-blue-600 text-[16px]">edit_note</span>
+                                </div>
+                                <div class="flex-1 min-w-0">
+                                    <div class="flex items-center gap-1.5">
+                                        <span class="text-xs font-semibold text-on-surface">sqldw-authoring-cli</span>
+                                        <span class="text-[9px] bg-blue-50 text-blue-600 px-1 py-0.5 rounded font-medium">Authoring</span>
+                                    </div>
+                                    <p class="text-[10px] text-on-surface-variant mt-0.5 truncate">Author Warehouses, Lakehouse SQL Endpoints, Mirrored DBs</p>
+                                </div>
+                                <div class="flex items-center gap-0.5 opacity-0 group-hover/skill:opacity-100 transition-opacity">
+                                    <button class="p-1 text-on-surface-variant hover:text-primary rounded transition-colors" title="Configure skill">
+                                        <span class="material-symbols-outlined text-[14px]">settings</span>
+                                    </button>
+                                    <button class="p-1 text-on-surface-variant hover:text-error rounded transition-colors" title="Remove skill">
+                                        <span class="material-symbols-outlined text-[14px]">close</span>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- Skill 3 — spark-consumption -->
+                            <div class="flex items-center gap-3 p-3 bg-surface-container-low rounded-xl border border-outline-variant/8 group/skill hover:border-emerald-200 transition-colors">
+                                <div class="w-8 h-8 rounded-lg bg-emerald-50 flex items-center justify-center shrink-0">
+                                    <span class="material-symbols-outlined text-emerald-600 text-[16px]">query_stats</span>
+                                </div>
+                                <div class="flex-1 min-w-0">
+                                    <div class="flex items-center gap-1.5">
+                                        <span class="text-xs font-semibold text-on-surface">spark-consumption-cli</span>
+                                        <span class="text-[9px] bg-emerald-50 text-emerald-600 px-1 py-0.5 rounded font-medium">Consumption</span>
+                                    </div>
+                                    <p class="text-[10px] text-on-surface-variant mt-0.5 truncate">Analyze Lakehouse tables interactively</p>
+                                </div>
+                                <div class="flex items-center gap-0.5 opacity-0 group-hover/skill:opacity-100 transition-opacity">
+                                    <button class="p-1 text-on-surface-variant hover:text-primary rounded transition-colors" title="Configure skill">
+                                        <span class="material-symbols-outlined text-[14px]">settings</span>
+                                    </button>
+                                    <button class="p-1 text-on-surface-variant hover:text-error rounded transition-colors" title="Remove skill">
+                                        <span class="material-symbols-outlined text-[14px]">close</span>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- Skill 4 — sqldw-consumption -->
+                            <div class="flex items-center gap-3 p-3 bg-surface-container-low rounded-xl border border-outline-variant/8 group/skill hover:border-emerald-200 transition-colors">
+                                <div class="w-8 h-8 rounded-lg bg-emerald-50 flex items-center justify-center shrink-0">
+                                    <span class="material-symbols-outlined text-emerald-600 text-[16px]">query_stats</span>
+                                </div>
+                                <div class="flex-1 min-w-0">
+                                    <div class="flex items-center gap-1.5">
+                                        <span class="text-xs font-semibold text-on-surface">sqldw-consumption-cli</span>
+                                        <span class="text-[9px] bg-emerald-50 text-emerald-600 px-1 py-0.5 rounded font-medium">Consumption</span>
+                                    </div>
+                                    <p class="text-[10px] text-on-surface-variant mt-0.5 truncate">Query Warehouses and SQL Endpoints</p>
+                                </div>
+                                <div class="flex items-center gap-0.5 opacity-0 group-hover/skill:opacity-100 transition-opacity">
+                                    <button class="p-1 text-on-surface-variant hover:text-primary rounded transition-colors" title="Configure skill">
+                                        <span class="material-symbols-outlined text-[14px]">settings</span>
+                                    </button>
+                                    <button class="p-1 text-on-surface-variant hover:text-error rounded transition-colors" title="Remove skill">
+                                        <span class="material-symbols-outlined text-[14px]">close</span>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- Add skill drop zone -->
+                            <button class="w-full flex items-center justify-center gap-1.5 p-2.5 border-2 border-dashed border-outline-variant/15 rounded-xl text-on-surface-variant text-[11px] font-medium hover:border-primary/30 hover:text-primary hover:bg-primary/3 transition-all">
+                                <span class="material-symbols-outlined text-[16px]">add_circle</span>
+                                Add skill from library
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- ═══ AVAILABLE SKILLS TO ADD (quick picker) ═══ -->
+                    <div>
+                        <label class="block text-[10px] font-bold text-on-surface-variant uppercase tracking-wider mb-2">Quick add — available skills</label>
+                        <div class="flex flex-wrap gap-1.5">
+                            <button class="inline-flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-medium bg-surface-container-low text-on-surface-variant border border-outline-variant/10 hover:bg-primary/5 hover:text-primary hover:border-primary/20 transition-all">
+                                <span class="material-symbols-outlined text-[11px]">add</span>
+                                eventhouse-authoring
+                            </button>
+                            <button class="inline-flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-medium bg-surface-container-low text-on-surface-variant border border-outline-variant/10 hover:bg-primary/5 hover:text-primary hover:border-primary/20 transition-all">
+                                <span class="material-symbols-outlined text-[11px]">add</span>
+                                eventhouse-consumption
+                            </button>
+                            <button class="inline-flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-medium bg-surface-container-low text-on-surface-variant border border-outline-variant/10 hover:bg-primary/5 hover:text-primary hover:border-primary/20 transition-all">
+                                <span class="material-symbols-outlined text-[11px]">add</span>
+                                powerbi-authoring
+                            </button>
+                            <button class="inline-flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-medium bg-surface-container-low text-on-surface-variant border border-outline-variant/10 hover:bg-primary/5 hover:text-primary hover:border-primary/20 transition-all">
+                                <span class="material-symbols-outlined text-[11px]">add</span>
+                                powerbi-consumption
+                            </button>
+                            <button class="inline-flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-medium bg-surface-container-low text-on-surface-variant border border-outline-variant/10 hover:bg-primary/5 hover:text-primary hover:border-primary/20 transition-all">
+                                <span class="material-symbols-outlined text-[11px]">add</span>
+                                check-updates
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- ═══ SECURITY & AUTH ═══ -->
+                    <div>
+                        <label class="block text-[10px] font-bold text-on-surface-variant uppercase tracking-wider mb-2">Authentication</label>
+                        <div class="p-3 bg-surface-container-low rounded-xl border border-outline-variant/8 space-y-2">
+                            <div class="flex items-center gap-2">
+                                <span class="material-symbols-outlined text-emerald-600 text-[16px]">verified_user</span>
+                                <span class="text-xs font-medium text-on-surface">Azure AD authenticated</span>
+                            </div>
+                            <p class="text-[10px] text-on-surface-variant leading-relaxed">All operations use your Azure AD identity. No secrets or tokens stored by skills.</p>
+                        </div>
+                    </div>
+
+                    <!-- ═══ RESPONSIBLE AI ═══ -->
+                    <div>
+                        <label class="block text-[10px] font-bold text-on-surface-variant uppercase tracking-wider mb-2">Security & Responsible AI</label>
+                        <div class="grid grid-cols-2 gap-2">
+                            <div class="flex items-center gap-1.5 p-2 bg-surface-container-low rounded-lg text-[10px] text-on-surface-variant">
+                                <span class="material-symbols-outlined text-emerald-600 text-[14px]">check_circle</span>
+                                Prompt-injection safe
+                            </div>
+                            <div class="flex items-center gap-1.5 p-2 bg-surface-container-low rounded-lg text-[10px] text-on-surface-variant">
+                                <span class="material-symbols-outlined text-emerald-600 text-[14px]">check_circle</span>
+                                No arbitrary execution
+                            </div>
+                            <div class="flex items-center gap-1.5 p-2 bg-surface-container-low rounded-lg text-[10px] text-on-surface-variant">
+                                <span class="material-symbols-outlined text-emerald-600 text-[14px]">check_circle</span>
+                                Secret scanning
+                            </div>
+                            <div class="flex items-center gap-1.5 p-2 bg-surface-container-low rounded-lg text-[10px] text-on-surface-variant">
+                                <span class="material-symbols-outlined text-emerald-600 text-[14px]">check_circle</span>
+                                OWASP LLM Top 10
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- ═══ EXAMPLE USE CASES ═══ -->
+                    <div>
+                        <label class="block text-[10px] font-bold text-on-surface-variant uppercase tracking-wider mb-2">Example use cases</label>
+                        <div class="space-y-1.5">
+                            <div class="flex items-center gap-2 p-2.5 bg-surface-container-low rounded-lg border border-outline-variant/8 hover:border-primary/15 transition-colors cursor-pointer">
+                                <span class="material-symbols-outlined text-primary text-[14px]">play_circle</span>
+                                <span class="text-xs text-on-surface">NYC Taxi Medallion Pipeline</span>
+                            </div>
+                            <div class="flex items-center gap-2 p-2.5 bg-surface-container-low rounded-lg border border-outline-variant/8 hover:border-primary/15 transition-colors cursor-pointer">
+                                <span class="material-symbols-outlined text-primary text-[14px]">play_circle</span>
+                                <span class="text-xs text-on-surface">Document My Workspace</span>
+                            </div>
+                            <div class="flex items-center gap-2 p-2.5 bg-surface-container-low rounded-lg border border-outline-variant/8 hover:border-primary/15 transition-colors cursor-pointer">
+                                <span class="material-symbols-outlined text-primary text-[14px]">play_circle</span>
+                                <span class="text-xs text-on-surface">Analytics PDF Report</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Actions footer -->
+                    <div class="flex gap-2 pt-3 border-t border-outline-variant/10">
+                        <button class="flex-1 flex items-center justify-center gap-1.5 px-4 py-2.5 bg-gradient-to-br from-primary to-primary-container text-white rounded-xl text-xs font-bold shadow-md shadow-primary/15 hover:scale-[1.02] active:scale-[0.98] transition-all">
+                            <span class="material-symbols-outlined text-[16px]">content_copy</span>
+                            Clone & Customize
+                        </button>
+                        <button class="flex items-center justify-center gap-1.5 px-4 py-2.5 text-on-surface-variant bg-surface-container-low border border-outline-variant/15 rounded-xl text-xs font-medium hover:bg-surface-container-high transition-colors">
+                            <span class="material-symbols-outlined text-[16px]">delete</span>
+                            Remove
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </main>
+
+</div>
+
+</body>
+</html>
