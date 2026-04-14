@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<WorkloadManifestConfiguration xmlns:xsi= "http://www.w3.org/2001/XMLSchema-instance" SchemaVersion="1.101.0">
+  <Workload WorkloadName="Org.AgentHub" HostingType="Remote">
+    <Version>1.0.0</Version>
+    <RemoteServiceConfiguration>
+      <CloudServiceConfiguration>
+        <Cloud>Public</Cloud>
+        <AADApp>
+          <AppId>e916ec28-db0d-4a71-9416-5b6d3c430a83</AppId> <!-- Your application ID -->
+          <RedirectUri>http://localhost:60006/close</RedirectUri>
+          <ResourceId>api://localdevinstance/fc3a8969-ed60-4daa-92df-1fdf4ff5bc15/Org.AgentHub/ym</ResourceId>
+        </AADApp>
+        <Endpoints>
+          <ServiceEndpoint>
+            <Name>Workload</Name>
+            <Url>https://be.endpointurl.net/workload</Url>
+            <IsEndpointResolutionService>false</IsEndpointResolutionService>
+          </ServiceEndpoint>
+          <ServiceEndpoint>
+            <Name>Frontend</Name>
+            <Url>https://fe.endpointurl.net</Url>
+            <IsEndpointResolutionService>false</IsEndpointResolutionService>
+          </ServiceEndpoint>
+        </Endpoints>
+      </CloudServiceConfiguration>
+    </RemoteServiceConfiguration>
+  </Workload>
+</WorkloadManifestConfiguration>
