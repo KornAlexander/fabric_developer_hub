@@ -58,7 +58,9 @@ services:
       - ./Frontend/src:/app/src
       - ./Frontend/tools:/app/tools
       - ./Frontend/Package:/app/Package
-      - ./Backend/python/bin:/app/../Backend/python/bin:ro
+      # The manifest-generator writes the .nupkg into the manifest-pkg volume.
+      # Webpack serves it from /manifests_new → Backend/python/bin/Debug/
+      - manifest-pkg:/app/../Backend/python/bin/Debug:ro
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:60006/',r=>{r.resume();process.exit(r.statusCode<400?0:1)}).on('error',()=>process.exit(1))"]
       interval: 10s
@@ -68,6 +70,8 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+      manifest-generator:
+        condition: service_completed_successfully
 
   # ── 4. DevGateway (registers workload with Fabric) ────────
   # Token flow: if DEVGATEWAY_TOKEN is set (from host `az` CLI), it is used

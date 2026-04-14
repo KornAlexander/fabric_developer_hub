@@ -105,7 +105,12 @@ module.exports = {
                 
                     const devParameters = {
                         name: process.env.WORKLOAD_NAME,
-                        url: "http://127.0.0.1:60006"
+                        url: "http://127.0.0.1:60006",
+                        devAADAppConfig: {
+                            audience: process.env.DEV_AAD_CONFIG_AUDIENCE || process.env.AUDIENCE,
+                            appId: process.env.DEV_AAD_CONFIG_APPID || process.env.CLIENT_ID,
+                            redirectUri: process.env.DEV_AAD_CONFIG_REDIRECT_URI || "http://localhost:60006/close"
+                        }
                     };
                 
                     res.end(JSON.stringify({ extension: devParameters }));

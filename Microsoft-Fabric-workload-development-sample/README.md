@@ -114,10 +114,25 @@ Backend runs on http://localhost:5000, frontend on http://localhost:60006.
 Runs all four services — manifest generation, backend, frontend, and DevGateway — in a single command:
 
 ```bash
-docker compose up --build
+./start.sh
 ```
 
-The `manifest-generator` service runs once to produce the `.nupkg`, then the backend and frontend start. Once the backend is healthy, the DevGateway container launches and prompts you to authenticate via device-code flow.
+The script acquires a Power BI access token from your host Azure CLI (if logged in) and passes it to the DevGateway, skipping the interactive device-code flow. If you're not logged in, it falls back to a device-code prompt inside the container.
+
+You can pass extra flags through, e.g. `./start.sh --build` or `./start.sh -d`.
+
+### How DevGateway authentication works
+
+The DevGateway registers your local machine as a workload endpoint with the Fabric cloud service. It calls Fabric's backend APIs to announce: "for workspace X, route workload requests to my local backend at `localhost:5000`."
+
+To do this it needs a user token scoped to the Power BI API (`https://analysis.windows.net/powerbi/api/.default`). This proves you are authorized to register a dev workload in that workspace — without it, anyone could redirect workload traffic for arbitrary workspaces.
+
+### Service startup order
+
+1. **manifest-generator** — runs once, produces the `.nupkg` manifest package
+2. **backend** — starts, waits until healthy (HTTP 200 on `/health`)
+3. **frontend** — starts after backend is healthy, serves the webpack dev server with hot reload
+4. **dev-gateway** — starts last, uploads the manifest package to Fabric and registers the local endpoint
 
 Frontend has hot reload via volume mounts. Backend restarts require rebuilding the container.
 

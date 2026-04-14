@@ -20,5 +20,9 @@ else
   echo "   Falling back to device-code login inside the container"
 fi
 
+# ── Clean up previous run ────────────────────────────────────
+# Stop containers and remove the manifest volume so it gets regenerated
+docker compose down -v 2>/dev/null || true
+
 # ── Launch all services ─────────────────────────────────────
 exec docker compose up --abort-on-container-failure "$@"
