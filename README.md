@@ -208,7 +208,6 @@ This project is in the **design phase**. Contributions welcome for:
 - Backend architecture proposals
 - Fabric REST API integration patterns
 - Accessibility improvements
-- Dark mode theme variants
 
 ---
 
