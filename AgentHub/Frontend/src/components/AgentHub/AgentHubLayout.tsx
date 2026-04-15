@@ -19,6 +19,7 @@ import {
     PersonCircle32Regular,
     Navigation24Regular,
     Dismiss24Regular,
+    Wrench24Regular,
 } from "@fluentui/react-icons";
 import { WorkloadClientAPI } from "@ms-fabric/workload-client";
 import { DashboardPage } from "./DashboardPage";
@@ -28,6 +29,7 @@ import { SettingsPage } from "./SettingsPage";
 import { JobDetailPage } from "./JobDetailPage";
 import { useGitHubAuth } from "./useGitHubAuth";
 import { ItemProvider } from "./ItemContext";
+import { PbiFixerPage } from "../PbiFixer";
 
 interface AgentHubLayoutProps {
     workloadClient: WorkloadClientAPI;
@@ -49,6 +51,7 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
     let activePage = "home";
     if (currentPath.includes("/orchestrator")) activePage = "orchestrator";
     else if (currentPath.includes("/agents")) activePage = "agents";
+    else if (currentPath.includes("/pbifixer")) activePage = "pbifixer";
     else if (currentPath.includes("/settings")) activePage = "settings";
     else if (currentPath.includes("/job/")) activePage = "orchestrator";
 
@@ -167,6 +170,7 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
                         <SideNavItem icon={<Home24Regular />} label="Home" active={activePage === "home"} onClick={() => navTo("home")} />
                         <SideNavItem icon={<BrainCircuit24Regular />} label="Orchestrator" active={activePage === "orchestrator"} onClick={() => navTo("orchestrator")} />
                         <SideNavItem icon={<Bot24Regular />} label="Agents" active={activePage === "agents"} onClick={() => navTo("agents")} />
+                        <SideNavItem icon={<Wrench24Regular />} label="PBI Fixer" active={activePage === "pbifixer"} onClick={() => navTo("pbifixer")} />
                         <SideNavItem icon={<Settings24Regular />} label="Settings" active={activePage === "settings"} onClick={() => navTo("settings")} />
                     </nav>
 
@@ -189,6 +193,7 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
                         <Route path={`${match.path}/home`}><DashboardPage workloadClient={workloadClient} /></Route>
                         <Route path={`${match.path}/orchestrator`}><OrchestratorPage workloadClient={workloadClient} /></Route>
                         <Route path={`${match.path}/agents`}><AgentsPage workloadClient={workloadClient} /></Route>
+                        <Route path={`${match.path}/pbifixer`}><PbiFixerPage workloadClient={workloadClient} /></Route>
                         <Route path={`${match.path}/settings`}><SettingsPage workloadClient={workloadClient} /></Route>
                         <Route path={`${match.path}/job/:jobId`}><JobDetailPage workloadClient={workloadClient} /></Route>
                         <Route path={match.path}><DashboardPage workloadClient={workloadClient} /></Route>

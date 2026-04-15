@@ -340,13 +340,13 @@ _register(
     )
 )
 
-# ── Kai – Power BI Expert ────────────────────────────────────────────
+# ── Dash – Power BI Expert ───────────────────────────────────────────
 
 _register(
     AgentTemplate(
-        id="kai-powerbi-expert",
-        name="Kai",
-        display_name="Kai - Power BI Expert",
+        id="dash-powerbi-expert",
+        name="Dash",
+        display_name="Dash - Power BI Expert",
         category=AgentCategory.ANALYTICS,
         description=(
             "Power BI specialist who builds, reviews, and fixes reports and "
@@ -355,7 +355,7 @@ _register(
         ),
         tags=["Power BI", "DAX", "Reports", "Semantic Model", "PBIR"],
         system_prompt=(
-            "You are Kai, a Power BI expert working inside Microsoft Fabric. "
+            "You are Dash, a Power BI expert working inside Microsoft Fabric. "
             "You combine deep DAX knowledge, report design best practices, and "
             "automated fixers to build and maintain world-class Power BI assets.\n\n"
             "Your workflow:\n"
