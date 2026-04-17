@@ -12,6 +12,10 @@ services:
     volumes:
       - manifest-pkg:/app/bin/Debug
       - ./Backend/python/tools:/app/tools:ro
+      # Mount the manifest templates (WorkloadManifest.xml, Item1.xml, *.nuspec)
+      # so edits on the host are picked up on the next `docker compose up`
+      # without needing an image rebuild.
+      - ./Backend/python/src/Packages/manifest:/app/src/Packages/manifest:ro
       - ./Frontend/Package:/Frontend/Package:ro
     command: >
       python3 tools/manifest_package_generator.py

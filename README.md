@@ -175,6 +175,48 @@ npx http-server -p 3000
 # http://localhost:3000/Design/home_dashboard.html
 ```
 
+### Running the AgentHub stack locally (Docker)
+
+The full backend + frontend + Fabric DevGateway runs via `docker compose`:
+
+```bash
+cd AgentHub
+cp .env.example .env      # fill in tenant, app, workspace IDs
+./start.sh
+```
+
+#### Platform notes
+
+The `dev-gateway` container is pinned to `linux/amd64` because Microsoft
+distributes the Fabric DevGateway binary as x64-only. This is transparent
+on Intel/AMD64 hosts. **On ARM64 hosts (Apple Silicon, Snapdragon, etc.)
+register QEMU emulation once:**
+
+```bash
+docker run --privileged --rm tonistiigi/binfmt --install amd64
+```
+
+The setting persists across reboots, so this is a one-shot.
+
+#### Corporate VPN networking
+
+If your VPN advertises all RFC1918 ranges (common with Zscaler /
+GlobalProtect), Docker may fail to allocate a bridge subnet
+(*"all predefined address pools have been fully subnetted"*). Fix by
+pinning Docker to the IANA benchmarking range, which no VPN routes:
+
+```bash
+sudo tee /etc/docker/daemon.json > /dev/null <<'EOF'
+{
+  "bip": "198.18.255.1/24",
+  "default-address-pools": [
+    { "base": "198.18.0.0/16", "size": 24 }
+  ]
+}
+EOF
+sudo service docker restart
+```
+
 ---
 
 ## Navigation Map

@@ -25,4 +25,8 @@ fi
 docker compose down -v 2>/dev/null || true
 
 # ── Launch all services ─────────────────────────────────────
-exec docker compose up --abort-on-container-failure "$@"
+# --build: ensure images reflect any Dockerfile / non-mounted source changes.
+# Manifest XML templates are bind-mounted (see docker-compose.yaml), so
+# editing WorkloadManifest.xml / Item1.xml is picked up without a rebuild —
+# but --build is cheap thanks to layer caching and covers everything else.
+exec docker compose up --build --abort-on-container-failure "$@"

@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import shutil
+import string
 import sys
 import tempfile
 import zipfile
@@ -146,10 +147,15 @@ class ManifestPackageGenerator:
         if workload_elem is not None:
             workload_name = workload_elem.get('WorkloadName')
             if workload_name:
-                if not workload_name.startswith('Org.'):
+                # Templates keep a ${WORKLOAD_NAME} placeholder here; the real
+                # value is substituted at package-build time from env vars.
+                if workload_name.startswith('${') and workload_name.endswith('}'):
+                    print(f"✅ WorkloadName is a template placeholder: {workload_name}")
+                elif not workload_name.startswith('Org.'):
                     print(f"❌ WorkloadName '{workload_name}' must have 'Org.' prefix")
                     return False
-                print(f"✅ WorkloadName format valid: {workload_name}")
+                else:
+                    print(f"✅ WorkloadName format valid: {workload_name}")
             else:
                 print("❌ WorkloadName attribute not found")
                 return False
@@ -182,6 +188,10 @@ class ManifestPackageGenerator:
                 if elem.tag.endswith('Workload'):
                     workload_name = elem.get('WorkloadName')
                     if workload_name:
+                        # Resolve template placeholder from env if present.
+                        if workload_name.startswith('${') and workload_name.endswith('}'):
+                            var = workload_name[2:-1]
+                            return os.environ.get(var, 'Org.WorkloadSample')
                         return workload_name
         except Exception as e:
             print(f"⚠️  Could not extract WorkloadName: {e}")
@@ -369,6 +379,12 @@ class ManifestPackageGenerator:
                 shutil.copy2(item1_path, temp_path)
             else:
                 self.create_item1_template(temp_path / "Item1.xml")
+
+            # Step 1b: Substitute ${VAR} placeholders in the copied XMLs
+            # from environment variables (loaded from AgentHub/.env by
+            # docker-compose env_file, or from the shell for local runs).
+            self.substitute_env_placeholders(temp_path / "WorkloadManifest.xml")
+            self.substitute_env_placeholders(temp_path / "Item1.xml")
             
             # Step 2: Load and process nuspec template
             print("📋 Processing nuspec template...")
@@ -392,6 +408,31 @@ class ManifestPackageGenerator:
         
         return str(nupkg_path)
     
+    # Placeholders in the manifest templates that must be supplied via env vars.
+    REQUIRED_ENV_PLACEHOLDERS = ("WORKLOAD_NAME", "CLIENT_ID", "AUDIENCE")
+
+    def substitute_env_placeholders(self, xml_path: Path) -> None:
+        """Replace ${VAR} placeholders in an XML file with values from os.environ.
+
+        Missing required vars raise ValueError so bad configs fail the build
+        instead of shipping a broken manifest. Unknown placeholders are left
+        alone (safe_substitute), which is handy for future additions.
+        """
+        if not xml_path.exists():
+            return
+
+        missing = [k for k in self.REQUIRED_ENV_PLACEHOLDERS if not os.environ.get(k)]
+        if missing:
+            raise ValueError(
+                "Manifest template requires these env vars (set them in "
+                f"AgentHub/.env): {', '.join(missing)}"
+            )
+
+        content = xml_path.read_text(encoding="utf-8")
+        rendered = string.Template(content).safe_substitute(os.environ)
+        xml_path.write_text(rendered, encoding="utf-8")
+        print(f"✅ Substituted env placeholders in {xml_path.name}")
+
     def create_build_info(self, output_dir: Path) -> None:
         """Create build information file for tracking."""
         build_info = {

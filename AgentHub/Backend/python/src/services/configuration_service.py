@@ -8,13 +8,16 @@ from enum import Enum
 
 from dotenv import load_dotenv
 
-# Load the single root .env (AgentHub/.env)
-# before anything reads os.environ.
+# Load the single root .env (AgentHub/.env) before anything reads os.environ.
 # parents[4] = AgentHub/ when running locally
 # (services/ → src/ → python/ → Backend/ → AgentHub/)
-# In Docker the env vars are injected via docker-compose env_file, so this is a no-op.
-_root_env = Path(__file__).resolve().parents[4] / ".env"
-load_dotenv(_root_env, override=False)
+# In Docker the env vars are injected via docker-compose env_file, and the
+# file lives at /app/src/services/ (only 3 parents), so we skip silently.
+_here = Path(__file__).resolve()
+if len(_here.parents) > 4:
+    _root_env = _here.parents[4] / ".env"
+    if _root_env.is_file():
+        load_dotenv(_root_env, override=False)
 
 logger = logging.getLogger(__name__)
 
