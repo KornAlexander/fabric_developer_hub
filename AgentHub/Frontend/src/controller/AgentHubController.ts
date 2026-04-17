@@ -36,8 +36,7 @@ import {
 } from "@ms-fabric/workload-client";
 
 import { Dispatch, SetStateAction } from "react";
-import { GenericItem } from '../models/SampleWorkloadModel';
-import { jobTypeDisplayNames } from "../utils";
+import { GenericItem } from '../models/AgentHubModel';
 
 import {
     AuthenticationUIRequiredException,
@@ -326,8 +325,8 @@ export async function callDatahubOpen(
         workspaceNavigationEnabled: workspaceNavigationEnabled,
         // not in use in the regular selector, but required to be non-empty for validation
         hostDetails: {
-            experience: 'sample experience 3rd party', // Change this to reflect your team's process, e.g., "Build notebook" 
-            scenario: 'sample scenario 3rd party', // Adjust this to the specific action, e.g., "Select Lakehouse" 
+            experience: 'agenthub', // Change this to reflect your team's process, e.g., "Build notebook" 
+            scenario: 'agenthub-action', // Adjust this to the specific action, e.g., "Select Lakehouse" 
         }
     };
 
@@ -614,7 +613,7 @@ export async function callRunItemJob(
         console.log(`Executed job id: ${result.itemJobInstanceId}`);
         if (showNotification) {
             callNotificationOpen(
-                `${jobTypeDisplayNames[result.itemJobType]} execution has begun.`,
+                `${result.itemJobType} execution has begun.`,
                 `Job instance ID: ${result.itemJobInstanceId}.`,
                 NotificationType.Success,
                 NotificationToastDuration.Medium,

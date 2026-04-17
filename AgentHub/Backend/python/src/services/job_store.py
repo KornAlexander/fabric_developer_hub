@@ -6,13 +6,10 @@ import json
 import logging
 import os
 import sqlite3
-import uuid
-from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from datetime import UTC, datetime
 
 from models.agent_models import (
     AgentAssignment,
-    AgentStatus,
     ExecutionPlan,
     Job,
     JobStatus,
@@ -21,7 +18,7 @@ from models.agent_models import (
 
 logger = logging.getLogger(__name__)
 
-_DB_PATH: Optional[str] = None
+_DB_PATH: str | None = None
 _SCHEMA_VERSION = 1
 
 
@@ -123,7 +120,7 @@ def create_job(job: Job) -> Job:
         conn.close()
 
 
-def get_job(job_id: str) -> Optional[Job]:
+def get_job(job_id: str) -> Job | None:
     conn = _connect()
     try:
         row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
@@ -134,7 +131,7 @@ def get_job(job_id: str) -> Optional[Job]:
         conn.close()
 
 
-def list_jobs(user_id: str, status: Optional[str] = None, limit: int = 50) -> List[Job]:
+def list_jobs(user_id: str, status: str | None = None, limit: int = 50) -> list[Job]:
     conn = _connect()
     try:
         if status:
@@ -232,7 +229,7 @@ def save_agent_config(config: UserAgentConfig) -> UserAgentConfig:
         conn.close()
 
 
-def get_user_agent_configs(user_id: str) -> List[UserAgentConfig]:
+def get_user_agent_configs(user_id: str) -> list[UserAgentConfig]:
     conn = _connect()
     try:
         rows = conn.execute(
@@ -270,11 +267,11 @@ def _row_to_config(row: sqlite3.Row) -> UserAgentConfig:
 
 def log_audit(
     job_id: str,
-    agent_id: Optional[str],
-    tool_name: Optional[str],
-    tool_args: Optional[dict],
+    agent_id: str | None,
+    tool_name: str | None,
+    tool_args: dict | None,
     result_summary: str,
-    user_id: Optional[str] = None,
+    user_id: str | None = None,
 ) -> None:
     conn = _connect()
     try:
@@ -286,7 +283,7 @@ def log_audit(
                 tool_name,
                 json.dumps(tool_args) if tool_args else None,
                 result_summary,
-                datetime.now(timezone.utc).isoformat(),
+                datetime.now(UTC).isoformat(),
                 user_id,
             ),
         )
@@ -295,7 +292,7 @@ def log_audit(
         conn.close()
 
 
-def get_audit_log(job_id: str) -> List[dict]:
+def get_audit_log(job_id: str) -> list[dict]:
     conn = _connect()
     try:
         rows = conn.execute(

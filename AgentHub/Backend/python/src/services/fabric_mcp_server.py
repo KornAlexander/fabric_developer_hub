@@ -23,8 +23,6 @@ Tools:
 
 import json
 import os
-import sys
-from typing import Optional
 
 import httpx
 from jose import jwt
@@ -141,7 +139,7 @@ async def fabric_list_workspaces() -> str:
 
 
 @mcp.tool()
-async def fabric_list_items(workspace_id: str, item_type: Optional[str] = None) -> str:
+async def fabric_list_items(workspace_id: str, item_type: str | None = None) -> str:
     """List items (lakehouses, notebooks, reports, etc.) in a Fabric workspace.
 
     Args:
@@ -175,7 +173,7 @@ async def fabric_create_item(
     workspace_id: str,
     display_name: str,
     item_type: str,
-    description: Optional[str] = None,
+    description: str | None = None,
 ) -> str:
     """Create a new item in a Fabric workspace.
 
@@ -240,7 +238,7 @@ def _validate_path(path: str) -> str:
 async def fabric_list_files(
     workspace_id: str,
     item_id: str,
-    path: Optional[str] = None,
+    path: str | None = None,
     recursive: bool = False,
 ) -> str:
     """List files and folders in a OneLake item (e.g. Lakehouse Files/).

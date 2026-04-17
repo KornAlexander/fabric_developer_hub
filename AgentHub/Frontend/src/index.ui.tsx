@@ -8,8 +8,8 @@ import { createWorkloadClient, InitParams, ItemTabActionContext } from '@ms-fabr
 import { fabricLightTheme } from "./theme";
 import { App } from "./App";
 import { convertGetItemResultToWorkloadItem } from "./utils";
-import { callItemGet } from "./controller/SampleWorkloadController";
-import { ItemPayload } from "./models/SampleWorkloadModel";
+import { callItemGet } from "./controller/AgentHubController";
+import { ItemPayload } from "./models/AgentHubModel";
 
 export async function initialize(params: InitParams) {
     const workloadClient = createWorkloadClient();
@@ -18,7 +18,7 @@ export async function initialize(params: InitParams) {
     workloadClient.navigation.onNavigate((route) => history.replace(route.targetUrl));
     workloadClient.action.onAction(async function ({ action, data }) {
         switch (action) {
-            case 'sample.tab.onInit':
+            case 'agenthub.tab.onInit':
                 const { id } = data as ItemTabActionContext;
                 try{
                     const getItemResult = await callItemGet(
@@ -34,15 +34,15 @@ export async function initialize(params: InitParams) {
                     );
                     return {};
                 }
-            case 'sample.tab.canDeactivate':
+            case 'agenthub.tab.canDeactivate':
                 return { canDeactivate: true };
-            case 'sample.tab.onDeactivate':
+            case 'agenthub.tab.onDeactivate':
                 return {};
-            case 'sample.tab.canDestroy':
+            case 'agenthub.tab.canDestroy':
                 return { canDestroy: true };
-            case 'sample.tab.onDestroy':
+            case 'agenthub.tab.onDestroy':
                 return {};
-            case 'sample.tab.onDelete':
+            case 'agenthub.tab.onDelete':
                 return {};
             default:
                 throw new Error('Unknown action received');

@@ -1,7 +1,8 @@
-from typing import Any, Optional
 from datetime import datetime
+from typing import Any
 from uuid import UUID
-from pydantic import BaseModel, Field
+
+from pydantic import BaseModel
 
 
 class JobMetadata(BaseModel):
@@ -10,8 +11,8 @@ class JobMetadata(BaseModel):
     """
     job_type: str
     job_instance_id: UUID
-    error_details: Optional[Any] = None
-    canceled_time: Optional[datetime] = None
+    error_details: Any | None = None
+    canceled_time: datetime | None = None
     use_onelake: bool = False
 
     @property
@@ -30,11 +31,11 @@ class JobMetadata(BaseModel):
             "canceled_time": self.canceled_time.isoformat() if self.canceled_time else None,
             "use_onelake": self.use_onelake
         }
-    
+
     def to_dict(self) -> dict:
         """Convert the job metadata to a dictionary for serialization."""
         return self.model_dump_json()
-    
+
     @classmethod
     def from_dict(cls, data: dict) -> 'JobMetadata':
         """Create a JobMetadata instance from a dictionary."""

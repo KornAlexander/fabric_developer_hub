@@ -31,7 +31,7 @@ import ReactFlow, {
 } from "reactflow";
 import "reactflow/dist/style.css";
 import { WorkloadClientAPI } from "@ms-fabric/workload-client";
-import { callAuthAcquireAccessToken } from "../../controller/SampleWorkloadController";
+import { callAuthAcquireAccessToken } from "../../controller/AgentHubController";
 import * as api from "../../controller/AgentHubApi";
 
 interface OrchestratorPageProps {

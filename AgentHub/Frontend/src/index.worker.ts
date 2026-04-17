@@ -7,14 +7,14 @@ import {
 
 export async function initialize(params: InitParams) {
     const workloadClient = createWorkloadClient();
-    const sampleWorkloadName = process.env.WORKLOAD_NAME;
+    const workloadName = process.env.WORKLOAD_NAME;
 
     workloadClient.action.onAction(async function ({ action, data }) {
         switch (action) {
             case 'open.agentHub':
                 const { workspaceObjectId: agentHubWsId } = data as ItemCreateContext;
                 return workloadClient.page.open({
-                    workloadName: sampleWorkloadName,
+                    workloadName: workloadName,
                     route: {
                         path: agentHubWsId ? `/agent-hub/home?ws=${agentHubWsId}` : `/agent-hub/home`,
                     },

@@ -1,5 +1,6 @@
-from typing import Optional
+
 from pydantic import BaseModel, Field
+
 
 class LakehouseTable(BaseModel):
     """
@@ -13,12 +14,12 @@ class LakehouseTable(BaseModel):
         ...,
         description="The full path to the table in OneLake storage"
     )
-    schema_name: Optional[str] = Field(
+    schema_name: str | None = Field(
         None,
         description="The schema name of the table, if available",
-        alias="schema"  
+        alias="schema"
     )
-    
+
     model_config = {
         "populate_by_name": True,
         "json_schema_extra": {

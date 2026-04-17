@@ -1,6 +1,6 @@
 # Testing Guide for Python Backend
 
-This guide explains how to set up and run tests for the Microsoft Fabric Python Backend sample.
+This guide explains how to set up and run tests for the AgentHub Python Backend.
 
 ## 📋 Prerequisites
 

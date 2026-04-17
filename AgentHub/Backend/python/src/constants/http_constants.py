@@ -9,4 +9,3 @@ class HttpHeaders:
 class AuthorizationSchemes:
     """Constants for OAuth scopes used in the workload."""
     BEARER = "Bearer"
-    

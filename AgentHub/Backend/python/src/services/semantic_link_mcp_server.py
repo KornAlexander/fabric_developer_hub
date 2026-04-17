@@ -18,7 +18,6 @@ from __future__ import annotations
 import json
 import os
 import time
-from typing import Optional
 
 import httpx
 from mcp.server.fastmcp import FastMCP
@@ -322,8 +321,8 @@ async def sl_clone_report(
     workspace_id: str,
     report_id: str,
     cloned_report_name: str,
-    target_workspace_id: Optional[str] = None,
-    target_dataset_id: Optional[str] = None,
+    target_workspace_id: str | None = None,
+    target_dataset_id: str | None = None,
 ) -> str:
     """Clone a report within or across workspaces.
 
@@ -477,7 +476,7 @@ async def sl_run_table_maintenance(
 async def sl_list_shortcuts(
     workspace_id: str,
     item_id: str,
-    parent_path: Optional[str] = None,
+    parent_path: str | None = None,
 ) -> str:
     """List OneLake shortcuts in a lakehouse or warehouse.
 
@@ -748,7 +747,7 @@ async def sl_deploy_semantic_model(
 @mcp.tool()
 async def sl_admin_list_workspaces(
     top: int = 100,
-    state: Optional[str] = None,
+    state: str | None = None,
 ) -> str:
     """[Admin] List all workspaces across the tenant.
 
@@ -801,7 +800,7 @@ async def sl_admin_list_datasets(
 async def sl_admin_get_activity_events(
     start_date: str,
     end_date: str,
-    activity_type: Optional[str] = None,
+    activity_type: str | None = None,
 ) -> str:
     """[Admin] Get audit/activity events for the tenant.
 
@@ -1118,7 +1117,6 @@ async def sl_set_endorsement(
         endorsement: 'Promoted', 'Certified', or 'None'.
     """
     body = {"endorsementDetails": {"endorsement": endorsement}}
-    url = f"{PBI_API}/admin/groups/{workspace_id}/datasets/{item_id}"
     async with httpx.AsyncClient(timeout=30.0) as client:
         # Try the endorsement API
         resp = await client.patch(

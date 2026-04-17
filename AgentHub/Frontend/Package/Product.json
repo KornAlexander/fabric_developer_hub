@@ -38,7 +38,7 @@
             }
         ]},
         "recommendedItemTypes": [
-          "SampleWorkloadItem"
+          "AgentHubItem"
         ]
     },
     "createExperience": {
@@ -62,7 +62,7 @@
             "workspace-plus-new",
             "workspace-plus-new-teams"
           ],
-          "itemType": "SampleWorkloadItem"
+          "itemType": "AgentHubItem"
         }
       ]
     },
@@ -81,11 +81,11 @@
         },
         {
           "mediaType": 0,
-          "source": "assets/images/SampleWorkload1.png"
+          "source": "assets/images/AgentHub1.png"
         },
         {
           "mediaType": 0,
-          "source": "assets/images/SampleWorkload2.png"
+          "source": "assets/images/AgentHub2.png"
         }
       ],
         "supportLink": {

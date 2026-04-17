@@ -1,7 +1,7 @@
 {
-  "name": "fabric-frontend-developer-sample",
+  "name": "agenthub-frontend",
   "version": "0.0.2",
-  "description": "Microsoft Fabric - Frontend Developer Sample App",
+  "description": "Fabric AgentHub — frontend",
   "main": "index.js",
   "scripts": {
     "start": "env-cmd -f ../.env webpack serve --open --config ./tools/webpack.config.js",

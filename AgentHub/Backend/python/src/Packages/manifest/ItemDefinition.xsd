@@ -69,7 +69,7 @@
   <xs:simpleType name="TypeName">
     <xs:annotation>
       <xs:documentation>
-        TypeName should contain WorkloadName as a prefix, e.g. Org.WorkloadSample.SampleWorkloadItem
+        TypeName should contain WorkloadName as a prefix, e.g. Org.AgentHub.AgentHubItem
       </xs:documentation>
     </xs:annotation>
     <xs:restriction base ="xs:string">
@@ -81,7 +81,7 @@
   <xs:simpleType name="JobTypeName">
     <xs:annotation>
       <xs:documentation>
-        JobTypeName should contain Item's TypeName as a prefix, e.g. Org.WorkloadSample.SampleWorkloadItem.SampleJobType
+        JobTypeName should contain Item's TypeName as a prefix, e.g. Org.AgentHub.AgentHubItem.MyJobType
       </xs:documentation>
     </xs:annotation>
     <xs:restriction base ="xs:string">

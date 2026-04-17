@@ -1,34 +1,32 @@
-import pytest
 import asyncio
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
+import sys
+from collections.abc import Generator
+from pathlib import Path
+from unittest.mock import AsyncMock, Mock, patch
+
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from typing import Dict, Any, Generator, Optional, List
-from uuid import UUID
-from datetime import datetime, timedelta
-import sys
-from pathlib import Path
 
 # Add src to Python path for imports
 src_path = Path(__file__).parent.parent / "src"
 if str(src_path) not in sys.path:
     sys.path.insert(0, str(src_path))
 
-from main import app as application
 from core.service_registry import ServiceRegistry
+from main import app as application
+from models.authentication_models import AuthorizationContext
 from services.authentication import AuthenticationService
-from services.item_factory import ItemFactory
-from models.authentication_models import AuthorizationContext, Claim, SubjectAndAppToken
+from services.authorization import AuthorizationHandler
 
 # Import the services that need to be mocked
 from services.configuration_service import ConfigurationService
-from services.open_id_connect_configuration import OpenIdConnectConfigurationManager, OpenIdConnectConfiguration
 from services.http_client import HttpClientService
+from services.item_factory import ItemFactory
 from services.item_metadata_store import ItemMetadataStore
 from services.lakehouse_client_service import LakehouseClientService
 from services.onelake_client_service import OneLakeClientService
-from services.authorization import AuthorizationHandler
-from constants.environment_constants import EnvironmentConstants
+from services.open_id_connect_configuration import OpenIdConnectConfigurationManager
 
 
 @pytest.fixture(scope="session")
@@ -51,10 +49,10 @@ def mock_service_registry():
     # Clear the singleton instance to ensure clean state
     ServiceRegistry._instance = None
     registry = ServiceRegistry()
-    
+
     # Mark as initialized to bypass initialization checks
     registry._initialized = True
-    
+
     return registry
 
 
@@ -77,14 +75,14 @@ def mock_auth_context():
 def mock_authentication_service(mock_auth_context):
     """Create a mock authentication service."""
     mock_service = AsyncMock(spec=AuthenticationService)
-    
+
     # Configure the mock's authenticate_control_plane_call to return a mock auth context
     mock_service.authenticate_control_plane_call.return_value = mock_auth_context
     mock_service.authenticate_data_plane_call.return_value = mock_auth_context
     mock_service.get_access_token_on_behalf_of.return_value = "mock_access_token"
     mock_service.get_fabric_s2s_token.return_value = "mock_s2s_token"
     mock_service.build_composite_token.return_value = "SubjectAndAppToken1.0 subjectToken=\"mock_subject\", appToken=\"mock_app\""
-    
+
     return mock_service
 
 
@@ -92,14 +90,14 @@ def mock_authentication_service(mock_auth_context):
 def mock_item_factory():
     """Create a mock item factory."""
     mock_factory = Mock(spec=ItemFactory)
-    
+
     # Import test helpers here to avoid circular imports
     from tests.test_helpers import TestHelpers
-    
+
     # Create a default mock item that will be returned
     mock_item = TestHelpers.create_mock_item()
     mock_factory.create_item.return_value = mock_item
-    
+
     return mock_factory
 
 
@@ -125,7 +123,7 @@ def mock_all_services(mock_service_registry, mock_authentication_service, mock_i
     mock_service_registry.register(AuthenticationService, mock_authentication_service)
     mock_service_registry.register(ItemFactory, mock_item_factory)
     mock_service_registry.register(ConfigurationService, mock_configuration_service)
-    
+
     # Mock remaining services
     services_to_mock = [
         (OpenIdConnectConfigurationManager, AsyncMock),
@@ -135,44 +133,44 @@ def mock_all_services(mock_service_registry, mock_authentication_service, mock_i
         (OneLakeClientService, Mock),
         (AuthorizationHandler, Mock)
     ]
-    
+
     mocked_services = {
         'AuthenticationService': mock_authentication_service,
         'ItemFactory': mock_item_factory,
         'ConfigurationService': mock_configuration_service
     }
-    
+
     for service_class, mock_type in services_to_mock:
         mock_service = mock_type(spec=service_class)
         mock_service_registry.register(service_class, mock_service)
         mocked_services[service_class.__name__] = mock_service
-    
+
     return mocked_services
 
 
 @pytest.fixture
-def app(mock_all_services, mock_service_registry) -> Generator[FastAPI, None, None]:
+def app(mock_all_services, mock_service_registry) -> Generator[FastAPI]:
     """Create FastAPI app with mocked services."""
     # Clear any existing dependency overrides
     application.dependency_overrides = {}
-    
+
     # Create a context manager to patch all the service getter functions
     patches = []
-    
+
     # Patch service registry getter
     registry_patch = patch('core.service_registry.get_service_registry', return_value=mock_service_registry)
     patches.append(registry_patch)
-    
+
     # Patch authentication service getter
-    auth_patch = patch('fabric_api.impl.item_lifecycle_controller.get_authentication_service', 
+    auth_patch = patch('fabric_api.impl.item_lifecycle_controller.get_authentication_service',
                       return_value=mock_all_services['AuthenticationService'])
     patches.append(auth_patch)
-    
+
     # Patch item factory getter
-    factory_patch = patch('fabric_api.impl.item_lifecycle_controller.get_item_factory', 
+    factory_patch = patch('fabric_api.impl.item_lifecycle_controller.get_item_factory',
                          return_value=mock_all_services['ItemFactory'])
     patches.append(factory_patch)
-    
+
     # Patch configuration service getter
     config_patch = patch('services.configuration_service.get_configuration_service',
                         return_value=mock_all_services['ConfigurationService'])
@@ -182,15 +180,15 @@ def app(mock_all_services, mock_service_registry) -> Generator[FastAPI, None, No
     jobs_auth_patch = patch('fabric_api.impl.jobs_controller.get_authentication_service',
                            return_value=mock_all_services['AuthenticationService'])
     patches.append(jobs_auth_patch)
-    
+
     jobs_factory_patch = patch('fabric_api.impl.jobs_controller.get_item_factory',
                               return_value=mock_all_services['ItemFactory'])
     patches.append(jobs_factory_patch)
-    
+
     # Apply all patches
     for p in patches:
         p.start()
-    
+
     try:
         yield application
     finally:
@@ -262,15 +260,15 @@ def auth_fixtures():
 def enhanced_mock_authentication_service():
     """Create an enhanced mock authentication service with more comprehensive capabilities."""
     mock_service = AsyncMock(spec=AuthenticationService)
-    
+
     # Use AuthenticationTestFixtures for enhanced mock context
     auth_context = AuthenticationTestFixtures.create_auth_context()
-    
+
     # Configure the mock's methods
     mock_service.authenticate_control_plane_call.return_value = auth_context
     mock_service.authenticate_data_plane_call.return_value = auth_context
     mock_service.get_access_token_on_behalf_of.return_value = "mock_access_token"
     mock_service.get_fabric_s2s_token.return_value = "mock_s2s_token"
     mock_service.build_composite_token.return_value = "SubjectAndAppToken1.0 subjectToken=\"mock_subject\", appToken=\"mock_app\""
-    
+
     return mock_service

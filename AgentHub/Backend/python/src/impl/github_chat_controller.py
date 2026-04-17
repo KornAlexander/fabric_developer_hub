@@ -11,12 +11,12 @@ Handles:
 import json
 import logging
 import time
+
 import httpx
 from cachetools import TTLCache
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -121,9 +121,9 @@ class PollTokenRequest(BaseModel):
 
 class PollTokenResponse(BaseModel):
     status: str  # "pending", "complete", "expired", "error"
-    access_token: Optional[str] = None
-    error: Optional[str] = None
-    github_user: Optional[str] = None
+    access_token: str | None = None
+    error: str | None = None
+    github_user: str | None = None
 
 
 class ChatMessage(BaseModel):
@@ -133,10 +133,10 @@ class ChatMessage(BaseModel):
 
 class ChatRequest(BaseModel):
     model: str
-    messages: List[ChatMessage]
+    messages: list[ChatMessage]
     stream: bool = True
-    max_tokens: Optional[int] = 4096
-    temperature: Optional[float] = 0.7
+    max_tokens: int | None = 4096
+    temperature: float | None = 0.7
     tools_enabled: bool = True
 
 
@@ -370,7 +370,7 @@ SYSTEM_PROMPT = (
 )
 
 
-async def _acquire_mcp_tokens(fabric_token: str) -> Optional[dict[str, str]]:
+async def _acquire_mcp_tokens(fabric_token: str) -> dict[str, str] | None:
     """Exchange the user's workload token for Fabric API + OneLake tokens via OBO."""
     logger.info("[OBO] Starting token exchange for MCP tools")
     try:
@@ -475,7 +475,7 @@ async def _call_copilot_api(copilot_token: str, body: dict) -> dict:
     return data
 
 
-async def _stream_agentic_chat(copilot_token: str, chat_req: ChatRequest, mcp_tokens: Optional[dict]):
+async def _stream_agentic_chat(copilot_token: str, chat_req: ChatRequest, mcp_tokens: dict | None):
     """Agentic loop: tool-call rounds (non-streaming) then stream final response.
 
     Emits SSE events:

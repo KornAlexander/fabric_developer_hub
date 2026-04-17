@@ -1,7 +1,9 @@
-import logging
-import httpx
 import asyncio
-from typing import Dict, Any, Optional, ClassVar
+import logging
+from typing import Any
+
+import httpx
+
 
 class HttpClientService:
     """
@@ -27,14 +29,14 @@ class HttpClientService:
 
     async def _log_request(self, request):
         self.logger.debug(f"Request: {request.method} {request.url}")
-    
+
     async def _log_response(self, response):
         request = response.request
         try:
             elapsed_time = 0
             if hasattr(response, '_elapsed') and response._elapsed:
                 elapsed_time = response._elapsed.total_seconds()
-            
+
             self.logger.debug(
                 f"Response: {request.method} {request.url} - "
                 f"Status: {response.status_code} - Time: {elapsed_time:.2f}s"
@@ -48,10 +50,10 @@ class HttpClientService:
 
     async def __aenter__(self):
         return self
-    
+
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         await self.close()
-    
+
     async def close(self):
         """Close the HTTP client."""
         if not self._closed and hasattr(self, '_client'):
@@ -75,8 +77,8 @@ class HttpClientService:
     async def dispose_async(self):
         """Dispose method for ServiceRegistry cleanup."""
         await self.close()
-    
-    def _get_headers(self, token: str) -> Dict[str, str]:
+
+    def _get_headers(self, token: str) -> dict[str, str]:
         """Create headers with proper authorization."""
         headers = {}
         if token.startswith("SubjectAndAppToken"):
@@ -85,12 +87,12 @@ class HttpClientService:
             headers["Authorization"] = f"Bearer {token}"
         headers["User-Agent"] = "Microsoft-Fabric-Workload/1.0"
         return headers
-    
+
     async def _make_request(self, method: str, url: str, token: str, **kwargs) -> httpx.Response:
         """Common request handling with retry logic."""
         headers = self._get_headers(token)
         headers.update(kwargs.pop('headers', {}))
-        
+
         max_retries = 3
         for attempt in range(max_retries):
             try:
@@ -123,7 +125,7 @@ class HttpClientService:
     async def get(self, url: str, token: str) -> httpx.Response:
         """Performs a GET request to the specified URL."""
         return await self._make_request('get', url, token)
-    
+
     async def put(self, url: str, content: Any, token: str) -> httpx.Response:
         """Performs a PUT request to the specified URL."""
         kwargs = {}
@@ -139,9 +141,9 @@ class HttpClientService:
             # JSON content for API calls
             kwargs['json'] = content
             kwargs['headers'] = {"Content-Type": "application/json"}
-        
+
         return await self._make_request('put', url, token, **kwargs)
-    
+
     async def post(self, url: str, content: Any, token: str) -> httpx.Response:
         """Performs a POST request to the specified URL."""
         kwargs = {}
@@ -152,15 +154,15 @@ class HttpClientService:
         else:
             kwargs['json'] = content
             kwargs['headers'] = {"Content-Type": "application/json"}
-        
+
         return await self._make_request('post', url, token, **kwargs)
-    
-    async def patch(self, url: str, content: Optional[Any], token: str, 
-                   content_type: Optional[str] = None) -> httpx.Response:
+
+    async def patch(self, url: str, content: Any | None, token: str,
+                   content_type: str | None = None) -> httpx.Response:
         """Performs a PATCH request to the specified URL."""
         kwargs = {}
         headers = {}
-        
+
         if content is None:
             pass  # No content
         elif isinstance(content, bytes):
@@ -172,20 +174,20 @@ class HttpClientService:
         else:
             kwargs['json'] = content
             headers["Content-Type"] = "application/json"
-        
+
         if headers:
             kwargs['headers'] = headers
-            
+
         return await self._make_request('patch', url, token, **kwargs)
-    
+
     async def delete(self, url: str, token: str) -> httpx.Response:
         """Performs a DELETE request to the specified URL."""
         return await self._make_request('delete', url, token)
-    
+
     async def head(self, url: str, token: str) -> httpx.Response:
         """Performs a HEAD request to the specified URL."""
         return await self._make_request('head', url, token)
-    
+
 def get_http_client_service() -> HttpClientService:
     """
     Get the singleton HttpClientService instance from ServiceRegistry.

@@ -1,4 +1,6 @@
 from constants.environment_constants import EnvironmentConstants
+
+
 class ApiConstants:
     """Api constants."""
     WORKLOAD_CONTROL_API_BASE_URL = f"{EnvironmentConstants.FABRIC_API_BASE_URL}/v1/workload-control"

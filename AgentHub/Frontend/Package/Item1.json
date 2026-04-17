@@ -1,5 +1,5 @@
 {
-    "name": "SampleWorkloadItem",
+    "name": "AgentHubItem",
     "displayName": "Item_1_DisplayName",
     "displayNamePlural": "Item_1_DisplayName_Plural",
     "version": "1.100",
@@ -20,7 +20,7 @@
         "name": "recentruns"
       },
       {
-        "name": "SampleItemCustomAction",
+        "name": "AgentHubItemAction",
         "displayName": "Context_Menu_1_Display_Name",
         "icon": {
           "name": "assets/images/execute.png"
@@ -33,7 +33,7 @@
     ],
     "quickActionItems": [
       {
-        "name": "SampleItemCustomAction",
+        "name": "AgentHubItemAction",
         "displayName": "Quick_Action_1_Display_Name",
         "icon": {
           "name": "assets/images/execute.png"
@@ -74,12 +74,12 @@
     "itemJobTypes": ["getData", "storeData"],
     "editorTab": {
       "maxInstanceCount": "10",
-      "onInit": "sample.tab.onInit",
-      "onDeactivate": "sample.tab.onDeactivate",
-      "canDeactivate": "sample.tab.canDeactivate",
-      "canDestroy": "sample.tab.canDestroy",
-      "onDestroy": "sample.tab.onDestroy",
-      "onDelete": "sample.tab.onDelete"
+      "onInit": "agenthub.tab.onInit",
+      "onDeactivate": "agenthub.tab.onDeactivate",
+      "canDeactivate": "agenthub.tab.canDeactivate",
+      "canDestroy": "agenthub.tab.canDestroy",
+      "onDestroy": "agenthub.tab.onDestroy",
+      "onDelete": "agenthub.tab.onDelete"
     },
     "createItemDialogConfig": {
       "onCreationFailure": { "action": "item.onCreationFailure" },

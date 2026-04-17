@@ -1,17 +1,19 @@
-from uuid import UUID
-from fastapi import Request, FastAPI
 import logging
+from uuid import UUID
+
+from fastapi import FastAPI, Request
+
 from exceptions.base_exception import WorkloadExceptionBase
 from exceptions.exceptions import (
-    UnauthorizedException,
-    TooManyRequestsException,
-    InternalErrorException,
-    InvariantViolationException,
-    DoubledOperandsOverflowException,
-    ItemMetadataNotFoundException,
     AuthenticationException,
     AuthenticationUIRequiredException,
-    InvalidParameterException
+    DoubledOperandsOverflowException,
+    InternalErrorException,
+    InvalidParameterException,
+    InvariantViolationException,
+    ItemMetadataNotFoundException,
+    TooManyRequestsException,
+    UnauthorizedException,
 )
 
 logger = logging.getLogger(__name__)
@@ -63,13 +65,13 @@ async def authentication_ui_required_exception_handler(request: Request, exc: Au
 async def value_error_handler(request: Request, exc: ValueError):
     """Handle ValueError exceptions by converting to InvalidParameterException."""
     logger.error(f"ValueError caught: {str(exc)}")
-    
+
     error_message = str(exc)
     parameter_name = "unknown"
-    
+
     # Try to extract parameter info from the request path
     path_params = request.path_params
-    
+
     # Common ValueError patterns
     if "badly formed hexadecimal UUID string" in error_message:
         # Try to identify which UUID parameter failed
@@ -86,13 +88,13 @@ async def value_error_handler(request: Request, exc: ValueError):
         parameter_name = "integer value"
     elif "could not convert string to float" in error_message:
         parameter_name = "numeric value"
-    
+
     # Create InvalidParameterException
     invalid_param_exc = InvalidParameterException(
         parameter_name=parameter_name,
         message=error_message
     )
-    
+
     # Return the formatted response
     return invalid_param_exc.to_response()
 
@@ -124,6 +126,6 @@ def register_exception_handlers(app: FastAPI):
 
     # Register base handler as fallback for any WorkloadExceptionBase we didn't explicitly handle
     app.add_exception_handler(WorkloadExceptionBase, workload_exception_handler)
-    
+
     # Register global exception handler for all other exceptions
     app.add_exception_handler(Exception, global_exception_handler)

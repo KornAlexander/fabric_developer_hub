@@ -33,7 +33,7 @@ export function App({ history, workloadClient }: AppProps) {
             </Route>
 
             {/* Item editor route — Fabric navigates here when opening an existing item */}
-            <Route path="/sample-workload-editor/:itemObjectId">
+            <Route path="/agenthub-item-editor/:itemObjectId">
                 <ItemEditorRoute workloadClient={workloadClient} />
             </Route>
 

@@ -7,7 +7,6 @@ class WorkloadConstants:
 
     class ItemTypes:
         """Nested class containing item type constants."""
-        ITEM1 = None  # placeholder, will be set after class definition
+        AGENTHUB_ITEM = None  # populated after class definition
 
-WorkloadConstants.ItemTypes.ITEM1 = f"{WorkloadConstants.WORKLOAD_NAME}.SampleWorkloadItem"
-    
+WorkloadConstants.ItemTypes.AGENTHUB_ITEM = f"{WorkloadConstants.WORKLOAD_NAME}.AgentHubItem"

@@ -191,12 +191,12 @@ class ManifestPackageGenerator:
                         # Resolve template placeholder from env if present.
                         if workload_name.startswith('${') and workload_name.endswith('}'):
                             var = workload_name[2:-1]
-                            return os.environ.get(var, 'Org.WorkloadSample')
+                            return os.environ.get(var, 'Org.AgentHub')
                         return workload_name
         except Exception as e:
             print(f"⚠️  Could not extract WorkloadName: {e}")
         
-        return 'Org.WorkloadSample'
+        return 'Org.AgentHub'
     
     def load_and_update_nuspec(self) -> str:
         """Load the nuspec template and update version."""
@@ -232,7 +232,7 @@ class ManifestPackageGenerator:
     def create_item1_template(self, output_path: Path) -> None:
         """Create Item1.xml with correct workload name."""
         workload_name = self.get_workload_name()
-        item_type = f"{workload_name}.SampleWorkloadItem"
+        item_type = f"{workload_name}.AgentHubItem"
         
         template_content = f'''<?xml version="1.0" encoding="utf-8" ?>
 <ItemManifestConfiguration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" SchemaVersion="1.101.0">

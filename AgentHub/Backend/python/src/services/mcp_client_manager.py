@@ -6,14 +6,13 @@ Per the design doc (§3.2, §7.6):
 - Fabric tokens are injected via environment variables, never tool arguments.
 """
 
+import asyncio
 import json
 import logging
 import os
 import sys
-import asyncio
 from contextlib import AsyncExitStack
 from pathlib import Path
-from typing import Any, Optional
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -38,7 +37,7 @@ class MCPClientManager:
         if not path.exists():
             logger.warning("MCP config not found at %s, starting with no servers", config_path)
             return {"servers": {}}
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             raw = json.load(f)
         # Resolve template variables in the config
         self._resolve_variables(raw, config_path)
@@ -100,7 +99,7 @@ class MCPClientManager:
         self,
         tool_name: str,
         arguments: dict,
-        tokens: Optional[dict[str, str]] = None,
+        tokens: dict[str, str] | None = None,
     ) -> str:
         """Execute a tool call via a per-request MCP server instance.
 
@@ -137,7 +136,7 @@ class MCPClientManager:
                 else:
                     parts.append(str(content))
             return "\n".join(parts)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise TimeoutError(f"Tool {tool_name} timed out after {TOOL_CALL_TIMEOUT}s")
         finally:
             await stack.aclose()

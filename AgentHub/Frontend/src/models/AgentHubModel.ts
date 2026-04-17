@@ -63,8 +63,8 @@ export interface ItemPayload {
 
 export interface TabContentProps {
     workloadClient: WorkloadClientAPI;
-    sampleWorkloadName?: string;
-    sampleItem?: WorkloadItem<ItemPayload>;
+    workloadName?: string;
+    item?: WorkloadItem<ItemPayload>;
 }
 
 export interface ItemCreationFailureData {

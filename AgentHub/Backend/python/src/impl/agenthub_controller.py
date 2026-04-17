@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -22,9 +20,8 @@ from models.agent_models import (
     SendMessageRequest,
     UserAgentConfig,
 )
-from services import job_store
+from services import job_store, orchestrator_engine
 from services.agent_registry import get_template, list_templates
-from services import orchestrator_engine
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +47,7 @@ async def _copilot_token(request: Request) -> str:
     return await _get_copilot_token(github_token)
 
 
-async def _mcp_tokens(request: Request) -> Optional[dict]:
+async def _mcp_tokens(request: Request) -> dict | None:
     """OBO exchange if Fabric token is present."""
     fabric_header = request.headers.get("X-Fabric-Token", "")
     fabric_token = fabric_header.removeprefix("Bearer ").strip() or None
@@ -69,7 +66,6 @@ async def list_workspaces(request: Request):
     if not mcp_tokens:
         raise HTTPException(400, "Fabric token required to list workspaces")
 
-    from services.mcp_client_manager import MCPClientManager
     from impl.github_chat_controller import _mcp_manager
     if not _mcp_manager:
         raise HTTPException(503, "MCP manager not available")
@@ -111,7 +107,7 @@ async def create_job(req: CreateJobRequest, request: Request):
 
 
 @router.get("/jobs")
-async def list_jobs(request: Request, status: Optional[str] = None, limit: int = 50):
+async def list_jobs(request: Request, status: str | None = None, limit: int = 50):
     user_id = _user_id_from_request(request)
     jobs = job_store.list_jobs(user_id, status=status, limit=limit)
     return [j.model_dump(mode="json") for j in jobs]
@@ -134,7 +130,7 @@ async def cancel_or_delete_job(job_id: str):
     if job.status == JobStatus.RUNNING:
         orchestrator_engine.cancel_job(job_id)
         job.status = JobStatus.CANCELLED
-        job.completed_at = datetime.now(timezone.utc)
+        job.completed_at = datetime.now(UTC)
         job_store.update_job(job)
         return {"status": "cancelled"}
     else:
@@ -205,7 +201,7 @@ async def reject_plan(req: ApprovePlanRequest):
     if not job:
         raise HTTPException(404, "Job not found")
     job.status = JobStatus.CANCELLED
-    job.completed_at = datetime.now(timezone.utc)
+    job.completed_at = datetime.now(UTC)
     job_store.update_job(job)
     return {"status": "rejected"}
 

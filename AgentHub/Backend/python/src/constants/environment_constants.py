@@ -1,6 +1,6 @@
 class EnvironmentConstants:
     """Environment constants."""
-    
+
     FABRIC_BACKEND_RESOURCE_ID = "https://analysis.windows.net/powerbi/api"
     AAD_INSTANCE_URL = "https://login.microsoftonline.com"
     ONELAKE_DFS_BASE_URL = "https://onelake.dfs.fabric.microsoft.com"

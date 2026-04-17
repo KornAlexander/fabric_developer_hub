@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from "react";
 import { WorkloadClientAPI } from "@ms-fabric/workload-client";
-import { callItemCreate, callItemGet, callItemUpdate } from "../../controller/SampleWorkloadController";
+import { callItemCreate, callItemGet, callItemUpdate } from "../../controller/AgentHubController";
 import { convertGetItemResultToWorkloadItem } from "../../utils";
 
 export interface AgentHubSettings {
@@ -37,7 +37,7 @@ export function useItemContext() {
     return useContext(ItemContext);
 }
 
-const ITEM_TYPE = (process.env.WORKLOAD_NAME || "Org.AgentHub") + ".SampleWorkloadItem";
+const ITEM_TYPE = (process.env.WORKLOAD_NAME || "Org.AgentHub") + ".AgentHubItem";
 const STORAGE_KEY_ITEM_ID = "agenthub_item_id";
 
 interface ItemProviderProps {

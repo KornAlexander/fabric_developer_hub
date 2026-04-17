@@ -5,10 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import time
 import uuid
-from datetime import datetime, timezone
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from collections.abc import AsyncGenerator
+from datetime import UTC, datetime
 
 import httpx
 
@@ -25,7 +24,7 @@ from models.agent_models import (
     ReasoningPhase,
 )
 from services.agent_registry import AGENT_TEMPLATES, get_template
-from services.job_store import update_job, log_audit
+from services.job_store import log_audit, update_job
 
 logger = logging.getLogger(__name__)
 
@@ -51,33 +50,33 @@ def configure(mcp_manager, copilot_token_fn, acquire_mcp_tokens_fn):
 
 # ── Active jobs bookkeeping ──────────────────────────────────────────
 
-_active_jobs: Dict[str, "_JobExecution"] = {}
+_active_jobs: dict[str, _JobExecution] = {}
 
 
 class _JobExecution:
     """Runtime state for a single running job."""
 
-    def __init__(self, job: Job, copilot_token: str, mcp_tokens: Optional[dict]):
+    def __init__(self, job: Job, copilot_token: str, mcp_tokens: dict | None):
         self.job = job
         self.copilot_token = copilot_token
         self.mcp_tokens = mcp_tokens
         self.event_queue: asyncio.Queue = asyncio.Queue()
-        self.user_message_queues: Dict[str, asyncio.Queue] = {}  # session_id -> Queue
-        self.tasks: List[asyncio.Task] = []
+        self.user_message_queues: dict[str, asyncio.Queue] = {}  # session_id -> Queue
+        self.tasks: list[asyncio.Task] = []
         self.cancelled = False
 
     def emit(self, event_type: str, **kwargs):
         payload = {"type": event_type, **kwargs}
         self.event_queue.put_nowait(payload)
 
-    async def events(self) -> AsyncGenerator[dict, None]:
+    async def events(self) -> AsyncGenerator[dict]:
         while True:
             try:
                 ev = await asyncio.wait_for(self.event_queue.get(), timeout=30)
                 yield ev
                 if ev.get("type") == "job_complete" or ev.get("type") == "job_failed":
                     return
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 yield {"type": "heartbeat"}
 
 
@@ -102,7 +101,7 @@ async def generate_plan(
     task_description: str,
     workspace_id: str,
     copilot_token: str,
-    context: Optional[dict] = None,
+    context: dict | None = None,
 ) -> ExecutionPlan:
     """Use the LLM to decompose a task into an ExecutionPlan."""
     agent_list = "\n".join(
@@ -188,16 +187,16 @@ async def generate_plan(
 # ── Job Execution ────────────────────────────────────────────────────
 
 
-async def start_job(job: Job, copilot_token: str, mcp_tokens: Optional[dict]) -> str:
+async def start_job(job: Job, copilot_token: str, mcp_tokens: dict | None) -> str:
     """Begin executing an approved job. Returns the job ID."""
     job.status = JobStatus.RUNNING
-    job.started_at = datetime.now(timezone.utc)
+    job.started_at = datetime.now(UTC)
 
     # Create agent assignments from the plan
     if job.plan:
         for pa in job.plan.agents:
             session_id = str(uuid.uuid4())
-            template = get_template(pa.agent_template_id)
+            get_template(pa.agent_template_id)
             job.agents.append(
                 AgentAssignment(
                     agent_id=pa.agent_template_id,
@@ -242,7 +241,7 @@ async def _monitor_job(execution: _JobExecution):
     job = execution.job
     any_error = any(a.status == AgentStatus.ERROR for a in job.agents)
     job.status = JobStatus.FAILED if any_error else JobStatus.COMPLETED
-    job.completed_at = datetime.now(timezone.utc)
+    job.completed_at = datetime.now(UTC)
     update_job(job)
 
     duration = ""
@@ -325,7 +324,7 @@ async def _run_agent(
         # Mark previous phase completed before starting a new one
         if assignment.phases and assignment.phases[-1].status == PhaseStatus.EXECUTING:
             assignment.phases[-1].status = PhaseStatus.COMPLETED
-            assignment.phases[-1].completed_at = datetime.now(timezone.utc)
+            assignment.phases[-1].completed_at = datetime.now(UTC)
             execution.emit("phase_complete", agentId=assignment.session_id,
                             agentName=template.display_name,
                             phaseNumber=assignment.phases[-1].phase_number)
@@ -344,7 +343,7 @@ async def _run_agent(
         execution.emit("phase_start", agentId=assignment.session_id,
                         agentName=template.display_name,
                         phase={"number": phase_counter, "title": phase_title,
-                               "timestamp": datetime.now(timezone.utc).isoformat()})
+                               "timestamp": datetime.now(UTC).isoformat()})
 
         body = {
             "model": TOOL_MODEL,
@@ -434,7 +433,7 @@ async def _run_agent(
             # Mark last phase completed
             if assignment.phases:
                 assignment.phases[-1].status = PhaseStatus.COMPLETED
-                assignment.phases[-1].completed_at = datetime.now(timezone.utc)
+                assignment.phases[-1].completed_at = datetime.now(UTC)
                 execution.emit("phase_complete", agentId=assignment.session_id,
                                 agentName=template.display_name,
                                 phaseNumber=assignment.phases[-1].phase_number)
@@ -512,7 +511,7 @@ async def _run_agent(
         # Mark current phase as completed after processing all tool calls
         if assignment.phases:
             assignment.phases[-1].status = PhaseStatus.COMPLETED
-            assignment.phases[-1].completed_at = datetime.now(timezone.utc)
+            assignment.phases[-1].completed_at = datetime.now(UTC)
             execution.emit("phase_complete", agentId=assignment.session_id,
                             agentName=template.display_name,
                             phaseNumber=assignment.phases[-1].phase_number)
@@ -536,7 +535,7 @@ def _parse_agent_output(content: str, assignment: AgentAssignment,
             # Mark previous phase completed before starting new one
             if assignment.phases and assignment.phases[-1].status == PhaseStatus.EXECUTING:
                 assignment.phases[-1].status = PhaseStatus.COMPLETED
-                assignment.phases[-1].completed_at = datetime.now(timezone.utc)
+                assignment.phases[-1].completed_at = datetime.now(UTC)
                 execution.emit("phase_complete", agentId=assignment.session_id,
                                 agentName=template.display_name,
                                 phaseNumber=assignment.phases[-1].phase_number)
@@ -551,12 +550,12 @@ def _parse_agent_output(content: str, assignment: AgentAssignment,
             execution.emit("phase_start", agentId=assignment.session_id,
                             agentName=template.display_name,
                             phase={"number": num, "title": title,
-                                   "timestamp": datetime.now(timezone.utc).isoformat()})
+                                   "timestamp": datetime.now(UTC).isoformat()})
 
         elif line.startswith("PHASE_END:"):
             if assignment.phases:
                 assignment.phases[-1].status = PhaseStatus.COMPLETED
-                assignment.phases[-1].completed_at = datetime.now(timezone.utc)
+                assignment.phases[-1].completed_at = datetime.now(UTC)
 
         elif line.startswith("DECISION:"):
             decision_text = line[len("DECISION:"):].strip()
@@ -585,7 +584,7 @@ def _parse_agent_output(content: str, assignment: AgentAssignment,
                                 action=action.model_dump(mode="json"))
 
 
-def _detect_action_from_tool(tool_name: str, tool_args: dict, result: str) -> Optional[AgentAction]:
+def _detect_action_from_tool(tool_name: str, tool_args: dict, result: str) -> AgentAction | None:
     """Infer an action from a tool call."""
     # Don't record success for calls that actually failed
     result_lower = result.lower()
@@ -684,7 +683,7 @@ def _copilot_headers(copilot_token: str) -> dict:
     }
 
 
-def get_job_execution(job_id: str) -> Optional[_JobExecution]:
+def get_job_execution(job_id: str) -> _JobExecution | None:
     return _active_jobs.get(job_id)
 
 
@@ -698,7 +697,7 @@ def cancel_job(job_id: str) -> bool:
     return True
 
 
-def inject_message(job_id: str, message: str, target_agent_session_id: Optional[str] = None):
+def inject_message(job_id: str, message: str, target_agent_session_id: str | None = None):
     """Push a user message into a running agent's queue."""
     exe = _active_jobs.get(job_id)
     if not exe:

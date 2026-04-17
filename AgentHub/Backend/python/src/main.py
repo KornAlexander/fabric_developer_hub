@@ -1,14 +1,12 @@
 import asyncio
-import os
 import logging
 import logging.config
+import os
 import sys
 import time
-from typing import Optional, Set
 import uuid
 from contextlib import asynccontextmanager
-from fabric_api.impl.jobs_controller import cleanup_background_tasks
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import uvicorn
@@ -18,34 +16,41 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
 
-from services.configuration_service import get_configuration_service
 from core.service_initializer import get_service_initializer
 from core.service_registry import get_service_registry
 
 # Import controllers
-from fabric_api.apis.endpoint_resolution_api import router as EndpointResolutionApiRouter
+from fabric_api.apis.endpoint_resolution_api import (
+    router as EndpointResolutionApiRouter,
+)
 from fabric_api.apis.item_lifecycle_api import router as ItemLifecycleApiRouter
 from fabric_api.apis.jobs_api import router as JobsApiRouter
-from impl.fabric_extension_controller import router as fabric_extension_router
-from impl.onelake_controller import router as onelake_controller
-from impl.lakehouse_controller import router as lakehouse_controller
-from impl.github_chat_controller import router as github_chat_router, set_mcp_manager, _get_copilot_token, _acquire_mcp_tokens
+from fabric_api.impl.jobs_controller import cleanup_background_tasks
 from impl.agenthub_controller import router as agenthub_router
-from services.mcp_client_manager import MCPClientManager
+from impl.github_chat_controller import (
+    _acquire_mcp_tokens,
+    _get_copilot_token,
+    set_mcp_manager,
+)
+from impl.github_chat_controller import router as github_chat_router
+from impl.lakehouse_controller import router as lakehouse_controller
+from impl.onelake_controller import router as onelake_controller
+from middleware.exception_handlers import register_exception_handlers
 from services import job_store as agenthub_store
 from services import orchestrator_engine
+from services.configuration_service import get_configuration_service
+from services.mcp_client_manager import MCPClientManager
 
-from middleware.exception_handlers import register_exception_handlers
 
 def setup_logging(config_service=None) -> logging.Logger:
     """Setup logging configuration based on settings."""
     if config_service is None:
         config_service = get_configuration_service()
-    
+
     # Map configuration log level to Python log level
     log_level_mapping = {
         "Trace": "DEBUG",
-        "Debug": "DEBUG", 
+        "Debug": "DEBUG",
         "Information": "INFO",
         "Warning": "WARNING",
         "Error": "ERROR",
@@ -69,7 +74,7 @@ def setup_logging(config_service=None) -> logging.Logger:
     app_name = config_service.get_app_name().replace(" ", "_")
     log_dir = Path(appdata) / app_name / 'logs'
     log_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # Log file path with date rotation
     log_filename = f'fabric_backend_{datetime.now().strftime("%Y%m%d")}.log'
     log_file = log_dir / log_filename
@@ -140,7 +145,7 @@ def setup_logging(config_service=None) -> logging.Logger:
     logging.config.dictConfig(logging_config)
     logger = logging.getLogger(__name__)
     logger.info(f"Logging initialized - Level: {log_level}, File: {log_file}")
-    
+
     return logger
 
 # Global state for shutdown handling
@@ -148,8 +153,8 @@ class ApplicationState:
     def __init__(self):
         self.shutdown_event = asyncio.Event()
         self.is_shutting_down = False
-        self.logger: Optional[logging.Logger] = None
-        self.active_requests: Set[str] = set()
+        self.logger: logging.Logger | None = None
+        self.active_requests: set[str] = set()
         self.request_lock = asyncio.Lock()
 
 app_state = ApplicationState()
@@ -159,14 +164,14 @@ async def lifespan(app: FastAPI):
     """Handle application lifecycle with proper startup and shutdown."""
     # Startup
     startup_start = time.time()
-    
+
     # Get configuration service (will create if not exists)
     config_service = get_configuration_service()
-    
+
     # Setup logging with configuration
     logger = setup_logging(config_service)
     app_state.logger = logger
-    
+
     logger.info("=" * 60)
     logger.info(f"Starting {config_service.get_app_name()}...")
     logger.info(f"Environment: {config_service.get_environment()}")
@@ -181,7 +186,7 @@ async def lifespan(app: FastAPI):
     logger.info(f"  - Debug: {config_service.is_debug()}")
     logger.info(f"  - Log Level: {config_service.get_log_level()}")
     logger.info(f"  - Shutdown Timeout: {config_service.get_shutdown_timeout()}s")
-    
+
     try:
         # Initialize all services with parallel execution
         initializer = get_service_initializer()
@@ -210,19 +215,19 @@ async def lifespan(app: FastAPI):
         if mcp_manager:
             orchestrator_engine.configure(mcp_manager, _get_copilot_token, _acquire_mcp_tokens)
             logger.info("✓ Orchestrator engine configured")
-        
+
         startup_time = time.time() - startup_start
         logger.info(f"✓ Application started successfully in {startup_time:.2f}s")
         logger.info(f"✓ Server: {config_service.get_http_endpoint()}")
         logger.info(f"✓ Debug Mode: {config_service.is_debug()}")
         logger.info("=" * 60)
-    
+
     except Exception as e:
         logger.error(f"Failed to start application: {str(e)}", exc_info=True)
         raise
-        
+
     yield
-    
+
     # Shutdown
     shutdown_start_time = time.time()
     logger.info("=" * 60)
@@ -235,7 +240,7 @@ async def lifespan(app: FastAPI):
     total_timeout = config_service.get_shutdown_timeout()
     tasks_cleanup_timeout = total_timeout * 0.6  # 60% for background tasks
     service_cleanup_timeout = total_timeout * 0.3  # 30% for services
-    
+
      # 1. Clean up background tasks
     try:
         logger.info(f"Cleaning up background tasks (timeout: {tasks_cleanup_timeout:.1f}s)...")
@@ -250,11 +255,11 @@ async def lifespan(app: FastAPI):
         logger.info(f"Cleaning up services (timeout: {service_cleanup_timeout:.1f}s)...")
         await asyncio.wait_for(registry.cleanup(), timeout=service_cleanup_timeout)
         logger.info("✓ Service registry cleanup completed")
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning("⚠ Service registry cleanup timed out")
     except Exception as e:
         logger.error(f"Error during service registry cleanup: {str(e)}", exc_info=True)
-        
+
     shutdown_duration = time.time() - shutdown_start_time
     logger.info(f"✓ Application shutdown completed in {shutdown_duration:.2f}s")
     logger.info("=" * 60)
@@ -263,10 +268,10 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
     config_service = get_configuration_service()
-    
+
     app = FastAPI(
         title=config_service.get_app_name(),
-        description="Python implementation of Microsoft Fabric backend sample workload",
+        description="Fabric AgentHub — backend",
         version="1.0.0",
         root_path="/workload",
         lifespan=lifespan,
@@ -274,19 +279,19 @@ def create_app() -> FastAPI:
         redoc_url="/api/redoc" if config_service.is_debug() else None,
         openapi_url="/api/openapi.json" if config_service.is_debug() else None
     )
-    
+
     # Configure middleware
-    
+
     # Security middleware (only in production)
     if config_service.is_production():
         app.add_middleware(
             TrustedHostMiddleware,
             allowed_hosts=config_service.get_allowed_hosts()
         )
-    
+
     # Compression
     app.add_middleware(GZipMiddleware, minimum_size=1000)
-    
+
     # CORS
     app.add_middleware(
         CORSMiddleware,
@@ -296,20 +301,19 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
         expose_headers=["X-Request-ID", "X-Process-Time"]
     )
-    
+
     # Register exception handlers
     register_exception_handlers(app)
-    
+
     # Include routers with proper prefixes
     app.include_router(EndpointResolutionApiRouter)
     app.include_router(ItemLifecycleApiRouter)
     app.include_router(JobsApiRouter)
-    app.include_router(fabric_extension_router)
     app.include_router(onelake_controller)
     app.include_router(lakehouse_controller)
     app.include_router(github_chat_router)
     app.include_router(agenthub_router)
-    
+
     return app
 
 # Create app instance
@@ -320,7 +324,7 @@ async def health_check():
     """Health check endpoint for monitoring."""
     return {
         "status": "healthy",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "version": app.version,
         "environment": os.environ.get('PYTHON_ENVIRONMENT', 'Development')
     }
@@ -330,20 +334,20 @@ async def readiness_check():
     """Readiness check for Kubernetes and load balancers."""
     try:
         registry = get_service_registry()
-        
+
         if not registry.is_initialized:
             return JSONResponse(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 content={
                     "status": "not ready",
                     "error": "Services not initialized",
-                    "timestamp": datetime.now(timezone.utc).isoformat()
+                    "timestamp": datetime.now(UTC).isoformat()
                 }
             )
-        
+
         return {
             "status": "ready",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "services": registry.get_all_services()
         }
     except Exception as e:
@@ -352,7 +356,7 @@ async def readiness_check():
             content={
                 "status": "not ready",
                 "error": str(e),
-                "timestamp": datetime.now(timezone.utc).isoformat()
+                "timestamp": datetime.now(UTC).isoformat()
             }
         )
 
@@ -365,34 +369,34 @@ async def add_process_time_header(request: Request, call_next):
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content={"message": "Server is shutting down"}
         )
-    
+
     # Generate or get request ID
     request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
     request.state.request_id = request_id
-    
+
     # Track active request
     async with app_state.request_lock:
         app_state.active_requests.add(request_id)
-    
+
     start_time = time.time()
-    
+
     try:
         response = await call_next(request)
         process_time = time.time() - start_time
-        
+
         # Add headers
         response.headers["X-Process-Time"] = f"{process_time:.3f}"
         response.headers["X-Request-ID"] = request_id
-        
+
         # Log request (skip health checks to reduce noise)
         if request.url.path not in ["/health", "/ready"] and app_state.logger:
             app_state.logger.info(
                 f"{request.method} {request.url.path} → {response.status_code} "
                 f"({process_time:.3f}s) [ID: {request_id[:8]}]"
             )
-        
+
         return response
-        
+
     except Exception as e:
         process_time = time.time() - start_time
         if app_state.logger:
