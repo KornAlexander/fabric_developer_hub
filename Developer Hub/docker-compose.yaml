@@ -39,6 +39,10 @@ services:
       - ./Backend/src:/app/src
       - ./Backend/src/appsettings.json:/app/src/appsettings.json:ro
       - ./Backend/src/appsettings.Development.json:/app/src/appsettings.Development.json:ro
+      # Mount the host .env so bootstrap.py can locate + log it (the values
+      # are also injected via env_file: above; this mount just makes the
+      # file visible inside the container for transparency / debugging).
+      - ./.env:/app/.env:ro
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health').read()"]
       interval: 30s
