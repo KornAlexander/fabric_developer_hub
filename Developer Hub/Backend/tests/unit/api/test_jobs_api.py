@@ -57,7 +57,7 @@ class TestJobsAPI:
         )
 
         # FastAPI returns 422 for validation errors
-        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
     def test_create_job_instance_empty_body(self, client, valid_headers, mock_item_factory):
         """Test job creation with empty request body."""

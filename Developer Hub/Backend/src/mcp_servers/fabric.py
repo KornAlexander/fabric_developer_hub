@@ -21,12 +21,15 @@ Tools:
     - fabric_create_directory
 """
 
+import base64
 import json
 import os
 
 import httpx
 from jose import jwt
 from mcp.server.fastmcp import FastMCP
+
+from mcp_servers._common import format_http_error
 
 # API endpoints
 FABRIC_API_BASE = "https://api.fabric.microsoft.com/v1"
@@ -124,7 +127,7 @@ async def fabric_list_workspaces() -> str:
             headers=_fabric_headers(),
         )
     if resp.status_code != 200:
-        return f"Error listing workspaces: {resp.status_code} — {resp.text[:500]}"
+        return format_http_error(resp, 'listing workspaces')
     data = resp.json()
     workspaces = data.get("value", [])
     result = []
@@ -152,7 +155,7 @@ async def fabric_list_items(workspace_id: str, item_type: str | None = None) -> 
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.get(url, headers=_fabric_headers())
     if resp.status_code != 200:
-        return f"Error listing items: {resp.status_code} — {resp.text[:500]}"
+        return format_http_error(resp, 'listing items')
     data = resp.json()
     items = data.get("value", [])
     result = []
@@ -193,7 +196,7 @@ async def fabric_create_item(
             headers=_fabric_headers(),
         )
     if resp.status_code not in (200, 201, 202):
-        return f"Error creating item: {resp.status_code} — {resp.text[:500]}"
+        return format_http_error(resp, 'creating item')
     created_item = resp.json()
     created_item.update(_build_item_links(workspace_id, created_item.get("id"), created_item.get("type", item_type)))
     return json.dumps(created_item, indent=2)
@@ -218,7 +221,7 @@ async def fabric_delete_item(
             headers=_fabric_headers(),
         )
     if resp.status_code not in (200, 204):
-        return f"Error deleting item: {resp.status_code} — {resp.text[:500]}"
+        return format_http_error(resp, 'deleting item')
     return json.dumps({"status": "deleted", "item_id": item_id})
 
 
@@ -257,40 +260,39 @@ async def fabric_list_files(
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.get(url, headers=_onelake_headers())
 
-    if resp.status_code == 404:
-        # Fall back: try listing Files/ and Tables/ separately
-        if not path:
-            results = []
-            for folder in ("Files", "Tables"):
-                folder_url = f"{ONELAKE_DFS_BASE}/{workspace_id}/{item_id}/{folder}"
-                folder_url += f"?resource=filesystem&recursive={str(recursive).lower()}"
-                try:
-                    r = await httpx.AsyncClient(timeout=30.0).__aenter__()
-                    resp2 = await r.get(folder_url, headers=_onelake_headers())
-                    await r.__aexit__(None, None, None)
-                    if resp2.status_code == 200:
-                        paths = resp2.json().get("paths", [])
-                        results.extend(paths)
-                except Exception:
-                    continue
-            return json.dumps(results, indent=2) if results else "No files found."
-        return f"Not found: {resp.status_code}"
-    if resp.status_code != 200:
-        return f"Error listing files: {resp.status_code} — {resp.text[:500]}"
+        if resp.status_code == 404:
+            # Fall back: try listing Files/ and Tables/ separately
+            if not path:
+                results: list = []
+                for folder in ("Files", "Tables"):
+                    folder_url = (
+                        f"{ONELAKE_DFS_BASE}/{workspace_id}/{item_id}/{folder}"
+                        f"?resource=filesystem&recursive={str(recursive).lower()}"
+                    )
+                    try:
+                        resp2 = await client.get(folder_url, headers=_onelake_headers())
+                        if resp2.status_code == 200:
+                            results.extend(resp2.json().get("paths", []))
+                    except Exception:
+                        continue
+                return json.dumps(results, indent=2) if results else "No files found."
+            return f"Not found: {resp.status_code}"
+        if resp.status_code != 200:
+            return format_http_error(resp, 'listing files')
 
-    data = resp.json()
-    paths = data.get("paths", [])
-    result = []
-    for p in paths:
-        result.append({
-            "name": p.get("name", "").rsplit("/", 1)[-1],
-            "path": p.get("name"),
-            "isDirectory": p.get("isDirectory", "false") == "true"
-                           or str(p.get("isDirectory", False)).lower() == "true",
-            "size": p.get("contentLength"),
-            "lastModified": p.get("lastModified"),
-        })
-    return json.dumps(result, indent=2)
+        data = resp.json()
+        paths = data.get("paths", [])
+        result = []
+        for p in paths:
+            result.append({
+                "name": p.get("name", "").rsplit("/", 1)[-1],
+                "path": p.get("name"),
+                "isDirectory": p.get("isDirectory", "false") == "true"
+                               or str(p.get("isDirectory", False)).lower() == "true",
+                "size": p.get("contentLength"),
+                "lastModified": p.get("lastModified"),
+            })
+        return json.dumps(result, indent=2)
 
 
 @mcp.tool()
@@ -321,14 +323,12 @@ async def fabric_read_file(
     async with httpx.AsyncClient(timeout=60.0) as client:
         resp = await client.get(url, headers=headers)
     if resp.status_code not in (200, 206):
-        return f"Error reading file: {resp.status_code} — {resp.text[:500]}"
+        return format_http_error(resp, 'reading file')
 
     content_type = resp.headers.get("content-type", "")
     if "text" in content_type or "json" in content_type or "csv" in content_type or "xml" in content_type:
         return resp.text
-    else:
-        import base64
-        return f"[binary, {len(resp.content)} bytes, base64]\n{base64.b64encode(resp.content).decode()}"
+    return f"[binary, {len(resp.content)} bytes, base64]\n{base64.b64encode(resp.content).decode()}"
 
 
 @mcp.tool()
@@ -363,7 +363,7 @@ async def fabric_write_file(
             create_headers["If-None-Match"] = "*"
         resp = await client.put(f"{base_url}?resource=file", headers=create_headers, content=b"")
         if resp.status_code not in (200, 201):
-            return f"Error creating file: {resp.status_code} — {resp.text[:500]}"
+            return format_http_error(resp, 'creating file')
 
         # Step 2: Append content
         resp = await client.patch(
@@ -372,7 +372,7 @@ async def fabric_write_file(
             content=content_bytes,
         )
         if resp.status_code not in (200, 202):
-            return f"Error uploading content: {resp.status_code} — {resp.text[:500]}"
+            return format_http_error(resp, 'uploading content')
 
         # Step 3: Flush / commit
         resp = await client.patch(
@@ -380,7 +380,7 @@ async def fabric_write_file(
             headers=headers,
         )
         if resp.status_code not in (200, 202):
-            return f"Error flushing file: {resp.status_code} — {resp.text[:500]}"
+            return format_http_error(resp, 'flushing file')
 
     return json.dumps({"status": "ok", "path": clean_path, "bytes_written": len(content_bytes)})
 
@@ -401,7 +401,7 @@ async def fabric_delete_file(workspace_id: str, item_id: str, file_path: str) ->
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.delete(url, headers=_onelake_headers())
     if resp.status_code not in (200, 202, 204):
-        return f"Error deleting file: {resp.status_code} — {resp.text[:500]}"
+        return format_http_error(resp, 'deleting file')
     return json.dumps({"status": "deleted", "path": clean_path})
 
 
@@ -421,7 +421,7 @@ async def fabric_create_directory(
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.put(url, headers=_onelake_headers())
     if resp.status_code not in (200, 201):
-        return f"Error creating directory: {resp.status_code} — {resp.text[:500]}"
+        return format_http_error(resp, 'creating directory')
     return json.dumps({"status": "created", "path": clean_path})
 
 

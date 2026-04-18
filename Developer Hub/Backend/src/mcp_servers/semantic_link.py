@@ -15,12 +15,14 @@ Token env vars (set by MCPClientManager):
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
-import time
 
 import httpx
 from mcp.server.fastmcp import FastMCP
+
+from mcp_servers._common import format_http_error
 
 # ── Constants ────────────────────────────────────────────────────────
 
@@ -28,14 +30,7 @@ FABRIC_API = "https://api.fabric.microsoft.com/v1"
 PBI_API = "https://api.powerbi.com/v1.0/myorg"
 XMLA_ENDPOINT = "https://analysis.windows.net/powerbi/api"
 
-mcp = FastMCP(
-    "semantic-link",
-    version="0.1.0",
-    description=(
-        "Semantic model, report, Direct Lake, lakehouse, refresh, "
-        "admin, and governance operations for Microsoft Fabric"
-    ),
-)
+mcp = FastMCP("semantic-link")
 
 
 def _headers() -> dict:
@@ -50,25 +45,7 @@ def _pbi_headers() -> dict:
     return _headers()
 
 
-async def _poll_lro(client: httpx.AsyncClient, location: str, hdrs: dict,
-                    max_wait: int = 120) -> dict | None:
-    """Poll a Fabric long-running operation until completion."""
-    deadline = time.monotonic() + max_wait
-    while time.monotonic() < deadline:
-        resp = await client.get(location, headers=hdrs)
-        if resp.status_code == 200:
-            body = resp.json()
-            status = body.get("status", "").lower()
-            if status in ("succeeded", "completed"):
-                return body
-            if status in ("failed", "cancelled"):
-                return body
-        await _async_sleep(3)
-    return None
-
-
-async def _async_sleep(seconds: float):
-    import asyncio
+async def _async_sleep(seconds: float) -> None:
     await asyncio.sleep(seconds)
 
 
@@ -94,7 +71,7 @@ async def sl_evaluate_dax(
     async with httpx.AsyncClient(timeout=60.0) as client:
         resp = await client.post(url, json=body, headers=_pbi_headers())
     if resp.status_code != 200:
-        return f"Error: {resp.status_code} — {resp.text[:500]}"
+        return format_http_error(resp)
     data = resp.json()
     results = data.get("results", [])
     if results:
@@ -133,7 +110,7 @@ async def sl_get_semantic_model_definition(
             if resp2.status_code == 200:
                 return json.dumps(resp2.json().get("definition", {}).get("parts", []), indent=2)
             return f"Error polling: {resp2.status_code} — {resp2.text[:500]}"
-    return f"Error: {resp.status_code} — {resp.text[:500]}"
+    return format_http_error(resp)
 
 
 @mcp.tool()
@@ -149,7 +126,7 @@ async def sl_list_semantic_models(
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.get(url, headers=_pbi_headers())
     if resp.status_code != 200:
-        return f"Error: {resp.status_code} — {resp.text[:500]}"
+        return format_http_error(resp)
     datasets = resp.json().get("value", [])
     result = []
     for ds in datasets:
@@ -210,7 +187,7 @@ async def sl_refresh_semantic_model(
         resp = await client.post(url, json=body, headers=_pbi_headers())
     if resp.status_code == 202:
         return json.dumps({"status": "refresh_triggered", "dataset_id": dataset_id})
-    return f"Error: {resp.status_code} — {resp.text[:500]}"
+    return format_http_error(resp)
 
 
 @mcp.tool()
@@ -230,7 +207,7 @@ async def sl_get_refresh_history(
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.get(url, headers=_pbi_headers())
     if resp.status_code != 200:
-        return f"Error: {resp.status_code} — {resp.text[:500]}"
+        return format_http_error(resp)
     return json.dumps(resp.json().get("value", []), indent=2)
 
 
@@ -252,7 +229,7 @@ async def sl_cancel_refresh(
         resp = await client.delete(url, headers=_pbi_headers())
     if resp.status_code in (200, 204):
         return json.dumps({"status": "cancelled", "refresh_id": refresh_id})
-    return f"Error: {resp.status_code} — {resp.text[:500]}"
+    return format_http_error(resp)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -272,7 +249,7 @@ async def sl_list_reports(
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.get(url, headers=_pbi_headers())
     if resp.status_code != 200:
-        return f"Error: {resp.status_code} — {resp.text[:500]}"
+        return format_http_error(resp)
     reports = resp.json().get("value", [])
     result = []
     for r in reports:
@@ -313,7 +290,7 @@ async def sl_get_report_definition(
             if resp2.status_code == 200:
                 return json.dumps(resp2.json().get("definition", {}).get("parts", []), indent=2)
             return f"Error polling: {resp2.status_code} — {resp2.text[:500]}"
-    return f"Error: {resp.status_code} — {resp.text[:500]}"
+    return format_http_error(resp)
 
 
 @mcp.tool()
@@ -343,7 +320,7 @@ async def sl_clone_report(
         resp = await client.post(url, json=body, headers=_pbi_headers())
     if resp.status_code in (200, 201):
         return json.dumps(resp.json(), indent=2)
-    return f"Error: {resp.status_code} — {resp.text[:500]}"
+    return format_http_error(resp)
 
 
 @mcp.tool()
@@ -365,7 +342,7 @@ async def sl_rebind_report(
         resp = await client.post(url, json=body, headers=_pbi_headers())
     if resp.status_code in (200, 204):
         return json.dumps({"status": "rebound", "report_id": report_id, "dataset_id": target_dataset_id})
-    return f"Error: {resp.status_code} — {resp.text[:500]}"
+    return format_http_error(resp)
 
 
 @mcp.tool()
@@ -389,7 +366,7 @@ async def sl_export_report(
         resp = await client.post(url, json=body, headers=_pbi_headers())
     if resp.status_code == 202:
         return json.dumps(resp.json(), indent=2)
-    return f"Error: {resp.status_code} — {resp.text[:500]}"
+    return format_http_error(resp)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -409,7 +386,7 @@ async def sl_list_lakehouses(
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.get(url, headers=_headers())
     if resp.status_code != 200:
-        return f"Error: {resp.status_code} — {resp.text[:500]}"
+        return format_http_error(resp)
     return json.dumps(resp.json().get("value", []), indent=2)
 
 
@@ -428,7 +405,7 @@ async def sl_get_lakehouse_tables(
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.get(url, headers=_headers())
     if resp.status_code != 200:
-        return f"Error: {resp.status_code} — {resp.text[:500]}"
+        return format_http_error(resp)
     return json.dumps(resp.json().get("data", []), indent=2)
 
 
@@ -465,7 +442,7 @@ async def sl_run_table_maintenance(
         resp = await client.post(url, json=body, headers=_headers())
     if resp.status_code in (200, 202):
         return json.dumps({"status": "maintenance_triggered", "table": table_name})
-    return f"Error: {resp.status_code} — {resp.text[:500]}"
+    return format_http_error(resp)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -491,7 +468,7 @@ async def sl_list_shortcuts(
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.get(url, headers=_headers())
     if resp.status_code != 200:
-        return f"Error: {resp.status_code} — {resp.text[:500]}"
+        return format_http_error(resp)
     return json.dumps(resp.json().get("value", []), indent=2)
 
 
@@ -532,7 +509,7 @@ async def sl_create_shortcut(
         resp = await client.post(url, json=body, headers=_headers())
     if resp.status_code in (200, 201):
         return json.dumps(resp.json(), indent=2)
-    return f"Error: {resp.status_code} — {resp.text[:500]}"
+    return format_http_error(resp)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -552,7 +529,7 @@ async def sl_list_workspace_users(
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.get(url, headers=_headers())
     if resp.status_code != 200:
-        return f"Error: {resp.status_code} — {resp.text[:500]}"
+        return format_http_error(resp)
     return json.dumps(resp.json().get("value", []), indent=2)
 
 
@@ -580,7 +557,7 @@ async def sl_add_workspace_user(
         resp = await client.post(url, json=body, headers=_headers())
     if resp.status_code in (200, 201):
         return json.dumps({"status": "added", "principal_id": principal_id, "role": role})
-    return f"Error: {resp.status_code} — {resp.text[:500]}"
+    return format_http_error(resp)
 
 
 @mcp.tool()
@@ -600,7 +577,7 @@ async def sl_assign_workspace_to_capacity(
         resp = await client.post(url, json=body, headers=_headers())
     if resp.status_code in (200, 202):
         return json.dumps({"status": "assigned", "workspace_id": workspace_id, "capacity_id": capacity_id})
-    return f"Error: {resp.status_code} — {resp.text[:500]}"
+    return format_http_error(resp)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -620,7 +597,7 @@ async def sl_get_git_connection(
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.get(url, headers=_headers())
     if resp.status_code != 200:
-        return f"Error: {resp.status_code} — {resp.text[:500]}"
+        return format_http_error(resp)
     return json.dumps(resp.json(), indent=2)
 
 
@@ -636,17 +613,17 @@ async def sl_get_git_status(
     url = f"{FABRIC_API}/workspaces/{workspace_id}/git/status"
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.post(url, headers=_headers())
-    if resp.status_code == 200:
-        return json.dumps(resp.json(), indent=2)
-    if resp.status_code == 202:
-        location = resp.headers.get("Location", "")
-        if location:
-            result_url = location.rstrip("/") + "/result"
-            await _async_sleep(3)
-            resp2 = await client.get(result_url, headers=_headers())
-            if resp2.status_code == 200:
-                return json.dumps(resp2.json(), indent=2)
-    return f"Error: {resp.status_code} — {resp.text[:500]}"
+        if resp.status_code == 200:
+            return json.dumps(resp.json(), indent=2)
+        if resp.status_code == 202:
+            location = resp.headers.get("Location", "")
+            if location:
+                result_url = location.rstrip("/") + "/result"
+                await _async_sleep(3)
+                resp2 = await client.get(result_url, headers=_headers())
+                if resp2.status_code == 200:
+                    return json.dumps(resp2.json(), indent=2)
+    return format_http_error(resp)
 
 
 @mcp.tool()
@@ -666,7 +643,7 @@ async def sl_commit_to_git(
         resp = await client.post(url, json=body, headers=_headers())
     if resp.status_code in (200, 202):
         return json.dumps({"status": "committed", "comment": comment})
-    return f"Error: {resp.status_code} — {resp.text[:500]}"
+    return format_http_error(resp)
 
 
 @mcp.tool()
@@ -684,7 +661,7 @@ async def sl_update_from_git(
         resp = await client.post(url, json=body, headers=_headers())
     if resp.status_code in (200, 202):
         return json.dumps({"status": "update_triggered"})
-    return f"Error: {resp.status_code} — {resp.text[:500]}"
+    return format_http_error(resp)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -763,7 +740,7 @@ async def sl_admin_list_workspaces(
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.get(url, headers=_pbi_headers())
     if resp.status_code != 200:
-        return f"Error: {resp.status_code} — {resp.text[:500]}"
+        return format_http_error(resp)
     workspaces = resp.json().get("value", [])
     result = []
     for ws in workspaces:
@@ -792,7 +769,7 @@ async def sl_admin_list_datasets(
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.get(url, headers=_pbi_headers())
     if resp.status_code != 200:
-        return f"Error: {resp.status_code} — {resp.text[:500]}"
+        return format_http_error(resp)
     return json.dumps(resp.json().get("value", []), indent=2)
 
 
@@ -811,14 +788,13 @@ async def sl_admin_get_activity_events(
         end_date: ISO 8601 end datetime.
         activity_type: Optional filter — e.g. 'ViewReport', 'CreateReport'.
     """
-    filter_str = f"activityDateTime ge {start_date} and activityDateTime le {end_date}"
-    if activity_type:
-        filter_str += f" and Activity eq '{activity_type}'"
     url = f"{PBI_API}/admin/activityevents?startDateTime='{start_date}'&endDateTime='{end_date}'"
+    if activity_type:
+        url += f"&$filter=Activity eq '{activity_type}'"
     async with httpx.AsyncClient(timeout=60.0) as client:
         resp = await client.get(url, headers=_pbi_headers())
     if resp.status_code != 200:
-        return f"Error: {resp.status_code} — {resp.text[:500]}"
+        return format_http_error(resp)
     return json.dumps(resp.json(), indent=2)
 
 
@@ -835,7 +811,7 @@ async def sl_admin_list_workspace_users(
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.get(url, headers=_pbi_headers())
     if resp.status_code != 200:
-        return f"Error: {resp.status_code} — {resp.text[:500]}"
+        return format_http_error(resp)
     return json.dumps(resp.json().get("value", []), indent=2)
 
 
@@ -852,7 +828,7 @@ async def sl_admin_list_dataset_users(
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.get(url, headers=_pbi_headers())
     if resp.status_code != 200:
-        return f"Error: {resp.status_code} — {resp.text[:500]}"
+        return format_http_error(resp)
     return json.dumps(resp.json().get("value", []), indent=2)
 
 
@@ -867,7 +843,7 @@ async def sl_list_connections() -> str:
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.get(url, headers=_headers())
     if resp.status_code != 200:
-        return f"Error: {resp.status_code} — {resp.text[:500]}"
+        return format_http_error(resp)
     return json.dumps(resp.json().get("value", []), indent=2)
 
 
@@ -878,7 +854,7 @@ async def sl_list_gateways() -> str:
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.get(url, headers=_pbi_headers())
     if resp.status_code != 200:
-        return f"Error: {resp.status_code} — {resp.text[:500]}"
+        return format_http_error(resp)
     return json.dumps(resp.json().get("value", []), indent=2)
 
 
@@ -913,7 +889,7 @@ async def sl_get_notebook_definition(
             if resp2.status_code == 200:
                 return json.dumps(resp2.json().get("definition", {}).get("parts", []), indent=2)
             return f"Error polling: {resp2.status_code} — {resp2.text[:500]}"
-    return f"Error: {resp.status_code} — {resp.text[:500]}"
+    return format_http_error(resp)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -933,7 +909,7 @@ async def sl_list_data_pipelines(
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.get(url, headers=_headers())
     if resp.status_code != 200:
-        return f"Error: {resp.status_code} — {resp.text[:500]}"
+        return format_http_error(resp)
     return json.dumps(resp.json().get("value", []), indent=2)
 
 
@@ -953,7 +929,7 @@ async def sl_run_data_pipeline(
         resp = await client.post(url, headers=_headers())
     if resp.status_code in (200, 202):
         return json.dumps({"status": "pipeline_triggered", "pipeline_id": pipeline_id})
-    return f"Error: {resp.status_code} — {resp.text[:500]}"
+    return format_http_error(resp)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -973,7 +949,7 @@ async def sl_list_warehouses(
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.get(url, headers=_headers())
     if resp.status_code != 200:
-        return f"Error: {resp.status_code} — {resp.text[:500]}"
+        return format_http_error(resp)
     return json.dumps(resp.json().get("value", []), indent=2)
 
 
@@ -994,7 +970,7 @@ async def sl_list_sql_endpoints(
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.get(url, headers=_headers())
     if resp.status_code != 200:
-        return f"Error: {resp.status_code} — {resp.text[:500]}"
+        return format_http_error(resp)
     return json.dumps(resp.json().get("value", []), indent=2)
 
 
@@ -1009,7 +985,7 @@ async def sl_list_capacities() -> str:
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.get(url, headers=_pbi_headers())
     if resp.status_code != 200:
-        return f"Error: {resp.status_code} — {resp.text[:500]}"
+        return format_http_error(resp)
     return json.dumps(resp.json().get("value", []), indent=2)
 
 
@@ -1030,7 +1006,7 @@ async def sl_list_mirrored_databases(
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.get(url, headers=_headers())
     if resp.status_code != 200:
-        return f"Error: {resp.status_code} — {resp.text[:500]}"
+        return format_http_error(resp)
     return json.dumps(resp.json().get("value", []), indent=2)
 
 
@@ -1049,7 +1025,7 @@ async def sl_get_mirroring_status(
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.post(url, headers=_headers())
     if resp.status_code != 200:
-        return f"Error: {resp.status_code} — {resp.text[:500]}"
+        return format_http_error(resp)
     return json.dumps(resp.json(), indent=2)
 
 
@@ -1074,7 +1050,7 @@ async def sl_list_item_schedules(
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.get(url, headers=_headers())
     if resp.status_code != 200:
-        return f"Error: {resp.status_code} — {resp.text[:500]}"
+        return format_http_error(resp)
     return json.dumps(resp.json().get("value", []), indent=2)
 
 
@@ -1096,7 +1072,7 @@ async def sl_run_item_job(
         resp = await client.post(url, headers=_headers())
     if resp.status_code in (200, 202):
         return json.dumps({"status": "job_triggered", "item_id": item_id, "job_type": job_type})
-    return f"Error: {resp.status_code} — {resp.text[:500]}"
+    return format_http_error(resp)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1126,7 +1102,7 @@ async def sl_set_endorsement(
         )
     if resp.status_code in (200, 204):
         return json.dumps({"status": "endorsed", "item_id": item_id, "endorsement": endorsement})
-    return f"Error: {resp.status_code} — {resp.text[:500]}"
+    return format_http_error(resp)
 
 
 # ═══════════════════════════════════════════════════════════════════════

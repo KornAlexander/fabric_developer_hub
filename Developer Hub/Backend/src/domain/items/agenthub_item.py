@@ -44,11 +44,16 @@ class AgentHubItem(ItemBase[dict[str, Any], dict[str, Any]]):
     def get_type_specific_metadata(self) -> dict[str, Any]:
         return self._metadata.model_dump(by_alias=True)
 
-    def set_type_specific_metadata(self, metadata) -> None:
+    def set_type_specific_metadata(
+        self, metadata: AgentHubMetadata | dict[str, Any] | None
+    ) -> None:
         if isinstance(metadata, dict):
             self._metadata = AgentHubMetadata.model_validate(metadata)
         elif isinstance(metadata, AgentHubMetadata):
             self._metadata = metadata
+        # Silently ignore None / unknown types to preserve original behaviour
+        # (the base class may invoke this with whatever the metadata store
+        # returned, including legacy shapes).
 
     async def get_item_payload(self) -> dict[str, Any]:
         return {PAYLOAD_KEY: self._metadata.model_dump(by_alias=True)}

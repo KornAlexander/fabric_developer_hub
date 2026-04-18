@@ -1060,14 +1060,19 @@ class TestItemBase:
                 await item.cancel_job(job_type, job_instance_id)
 
                 # Assert - Verify warning was logged
+                # The implementation uses lazy %s formatting (the standard
+                # logging idiom) so reconstruct the rendered message before
+                # asserting, instead of inspecting the raw format string.
                 mock_logger.warning.assert_called_once()
-                warning_call = mock_logger.warning.call_args[0][0]
+                warning_args = mock_logger.warning.call_args.args
+                warning_call = warning_args[0] % warning_args[1:] if len(warning_args) > 1 else warning_args[0]
                 assert f"Recreating missing job {job_instance_id} metadata" in warning_call
                 assert f"tenant {TestFixtures.TENANT_ID}" in warning_call
                 assert f"item {TestFixtures.ITEM_ID}" in warning_call
 
                 # Verify success info was logged
                 mock_logger.info.assert_called_once()
-                info_call = mock_logger.info.call_args[0][0]
+                info_args = mock_logger.info.call_args.args
+                info_call = info_args[0] % info_args[1:] if len(info_args) > 1 else info_args[0]
                 assert f"Canceled job {job_instance_id}" in info_call
                 assert f"item {TestFixtures.ITEM_ID}" in info_call

@@ -70,6 +70,7 @@ async def _get_copilot_token(github_token: str) -> str:
     if resp.status_code == 401:
         _copilot_token_cache.pop(cache_key, None)
         raise HTTPException(status_code=401, detail="GitHub token invalid or expired. Please sign in again.")
+
     if resp.status_code == 403:
         raise HTTPException(
             status_code=403,
@@ -145,7 +146,7 @@ class ChatRequest(BaseModel):
 _mcp_manager = None
 
 
-def set_mcp_manager(manager):
+def set_mcp_manager(manager) -> None:
     """Called from main.py at startup to inject the MCPClientManager."""
     global _mcp_manager
     _mcp_manager = manager

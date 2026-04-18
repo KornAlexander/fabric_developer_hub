@@ -68,13 +68,13 @@ class ItemBase[TItemMetadata, TItemClientMetadata](ABC):
 
     async def load(self, item_id: UUID) -> None:
         """Load an existing item or create a default one if not found."""
-        self.logger.info(f"Loading item {item_id}")
+        self.logger.info("Loading item %s", item_id)
         self.item_object_id = str(item_id)
         tenant_object_id = self.auth_context.tenant_object_id
 
         # Check if the item exists in storage
         if not await self.item_metadata_store.exists(tenant_object_id, str(item_id)):
-            self.logger.error(f"Item {item_id} not found")
+            self.logger.error("Item %s not found", item_id)
             raise ItemMetadataNotFoundException(f"Item not found: {item_id}")
 
         metadata_class = self.get_metadata_class()
@@ -90,9 +90,18 @@ class ItemBase[TItemMetadata, TItemClientMetadata](ABC):
         common_metadata = item_metadata.common_metadata
 
         if common_metadata.type != self.item_type:
-            self.logger.error(f"Unexpected item type '{common_metadata.type}'. Expected '{self.item_type}'")
-            raise UnexpectedItemTypeException(f"Unexpected item type '{common_metadata.type}'. Expected '{self.item_type}'")
+            self.logger.error(
+                "Unexpected item type '%s'. Expected '%s'",
+                common_metadata.type,
+                self.item_type,
+            )
+            raise UnexpectedItemTypeException(
+                f"Unexpected item type '{common_metadata.type}'. Expected '{self.item_type}'"
+            )
 
+        # Tenant isolation: the metadata-store's tenant key MUST match the
+        # tenant claim from the validated bearer token. Never trust
+        # tenant/workspace IDs supplied via path/body without this cross-check.
         self._ensure_condition(
             str(common_metadata.tenant_object_id).lower() == str(tenant_object_id).lower(),
             "TenantObjectId must match"
@@ -108,7 +117,7 @@ class ItemBase[TItemMetadata, TItemClientMetadata](ABC):
         self.display_name = common_metadata.display_name
         self.description = common_metadata.description
         self.set_type_specific_metadata(item_metadata.type_specific_metadata)
-        self.logger.info(f"Successfully loaded item {item_id}")
+        self.logger.info("Successfully loaded item %s", item_id)
 
 
     @abstractmethod
@@ -124,18 +133,27 @@ class ItemBase[TItemMetadata, TItemClientMetadata](ABC):
         self.display_name = create_request.display_name
         self.description = create_request.description
 
-        self.logger.info(f"Creating item {self.item_type} with ID {item_id} in workspace {workspace_id}")
-        self.logger.debug(f"Creation payload: {create_request.creation_payload}")
+        self.logger.info(
+            "Creating item %s with ID %s in workspace %s",
+            self.item_type,
+            item_id,
+            workspace_id,
+        )
+        self.logger.debug("Creation payload: %s", create_request.creation_payload)
 
         self.set_definition(create_request.creation_payload)
-        self.logger.debug(f"Creating item with tenant ID: {self.tenant_object_id}")
+        self.logger.debug("Creating item with tenant ID: %s", self.tenant_object_id)
         await self.save_changes()
-        self.logger.info(f"Successfully created item {item_id}")
+        self.logger.info("Successfully created item %s", item_id)
 
     async def update(self, update_request: UpdateItemRequest) -> None:
         """Update an existing item."""
         if not update_request:
-            self.logger.error(f"Invalid item payload for type {self.item_type}, item ID {self.item_object_id}")
+            self.logger.error(
+                "Invalid item payload for type %s, item ID %s",
+                self.item_type,
+                self.item_object_id,
+            )
             raise InvalidItemPayloadException(self.item_type, self.item_object_id)
 
         self.display_name = update_request.display_name
@@ -143,12 +161,12 @@ class ItemBase[TItemMetadata, TItemClientMetadata](ABC):
 
         self.update_definition(update_request.update_payload)
         await self.save_changes()
-        self.logger.info(f"Successfully updated item {self.item_object_id}")
+        self.logger.info("Successfully updated item %s", self.item_object_id)
 
     async def delete(self) -> None:
         """Delete an existing item."""
         await self.item_metadata_store.delete(self.tenant_object_id, self.item_object_id)
-        self.logger.info(f"Successfully deleted item {self.item_object_id}")
+        self.logger.info("Successfully deleted item %s", self.item_object_id)
 
     @abstractmethod
     def set_definition(self, payload: dict[str, Any]) -> None:
@@ -194,7 +212,12 @@ class ItemBase[TItemMetadata, TItemClientMetadata](ABC):
 
         if not await self.item_metadata_store.exists_job(self.tenant_object_id, self.item_object_id, str(job_instance_id)):
             # Recreate missing job metadata
-            self.logger.warning(f"Recreating missing job {job_instance_id} metadata in tenant {self.tenant_object_id} item {self.item_object_id}")
+            self.logger.warning(
+                "Recreating missing job %s metadata in tenant %s item %s",
+                job_instance_id,
+                self.tenant_object_id,
+                self.item_object_id,
+            )
             # Create new JobMetadata instance
             job_metadata = JobMetadata(
                 job_type=job_type,
@@ -218,18 +241,22 @@ class ItemBase[TItemMetadata, TItemClientMetadata](ABC):
             str(job_instance_id),
             job_metadata
         )
-        self.logger.info(f"Canceled job {job_instance_id} for item {self.item_object_id}")
+        self.logger.info(
+            "Canceled job %s for item %s",
+            job_instance_id,
+            self.item_object_id,
+        )
 
     async def save_changes(self) -> None:
         """Save changes to this item."""
-        self.logger.info(f"Saving item with tenant ID: {self.tenant_object_id}")
+        self.logger.info("Saving item with tenant ID: %s", self.tenant_object_id)
         await self.store()
         await self.allocate_and_free_resources()
         await self.update_fabric()
 
     async def store(self) -> None:
         """Store the item metadata."""
-        self.logger.info(f"Storing item {self.item_object_id}")
+        self.logger.info("Storing item %s", self.item_object_id)
         common_metadata = CommonItemMetadata(
             type=self.item_type,
             tenant_object_id=self.tenant_object_id,

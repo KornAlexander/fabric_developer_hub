@@ -18,11 +18,11 @@ T = TypeVar('T')
 
 
 class ItemMetadataStore:
-    def __init__(self):
+    def __init__(self) -> None:
         self.logger = logging.getLogger(__name__)
         self.config_service = get_configuration_service()
         self.data_dir = self.get_base_directory_path(WorkloadConstants.WORKLOAD_NAME)
-        self.logger.debug(f"created Data directory: {self.data_dir}")
+        self.logger.debug("created Data directory: %s", self.data_dir)
         os.makedirs(self.data_dir, exist_ok=True)
 
     async def _ensure_dir_exists(self, path: Path) -> None:
@@ -45,9 +45,9 @@ class ItemMetadataStore:
 
 
     def _get_item_dir_path(self, tenant_id: str, item_id: str) -> Path:
+        """Get directory path for an item."""
         tenant_id_str = str(tenant_id)
         item_id_str = str(item_id)
-        """Get directory path for an item."""
         tenant_dir = self.data_dir / tenant_id_str
         return tenant_dir / item_id_str
 
@@ -83,7 +83,7 @@ class ItemMetadataStore:
             common_metadata: The common metadata model
             type_specific_metadata: The type-specific metadata model
         """
-        self.logger.info(f"Upserting metadata for item {item_id} in tenant {tenant_id}")
+        self.logger.info("Upserting metadata for item %s in tenant %s", item_id, tenant_id)
 
         # Ensure directories exist
         item_dir = self._get_item_dir_path(tenant_id, item_id)
@@ -108,7 +108,7 @@ class ItemMetadataStore:
                 # Otherwise, try direct serialization
             await f.write(json.dumps(data, indent=2))
 
-    async def load(self, tenant_id: str, item_id: str, metadata_class: type[T] = None) -> ItemMetadata[T]:
+    async def load(self, tenant_id: str, item_id: str, metadata_class: type[T] | None = None) -> ItemMetadata[T]:
         """Load an item's metadata.
 
         Args:
@@ -122,7 +122,7 @@ class ItemMetadataStore:
         Raises:
             FileNotFoundError: If the item metadata doesn't exist
         """
-        self.logger.info(f"Loading metadata for item {item_id} in tenant {tenant_id}")
+        self.logger.info("Loading metadata for item %s in tenant %s", item_id, tenant_id)
 
         # Load common metadata
         common_path = self._get_common_metadata_path(tenant_id, item_id)
@@ -132,7 +132,7 @@ class ItemMetadataStore:
         type_specific_exists = await asyncio.to_thread(type_specific_path.exists)
 
         if not common_exists or not type_specific_exists:
-            self.logger.error(f"Metadata not found for item {item_id} in tenant {tenant_id}")
+            self.logger.error("Metadata not found for item %s in tenant %s", item_id, tenant_id)
             raise FileNotFoundError(f"Item metadata not found for {item_id}")
 
         async with aiofiles.open(common_path) as f:
@@ -149,9 +149,9 @@ class ItemMetadataStore:
                 # Otherwise just use the raw data
                 type_specific_metadata = type_specific_data
 
-        self.logger.info(f"Metadata loaded for item {item_id} in tenant {tenant_id}:")
-        self.logger.info(f"Common metadata: {common_metadata}")
-        self.logger.info(f"Type-specific metadata: {type_specific_metadata}")
+        self.logger.info("Metadata loaded for item %s in tenant %s:", item_id, tenant_id)
+        self.logger.info("Common metadata: %s", common_metadata)
+        self.logger.info("Type-specific metadata: %s", type_specific_metadata)
 
         return ItemMetadata(
             common_metadata=common_metadata,
@@ -169,15 +169,15 @@ class ItemMetadataStore:
 
     async def delete(self, tenant_id: str, item_id: str) -> None:
         """Delete an item's metadata."""
-        self.logger.info(f"Deleting metadata for item {item_id} in tenant {tenant_id}")
+        self.logger.info("Deleting metadata for item %s in tenant %s", item_id, tenant_id)
         item_dir = self._get_item_dir_path(tenant_id, item_id)
 
         dir_exists = await asyncio.to_thread(item_dir.exists)
         if dir_exists:
             await asyncio.to_thread(shutil.rmtree, item_dir)
         else:
-            self.logger.warning(f"Item directory {item_dir} does not exist, nothing to delete.")
-        self.logger.info(f"Metadata for item {item_id} in tenant {tenant_id} deleted successfully.")
+            self.logger.warning("Item directory %s does not exist, nothing to delete.", item_dir)
+        self.logger.info("Metadata for item %s in tenant %s deleted successfully.", item_id, tenant_id)
 
     async def upsert_job(
         self,
@@ -194,7 +194,7 @@ class ItemMetadataStore:
             job_id: The job ID
             job_metadata: The job metadata model
         """
-        self.logger.info(f"Upserting job metadata for job {job_id} in item {item_id}")
+        self.logger.info("Upserting job metadata for job %s in item %s", job_id, item_id)
 
         jobs_dir = self._get_item_dir_path(tenant_id, item_id) / self.config_service.get_jobs_directory_name()
         await self._ensure_dir_exists(jobs_dir)
@@ -227,7 +227,7 @@ class ItemMetadataStore:
         job_exists = await asyncio.to_thread(job_path.exists)
 
         if not job_exists:
-            self.logger.error(f"Metadata not found for job {job_id} in item {item_id}")
+            self.logger.error("Metadata not found for job %s in item %s", job_id, item_id)
             raise FileNotFoundError(f"Job metadata not found for job {job_id}")
 
         async with aiofiles.open(job_path) as f:
@@ -255,4 +255,4 @@ def get_item_metadata_store() -> ItemMetadataStore:
     except KeyError:
         raise RuntimeError(
             "ItemMetadataStore not initialized. Ensure ServiceInitializer.initialize_all_services() ran at startup."
-        )
+        ) from None

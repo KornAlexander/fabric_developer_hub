@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from typing import Any
 from uuid import UUID
 
 from fabric_api.apis.jobs_api_base import BaseJobsApi
@@ -16,8 +17,12 @@ from services.fabric.item_factory import get_item_factory
 
 logger = logging.getLogger(__name__)
 
-# # Global set to track background tasks
-_background_tasks: set[asyncio.Task] = set()
+# Module-level set tracks live background job tasks so they are not
+# garbage-collected mid-flight (Python docs warn that asyncio holds only
+# weak refs). Mutation happens from the asyncio thread only, so no lock
+# is needed; cleanup_background_tasks() drains it on shutdown.
+_background_tasks: set[asyncio.Task[None]] = set()
+
 
 class JobsController(BaseJobsApi):
     """Implementation of the Jobs API for handling job lifecycle operations"""
@@ -36,26 +41,35 @@ class JobsController(BaseJobsApi):
         create_item_job_instance_request: CreateItemJobInstanceRequest = None
     ) -> None:
         """Called by Microsoft Fabric for starting a new job instance."""
-        logger.info(f"Creating job instance: {jobType}/{jobInstanceId} for item {itemType}/{itemId}")
+        logger.info(
+            "Creating job instance: %s/%s for item %s/%s",
+            jobType,
+            jobInstanceId,
+            itemType,
+            itemId,
+        )
 
         # Get required services
         auth_service = get_authentication_service()
         item_factory = get_item_factory()
 
         try:
-            # Authenticate the call
+            # Authenticate the call. authenticate_control_plane_call cross-
+            # checks the tenant header against the bearer-token tenant claim.
             auth_context = await auth_service.authenticate_control_plane_call(
                 authorization,
                 x_ms_client_tenant_id
             )
 
-            # Create and load the item
+            # Create and load the item — load() also enforces tenant isolation.
             item = item_factory.create_item(itemType, auth_context)
             await item.load(itemId)
 
-            logger.info(f"Running job type: {jobType}")
+            logger.info("Running job type: %s", jobType)
 
-            # Start job execution in the background without awaiting it
+            # Start job execution in the background without awaiting it.
+            # Track the task in _background_tasks to prevent GC and to allow
+            # graceful cancellation during shutdown.
             task = asyncio.create_task(
                 self._execute_job_wrapper(
                     item,
@@ -67,31 +81,48 @@ class JobsController(BaseJobsApi):
                 name=f"Job_{jobType}_{jobInstanceId}"
             )
 
-            # Add to background tasks set to prevent garbage collection
             _background_tasks.add(task)
-
-            # Remove from set when done
             task.add_done_callback(_background_tasks.discard)
 
-            # Return 202 Accepted response (handled by FastAPI)
-            logger.info(f"Job {jobInstanceId} started successfully")
+            # Return 202 Accepted (handled by FastAPI via empty return).
+            logger.info("Job %s started successfully", jobInstanceId)
             return None
-        except Exception as e:
-            logger.error(f"Error creating job instance: {str(e)}", exc_info=True)
+        except Exception:
+            # Re-raise so the workload exception handler converts to a Fabric
+            # error envelope. logger.exception adds the traceback.
+            logger.exception("Error creating job instance")
             raise
 
-    async def _execute_job_wrapper(self, item, job_type: str, job_instance_id: UUID,
-                                   invoke_type: JobInvokeType, creation_payload: dict):
-        """Wrapper for job execution with proper error handling"""
+    async def _execute_job_wrapper(
+        self,
+        item: Any,
+        job_type: str,
+        job_instance_id: UUID,
+        invoke_type: JobInvokeType,
+        creation_payload: dict[str, Any],
+    ) -> None:
+        """Wrapper for background job execution with proper error handling.
+
+        Background-task contract:
+        - On success: log and return.
+        - On CancelledError: log and re-raise so the cancellation propagates.
+        - On any other exception: log the traceback and SWALLOW. Re-raising
+          would only surface as an "unhandled task exception" warning since
+          nothing awaits this task.
+        """
         try:
             await item.execute_job(job_type, job_instance_id, invoke_type, creation_payload)
-            logger.info(f"Job {job_instance_id} completed successfully")
+            logger.info("Job %s completed successfully", job_instance_id)
         except asyncio.CancelledError:
-            logger.warning(f"Job {job_instance_id} was cancelled during shutdown")
+            logger.warning("Job %s was cancelled during shutdown", job_instance_id)
             raise  # Re-raise to properly handle cancellation
-        except Exception as e:
-            logger.error(f"Error during execution of job {job_instance_id} (type: {job_type}): {str(e)}", exc_info=True)
-            # Don't re-raise - this is a background task
+        except Exception:
+            logger.exception(
+                "Error during execution of job %s (type: %s)",
+                job_instance_id,
+                job_type,
+            )
+            # Don't re-raise — this is a fire-and-forget background task.
 
     async def jobs_get_item_job_instance_state(
         self,
@@ -106,26 +137,29 @@ class JobsController(BaseJobsApi):
         x_ms_client_tenant_id: str = None
     ) -> ItemJobInstanceState:
         """Called by Microsoft Fabric for retrieving a job instance state."""
-        logger.info(f"Getting job instance state: {jobType}/{jobInstanceId} for item {itemType}/{itemId}")
+        logger.info(
+            "Getting job instance state: %s/%s for item %s/%s",
+            jobType,
+            jobInstanceId,
+            itemType,
+            itemId,
+        )
 
-        # Get required services
         auth_service = get_authentication_service()
         item_factory = get_item_factory()
 
         try:
-            # Authenticate the call
             auth_context = await auth_service.authenticate_control_plane_call(
                 authorization,
                 x_ms_client_tenant_id
             )
 
-            # Create and load the item
             item = item_factory.create_item(itemType, auth_context)
             await item.load(itemId)
 
             # Check if item exists
             if not item.item_object_id:
-                logger.error(f"Item {itemId} not found")
+                logger.error("Item %s not found", itemId)
                 return ItemJobInstanceState(
                     status=JobInstanceStatus.FAILED,
                     error_details=ErrorDetails(
@@ -135,12 +169,11 @@ class JobsController(BaseJobsApi):
                     )
                 )
 
-            # Get job state
             job_state = await item.get_job_state(jobType, jobInstanceId)
-            logger.info(f"Job {jobInstanceId} state: {job_state.status}")
+            logger.info("Job %s state: %s", jobInstanceId, job_state.status)
             return job_state
-        except Exception as e:
-            logger.error(f"Error getting job instance state: {str(e)}", exc_info=True)
+        except Exception:
+            logger.exception("Error getting job instance state")
             raise
 
     async def jobs_cancel_item_job_instance(
@@ -156,26 +189,29 @@ class JobsController(BaseJobsApi):
         x_ms_client_tenant_id: str = None
     ) -> ItemJobInstanceState:
         """Called by Microsoft Fabric for cancelling a job instance."""
-        logger.info(f"Cancelling job instance: {jobType}/{jobInstanceId} for item {itemType}/{itemId}")
+        logger.info(
+            "Cancelling job instance: %s/%s for item %s/%s",
+            jobType,
+            jobInstanceId,
+            itemType,
+            itemId,
+        )
 
-        # Get required services
         auth_service = get_authentication_service()
         item_factory = get_item_factory()
 
         try:
-            # Authenticate the call
             auth_context = await auth_service.authenticate_control_plane_call(
                 authorization,
                 x_ms_client_tenant_id
             )
 
-            # Create and load the item
             item = item_factory.create_item(itemType, auth_context)
             await item.load(itemId)
 
             # Check if item exists
             if not item.item_object_id:
-                logger.error(f"Item {itemId} not found")
+                logger.error("Item %s not found", itemId)
                 return ItemJobInstanceState(
                     status=JobInstanceStatus.FAILED,
                     error_details=ErrorDetails(
@@ -185,19 +221,18 @@ class JobsController(BaseJobsApi):
                     )
                 )
 
-            # Cancel the job
-            logger.info(f"Canceling job {jobType}/{jobInstanceId}")
+            logger.info("Canceling job %s/%s", jobType, jobInstanceId)
             await item.cancel_job(jobType, jobInstanceId)
 
-            # Return canceled state
             return ItemJobInstanceState(
                 status=JobInstanceStatus.CANCELLED
             )
-        except Exception as e:
-            logger.error(f"Error cancelling job instance: {str(e)}", exc_info=True)
+        except Exception:
+            logger.exception("Error cancelling job instance")
             raise
 
-async def cleanup_background_tasks(timeout: float = 3.0):
+
+async def cleanup_background_tasks(timeout: float = 3.0) -> None:
     """Clean up any remaining background tasks during shutdown."""
     if not _background_tasks:
         return
@@ -207,7 +242,7 @@ async def cleanup_background_tasks(timeout: float = 3.0):
         _background_tasks.clear()
         return
 
-    logger.info(f"Cancelling {len(pending_tasks)} pending background tasks...")
+    logger.info("Cancelling %d pending background tasks...", len(pending_tasks))
 
     # Cancel all pending tasks
     for task in pending_tasks:
@@ -220,6 +255,6 @@ async def cleanup_background_tasks(timeout: float = 3.0):
             timeout=timeout
         )
     except TimeoutError:
-        logger.warning(f"Some tasks did not complete within {timeout}s timeout")
+        logger.warning("Some tasks did not complete within %.1fs timeout", timeout)
 
     _background_tasks.clear()

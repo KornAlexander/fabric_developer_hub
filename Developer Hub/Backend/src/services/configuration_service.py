@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 # .env is loaded once at process start by src/bootstrap.py, which every
 # entrypoint (main.py, tests/conftest.py) imports first. Do not re-load here.
@@ -38,10 +38,10 @@ class ConfigurationService:
     Provides a clean interface for configuration management across environments.
     """
 
-    _instance: Optional['ConfigurationService'] = None
+    _instance: "ConfigurationService | None" = None
     _initialized: bool = False
 
-    def __new__(cls, *args, **kwargs):
+    def __new__(cls, *args: Any, **kwargs: Any) -> "ConfigurationService":
         """Ensure singleton pattern."""
         if cls._instance is None:
             cls._instance = super().__new__(cls)
@@ -106,10 +106,11 @@ class ConfigurationService:
             # 5. Parse structured configs
             self._parse_structured_configs()
 
-            self.logger.info(f"Configuration loaded successfully for environment: {self.environment}")
+            self.logger.info("Configuration loaded successfully for environment: %s", self.environment)
 
-        except Exception as e:
-            self.logger.error(f"Failed to load configuration: {e}")
+        except Exception:
+            # logger.exception captures the full traceback for ops to triage.
+            self.logger.exception("Failed to load configuration")
             raise
 
     def _load_config_file(self, config_path: Path, required: bool = True) -> None:
@@ -130,17 +131,17 @@ class ConfigurationService:
 
                 file_config = json.loads(content)
                 self._deep_merge(self.config, file_config)
-                self.logger.debug(f"Loaded configuration from {config_path}")
+                self.logger.debug("Loaded configuration from %s", config_path)
 
         except FileNotFoundError:
             if required:
-                self.logger.error(f"Required configuration file not found: {config_path}")
+                self.logger.error("Required configuration file not found: %s", config_path)
                 raise
             else:
-                self.logger.debug(f"Optional configuration file not found: {config_path}")
+                self.logger.debug("Optional configuration file not found: %s", config_path)
 
-        except json.JSONDecodeError as e:
-            self.logger.error(f"Invalid JSON in configuration file {config_path}: {e}")
+        except json.JSONDecodeError:
+            self.logger.exception("Invalid JSON in configuration file %s", config_path)
             raise
 
     def _is_in_string(self, line: str, position: int) -> bool:
@@ -180,13 +181,13 @@ class ConfigurationService:
                 # Convert __ to : for nested keys
                 config_key = env_key.replace('__', ':')
                 self._set_nested_value(config_key, env_value)
-                self.logger.debug(f"Set {config_key} from environment variable {env_key}")
+                self.logger.debug("Set %s from environment variable %s", config_key, env_key)
 
         # Apply standard mappings
         for env_var, config_key in env_mappings.items():
             if value := os.environ.get(env_var):
                 self._set_nested_value(config_key, value)
-                self.logger.debug(f"Overrode {config_key} from environment variable {env_var}")
+                self.logger.debug("Overrode %s from environment variable %s", config_key, env_var)
 
     def _set_nested_value(self, key_path: str, value: Any) -> None:
         """Set a nested configuration value using : separator."""

@@ -77,9 +77,13 @@ async def list_workspaces(request: Request):
         result = await _mcp_manager.call_tool("fabric_list_workspaces", {}, mcp_tokens)
         workspaces = json.loads(str(result))
         return [{"id": w.get("id"), "name": w.get("displayName", w.get("id"))} for w in workspaces]
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error("Failed to list workspaces: %s", e)
-        raise HTTPException(500, f"Failed to list workspaces: {e}")
+        # Don't echo the underlying exception message back to the user — it can
+        # leak internal SDK details. Log full traceback server-side.
+        logger.exception("Failed to list workspaces")
+        raise HTTPException(500, "Failed to list workspaces") from e
 
 
 # ── Job endpoints ────────────────────────────────────────────────────

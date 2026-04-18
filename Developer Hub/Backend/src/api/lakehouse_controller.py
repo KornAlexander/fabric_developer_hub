@@ -42,11 +42,11 @@ async def get_lakehouse_file(
     data = await onelake_service.get_onelake_file(lakehouse_access_token, source)
 
     if not data:
-        logger.warning(f"GetOneLakeFile returned empty data for source: {source}")
+        logger.warning("GetOneLakeFile returned empty data for source: %s", source)
         # Return a 204 No Content status code for empty data
         return None
 
-    logger.info(f"GetOneLakeFile succeeded for source: {source}")
+    logger.info("GetOneLakeFile succeeded for source: %s", source)
     return data
 
 @router.put("/writeToLakehouseFile")
@@ -80,7 +80,7 @@ async def write_to_lakehouse_file(
 
     if file_exists and not request.overwrite_if_exists:
         # File exists, and overwrite is not allowed, return conflict
-        logger.error(f"WriteToOneLakeFile failed. The file already exists at filePath: {file_path}.")
+        logger.error("WriteToOneLakeFile failed. The file already exists at filePath: %s.", file_path)
         raise HTTPException(status_code=409, detail="File already exists. Overwrite is not allowed.")
 
     # Write content to file
@@ -88,7 +88,7 @@ async def write_to_lakehouse_file(
         lakehouse_access_token, file_path, request.content
     )
 
-    logger.info(f"WriteToOneLakeFile succeeded for filePath: {file_path}")
+    logger.info("WriteToOneLakeFile succeeded for filePath: %s", file_path)
     return {"success": True}
 
 @router.get("/onelake/{workspace_id}/{lakehouse_id}/tables")

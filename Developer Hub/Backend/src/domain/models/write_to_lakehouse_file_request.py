@@ -32,14 +32,16 @@ class WriteToLakehouseFileRequest(BaseModel):
     )
 
     # V2-style validators to ensure workspace_id and lakehouse_id are valid UUIDs
-    @field_validator('workspace_id', 'lakehouse_id')
+    @field_validator("workspace_id", "lakehouse_id")
     @classmethod  # Field validators should be classmethods in V2
-    def validate_uuid(cls, v):
+    def validate_uuid(cls, v: str) -> str:
         try:
             uuid.UUID(v)
-            return v
-        except ValueError:
-            raise ValueError(f"Invalid UUID format: {v}")
+        except ValueError as e:
+            # Preserve exception chain so the underlying parse error stays
+            # in the traceback for debuggability.
+            raise ValueError(f"Invalid UUID format: {v}") from e
+        return v
 
     model_config = {  # Use model_config instead of Config in V2
         "json_schema_extra": {

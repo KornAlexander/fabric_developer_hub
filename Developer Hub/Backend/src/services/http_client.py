@@ -10,7 +10,7 @@ class HttpClientService:
     Singleton HTTP client service with connection pooling and retry logic.
     Managed by ServiceRegistry for proper lifecycle management.
     """
-    def __init__(self):
+    def __init__(self) -> None:
         self.logger = logging.getLogger(__name__)
         self._closed = False
         self._client = httpx.AsyncClient(
@@ -27,25 +27,25 @@ class HttpClientService:
             }
         )
 
-    async def _log_request(self, request):
-        self.logger.debug(f"Request: {request.method} {request.url}")
+    async def _log_request(self, request: httpx.Request) -> None:
+        self.logger.debug("Request: %s %s", request.method, request.url)
 
-    async def _log_response(self, response):
+    async def _log_response(self, response: httpx.Response) -> None:
         request = response.request
         try:
-            elapsed_time = 0
+            elapsed_time = 0.0
             if hasattr(response, '_elapsed') and response._elapsed:
                 elapsed_time = response._elapsed.total_seconds()
 
             self.logger.debug(
-                f"Response: {request.method} {request.url} - "
-                f"Status: {response.status_code} - Time: {elapsed_time:.2f}s"
+                "Response: %s %s - Status: %s - Time: %.2fs",
+                request.method, request.url, response.status_code, elapsed_time,
             )
         except Exception:
             # If we can't get timing, just log without it
             self.logger.debug(
-                f"Response: {request.method} {request.url} - "
-                f"Status: {response.status_code}"
+                "Response: %s %s - Status: %s",
+                request.method, request.url, response.status_code,
             )
 
     async def __aenter__(self):
@@ -70,11 +70,11 @@ class HttpClientService:
                         self._client.close()
                     self._closed = True
                     self.logger.warning("HTTP client closed outside async context")
-            except Exception as e:
-                self.logger.error(f"Error closing HTTP client: {e}")
+            except Exception:
+                self.logger.exception("Error closing HTTP client")
                 self._closed = True  # Mark as closed anyway
 
-    async def dispose_async(self):
+    async def dispose_async(self) -> None:
         """Dispose method for ServiceRegistry cleanup."""
         await self.close()
 
@@ -105,8 +105,8 @@ class HttpClientService:
                 if e.response.status_code >= 500 and attempt < max_retries - 1:
                     wait_time = 2 ** attempt
                     self.logger.warning(
-                        f"Request failed with {e.response.status_code}, "
-                        f"retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})"
+                        "Request failed with %s, retrying in %ss (attempt %d/%d)",
+                        e.response.status_code, wait_time, attempt + 1, max_retries,
                     )
                     await asyncio.sleep(wait_time)
                     continue
@@ -115,8 +115,8 @@ class HttpClientService:
                 if attempt < max_retries - 1:
                     wait_time = 2 ** attempt
                     self.logger.warning(
-                        f"Request error: {e}, retrying in {wait_time}s "
-                        f"(attempt {attempt + 1}/{max_retries})"
+                        "Request error: %s, retrying in %ss (attempt %d/%d)",
+                        e, wait_time, attempt + 1, max_retries,
                     )
                     await asyncio.sleep(wait_time)
                     continue
@@ -203,4 +203,4 @@ def get_http_client_service() -> HttpClientService:
         raise RuntimeError(
             "HttpClientService not initialized. Please ensure ServiceInitializer.initialize_all_services() "
             "has been called during application startup."
-        )
+        ) from None

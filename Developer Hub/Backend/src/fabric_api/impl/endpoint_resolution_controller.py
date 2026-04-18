@@ -19,15 +19,17 @@ from services.auth.authentication import get_authentication_service
 
 logger = logging.getLogger(__name__)
 
+
 class EndpointResolutionController(BaseEndpointResolutionApi):
     """
     Implementation of the Endpoint Resolution API.
 
-    This controller resolves service endpoints for requests originating from Microsoft Fabric
-    based on resolution context properties such as tenant region and workspace region.
+    This controller resolves service endpoints for requests originating from
+    Microsoft Fabric based on resolution context properties such as tenant
+    region and workspace region.
     """
 
-    def __init__(self, request: Request):
+    def __init__(self, request: Request) -> None:
         """
         Initialize the controller with the current request context.
 
@@ -62,7 +64,11 @@ class EndpointResolutionController(BaseEndpointResolutionApi):
         Raises:
             HTTPException: If the request is invalid or authentication fails
         """
-        self.logger.info(f"ResolveAsync: Attempting to resolve endpoint. Activity ID: {activity_id}, Request ID: {request_id}")
+        self.logger.info(
+            "ResolveAsync: Attempting to resolve endpoint. Activity ID: %s, Request ID: %s",
+            activity_id,
+            request_id,
+        )
 
         # Validate request body
         if not body:
@@ -71,7 +77,9 @@ class EndpointResolutionController(BaseEndpointResolutionApi):
 
         if not body.context or len(body.context) == 0:
             self.logger.error("ResolveAsync: The resolution context is missing or empty.")
-            raise HTTPException(status_code=400, detail="The resolution context is missing or empty.")
+            raise HTTPException(
+                status_code=400, detail="The resolution context is missing or empty."
+            )
 
         try:
             # Authenticate the call (without requiring subject token or tenant ID header)
@@ -86,30 +94,36 @@ class EndpointResolutionController(BaseEndpointResolutionApi):
             # Log context properties for debugging
             context_dict = {prop.name: prop.value for prop in body.context}
             context_json = json.dumps(context_dict)
-            self.logger.info(f"Resolving endpoint with Context Properties: {context_json}")
+            self.logger.info("Resolving endpoint with Context Properties: %s", context_json)
 
             # Resolve the endpoint URL based on the request
             resolved_url = self._resolve_endpoint_url(body)
 
-            # Set TTL (time-to-live) in minutes - default to 60 minutes
+            # Set TTL (time-to-live) in minutes — default to 60 minutes
             ttl_in_minutes = 60
 
-            # Create and return the response
             response = EndpointResolutionResponse(
                 url=resolved_url,
                 ttl_in_minutes=ttl_in_minutes
             )
 
-            self.logger.info(f"Resolved endpoint URL: {response.url}")
+            self.logger.info("Resolved endpoint URL: %s", response.url)
 
             return response
 
         except AuthenticationException as e:
-            self.logger.error(f"Authentication failed: {str(e)}")
-            raise HTTPException(status_code=401, detail=str(e))
+            # Preserve original wire shape (HTTPException 401 with the auth
+            # exception's user-facing message). Log full context server-side.
+            self.logger.error("Authentication failed: %s", e)
+            raise HTTPException(status_code=401, detail=str(e)) from e
         except Exception as e:
-            self.logger.error(f"Error resolving endpoint: {str(e)}", exc_info=True)
-            raise HTTPException(status_code=500, detail=f"Error resolving endpoint: {str(e)}")
+            # Log full traceback server-side; do NOT leak the underlying
+            # exception message to the client — it could expose internal
+            # state, file paths, or stack frames. Generic 500 detail.
+            self.logger.exception("Error resolving endpoint")
+            raise HTTPException(
+                status_code=500, detail="Error resolving endpoint"
+            ) from e
 
     def _resolve_endpoint_url(self, request: EndpointResolutionRequest) -> str:
         """
@@ -128,30 +142,32 @@ class EndpointResolutionController(BaseEndpointResolutionApi):
         # Extract context properties for potential routing logic
         context_dict = {prop.name: prop.value for prop in request.context}
 
-        # Log the context for debugging
-        self.logger.debug(f"Endpoint resolution context: {context_dict}")
+        self.logger.debug("Endpoint resolution context: %s", context_dict)
 
-        # Get endpoint name if provided
         endpoint_name = context_dict.get("EndpointName")
         tenant_region = context_dict.get("TenantRegion")
         workspace_region = context_dict.get("WorkspaceRegion")
         tenant_id = context_dict.get("TenantId")
 
-        self.logger.info(f"Resolving endpoint: name={endpoint_name}, tenant_region={tenant_region}, "
-                         f"workspace_region={workspace_region}, tenant_id={tenant_id}")
+        self.logger.info(
+            "Resolving endpoint: name=%s, tenant_region=%s, workspace_region=%s, tenant_id=%s",
+            endpoint_name,
+            tenant_region,
+            workspace_region,
+            tenant_id,
+        )
 
-        # Build the base URL from the current request
-        # This ensures we return the correct scheme, host, and port
-        if hasattr(self.request, 'url'):
-            # Starlette Request object
+        # Build the base URL from the current request. This ensures we return
+        # the correct scheme, host, and port.
+        if hasattr(self.request, "url"):
             base_url = f"{self.request.url.scheme}://{self.request.url.netloc}"
         else:
             # Fallback for testing or other contexts
             base_url = "http://localhost:5000"
             self.logger.warning("Request context not available, using fallback URL")
 
-        # Add the workload API base path
-        api_base_route = "/workload"  # This should match your actual API base route
+        # Add the workload API base path. Must match the actual API base route.
+        api_base_route = "/workload"
         resolved_url = f"{base_url}{api_base_route}"
 
         return resolved_url

@@ -7,6 +7,7 @@ import logging
 import os
 import sqlite3
 from datetime import UTC, datetime
+from typing import Any
 
 from domain.models.agent_models import (
     AgentAssignment,
@@ -286,7 +287,7 @@ def log_audit(
     job_id: str,
     agent_id: str | None,
     tool_name: str | None,
-    tool_args: dict | None,
+    tool_args: dict[str, Any] | None,
     result_summary: str,
     user_id: str | None = None,
 ) -> None:
@@ -309,7 +310,7 @@ def log_audit(
         conn.close()
 
 
-def get_audit_log(job_id: str) -> list[dict]:
+def get_audit_log(job_id: str) -> list[dict[str, Any]]:
     conn = _connect()
     try:
         rows = conn.execute(

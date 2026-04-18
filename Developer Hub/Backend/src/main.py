@@ -63,18 +63,19 @@ def setup_logging(config_service=None) -> logging.Logger:
     config_log_level = config_service.get_log_level()
     log_level = log_level_mapping.get(config_log_level, "INFO")
 
-    # Get user's AppData/Roaming directory (cross-platform)
-    appdata = Path.home() / '.config' / 'fabric_backend'
+    # Get user's AppData/Roaming directory (cross-platform).
+    # Path() coerces a str (the Windows APPDATA env var) the same as a Path.
+    appdata: Path
     if os.name == 'nt':
-    # On Windows, use APPDATA environment variable (Roaming)
-        appdata = os.environ.get('APPDATA')
-        if not appdata:
-            # Fallback if APPDATA is not set
-            appdata = os.path.expanduser('~\\AppData\\Roaming')
+        # On Windows, use APPDATA environment variable (Roaming)
+        appdata_env = os.environ.get('APPDATA') or os.path.expanduser('~\\AppData\\Roaming')
+        appdata = Path(appdata_env)
+    else:
+        appdata = Path.home() / '.config' / 'fabric_backend'
 
     # Create logs directory
     app_name = config_service.get_app_name().replace(" ", "_")
-    log_dir = Path(appdata) / app_name / 'logs'
+    log_dir = appdata / app_name / 'logs'
     log_dir.mkdir(parents=True, exist_ok=True)
 
     # Log file path with date rotation
@@ -146,13 +147,13 @@ def setup_logging(config_service=None) -> logging.Logger:
 
     logging.config.dictConfig(logging_config)
     logger = logging.getLogger(__name__)
-    logger.info(f"Logging initialized - Level: {log_level}, File: {log_file}")
+    logger.info("Logging initialized - Level: %s, File: %s", log_level, log_file)
 
     return logger
 
 # Global state for shutdown handling
 class ApplicationState:
-    def __init__(self):
+    def __init__(self) -> None:
         self.shutdown_event = asyncio.Event()
         self.is_shutting_down = False
         self.logger: logging.Logger | None = None
@@ -175,19 +176,19 @@ async def lifespan(app: FastAPI):
     app_state.logger = logger
 
     logger.info("=" * 60)
-    logger.info(f"Starting {config_service.get_app_name()}...")
-    logger.info(f"Environment: {config_service.get_environment()}")
-    logger.info(f"Python Version: {sys.version}")
-    logger.info(f"Platform: {sys.platform}")
-    logger.info(f"Process ID: {os.getpid()}")
+    logger.info("Starting %s...", config_service.get_app_name())
+    logger.info("Environment: %s", config_service.get_environment())
+    logger.info("Python Version: %s", sys.version)
+    logger.info("Platform: %s", sys.platform)
+    logger.info("Process ID: %s", os.getpid())
     logger.info("=" * 60)
 
     logger.info("Configuration Summary:")
-    logger.info(f"  - Host: {config_service.get_host()}")
-    logger.info(f"  - Port: {config_service.get_port()}")
-    logger.info(f"  - Debug: {config_service.is_debug()}")
-    logger.info(f"  - Log Level: {config_service.get_log_level()}")
-    logger.info(f"  - Shutdown Timeout: {config_service.get_shutdown_timeout()}s")
+    logger.info("  - Host: %s", config_service.get_host())
+    logger.info("  - Port: %s", config_service.get_port())
+    logger.info("  - Debug: %s", config_service.is_debug())
+    logger.info("  - Log Level: %s", config_service.get_log_level())
+    logger.info("  - Shutdown Timeout: %ss", config_service.get_shutdown_timeout())
 
     try:
         # Initialize all services with parallel execution
@@ -201,31 +202,34 @@ async def lifespan(app: FastAPI):
             await mcp_manager.discover_tools()
             set_mcp_manager(mcp_manager)
             tool_count = len(mcp_manager.tools)
-            logger.info(f"✓ MCP client initialized: {tool_count} tools from {len(mcp_manager.config.get('servers', {}))} servers")
-        except Exception as e:
-            logger.warning(f"⚠ MCP initialization failed (chat will work without tools): {e}")
+            logger.info(
+                "\u2713 MCP client initialized: %d tools from %d servers",
+                tool_count, len(mcp_manager.config.get('servers', {})),
+            )
+        except Exception:
+            logger.warning("\u26a0 MCP initialization failed (chat will work without tools)", exc_info=True)
             mcp_manager = None
 
         # Initialize AgentHub database
         try:
             agenthub_store.init_db()
-            logger.info("✓ AgentHub database initialized")
-        except Exception as e:
-            logger.warning(f"⚠ AgentHub DB init failed: {e}")
+            logger.info("\u2713 AgentHub database initialized")
+        except Exception:
+            logger.warning("\u26a0 AgentHub DB init failed", exc_info=True)
 
         # Configure orchestrator engine
         if mcp_manager:
             get_orchestrator_engine().configure(mcp_manager, _get_copilot_token, _acquire_mcp_tokens)
-            logger.info("✓ Orchestrator engine configured")
+            logger.info("\u2713 Orchestrator engine configured")
 
         startup_time = time.time() - startup_start
-        logger.info(f"✓ Application started successfully in {startup_time:.2f}s")
-        logger.info(f"✓ Server: {config_service.get_http_endpoint()}")
-        logger.info(f"✓ Debug Mode: {config_service.is_debug()}")
+        logger.info("\u2713 Application started successfully in %.2fs", startup_time)
+        logger.info("\u2713 Server: %s", config_service.get_http_endpoint())
+        logger.info("\u2713 Debug Mode: %s", config_service.is_debug())
         logger.info("=" * 60)
 
-    except Exception as e:
-        logger.error(f"Failed to start application: {str(e)}", exc_info=True)
+    except Exception:
+        logger.exception("Failed to start application")
         raise
 
     yield
@@ -245,25 +249,25 @@ async def lifespan(app: FastAPI):
 
      # 1. Clean up background tasks
     try:
-        logger.info(f"Cleaning up background tasks (timeout: {tasks_cleanup_timeout:.1f}s)...")
+        logger.info("Cleaning up background tasks (timeout: %.1fs)...", tasks_cleanup_timeout)
         await cleanup_background_tasks(timeout=tasks_cleanup_timeout)
-        logger.info("✓ Background tasks cleanup completed")
-    except Exception as e:
-        logger.error(f"Error during background tasks cleanup: {str(e)}", exc_info=True)
+        logger.info("\u2713 Background tasks cleanup completed")
+    except Exception:
+        logger.exception("Error during background tasks cleanup")
 
     # 2. Clean up services
     try:
         registry = get_service_registry()
-        logger.info(f"Cleaning up services (timeout: {service_cleanup_timeout:.1f}s)...")
+        logger.info("Cleaning up services (timeout: %.1fs)...", service_cleanup_timeout)
         await asyncio.wait_for(registry.cleanup(), timeout=service_cleanup_timeout)
-        logger.info("✓ Service registry cleanup completed")
+        logger.info("\u2713 Service registry cleanup completed")
     except TimeoutError:
-        logger.warning("⚠ Service registry cleanup timed out")
-    except Exception as e:
-        logger.error(f"Error during service registry cleanup: {str(e)}", exc_info=True)
+        logger.warning("\u26a0 Service registry cleanup timed out")
+    except Exception:
+        logger.exception("Error during service registry cleanup")
 
     shutdown_duration = time.time() - shutdown_start_time
-    logger.info(f"✓ Application shutdown completed in {shutdown_duration:.2f}s")
+    logger.info("\u2713 Application shutdown completed in %.2fs", shutdown_duration)
     logger.info("=" * 60)
 
 # Create FastAPI app
@@ -393,8 +397,8 @@ async def add_process_time_header(request: Request, call_next):
         # Log request (skip health checks to reduce noise)
         if request.url.path not in ["/health", "/ready"] and app_state.logger:
             app_state.logger.info(
-                f"{request.method} {request.url.path} → {response.status_code} "
-                f"({process_time:.3f}s) [ID: {request_id[:8]}]"
+                "%s %s \u2192 %s (%.3fs) [ID: %s]",
+                request.method, request.url.path, response.status_code, process_time, request_id[:8],
             )
 
         return response
@@ -403,9 +407,9 @@ async def add_process_time_header(request: Request, call_next):
         process_time = time.time() - start_time
         if app_state.logger:
             app_state.logger.error(
-                f"{request.method} {request.url.path} → ERROR "
-                f"({process_time:.3f}s) [ID: {request_id[:8]}]: {str(e)}",
-                exc_info=True
+                "%s %s \u2192 ERROR (%.3fs) [ID: %s]: %s",
+                request.method, request.url.path, process_time, request_id[:8], e,
+                exc_info=True,
             )
         raise
     finally:

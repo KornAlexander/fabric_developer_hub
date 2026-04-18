@@ -9,17 +9,17 @@ from domain.models.authentication_models import AuthorizationContext
 logger = logging.getLogger(__name__)
 
 class ItemFactory:
-    def __init__(self):
+    def __init__(self) -> None:
         self.logger = logging.getLogger(__name__)
 
 
     def create_item(self, item_type: str, auth_context: AuthorizationContext) -> ItemBase:
         """Create an instance of the specified item type."""
-        self.logger.info(f"Creating item of type {item_type}")
+        self.logger.info("Creating item of type %s", item_type)
         if item_type == WorkloadConstants.ItemTypes.AGENTHUB_ITEM:
             return AgentHubItem(auth_context)
         else:
-            self.logger.error(f"Unexpected item type: {item_type}")
+            self.logger.error("Unexpected item type: %s", item_type)
             raise UnexpectedItemTypeException(f"Items of type {item_type} are not supported")
 
 
@@ -31,4 +31,4 @@ def get_item_factory() -> ItemFactory:
     except KeyError:
         raise RuntimeError(
             "ItemFactory not initialized. Ensure ServiceInitializer.initialize_all_services() ran at startup."
-        )
+        ) from None

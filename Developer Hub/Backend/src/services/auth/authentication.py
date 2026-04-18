@@ -93,8 +93,8 @@ class AuthenticationService:
         # Parse the tokens
         try:
             subject_and_app_token = SubjectAndAppToken.parse(auth_header)
-        except AuthenticationException as e:
-            self.logger.error(f"Failed to parse SubjectAndAppToken: {str(e)}")
+        except AuthenticationException:
+            self.logger.exception("Failed to parse SubjectAndAppToken")
             raise
 
         # Create authorization context based on parsed tokens
@@ -127,7 +127,7 @@ class AuthenticationService:
         Returns:
             AuthorizationContext with user and tenant information
         """
-        self.logger.info(f"Authenticating data plane call with scopes: {allowed_scopes}")
+        self.logger.info("Authenticating data plane call with scopes: %s", allowed_scopes)
 
         if not auth_header or not auth_header.startswith("Bearer "):
             self.logger.error("Missing or invalid Authorization header")
@@ -143,7 +143,7 @@ class AuthenticationService:
         scopes: list[str]
     ) -> str:
         """Get an access token using OBO flow."""
-        self.logger.info(f"Getting access token for scopes: {', '.join(scopes)}")
+        self.logger.info("Getting access token for scopes: %s", ", ".join(scopes))
 
         if not auth_context.original_subject_token:
             self.logger.error("No original_subject_token in AuthorizationContext for OBO flow.")
@@ -158,7 +158,7 @@ class AuthenticationService:
             raise AuthenticationException("Cannot determine tenant authority for OBO flow.")
 
         obo_app = self._get_msal_app(auth_context.tenant_object_id)
-        self.logger.debug(f"OBO MSAL app configured with authority: {auth_context.tenant_object_id}")
+        self.logger.debug("OBO MSAL app configured with authority: %s", auth_context.tenant_object_id)
 
         try:
             result = obo_app.acquire_token_on_behalf_of(
@@ -167,13 +167,13 @@ class AuthenticationService:
             )
 
         except Exception as e:
-            self.logger.error(f"MSAL OBO acquire_token_on_behalf_of call failed unexpectedly: {str(e)}", exc_info=True)
-            raise AuthenticationException(f"OBO token acquisition failed: {str(e)}")
+            self.logger.exception("MSAL OBO acquire_token_on_behalf_of call failed unexpectedly")
+            raise AuthenticationException(f"OBO token acquisition failed: {e!s}") from e
 
         if "error" in result:
             error_code = result.get("error")
             error_description = result.get("error_description", "")
-            self.logger.error(f"Error in OBO token acquisition: {error_code}: {error_description}")
+            self.logger.error("Error in OBO token acquisition: %s: %s", error_code, error_description)
             # Handle consent required error
             if error_code in ["interaction_required", "consent_required", "invalid_grant"] or result.get("suberror") == "conditional_access":
                 claims_challenge = result.get("claims")
@@ -182,7 +182,12 @@ class AuthenticationService:
                     py_ex.add_claims_for_conditional_access(claims_challenge)
                 if error_code == "consent_required" or "consent_required" in error_description.lower():
                     py_ex.add_scopes_to_consent(scopes)
-                self.logger.warning(f"OBO flow requires UI interaction: {error_code}. Claims: {claims_challenge}, Scopes: {scopes if 'consent_required' in error_description.lower() or error_code == 'consent_required' else 'N/A'}")
+                self.logger.warning(
+                    "OBO flow requires UI interaction: %s. Claims: %s, Scopes: %s",
+                    error_code,
+                    claims_challenge,
+                    scopes if 'consent_required' in error_description.lower() or error_code == 'consent_required' else 'N/A',
+                )
                 raise py_ex
             raise AuthenticationException(f"Error acquiring token: {error_code}")
 
@@ -190,7 +195,7 @@ class AuthenticationService:
             self.logger.error("Access token not found in OBO result")
             raise AuthenticationException("Access token not found in OBO result")
 
-        self.logger.info(f"OBO flow successful for user {auth_context.object_id}.")
+        self.logger.info("OBO flow successful for user %s.", auth_context.object_id)
         return result["access_token"]
 
     async def build_composite_token(
@@ -199,7 +204,7 @@ class AuthenticationService:
         scopes: list[str]
     ) -> str:
         """Build a composite token for making calls to Fabric APIs."""
-        self.logger.info(f"Building composite token for scopes: {', '.join(scopes)}")
+        self.logger.info("Building composite token for scopes: %s", ", ".join(scopes))
 
         # Get OBO token for Fabric
         token_obo = await self.get_access_token_on_behalf_of(auth_context, scopes)
@@ -221,13 +226,13 @@ class AuthenticationService:
             try:
                 result = app.acquire_token_for_client(scopes=scopes)
             except MsalServiceError as e:
-                self.logger.error(f"MSAL exception: {str(e)}")
-                raise AuthenticationException(f"MSAL exception: {str(e)}")
+                self.logger.exception("MSAL exception")
+                raise AuthenticationException(f"MSAL exception: {e!s}") from e
 
             if "error" in result:
                 error_code = result.get("error")
                 error_description = result.get("error_description", "")
-                self.logger.error(f"MSAL exception: {error_code}: {error_description}")
+                self.logger.error("MSAL exception: %s: %s", error_code, error_description)
                 raise AuthenticationException(f"MSAL exception: {error_code}")
 
             return result["access_token"]
@@ -235,8 +240,8 @@ class AuthenticationService:
         except AuthenticationException:
             raise
         except Exception as e:
-            self.logger.error(f"An error occurred: {str(e)}")
-            raise Exception(f"An error occurred: {str(e)}")
+            self.logger.exception("An error occurred")
+            raise Exception(f"An error occurred: {e!s}") from e
 
     async def _authenticate(
         self,
@@ -312,8 +317,8 @@ class AuthenticationService:
 
         if claim_value not in expected_values:
             self.logger.error(
-                f"{error_message}: claim '{claim_name}' has value '{claim_value}', "
-                f"expected one of: {expected_values}"
+                "%s: claim '%s' has value '%s', expected one of: %s",
+                error_message, claim_name, claim_value, expected_values,
             )
             raise AuthenticationException(error_message)
 
@@ -345,12 +350,15 @@ class AuthenticationService:
             try:
                 expected_issuer = oidc_config.issuer_configuration.format(tenantid=tenant_id)
             except KeyError:
-                logger.error(f"Issuer configuration:{oidc_config.issuer_configuration} missing tenantid placeholder 'tenantid'")
-                raise AuthenticationException("Issuer configuration missing tenantid placeholder")
+                logger.error(
+                    "Issuer configuration:%s missing tenantid placeholder 'tenantid'",
+                    oidc_config.issuer_configuration,
+                )
+                raise AuthenticationException("Issuer configuration missing tenantid placeholder") from None
         elif token_version == TokenVersion.V2:
             expected_issuer = f"{EnvironmentConstants.AAD_INSTANCE_URL}/{tenant_id}/v2.0"
         else:
-            self.logger.error(f"Unsupported token version: {token_version}")
+            self.logger.error("Unsupported token version: %s", token_version)
             raise AuthenticationException(f"Unsupported token version: {token_version}")
         return expected_issuer
 
@@ -373,7 +381,12 @@ class AuthenticationService:
         Validate common properties of an AAD token (signature, lifetime, audience, issuer).
         Returns the decoded claims as a dictionary.
         """
-        self.logger.debug(f"Validating AAD token. is_app_only: {is_app_only}, expected_tenant_id_for_issuer: {expected_tenant_id_for_issuer}")
+        self.logger.debug(
+            "Validating AAD token. is_app_only: %s, expected_tenant_id_for_issuer: %s",
+            is_app_only, expected_tenant_id_for_issuer,
+        )
+        unverified_claims_dict: dict[str, Any] | None = None
+        expected_audience: str | None = None
         try:
             unverified_header = jwt.get_unverified_header(token)
             unverified_claims_dict = jwt.get_unverified_claims(token)
@@ -388,7 +401,7 @@ class AuthenticationService:
 
             # Get token version for issuer and audience validation
             token_version = self._get_token_version(unverified_claims_list)
-            self.logger.debug(f"Token version: {token_version}")
+            self.logger.debug("Token version: %s", token_version)
 
             # Get OpenID Connect configuration for signing keys
             oidc_config = await self.openid_manager.get_configuration_async()
@@ -409,7 +422,7 @@ class AuthenticationService:
                 raise AuthenticationException("Expected issuer not found")
 
             expected_audience = self._get_excpected_audience(token_version)
-            self.logger.debug(f"Expected audience: {expected_audience}")
+            self.logger.debug("Expected audience: %s", expected_audience)
 
             # Validate token fully
             decoded_payload = jwt.decode(
@@ -430,7 +443,7 @@ class AuthenticationService:
             )
 
             claims = [Claim(type=k, value=v) for k, v in decoded_payload.items()]
-            self.logger.debug(f"Token validated successfully. Claims: {decoded_payload}")
+            self.logger.debug("Token validated successfully. Claims: %s", decoded_payload)
 
             app_id_claim = "appid" if token_version == TokenVersion.V1 else "azp"
             self._validate_claim_exists(claims, app_id_claim, f"access tokens should have {app_id_claim} claim")
@@ -441,22 +454,36 @@ class AuthenticationService:
 
         except ExpiredSignatureError:
             self.logger.error("Token has expired")
-            raise AuthenticationException("Token has expired")
+            raise AuthenticationException("Token has expired") from None
         except JWTClaimsError as e:
+            # Build a richer log line when the failure is an audience mismatch.
+            # Both `unverified_claims_dict` and `expected_audience` are
+            # initialized to None above, so neither is ever unbound here.
             if "Invalid audience" in str(e):
-                token_audience_from_unverified = unverified_claims_dict.get("aud") if 'unverified_claims_dict' in locals() else "N/A (unverified claims not available)"
-                expected_audiences_for_log = expected_audience if 'valid_audiences' in locals() else "N/A (expected audiences not available)"
-                error_message = f". Expected: {expected_audiences_for_log}, Got: {token_audience_from_unverified}"
-
-            self.logger.error(error_message)
-            self.logger.error(f"Token has invalid claims: {str(e)}")
-            raise AuthenticationException(f"Invalid token claims: {str(e)}")
+                token_audience_from_unverified = (
+                    unverified_claims_dict.get("aud")
+                    if unverified_claims_dict is not None
+                    else "N/A (unverified claims not available)"
+                )
+                expected_audiences_for_log = (
+                    expected_audience
+                    if expected_audience is not None
+                    else "N/A (expected audiences not available)"
+                )
+                self.logger.error(
+                    ". Expected: %s, Got: %s",
+                    expected_audiences_for_log, token_audience_from_unverified,
+                )
+            self.logger.error("Token has invalid claims: %s", e)
+            raise AuthenticationException(f"Invalid token claims: {e!s}") from e
         except JWTError as e:
-            self.logger.error(f"JWT validation failed: {str(e)}")
-            raise AuthenticationException(f"Token validation failed: {str(e)}")
+            self.logger.error("JWT validation failed: %s", e)
+            raise AuthenticationException(f"Token validation failed: {e!s}") from e
+        except AuthenticationException:
+            raise
         except Exception as e:
-            self.logger.error(f"Token validation failed: {str(e)}")
-            raise AuthenticationException(f"Token validation failed: {str(e)}")
+            self.logger.exception("Token validation failed")
+            raise AuthenticationException(f"Token validation failed: {e!s}") from e
 
     async def _validate_app_token(self, token: str) -> dict[str, Any]:
         """
@@ -485,7 +512,9 @@ class AuthenticationService:
 
         if expected_value is not None and str(claim_value) != expected_value:
             error_msg = error_message or f"Claim {claim_name} has incorrect value"
-            self.logger.error(f"{error_msg}: expected '{expected_value}', got '{claim_value}'")
+            self.logger.error(
+                "%s: expected '%s', got '%s'", error_msg, expected_value, claim_value,
+            )
             raise AuthenticationException(error_msg)
 
         return claim_value
@@ -496,14 +525,17 @@ class AuthenticationService:
             if claim.type == claim_name:
                 return claim.value
 
-        self.logger.error(f"Missing claim {claim_name}: {error_message}")
+        self.logger.error("Missing claim %s: %s", claim_name, error_message)
         raise AuthenticationException(f"Missing claim {claim_name}: {error_message}")
 
     def _validate_no_claim(self, claims: list[Claim], claim_name: str, error_message: str) -> None:
         """Validate a claim does not exist."""
         for claim in claims:
             if claim.type == claim_name:
-                self.logger.error(f"Unexpected claim exists: claimType='{claim_name}', reason='{error_message}', actualValue={claim.value}")
+                self.logger.error(
+                    "Unexpected claim exists: claimType='%s', reason='%s', actualValue=%s",
+                    claim_name, error_message, claim.value,
+                )
                 raise AuthenticationException("Unexpected token format")
 
     def _validate_app_only(self, claims: list[Claim], is_app_only: bool) -> None:
@@ -546,10 +578,16 @@ class AuthenticationService:
             allowed_scopes_str = ", ".join(allowed_scopes)
             token_scopes_str = ", ".join(token_scopes) if token_scopes else "none"
             error_message = "Workload's Entra ID application is missing required scopes"
-            self.logger.error(f"{error_message}. Required: [{allowed_scopes_str}], Found: [{token_scopes_str}]")
+            self.logger.error(
+                "%s. Required: [%s], Found: [%s]",
+                error_message, allowed_scopes_str, token_scopes_str,
+            )
             raise AuthenticationException(error_message)
 
-        self.logger.debug(f"Scope validation successful. Required: {allowed_scopes}, Found: {token_scopes}")
+        self.logger.debug(
+            "Scope validation successful. Required: %s, Found: %s",
+            allowed_scopes, token_scopes,
+        )
 
 
 def get_authentication_service() -> AuthenticationService:
@@ -560,4 +598,4 @@ def get_authentication_service() -> AuthenticationService:
     except KeyError:
         raise RuntimeError(
             "AuthenticationService not initialized. Ensure ServiceInitializer.initialize_all_services() ran at startup."
-        )
+        ) from None

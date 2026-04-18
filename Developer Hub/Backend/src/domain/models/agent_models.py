@@ -54,9 +54,9 @@ class AgentTemplate(BaseModel):
     display_name: str
     category: AgentCategory
     description: str
-    tags: list[str] = []
+    tags: list[str] = Field(default_factory=list)
     system_prompt: str
-    available_tools: list[str] = []
+    available_tools: list[str] = Field(default_factory=list)
     default_access_level: str = "read"
     icon: str | None = None
     version: str = "1.0.0"
@@ -66,8 +66,8 @@ class UserAgentConfig(BaseModel):
     id: str
     user_id: str
     agent_template_id: str
-    access_levels: dict[str, bool] = {}
-    tool_integrations: dict[str, bool] = {}
+    access_levels: dict[str, bool] = Field(default_factory=dict)
+    tool_integrations: dict[str, bool] = Field(default_factory=dict)
     runtime_schedule: str | None = None
     custom_prompt_additions: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -88,8 +88,8 @@ class ReasoningPhase(BaseModel):
     status: PhaseStatus = PhaseStatus.EXECUTING
     started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     completed_at: datetime | None = None
-    details: list[str] = []
-    decisions: list[AgentDecision] = []
+    details: list[str] = Field(default_factory=list)
+    decisions: list[AgentDecision] = Field(default_factory=list)
 
 
 class AgentAction(BaseModel):
@@ -113,8 +113,8 @@ class AgentAssignment(BaseModel):
     status: AgentStatus = AgentStatus.QUEUED
     goal: str
     current_step: str | None = None
-    phases: list[ReasoningPhase] = []
-    actions: list[AgentAction] = []
+    phases: list[ReasoningPhase] = Field(default_factory=list)
+    actions: list[AgentAction] = Field(default_factory=list)
 
 
 # ── Execution Plan ──────────────────────────────────────────────────
@@ -123,14 +123,14 @@ class PlannedAgent(BaseModel):
     agent_template_id: str
     role: str
     goal: str
-    depends_on: list[str] = []
-    tool_groups: list[str] = []
+    depends_on: list[str] = Field(default_factory=list)
+    tool_groups: list[str] = Field(default_factory=list)
 
 
 class ExecutionPlan(BaseModel):
     job_id: str
-    agents: list[PlannedAgent] = []
-    communication_graph: dict[str, list[str]] = {}
+    agents: list[PlannedAgent] = Field(default_factory=list)
+    communication_graph: dict[str, list[str]] = Field(default_factory=dict)
     estimated_duration: str | None = None
     summary: str = ""
 
@@ -148,14 +148,14 @@ class Job(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     started_at: datetime | None = None
     completed_at: datetime | None = None
-    agents: list[AgentAssignment] = []
+    agents: list[AgentAssignment] = Field(default_factory=list)
 
 
 # ── SSE Event Payloads ──────────────────────────────────────────────
 
 class SSEEvent(BaseModel):
     type: str
-    data: dict[str, Any] = {}
+    data: dict[str, Any] = Field(default_factory=dict)
 
 
 # ── API Request / Response Models ───────────────────────────────────
@@ -183,7 +183,7 @@ class SendMessageRequest(BaseModel):
 
 class AgentConfigRequest(BaseModel):
     agent_template_id: str
-    access_levels: dict[str, bool] = {}
-    tool_integrations: dict[str, bool] = {}
+    access_levels: dict[str, bool] = Field(default_factory=dict)
+    tool_integrations: dict[str, bool] = Field(default_factory=dict)
     runtime_schedule: str | None = None
     custom_prompt_additions: str | None = None

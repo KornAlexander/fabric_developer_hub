@@ -136,8 +136,8 @@ class MCPClientManager:
                 else:
                     parts.append(str(content))
             return "\n".join(parts)
-        except TimeoutError:
-            raise TimeoutError(f"Tool {tool_name} timed out after {TOOL_CALL_TIMEOUT}s")
+        except TimeoutError as e:
+            raise TimeoutError(f"Tool {tool_name} timed out after {TOOL_CALL_TIMEOUT}s") from e
         finally:
             await stack.aclose()
 

@@ -6,7 +6,7 @@ from domain.constants.environment_constants import EnvironmentConstants
 
 
 class OneLakeClientService:
-    def __init__(self):
+    def __init__(self) -> None:
         self.logger = logging.getLogger(__name__)
         self._http_client_service = None
 
@@ -18,7 +18,7 @@ class OneLakeClientService:
             self._http_client_service = get_http_client_service()
         return self._http_client_service
 
-    async def dispose_async(self):
+    async def dispose_async(self) -> None:
         """Cleanup method for service registry."""
         # No cleanup needed as HTTP client is managed by registry
         self.logger.debug("OneLakeClientService disposed")
@@ -37,10 +37,13 @@ class OneLakeClientService:
             elif response.status_code == 404:
                 return False
             else:
-                self.logger.warning(f"check_if_file_exists received unexpected status code: {response.status_code}")
+                self.logger.warning(
+                    "check_if_file_exists received unexpected status code: %s",
+                    response.status_code,
+                )
                 return False
         except Exception as ex:
-            self.logger.error(f"check_if_file_exists failed for filePath: {file_path}. Error: {str(ex)}")
+            self.logger.error("check_if_file_exists failed for filePath: %s. Error: %s", file_path, ex)
             return False
 
     async def get_onelake_folder_names(self, token: str, workspace_id: UUID, item_id: UUID) -> list[str] | None:
@@ -62,13 +65,19 @@ class OneLakeClientService:
             elif response.status_code == 404:
                 return None
             else:
-                self.logger.warning(f"get_onelake_folder_names received unexpected status code: {response.status_code}")
+                self.logger.warning(
+                    "get_onelake_folder_names received unexpected status code: %s",
+                    response.status_code,
+                )
                 return None
         except Exception as ex:
-            self.logger.error(f"get_onelake_folder_names failed for workspaceId: {workspace_id}, itemId: {item_id}. Error: {str(ex)}")
+            self.logger.error(
+                "get_onelake_folder_names failed for workspaceId: %s, itemId: %s. Error: %s",
+                workspace_id, item_id, ex,
+            )
             return None
 
-    async def write_to_onelake_file(self, token: str, file_path: str, content: str):
+    async def write_to_onelake_file(self, token: str, file_path: str, content: str) -> None:
         """
         Writes content to a OneLake file, overwriting any existing data.
         """
@@ -78,12 +87,18 @@ class OneLakeClientService:
             # Create a new file or overwrite existing
             response = await self.http_client_service.put(url, "", token)
             if response.status_code < 200 or response.status_code > 299:
-                self.logger.error(f"write_to_onelake_file Creating a new file failed for filePath: {file_path}. Status: {response.status_code}")
+                self.logger.error(
+                    "write_to_onelake_file Creating a new file failed for filePath: %s. Status: %s",
+                    file_path, response.status_code,
+                )
                 return
 
-            self.logger.info(f"write_to_onelake_file Creating a new file succeeded for filePath: {file_path}")
+            self.logger.info("write_to_onelake_file Creating a new file succeeded for filePath: %s", file_path)
         except Exception as ex:
-            self.logger.error(f"write_to_onelake_file Creating a new file failed for filePath: {file_path}. Error: {str(ex)}")
+            self.logger.error(
+                "write_to_onelake_file Creating a new file failed for filePath: %s. Error: %s",
+                file_path, ex,
+            )
             return
 
         # Append content to the file
@@ -98,17 +113,20 @@ class OneLakeClientService:
         try:
             response = await self.http_client_service.get(url, token)
             if response.status_code < 200 or response.status_code > 299:
-                self.logger.error(f"get_onelake_file failed for source: {source}. Status: {response.status_code}")
+                self.logger.error(
+                    "get_onelake_file failed for source: %s. Status: %s",
+                    source, response.status_code,
+                )
                 return ""
 
             content = response.text
-            self.logger.info(f"get_onelake_file succeeded for source: {source}")
+            self.logger.info("get_onelake_file succeeded for source: %s", source)
             return content
         except Exception as ex:
-            self.logger.error(f"get_onelake_file failed for source: {source}. Error: {str(ex)}")
+            self.logger.error("get_onelake_file failed for source: %s. Error: %s", source, ex)
             return ""
 
-    async def delete_onelake_file(self, token: str, file_path: str):
+    async def delete_onelake_file(self, token: str, file_path: str) -> None:
         """
         Deletes a file from OneLake.
         """
@@ -117,12 +135,15 @@ class OneLakeClientService:
         try:
             response = await self.http_client_service.delete(url, token)
             if response.status_code < 200 or response.status_code > 299:
-                self.logger.error(f"delete_onelake_file failed for filePath: {file_path}. Status: {response.status_code}")
+                self.logger.error(
+                    "delete_onelake_file failed for filePath: %s. Status: %s",
+                    file_path, response.status_code,
+                )
                 return
 
-            self.logger.info(f"delete_onelake_file succeeded for filePath: {file_path}")
+            self.logger.info("delete_onelake_file succeeded for filePath: %s", file_path)
         except Exception as ex:
-            self.logger.error(f"delete_onelake_file failed for filePath: {file_path}. Error: {str(ex)}")
+            self.logger.error("delete_onelake_file failed for filePath: %s. Error: %s", file_path, ex)
 
     def get_onelake_file_path(self, workspace_id: str, item_id: str, filename: str) -> str:
         """
@@ -130,7 +151,7 @@ class OneLakeClientService:
         """
         return f"{workspace_id}/{item_id}/Files/{filename}"
 
-    async def _append_to_onelake_file(self, token: str, file_path: str, content: str):
+    async def _append_to_onelake_file(self, token: str, file_path: str, content: str) -> None:
         """
         Appends content to an OneLake file and flushes the changes.
         """
@@ -143,7 +164,10 @@ class OneLakeClientService:
             encoded_content = content.encode('utf-8')
             response = await self.http_client_service.patch(append_url, encoded_content, token)
             if response.status_code < 200 or response.status_code > 299:
-                self.logger.error(f"_append_to_onelake_file failed for filePath: {file_path}. Status: {response.status_code}")
+                self.logger.error(
+                    "_append_to_onelake_file failed for filePath: %s. Status: %s",
+                    file_path, response.status_code,
+                )
                 return
 
             # Calculate the length of the content that was appended
@@ -156,12 +180,18 @@ class OneLakeClientService:
             # Perform a flush to finalize the changes
             flush_response = await self.http_client_service.patch(flush_url, None, token)
             if flush_response.status_code < 200 or flush_response.status_code > 299:
-                self.logger.error(f"_append_to_onelake_file flush failed for filePath: {file_path}. Status: {flush_response.status_code}")
+                self.logger.error(
+                    "_append_to_onelake_file flush failed for filePath: %s. Status: %s",
+                    file_path, flush_response.status_code,
+                )
                 return
 
-            self.logger.info(f"_append_to_onelake_file succeeded for filePath: {file_path}")
+            self.logger.info("_append_to_onelake_file succeeded for filePath: %s", file_path)
         except Exception as ex:
-            self.logger.error(f"_append_to_onelake_file failed for filePath: {file_path}. Error: {str(ex)}")
+            self.logger.error(
+                "_append_to_onelake_file failed for filePath: %s. Error: %s",
+                file_path, ex,
+            )
 
     def _build_append_query_parameters(self) -> str:
         """
@@ -202,4 +232,4 @@ def get_onelake_client_service() -> OneLakeClientService:
     except KeyError:
         raise RuntimeError(
             "OneLakeClientService not initialized. Ensure ServiceInitializer.initialize_all_services() ran at startup."
-        )
+        ) from None

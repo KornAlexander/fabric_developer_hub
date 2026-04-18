@@ -14,7 +14,7 @@ from domain.models.onelake_folder import OneLakePathContainer
 class LakehouseClientService:
     """Service for interacting with Fabric Lakehouse and OneLake storage."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.logger = logging.getLogger(__name__)
         self._http_client_service = None
 
@@ -26,7 +26,7 @@ class LakehouseClientService:
             self._http_client_service = get_http_client_service()
         return self._http_client_service
 
-    async def dispose_async(self):
+    async def dispose_async(self) -> None:
         """Cleanup method for service registry."""
         self.logger.debug("LakehouseClientService disposed")
 
@@ -108,8 +108,8 @@ class LakehouseClientService:
 
         except Exception as ex:
             self.logger.error(
-                f"Failed to retrieve FabricLakehouse for lakehouse: {lakehouse_id} "
-                f"in workspace: {workspace_id}. Error: {str(ex)}"
+                "Failed to retrieve FabricLakehouse for lakehouse: %s in workspace: %s. Error: %s",
+                lakehouse_id, workspace_id, ex,
             )
             return None
 
@@ -195,12 +195,12 @@ class LakehouseClientService:
 
         except httpx.HTTPStatusError as ex:
             # Handle HTTP request failure
-            self.logger.error(f"HTTP request failed: {str(ex)}")
+            self.logger.error("HTTP request failed: %s", ex)
             raise
 
         except Exception as ex:
             # Handle other types of exceptions
-            self.logger.error(f"Error in _get_path_list: {str(ex)}")
+            self.logger.error("Error in _get_path_list: %s", ex)
             raise
 
 
@@ -212,4 +212,4 @@ def get_lakehouse_client_service() -> LakehouseClientService:
     except KeyError:
         raise RuntimeError(
             "LakehouseClientService not initialized. Ensure ServiceInitializer.initialize_all_services() ran at startup."
-        )
+        ) from None

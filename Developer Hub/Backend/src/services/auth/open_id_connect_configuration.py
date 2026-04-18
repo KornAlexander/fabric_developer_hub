@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 class OpenIdConnectConfiguration:
     """Configuration container for OpenID Connect metadata."""
 
-    def __init__(self, issuer: str, jwks_data: dict[str, Any]):
+    def __init__(self, issuer: str, jwks_data: dict[str, Any]) -> None:
         self.issuer_configuration = issuer
         self._signing_keys = jwks_data.get("keys", [])
 
@@ -25,10 +25,10 @@ class OpenIdConnectConfigurationManager:
     """
     Manager for fetching and caching OpenID Connect configuration.
     """
-    _instance = None
+    _instance: "OpenIdConnectConfigurationManager | None" = None
     _instance_lock = asyncio.Lock()
 
-    def __init__(self, metadata_endpoint: str, cache_duration_seconds: int = 3600):
+    def __init__(self, metadata_endpoint: str, cache_duration_seconds: int = 3600) -> None:
         self.metadata_endpoint = metadata_endpoint
         self.cache_duration_seconds = cache_duration_seconds
         self.configuration: OpenIdConnectConfiguration | None = None
@@ -78,12 +78,14 @@ class OpenIdConnectConfigurationManager:
                     )
 
                     self.last_updated = current_time
-                    logger.info(f"OpenID Connect configuration refreshed from {self.metadata_endpoint}")
+                    logger.info("OpenID Connect configuration refreshed from %s", self.metadata_endpoint)
 
                     return self.configuration
 
-            except Exception as e:
-                logger.error(f"Failed to fetch OpenID Connect configuration: {str(e)}")
+            except Exception:
+                # Capture full traceback so ops can see the underlying error
+                # (DNS, TLS, JSON parse, missing jwks_uri, etc.).
+                logger.exception("Failed to fetch OpenID Connect configuration")
                 if not self.configuration:
                     raise  # Only raise if we don't have a cached configuration
                 logger.warning("Returning expired cached configuration")
@@ -94,5 +96,8 @@ async def get_openid_manager_service() -> OpenIdConnectConfigurationManager:
         if OpenIdConnectConfigurationManager._instance is None:
             metadata_endpoint = ApiConstants.DEFAULT_OPENID_CONFIG_ENDPOINT
             OpenIdConnectConfigurationManager._instance = OpenIdConnectConfigurationManager(metadata_endpoint)
-            logger.info(f"Created OpenID Connect configuration manager with endpoint: {metadata_endpoint}")
+            logger.info(
+                "Created OpenID Connect configuration manager with endpoint: %s",
+                metadata_endpoint,
+            )
     return OpenIdConnectConfigurationManager._instance

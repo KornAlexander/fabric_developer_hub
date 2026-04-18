@@ -1,29 +1,47 @@
 import asyncio
 import logging
+from collections.abc import Awaitable
 from typing import TypeVar
 
 from app.core.service_registry import get_service_registry
 from services.auth.authentication import AuthenticationService
 from services.auth.authorization import AuthorizationHandler
-from services.configuration_service import get_configuration_service
-from services.http_client import HttpClientService
-from services.fabric.item_factory import ItemFactory
-from services.fabric.item_metadata_store import ItemMetadataStore
-from services.fabric.lakehouse_client_service import LakehouseClientService
-from services.fabric.onelake_client_service import OneLakeClientService
 from services.auth.open_id_connect_configuration import (
     OpenIdConnectConfigurationManager,
     get_openid_manager_service,
 )
+from services.configuration_service import get_configuration_service
+from services.fabric.item_factory import ItemFactory
+from services.fabric.item_metadata_store import ItemMetadataStore
+from services.fabric.lakehouse_client_service import LakehouseClientService
+from services.fabric.onelake_client_service import OneLakeClientService
+from services.http_client import HttpClientService
 
 logger = logging.getLogger(__name__)
 
-T = TypeVar('T')
+T = TypeVar("T")
+
+
+async def _gather_or_raise_first(label: str, *coros: Awaitable[None]) -> None:
+    """Run independent service-init coros in parallel and re-raise the first
+    failure with chained traceback.
+
+    `asyncio.gather(..., return_exceptions=True)` swallows exceptions into the
+    result list; we re-raise the first one with `raise exc from exc` so the
+    original traceback (and tenant-isolation / token-validation context) is
+    preserved when bootstrap fails.
+    """
+    results = await asyncio.gather(*coros, return_exceptions=True)
+    for i, result in enumerate(results):
+        if isinstance(result, BaseException):
+            logger.error("Failed to initialize %s service at index %d: %s", label, i, result)
+            raise result
+
 
 class ServiceInitializer:
     """Handles initialization of all application services with optimized parallel loading."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.registry = get_service_registry()
         self._initialization_lock = asyncio.Lock()
 
@@ -40,52 +58,43 @@ class ServiceInitializer:
             logger.info("Starting service initialization...")
 
             try:
-                # 0. Initialize ConfigurationService first (all other services may depend on it)
+                # 0. Initialize ConfigurationService first (all other services
+                #    may depend on it).
                 config_service = get_configuration_service()
-                logger.info(f"Configuration loaded for environment: {config_service.get_environment()}")
+                logger.info(
+                    "Configuration loaded for environment: %s",
+                    config_service.get_environment(),
+                )
 
-                # 1. Initialize services with no dependencies in parallel
+                # 1. Initialize services with no dependencies in parallel.
                 logger.info("Initializing independent services...")
-                independent_tasks = [
+                await _gather_or_raise_first(
+                    "independent",
                     self._initialize_openid_manager(),
                     self._initialize_http_client(),
                     self._initialize_item_metadata_store(),
-                ]
+                )
 
-                # Execute independent initializations in parallel
-                results = await asyncio.gather(*independent_tasks, return_exceptions=True)
-
-                # Check for any initialization errors
-                for i, result in enumerate(results):
-                    if isinstance(result, Exception):
-                        logger.error(f"Failed to initialize service at index {i}: {result}")
-                        raise result
-
-                # 2. Initialize services that depend on OpenID manager
+                # 2. Initialize services that depend on OpenID manager.
                 await self._initialize_authentication_service()
 
-                # 3. Initialize remaining services in parallel
+                # 3. Initialize remaining services in parallel.
                 logger.info("Initializing dependent services...")
-                dependent_tasks = [
+                await _gather_or_raise_first(
+                    "dependent",
                     self._initialize_authorization_handler(),
                     self._initialize_item_factory(),
                     self._initialize_lakehouse_client(),
                     self._initialize_onelake_client(),
-                ]
-
-                results = await asyncio.gather(*dependent_tasks, return_exceptions=True)
-
-                # Check for any initialization errors
-                for i, result in enumerate(results):
-                    if isinstance(result, Exception):
-                        logger.error(f"Failed to initialize dependent service at index {i}: {result}")
-                        raise result
+                )
 
                 self.registry.mark_initialized()
                 logger.info("All services initialized successfully!")
 
-            except Exception as e:
-                logger.error(f"Failed to initialize services: {str(e)}")
+            except Exception:
+                # Tear down anything partially constructed so a retry sees a
+                # clean registry. logger.exception captures the traceback.
+                logger.exception("Failed to initialize services")
                 self.registry.clear()
                 raise
 
@@ -94,7 +103,6 @@ class ServiceInitializer:
         logger.info("Initializing OpenID Connect Configuration Manager...")
         openid_manager = await get_openid_manager_service()
         self.registry.register(OpenIdConnectConfigurationManager, openid_manager)
-
 
     async def _initialize_http_client(self) -> None:
         """Initialize HTTP Client Service."""
@@ -138,6 +146,7 @@ class ServiceInitializer:
         logger.info("Initializing OneLake Client Service...")
         onelake_client = OneLakeClientService()
         self.registry.register(OneLakeClientService, onelake_client)
+
 
 def get_service_initializer() -> ServiceInitializer:
     """Get the singleton ServiceInitializer instance."""

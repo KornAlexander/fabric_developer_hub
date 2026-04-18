@@ -7,6 +7,21 @@ from domain.exceptions.base_exception import WorkloadExceptionBase
 from fabric_api.models.error_source import ErrorSource
 
 
+def _quote_header_value(value: str) -> str:
+    """Make `value` safe to embed inside an HTTP header quoted-string.
+
+    Strips CR/LF (defence-in-depth against header injection — uvicorn already
+    rejects them, but layered defence is cheap) and escapes the two
+    quoted-string metacharacters defined by RFC 7230 §3.2.6.
+    """
+    return (
+        value.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\r", " ")
+        .replace("\n", " ")
+    )
+
+
 class InternalErrorException(WorkloadExceptionBase):
     """Exception for internal errors."""
 
@@ -126,17 +141,24 @@ class AuthenticationUIRequiredException(WorkloadExceptionBase):
         matching the C# AuthenticationService.AddBearerClaimToResponse logic.
         """
         header_parts = ["Bearer"]
-        error_description = str(self.message_template).replace('\r', ' ').replace('\n', ' ')
+        # Header values are quoted strings (RFC 7235 §2.1) — strip CRLFs to
+        # prevent header-splitting and escape backslash + quote so the
+        # quoted-string remains well-formed even when the error message
+        # contains user-influenced characters.
+        error_description = _quote_header_value(str(self.message_template))
 
         # Always include the authorization_uri for better client compatibility
-        header_parts.append('authorization_uri="https://login.microsoftonline.com/common/oauth2/authorize"')
+        header_parts.append(
+            'authorization_uri="https://login.microsoftonline.com/common/oauth2/authorize"'
+        )
 
         if self._claims_for_conditional_access:
+            claims_value = _quote_header_value(self._claims_for_conditional_access)
             header_parts.append('error="invalid_token"')
             header_parts.append(f'error_description="{error_description}"')
-            header_parts.append(f'claims="{self._claims_for_conditional_access}"')
+            header_parts.append(f'claims="{claims_value}"')
         elif self._additional_scopes_to_consent:
-            scopes_str = " ".join(self._additional_scopes_to_consent)
+            scopes_str = _quote_header_value(" ".join(self._additional_scopes_to_consent))
             header_parts.append('error="insufficient_scope"')
             header_parts.append(f'error_description="{error_description}"')
             header_parts.append(f'scope="{scopes_str}"')
