@@ -3,7 +3,7 @@
 <html class="light" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>AgentHub | Home</title>
+<title>AgentHub | Sessions</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&amp;display=swap" rel="stylesheet"/>
 <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
@@ -84,15 +84,15 @@
         .tonal-transition { transition: background-color 0.3s ease; }
     </style>
 </head>
-<body class="bg-surface font-body text-on-surface">
+<body class="bg-surface text-on-surface font-body overflow-hidden h-screen flex flex-col">
 <!-- Context Bar -->
 <header class="flex justify-between items-center px-5 w-full sticky top-0 z-50 bg-surface h-12 border-b border-outline-variant/10 tonal-transition shrink-0">
     <div class="flex items-center gap-3">
         <span class="text-base font-semibold text-on-surface tracking-tight">AgentHub</span>
         <div class="h-3.5 w-px bg-outline-variant/30"></div>
         <div class="flex items-center gap-1.5 text-on-surface-variant">
-            <span class="material-symbols-outlined text-[18px]" style="font-variation-settings: 'FILL' 1;">home</span>
-            <span class="text-xs font-medium text-on-surface">Home</span>
+            <span class="material-symbols-outlined text-[18px]" style="font-variation-settings: 'FILL' 1;">forum</span>
+            <span class="text-xs font-medium text-on-surface">Sessions</span>
         </div>
     </div>
     <div class="flex items-center gap-4 flex-1 max-w-md mx-8">
@@ -113,52 +113,19 @@
         </div>
     </div>
 </header>
-<!-- SideNavBar -->
-<aside class="fixed left-0 top-12 h-[calc(100vh-3rem)] w-64 bg-[#f4f3f2] dark:bg-gray-800 flex flex-col py-6 z-40 hidden md:flex">
-<div class="px-6 mb-8">
-<div class="flex items-center gap-3">
-<div class="w-8 h-8 bg-primary rounded-lg flex items-center justify-center text-white font-bold">F</div>
-<div>
-<div class="text-sm font-bold text-[#1a1c1c] dark:text-white">AgentHub</div>
-<div class="text-[10px] text-secondary uppercase tracking-widest font-bold">Fabric Enterprise</div>
-</div>
-</div>
-</div>
-<nav class="flex-grow">
-<a class="relative flex items-center bg-[#ffffff] dark:bg-gray-700 text-[#1a1c1c] dark:text-white before:content-[''] before:absolute before:left-0 before:w-1 before:h-6 before:bg-[#005faa] before:rounded-full py-3 px-6 transition-all duration-200 ease-in-out" href="#">
-<span class="material-symbols-outlined mr-3" data-icon="home">home</span>
-<span class="text-sm font-medium">Home</span>
-</a>
-<a class="flex items-center text-[#404752] dark:text-gray-400 py-3 px-6 hover:bg-gray-200/50 dark:hover:bg-gray-700/50 transition-all duration-200 ease-in-out" href="#">
-<span class="material-symbols-outlined mr-3" data-icon="account_tree">account_tree</span>
-<span class="text-sm">Orchestrator</span>
-</a>
-<a class="flex items-center text-[#404752] dark:text-gray-400 py-3 px-6 hover:bg-gray-200/50 dark:hover:bg-gray-700/50 transition-all duration-200 ease-in-out" href="#">
-<span class="material-symbols-outlined mr-3" data-icon="smart_toy">smart_toy</span>
-<span class="text-sm">Agents</span>
-</a>
-<a class="flex items-center text-[#404752] dark:text-gray-400 py-3 px-6 hover:bg-gray-200/50 dark:hover:bg-gray-700/50 transition-all duration-200 ease-in-out" href="#">
-<span class="material-symbols-outlined mr-3" data-icon="settings">settings</span>
-<span class="text-sm">Settings</span>
-</a>
-</nav>
-<div class="px-6 pt-6 border-t border-outline-variant/10">
-<a class="flex items-center text-[#404752] py-2 hover:text-primary transition-colors" href="#">
-<span class="material-symbols-outlined mr-3 text-sm" data-icon="contact_support">contact_support</span>
-<span class="text-sm">Support</span>
-</a>
-<a class="flex items-center text-[#404752] py-2 hover:text-primary transition-colors" href="#">
-<span class="material-symbols-outlined mr-3 text-sm" data-icon="chat_bubble">chat_bubble</span>
-<span class="text-sm">Feedback</span>
-</a>
-</div>
-</aside>
+<div class="flex flex-1 overflow-hidden">
+
+<!-- ═══ SIDEBAR (shared, see _shared/sidebar.js) ═══ -->
+<aside id="agenthub-sidebar"></aside>
+<script src="_shared/sidebar.js"></script>
+<script>renderAgentHubSidebar('sessions');</script>
+
 <!-- Main Content Stage -->
-<main class="md:ml-64 min-h-screen bg-surface-bright p-8">
+<main class="flex-1 overflow-y-auto bg-surface p-8">
 <!-- Header Section -->
 <header class="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-12">
 <div>
-<h1 class="text-4xl font-light text-on-surface tracking-tight mb-2">Agent <span class="font-bold">Dashboard</span></h1>
+<h1 class="text-4xl font-light text-on-surface tracking-tight mb-2"><span class="font-bold">Sessions</span></h1>
 <p class="text-on-surface-variant max-w-lg">Monitor, orchestrate, and deploy enterprise-grade AI agents across your Fabric ecosystem.</p>
 </div>
 <button class="bg-gradient-to-br from-primary to-primary-container text-white px-6 py-3 rounded-md flex items-center gap-2 font-medium shadow-sm hover:opacity-90 active:scale-95 transition-all">
@@ -465,23 +432,5 @@
 </div>
 </section>
 </main>
-<!-- Mobile Bottom Navigation Shell -->
-<nav class="md:hidden fixed bottom-0 left-0 right-0 bg-surface border-t border-outline-variant/20 flex justify-around py-3 z-50">
-<a class="flex flex-col items-center gap-1 text-primary" href="#">
-<span class="material-symbols-outlined" data-icon="home" style="font-variation-settings: 'FILL' 1;">home</span>
-<span class="text-[10px] font-bold">Home</span>
-</a>
-<a class="flex flex-col items-center gap-1 text-on-surface-variant" href="#">
-<span class="material-symbols-outlined" data-icon="account_tree">account_tree</span>
-<span class="text-[10px]">Orchestrator</span>
-</a>
-<a class="flex flex-col items-center gap-1 text-on-surface-variant" href="#">
-<span class="material-symbols-outlined" data-icon="smart_toy">smart_toy</span>
-<span class="text-[10px]">Agents</span>
-</a>
-<a class="flex flex-col items-center gap-1 text-on-surface-variant" href="#">
-<span class="material-symbols-outlined" data-icon="settings">settings</span>
-<span class="text-[10px]">Settings</span>
-</a>
-</nav>
+</div>
 </body></html>

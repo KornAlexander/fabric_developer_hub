@@ -137,49 +137,10 @@
 
 <div class="flex flex-1 overflow-hidden">
 
-    <!-- ═══ SIDEBAR ═══ -->
-    <aside class="w-56 bg-surface-container-low flex flex-col py-5 shrink-0">
-        <div class="px-5 mb-8">
-            <div class="flex items-center gap-2.5">
-                <div class="w-8 h-8 bg-primary-container rounded-lg flex items-center justify-center text-white">
-                    <span class="material-symbols-outlined text-[16px] filled">dataset</span>
-                </div>
-                <div>
-                    <div class="text-sm font-bold text-on-surface leading-tight">AgentHub</div>
-                    <div class="text-[9px] text-on-surface-variant uppercase tracking-widest font-bold">Fabric Enterprise</div>
-                </div>
-            </div>
-        </div>
-        <nav class="flex-1 px-2.5 space-y-0.5">
-            <a class="flex items-center text-on-surface-variant py-2.5 px-3 hover:bg-surface-container-high/50 rounded-lg transition-all text-sm" href="#">
-                <span class="material-symbols-outlined mr-2.5 text-[20px]">home</span>
-                Home
-            </a>
-            <a class="flex items-center text-on-surface-variant py-2.5 px-3 hover:bg-surface-container-high/50 rounded-lg transition-all text-sm" href="#">
-                <span class="material-symbols-outlined mr-2.5 text-[20px]">account_tree</span>
-                Orchestrator
-            </a>
-            <a class="relative flex items-center bg-surface-container-lowest text-on-surface py-2.5 px-3 rounded-lg shadow-sm font-medium text-sm" href="#">
-                <div class="absolute left-0 top-1/4 bottom-1/4 w-[3px] bg-primary rounded-full"></div>
-                <span class="material-symbols-outlined mr-2.5 text-[20px] filled" style="color: #005faa;">smart_toy</span>
-                Agents
-            </a>
-            <a class="flex items-center text-on-surface-variant py-2.5 px-3 hover:bg-surface-container-high/50 rounded-lg transition-all text-sm" href="#">
-                <span class="material-symbols-outlined mr-2.5 text-[20px]">settings</span>
-                Settings
-            </a>
-        </nav>
-        <div class="px-2.5 pt-4 border-t border-outline-variant/10 space-y-0.5">
-            <a class="flex items-center text-on-surface-variant py-2 px-3 hover:bg-surface-container-high/50 rounded-lg transition-all text-xs" href="#">
-                <span class="material-symbols-outlined mr-2 text-[18px]">contact_support</span>
-                Support
-            </a>
-            <a class="flex items-center text-on-surface-variant py-2 px-3 hover:bg-surface-container-high/50 rounded-lg transition-all text-xs" href="#">
-                <span class="material-symbols-outlined mr-2 text-[18px]">chat_bubble</span>
-                Feedback
-            </a>
-        </div>
-    </aside>
+    <!-- ═══ SIDEBAR (shared, see _shared/sidebar.js) ═══ -->
+    <aside id="agenthub-sidebar"></aside>
+    <script src="_shared/sidebar.js"></script>
+    <script>renderAgentHubSidebar('agents');</script>
 
     <!-- ═══ MAIN CONTENT ═══ -->
     <main class="flex-1 overflow-hidden flex flex-col bg-surface">

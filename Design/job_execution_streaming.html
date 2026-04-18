@@ -214,25 +214,10 @@
      ═══════════════════════════════════════════════════════════════════ -->
 <div class="flex flex-1 overflow-hidden">
 
-    <!-- COLLAPSED SIDE NAV -->
-    <nav class="w-12 bg-surface-container-low flex flex-col items-center py-4 gap-3 shrink-0 border-r border-outline-variant/5">
-        <div class="w-8 h-8 bg-primary-container rounded-lg flex items-center justify-center text-white mb-4">
-            <span class="material-symbols-outlined text-[18px] filled">dataset</span>
-        </div>
-        <button class="p-2 text-on-surface-variant hover:bg-surface-container-high rounded-lg transition-all" title="Home">
-            <span class="material-symbols-outlined text-[20px]">home</span>
-        </button>
-        <button class="p-2 bg-surface-container-lowest text-primary rounded-lg shadow-sm relative" title="Orchestrator">
-            <span class="material-symbols-outlined text-[20px] filled">account_tree</span>
-            <div class="absolute left-0 top-1/4 bottom-1/4 w-[3px] bg-primary rounded-full"></div>
-        </button>
-        <button class="p-2 text-on-surface-variant hover:bg-surface-container-high rounded-lg transition-all" title="Agents">
-            <span class="material-symbols-outlined text-[20px]">smart_toy</span>
-        </button>
-        <button class="p-2 text-on-surface-variant hover:bg-surface-container-high rounded-lg transition-all" title="Settings">
-            <span class="material-symbols-outlined text-[20px]">settings</span>
-        </button>
-    </nav>
+    <!-- ═══ SIDEBAR (shared, see _shared/sidebar.js) — defaults to collapsed on this page ═══ -->
+    <aside id="agenthub-sidebar"></aside>
+    <script src="_shared/sidebar.js"></script>
+    <script>renderAgentHubSidebar('new-session', { collapsed: true });</script>
 
     <!-- ═══════════════════════════════════════════════════════════════
          CENTER: Streaming Reasoning & Actions

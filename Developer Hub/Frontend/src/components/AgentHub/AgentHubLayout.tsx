@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useCallback } from "react";
+import React, { useMemo, useState, useCallback, useEffect } from "react";
 import { Route, Switch, useHistory, useRouteMatch } from "react-router-dom";
 import "../../styles.scss";
 import {
@@ -21,6 +21,8 @@ import {
     AddCircle24Regular,
     ChatMultiple24Regular,
     MoreHorizontal24Regular,
+    ChevronLeft24Regular,
+    ChevronRight24Regular,
 } from "@fluentui/react-icons";
 import { WorkloadClientAPI } from "@ms-fabric/workload-client";
 import { DashboardPage } from "./DashboardPage";
@@ -123,6 +125,26 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
     const toggleSidebar = useCallback(() => setSidebarOpen(prev => !prev), []);
     const closeSidebar = useCallback(() => setSidebarOpen(false), []);
 
+    // Collapsed (icon-rail) state — persisted in localStorage so it carries across pages.
+    const SIDEBAR_COLLAPSE_KEY = "agenthub.sidebar.collapsed";
+    const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
+        try { return localStorage.getItem(SIDEBAR_COLLAPSE_KEY) === "1"; } catch { return false; }
+    });
+    const toggleCollapsed = useCallback(() => {
+        setSidebarCollapsed(prev => {
+            const next = !prev;
+            try { localStorage.setItem(SIDEBAR_COLLAPSE_KEY, next ? "1" : "0"); } catch { /* ignore */ }
+            return next;
+        });
+    }, []);
+    useEffect(() => {
+        const onStorage = (e: StorageEvent) => {
+            if (e.key === SIDEBAR_COLLAPSE_KEY) setSidebarCollapsed(e.newValue === "1");
+        };
+        window.addEventListener("storage", onStorage);
+        return () => window.removeEventListener("storage", onStorage);
+    }, []);
+
     function navTo(page: string) {
         nav(page);
         closeSidebar();
@@ -171,35 +193,44 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
                 {sidebarOpen && <div className="sidebar-backdrop" onClick={closeSidebar} />}
 
                 {/* Sidebar */}
-                <aside className={`agenthub-sidebar ${sidebarOpen ? "sidebar--open" : ""}`}>
+                <aside className={`agenthub-sidebar ${sidebarOpen ? "sidebar--open" : ""} ${sidebarCollapsed ? "agenthub-sidebar--collapsed" : ""}`}>
                     <div className="agenthub-sidebar-brand">
                         <div className="agenthub-brand-icon"><BrainCircuit24Regular /></div>
-                        <div>
+                        <div className="agenthub-brand-text">
                             <Text weight="bold" size={300}>AgentHub</Text>
                             <Text size={100} className="agenthub-brand-sub">FABRIC ENTERPRISE</Text>
                         </div>
+                        <button
+                            type="button"
+                            className="sidebar-collapse-btn"
+                            onClick={toggleCollapsed}
+                            aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+                            title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+                        >
+                            {sidebarCollapsed ? <ChevronRight24Regular /> : <ChevronLeft24Regular />}
+                        </button>
                     </div>
 
                     <nav className="agenthub-sidenav">
                         <div className="sidenav-section-label">Agent Hub</div>
-                        <SideNavItem icon={<AddCircle24Regular />} label="New Session" active={activePage === "newsession"} onClick={() => navTo("orchestrator")} />
-                        <SideNavItem icon={<ChatMultiple24Regular />} label="Sessions" active={activePage === "sessions"} onClick={() => navTo("home")} />
-                        <SideNavItem icon={<Bot24Regular />} label="Agents and Skills" active={activePage === "agents"} onClick={() => navTo("agents")} />
+                        <SideNavItem icon={<AddCircle24Regular />} label="New Session" active={activePage === "newsession"} collapsed={sidebarCollapsed} onClick={() => navTo("orchestrator")} />
+                        <SideNavItem icon={<ChatMultiple24Regular />} label="Sessions" active={activePage === "sessions"} collapsed={sidebarCollapsed} onClick={() => navTo("home")} />
+                        <SideNavItem icon={<Bot24Regular />} label="Agents and Skills" active={activePage === "agents"} collapsed={sidebarCollapsed} onClick={() => navTo("agents")} />
 
                         <div className="sidenav-section-label sidenav-section-label--spaced">Tools</div>
-                        <SideNavItem icon={<Wrench24Regular />} label="Power BI Fixer" active={activePage === "pbifixer"} onClick={() => navTo("pbifixer")} />
-                        <SideNavItem icon={<MoreHorizontal24Regular />} label="…" active={false} onClick={() => { /* placeholder */ }} disabled />
-                        <SideNavItem icon={<MoreHorizontal24Regular />} label="…" active={false} onClick={() => { /* placeholder */ }} disabled />
+                        <SideNavItem icon={<Wrench24Regular />} label="Power BI Fixer" active={activePage === "pbifixer"} collapsed={sidebarCollapsed} onClick={() => navTo("pbifixer")} />
+                        <SideNavItem icon={<MoreHorizontal24Regular />} label="…" active={false} collapsed={sidebarCollapsed} onClick={() => { /* placeholder */ }} disabled />
+                        <SideNavItem icon={<MoreHorizontal24Regular />} label="…" active={false} collapsed={sidebarCollapsed} onClick={() => { /* placeholder */ }} disabled />
                     </nav>
 
                     <div className="agenthub-sidebar-footer">
-                        <div className="sidenav-footer-item" onClick={() => { auth.signOut(); closeSidebar(); }}>
+                        <div className="sidenav-footer-item" onClick={() => { auth.signOut(); closeSidebar(); }} title={`Sign out (${auth.githubUser})`}>
                             <SignOut24Regular /> <Text size={200}>Sign out ({auth.githubUser})</Text>
                         </div>
-                        <div className="sidenav-footer-item">
+                        <div className="sidenav-footer-item" title="Support">
                             <QuestionCircle24Regular /> <Text size={200}>Support</Text>
                         </div>
-                        <div className="sidenav-footer-item">
+                        <div className="sidenav-footer-item" title="Feedback">
                             <Chat24Regular /> <Text size={200}>Feedback</Text>
                         </div>
                     </div>
@@ -223,13 +254,14 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
     );
 }
 
-function SideNavItem({ icon, label, active, onClick, disabled }: {
-    icon: React.ReactNode; label: string; active: boolean; onClick: () => void; disabled?: boolean;
+function SideNavItem({ icon, label, active, onClick, disabled, collapsed }: {
+    icon: React.ReactNode; label: string; active: boolean; onClick: () => void; disabled?: boolean; collapsed?: boolean;
 }) {
     return (
         <div
             className={`sidenav-item ${active ? "sidenav-item--active" : ""} ${disabled ? "sidenav-item--disabled" : ""}`}
             onClick={disabled ? undefined : onClick}
+            title={collapsed ? label : undefined}
         >
             {icon}
             <Text size={300} weight={active ? "semibold" : "regular"}>{label}</Text>
