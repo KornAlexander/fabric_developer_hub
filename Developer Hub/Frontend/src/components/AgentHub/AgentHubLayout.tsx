@@ -50,6 +50,18 @@ function topbarBreadcrumbLabel(activePage: string): string {
     }
 }
 
+/** Breadcrumb icon for the topbar — mirrors the per-page sidebar icon. */
+function TopbarBreadcrumbIcon({ activePage }: { activePage: string }) {
+    const cls = "topbar-breadcrumb-icon";
+    switch (activePage) {
+        case "sessions":   return <ChatMultiple24Regular className={cls} />;
+        case "newsession": return <AddCircle24Regular className={cls} />;
+        case "agents":     return <Bot24Regular className={cls} />;
+        case "pbifixer":   return <Wrench24Regular className={cls} />;
+        default:           return <BrainCircuit24Regular className={cls} />;
+    }
+}
+
 export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId }: AgentHubLayoutProps) {
     const history = useHistory();
     const match = useRouteMatch();
@@ -177,7 +189,7 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
                     <span className="topbar-brand">Developer Hub</span>
                     <span className="topbar-divider" />
                     <div className="topbar-breadcrumb">
-                        <BrainCircuit24Regular className="topbar-breadcrumb-icon" />
+                        <TopbarBreadcrumbIcon activePage={activePage} />
                         <span>{topbarBreadcrumbLabel(activePage)}</span>
                     </div>
                 </div>
@@ -203,12 +215,8 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
 
                 {/* Sidebar */}
                 <aside className={`agenthub-sidebar ${sidebarOpen ? "sidebar--open" : ""} ${sidebarCollapsed ? "agenthub-sidebar--collapsed" : ""}`}>
-                    <div className="agenthub-sidebar-brand">
-                        <div className="agenthub-brand-icon"><BrainCircuit24Regular /></div>
-                        <div className="agenthub-brand-text">
-                            <Text weight="bold" size={300}>Developer Hub</Text>
-                            <Text size={100} className="agenthub-brand-sub">FABRIC ENTERPRISE</Text>
-                        </div>
+                    {/* Collapse toggle (design has no brand block in the sidebar — brand lives only in the topbar). */}
+                    <div className="agenthub-sidebar-toolbar">
                         <button
                             type="button"
                             className="sidebar-collapse-btn"
