@@ -1,0 +1,157 @@
+/* ═══════════════════════════════════════════════════════════════════
+   Developer Hub — shared design tokens and typography
+   Used by every page under /Design/*.html via:
+       <link rel="stylesheet" href="_shared/styles.css">
+
+   Goal: a single, modern, professional type scale and spacing system
+   so all pages feel like one product. Pages should prefer the `.dh-*`
+   classes below over ad-hoc Tailwind sizes for page-level structure.
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ── Base ──────────────────────────────────────────────────────────── */
+
+:root {
+    /* Type scale (px) */
+    --dh-font-size-xs:   11px;
+    --dh-font-size-sm:   12px;
+    --dh-font-size-base: 13px;
+    --dh-font-size-md:   14px;
+    --dh-font-size-lg:   16px;
+    --dh-font-size-xl:   18px;
+    --dh-font-size-h2:   18px;
+    --dh-font-size-h1:   24px;
+    --dh-font-size-hero: 24px;
+
+    /* Font weights — page titles use Light for a modern, editorial feel. */
+    --dh-weight-light:    300;
+    --dh-weight-regular:  400;
+    --dh-weight-medium:   500;
+    --dh-weight-semibold: 600;
+    --dh-weight-bold:     700;
+
+    /* Line heights */
+    --dh-lh-tight: 1.25;
+    --dh-lh-snug:  1.4;
+    --dh-lh-normal: 1.55;
+
+    /* Letter spacing */
+    --dh-track-tight:  -0.01em;
+    --dh-track-tighter:-0.02em;
+    --dh-track-wider:  0.08em;
+
+    /* Content rhythm */
+    --dh-page-pad-x: 32px;
+    --dh-page-pad-y: 28px;
+    --dh-section-gap: 32px;
+}
+
+html, body {
+    font-family: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+    font-size: var(--dh-font-size-md);
+    line-height: var(--dh-lh-normal);
+    letter-spacing: var(--dh-track-tight);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    font-feature-settings: "cv11", "ss01", "ss03";
+}
+
+/* Keep Tailwind's utility classes fully in charge of sizing inside
+   components — the tokens above only set a sensible default for any
+   element that doesn't carry an explicit size utility. */
+p, li, span, div, label, input, textarea, button, select {
+    letter-spacing: inherit;
+}
+
+/* ── Layout primitives ─────────────────────────────────────────────── */
+
+/* Canonical main padding. Use on <main> (or the inner wrapper) so every
+   page has the same outer margin regardless of internal layout. */
+.dh-main-pad   { padding: var(--dh-page-pad-y) var(--dh-page-pad-x); }
+.dh-main-pad-x { padding-left: var(--dh-page-pad-x); padding-right: var(--dh-page-pad-x); }
+.dh-main-pad-y { padding-top: var(--dh-page-pad-y); padding-bottom: var(--dh-page-pad-y); }
+
+/* Page hero spacing: use on the first <header> inside <main>. */
+.dh-page-hero {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: var(--dh-section-gap);
+}
+
+/* ── Typography primitives ─────────────────────────────────────────── */
+
+/* Page title — used once per page. */
+.dh-h1 {
+    font-size: var(--dh-font-size-h1);
+    font-weight: var(--dh-weight-light);
+    line-height: var(--dh-lh-tight);
+    letter-spacing: var(--dh-track-tighter);
+    color: inherit;
+    margin: 0 0 6px 0;
+}
+
+/* Large hero title — only for landing / empty-state hero blocks. */
+.dh-hero {
+    font-size: var(--dh-font-size-hero);
+    font-weight: var(--dh-weight-light);
+    line-height: var(--dh-lh-tight);
+    letter-spacing: var(--dh-track-tighter);
+    margin: 0;
+}
+
+/* Section title — e.g. "Active Agents", "Recent Sessions". */
+.dh-h2 {
+    font-size: var(--dh-font-size-h2);
+    font-weight: var(--dh-weight-semibold);
+    line-height: var(--dh-lh-tight);
+    letter-spacing: var(--dh-track-tight);
+    margin: 0;
+}
+
+/* Small bold all-caps "eyebrow" label. */
+.dh-eyebrow {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: var(--dh-track-wider);
+    color: var(--on-surface-variant, #404752);
+    opacity: 0.75;
+}
+
+/* Page subtitle — one short descriptive sentence under the H1. */
+.dh-subtitle {
+    font-size: var(--dh-font-size-base);
+    line-height: var(--dh-lh-snug);
+    color: var(--on-surface-variant, #404752);
+    max-width: 60ch;
+    margin: 0;
+}
+
+/* Body/caption helpers. */
+.dh-body    { font-size: var(--dh-font-size-base); line-height: var(--dh-lh-normal); }
+.dh-caption { font-size: var(--dh-font-size-sm);   line-height: var(--dh-lh-snug); color: var(--on-surface-variant, #404752); }
+
+/* ── Scrollbar polish (WebKit) ─────────────────────────────────────── */
+
+.smooth-scroll { scroll-behavior: smooth; }
+
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+    background: rgba(64, 71, 82, 0.18);
+    border-radius: 8px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover { background: rgba(64, 71, 82, 0.32); background-clip: padding-box; }
+
+/* ── Focus ring ────────────────────────────────────────────────────── */
+
+:focus-visible {
+    outline: 2px solid #005faa;
+    outline-offset: 2px;
+    border-radius: 6px;
+}

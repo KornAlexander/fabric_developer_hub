@@ -5,9 +5,9 @@
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
 <title>AgentHub | Sessions</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&amp;display=swap" rel="stylesheet"/>
 <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="_shared/styles.css" rel="stylesheet"/>
 <script id="tailwind-config">
         tailwind.config = {
             darkMode: "class",
@@ -126,12 +126,12 @@
 <script>renderAgentHubSidebar('sessions');</script>
 
 <!-- Main Content Stage -->
-<main class="flex-1 overflow-y-auto bg-surface p-8">
+<main class="flex-1 overflow-y-auto bg-surface dh-main-pad">
 <!-- Header Section -->
-<header class="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-12">
+<header class="dh-page-hero">
 <div>
-<h1 class="text-4xl font-light text-on-surface tracking-tight mb-2"><span class="font-bold">Sessions</span></h1>
-<p class="text-on-surface-variant max-w-lg">Monitor, orchestrate, and deploy enterprise-grade AI agents across your Fabric ecosystem.</p>
+<h1 class="dh-h1 text-on-surface">Sessions</h1>
+<p class="dh-subtitle">Monitor, orchestrate, and deploy enterprise-grade AI agents across your Fabric ecosystem.</p>
 </div>
 <button class="bg-gradient-to-br from-primary to-primary-container text-white px-6 py-3 rounded-md flex items-center gap-2 font-medium shadow-sm hover:opacity-90 active:scale-95 transition-all">
 <span class="material-symbols-outlined" data-icon="add_circle">add_circle</span>
@@ -139,9 +139,9 @@
             </button>
 </header>
 <!-- Bento Grid: Active Agents -->
-<section class="mb-12">
+<section class="mb-8">
 <div class="flex items-center justify-between mb-6">
-<h2 class="text-xl font-semibold tracking-tight">Active Agents</h2>
+<h2 class="dh-h2">Active Agents</h2>
 <div class="flex gap-2">
 <span class="bg-surface-container-high text-on-surface-variant text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider">4 Running</span>
 <span class="bg-surface-container-high text-on-surface-variant text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider">1 Waiting</span>
@@ -368,7 +368,7 @@
 </section>
 <!-- Recent Successes Section -->
 <section>
-<h2 class="text-xl font-semibold tracking-tight mb-6">Recent Jobs</h2>
+<h2 class="dh-h2 mb-6">Recent Jobs</h2>
 <div class="bg-surface-container-lowest rounded-xl border border-outline-variant/10 shadow-sm overflow-hidden">
 <table class="w-full text-left border-collapse">
 <thead>
