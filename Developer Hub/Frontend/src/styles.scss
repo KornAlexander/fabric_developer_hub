@@ -2042,3 +2042,61 @@ html, body, #root {
     font-size: 12px;
     font-weight: 700;
 }
+
+/* ── Topbar redesign — matches design mockup ────────────────── */
+.topbar-brand {
+    font-size: 16px;
+    font-weight: 600;
+    color: #1a1c1c;
+    letter-spacing: -0.01em;
+}
+.topbar-divider {
+    width: 1px;
+    height: 14px;
+    background: rgba(192, 199, 212, 0.4);
+}
+.topbar-breadcrumb {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: #5f5e5e;
+    font-size: 12px;
+    font-weight: 500;
+
+    span:not(.topbar-breadcrumb-chev) {
+        color: #1a1c1c;
+    }
+}
+.topbar-breadcrumb-icon {
+    width: 18px;
+    height: 18px;
+    color: #5f5e5e;
+}
+.topbar-breadcrumb-chev {
+    color: #5f5e5e;
+    font-size: 14px;
+    line-height: 1;
+}
+
+.agenthub-topbar-search {
+    flex: 1;
+    max-width: 420px;
+    margin: 0 32px;
+    position: relative;
+
+    input {
+        width: 100%;
+        background: #f4f3f2;
+        border: none;
+        border-radius: 8px;
+        padding: 6px 14px;
+        font-size: 12px;
+        color: #1a1c1c;
+        font-family: inherit;
+        outline: none;
+        transition: box-shadow 0.15s;
+
+        &::placeholder { color: rgba(95, 94, 94, 0.5); }
+        &:focus { box-shadow: 0 0 0 2px rgba(0, 95, 170, 0.2); }
+    }
+}

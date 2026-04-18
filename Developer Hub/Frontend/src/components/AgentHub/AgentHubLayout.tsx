@@ -135,14 +135,27 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
             routeItemObjectId={routeItemObjectId || null}
         >
         <div className="agenthub-root">
-            {/* Top bar — utility only, no page links */}
+            {/* Top bar — matches design: brand text + breadcrumb, search, utility icons */}
             <div className="agenthub-topbar">
                 <div className="agenthub-topbar-left">
                     <button className="hamburger-btn" onClick={toggleSidebar} aria-label="Toggle navigation">
                         {sidebarOpen ? <Dismiss24Regular /> : <Navigation24Regular />}
                     </button>
-                    <BrainCircuit24Regular style={{ color: "#0078d4" }} />
-                    <Text weight="bold" size={400}>AgentHub</Text>
+                    <span className="topbar-brand">AgentHub</span>
+                    <span className="topbar-divider" />
+                    <div className="topbar-breadcrumb">
+                        <BrainCircuit24Regular className="topbar-breadcrumb-icon" />
+                        <span>Orchestrator</span>
+                        <span className="topbar-breadcrumb-chev">›</span>
+                        <span>New Session</span>
+                    </div>
+                </div>
+                <div className="agenthub-topbar-search">
+                    <input
+                        type="text"
+                        placeholder="Search orchestrated jobs..."
+                        aria-label="Search"
+                    />
                 </div>
                 <div className="agenthub-topbar-right">
                     <Alert24Regular className="topbar-icon" />
