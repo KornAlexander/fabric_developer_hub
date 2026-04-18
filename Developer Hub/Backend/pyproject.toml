@@ -26,6 +26,8 @@ dependencies = [
     # Agent tooling
     "mcp>=1.0",
     "cachetools>=5",
+    # Attachment parsing (PDF text extraction for prompt attachments)
+    "pypdf>=5.0",
 ]
 
 [dependency-groups]
@@ -58,7 +60,7 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
 pythonpath = ["src"]
-addopts = ["-v", "--tb=short", "--strict-markers", "--cov=src", "--cov-report=term-missing", "--cov-fail-under=70"]
+addopts = ["-v", "--tb=short", "--strict-markers", "--cov=src", "--cov-report=term-missing", "--cov-fail-under=75"]
 markers = [
     "unit: Unit tests",
     "integration: Integration tests",
@@ -72,6 +74,28 @@ markers = [
 filterwarnings = [
     "ignore::pytest.PytestUnknownMarkWarning",
     "ignore::PendingDeprecationWarning",
+]
+
+# ── Coverage ───────────────────────────────────────────────────────
+# Exclude auto-generated OpenAPI code and app-level entry points that are
+# exercised only by the live uvicorn process (not by unit tests).
+[tool.coverage.run]
+source = ["src"]
+omit = [
+    # OpenAPI-generated — no hand-written logic to cover.
+    "src/fabric_api/apis/*",
+    "src/fabric_api/models/*",
+    # FastAPI bootstrap / lifespan; covered by integration smoke tests, not unit.
+    "src/main.py",
+    "src/app/core/service_initializer.py",
+]
+
+[tool.coverage.report]
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "\\.\\.\\.",
+    "pragma: no cover",
 ]
 
 # ── Formatting / Linting ───────────────────────────────────────────

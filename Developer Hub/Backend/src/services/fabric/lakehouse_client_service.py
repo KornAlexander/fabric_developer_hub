@@ -4,11 +4,13 @@ from uuid import UUID
 
 import httpx
 
+from app.core.service_registry import get_service_registry
 from domain.constants.environment_constants import EnvironmentConstants
 from domain.models.fabric_item import FabricItem
 from domain.models.lakehouse_file import LakehouseFile
 from domain.models.lakehouse_table import LakehouseTable
 from domain.models.onelake_folder import OneLakePathContainer
+from services.http_client import get_http_client_service
 
 
 class LakehouseClientService:
@@ -22,7 +24,6 @@ class LakehouseClientService:
     def http_client_service(self):
         """Lazy load HTTP client service."""
         if self._http_client_service is None:
-            from services.http_client import get_http_client_service
             self._http_client_service = get_http_client_service()
         return self._http_client_service
 
@@ -206,7 +207,6 @@ class LakehouseClientService:
 
 def get_lakehouse_client_service() -> LakehouseClientService:
     """Get the singleton LakehouseClientService from ServiceRegistry."""
-    from app.core.service_registry import get_service_registry
     try:
         return get_service_registry().get(LakehouseClientService)
     except KeyError:

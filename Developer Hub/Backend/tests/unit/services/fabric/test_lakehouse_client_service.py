@@ -23,6 +23,7 @@ from services.fabric.lakehouse_client_service import (
     LakehouseClientService,
     get_lakehouse_client_service,
 )
+from app.core.service_registry import ServiceRegistry
 
 
 def _resp(status: int, json_body: dict | None = None, raise_for_status: bool = False) -> MagicMock:
@@ -205,7 +206,6 @@ async def test_get_path_list_propagates_http_error(svc) -> None:
 
 
 def test_get_lakehouse_client_service_raises_when_not_registered() -> None:
-    from app.core.service_registry import ServiceRegistry
 
     ServiceRegistry._instance = None
     with pytest.raises(RuntimeError, match="not initialized"):

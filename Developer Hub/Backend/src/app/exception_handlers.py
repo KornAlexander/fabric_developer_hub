@@ -7,6 +7,7 @@ dispatch. A couple of exceptions need extra behaviour (custom log level or
 from __future__ import annotations
 
 import logging
+from uuid import UUID
 
 from fastapi import FastAPI, Request
 
@@ -57,8 +58,6 @@ async def value_error_handler(request: Request, exc: ValueError):
     for generated routes that still do `UUID(str)` inside the handler body;
     in that case we try to infer which path parameter failed.
     """
-    from uuid import UUID
-
     message = str(exc)
     param_name = "unknown"
 

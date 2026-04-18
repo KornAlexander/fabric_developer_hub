@@ -21,6 +21,7 @@ from services.agenthub.orchestrator_engine import (
     _detect_action_from_tool,
     _JobExecution,
 )
+import asyncio
 
 
 def test_engine_init_and_configure() -> None:
@@ -71,7 +72,6 @@ def test_inject_message_unknown_job_returns_false() -> None:
 
 @pytest.mark.asyncio
 async def test_inject_message_routes_to_specific_session() -> None:
-    import asyncio
 
     engine = OrchestratorEngine()
     job = _make_job()
@@ -86,7 +86,6 @@ async def test_inject_message_routes_to_specific_session() -> None:
 
 @pytest.mark.asyncio
 async def test_inject_message_broadcasts_when_no_target() -> None:
-    import asyncio
 
     engine = OrchestratorEngine()
     job = _make_job()

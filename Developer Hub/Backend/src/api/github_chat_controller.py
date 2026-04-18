@@ -8,6 +8,7 @@ Handles:
 - Agentic tool-call loop with OBO-authenticated Fabric/OneLake tokens
 """
 
+import asyncio
 import json
 import logging
 import time
@@ -16,7 +17,11 @@ import httpx
 from cachetools import TTLCache
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from jose import jwt
 from pydantic import BaseModel
+
+from domain.models.authentication_models import AuthorizationContext
+from services.auth.authentication import get_authentication_service
 
 logger = logging.getLogger(__name__)
 
@@ -346,9 +351,6 @@ _ONELAKE_SCOPES = ["https://storage.azure.com/.default"]
 
 # Model to fall back to for tool-calling when the primary model doesn't support it
 TOOL_CALLING_FALLBACK_MODEL = "gpt-4o"
-# Models known to NOT return tool_calls properly via Copilot API
-_MODELS_WITHOUT_TOOL_CALLS = {"claude-opus-4.6", "claude-sonnet-4", "claude-3.5-sonnet", "claude-3-opus", "claude-3-sonnet"}
-
 
 SYSTEM_PROMPT = (
     "You are AgentHub, an AI assistant integrated into a Microsoft Fabric workload. "
@@ -372,10 +374,17 @@ SYSTEM_PROMPT = (
 
 
 async def _acquire_mcp_tokens(fabric_token: str) -> dict[str, str] | None:
-    """Exchange the user's workload token for Fabric API + OneLake tokens via OBO."""
+    """Exchange the user's workload token for Fabric API + OneLake tokens via OBO.
+
+    MSAL's ``acquire_token_on_behalf_of`` is synchronous and does a network
+    round-trip to AAD. Calling it directly from the async handler blocks the
+    event loop for the entire duration (~300-500 ms per scope), which
+    serializes every other in-flight request on the worker. We run each OBO
+    in a thread via ``asyncio.to_thread`` and fetch both scopes in parallel
+    with ``asyncio.gather``.
+    """
     logger.info("[OBO] Starting token exchange for MCP tools")
     try:
-        from services.auth.authentication import get_authentication_service
         auth_service = get_authentication_service()
     except Exception as e:
         logger.warning("[OBO] Auth service unavailable: %s", e)
@@ -383,7 +392,6 @@ async def _acquire_mcp_tokens(fabric_token: str) -> dict[str, str] | None:
 
     # Decode the tenant ID from the token's claims
     try:
-        from jose import jwt
         unverified = jwt.get_unverified_claims(fabric_token)
         tenant_id = unverified.get("tid")
         user_id = unverified.get("oid", "unknown")
@@ -397,33 +405,47 @@ async def _acquire_mcp_tokens(fabric_token: str) -> dict[str, str] | None:
         return None
 
     # Build a minimal AuthorizationContext for OBO
-    from domain.models.authentication_models import AuthorizationContext
     auth_context = AuthorizationContext(
         original_subject_token=fabric_token,
         tenant_object_id=tenant_id,
     )
 
-    tokens = {}
-    # Get Fabric REST API token
-    try:
-        tokens["FABRIC_API_TOKEN"] = await auth_service.get_access_token_on_behalf_of(
-            auth_context, _FABRIC_API_SCOPES
-        )
-        logger.info("[OBO] Fabric API token acquired (%d chars)", len(tokens["FABRIC_API_TOKEN"]))
-    except Exception as e:
-        logger.warning("[OBO] Fabric API OBO failed: %s", e)
+    async def _obo(scopes: list[str], label: str) -> tuple[str, str | None]:
+        try:
+            # auth_service.get_access_token_on_behalf_of is itself async but
+            # calls synchronous MSAL internally. Offload to a thread so it
+            # does not block the event loop.
+            tok = await asyncio.to_thread(
+                _sync_obo, auth_service, auth_context, scopes
+            )
+            logger.info("[OBO] %s token acquired (%d chars)", label, len(tok))
+            return label, tok
+        except Exception as e:
+            logger.warning("[OBO] %s OBO failed: %s", label, e)
+            return label, None
 
-    # Get OneLake storage token
-    try:
-        tokens["ONELAKE_TOKEN"] = await auth_service.get_access_token_on_behalf_of(
-            auth_context, _ONELAKE_SCOPES
-        )
-        logger.info("[OBO] OneLake token acquired (%d chars)", len(tokens["ONELAKE_TOKEN"]))
-    except Exception as e:
-        logger.warning("[OBO] OneLake OBO failed: %s", e)
+    results = await asyncio.gather(
+        _obo(_FABRIC_API_SCOPES, "Fabric API"),
+        _obo(_ONELAKE_SCOPES, "OneLake"),
+    )
+    tokens: dict[str, str] = {}
+    label_to_key = {"Fabric API": "FABRIC_API_TOKEN", "OneLake": "ONELAKE_TOKEN"}
+    for label, tok in results:
+        if tok:
+            tokens[label_to_key[label]] = tok
 
     logger.info("[OBO] Token exchange complete: %s", list(tokens.keys()))
     return tokens if tokens else None
+
+
+def _sync_obo(auth_service, auth_context, scopes):
+    """Synchronous wrapper for use with ``asyncio.to_thread``.
+
+    ``auth_service.get_access_token_on_behalf_of`` is declared ``async``
+    but its body is CPU-bound/blocking MSAL — we run it in its own loop
+    inside a worker thread.
+    """
+    return asyncio.run(auth_service.get_access_token_on_behalf_of(auth_context, scopes))
 
 
 def _copilot_headers(copilot_token: str) -> dict:

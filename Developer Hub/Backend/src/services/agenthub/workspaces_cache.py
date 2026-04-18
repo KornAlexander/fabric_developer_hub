@@ -16,7 +16,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from services.agenthub.session_store import _connect
+from services.agenthub._db import connect as _connect
 
 logger = logging.getLogger(__name__)
 

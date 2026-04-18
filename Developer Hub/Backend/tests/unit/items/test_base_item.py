@@ -19,6 +19,9 @@ from services.fabric.item_metadata_store import ItemMetadataStore
 from services.fabric.onelake_client_service import OneLakeClientService
 from tests.test_fixtures import TestFixtures
 from tests.test_helpers import TestHelpers
+from domain.models.common_item_metadata import CommonItemMetadata
+from fabric_api.models.create_item_request import CreateItemRequest
+from fabric_api.models.update_item_request import UpdateItemRequest
 
 
 # Create a concrete implementation of ItemBase for testing
@@ -100,9 +103,9 @@ class TestItemBase:
         """Test that ItemBase initialization creates and injects all required service dependencies."""
 
         # Arrange - Mock the service getter functions
-        with patch('services.fabric.item_metadata_store.get_item_metadata_store', return_value=mock_item_metadata_store), \
-             patch('services.fabric.onelake_client_service.get_onelake_client_service', return_value=mock_onelake_client_service), \
-             patch('services.auth.authentication.get_authentication_service', return_value=mock_authentication_service):
+        with patch('domain.items.base_item.get_item_metadata_store', return_value=mock_item_metadata_store), \
+             patch('domain.items.base_item.get_onelake_client_service', return_value=mock_onelake_client_service), \
+             patch('domain.items.base_item.get_authentication_service', return_value=mock_authentication_service):
 
             # Act - Create an instance of the testable item
             item = ConcreteTestItem(auth_context)
@@ -143,9 +146,9 @@ class TestItemBase:
         """Test that ItemBase initialization properly sets the authorization context."""
 
         # Arrange - Mock all service dependencies
-        with patch('services.fabric.item_metadata_store.get_item_metadata_store'), \
-             patch('services.fabric.onelake_client_service.get_onelake_client_service'), \
-             patch('services.auth.authentication.get_authentication_service'):
+        with patch('domain.items.base_item.get_item_metadata_store'), \
+             patch('domain.items.base_item.get_onelake_client_service'), \
+             patch('domain.items.base_item.get_authentication_service'):
 
             # Act
             item = ConcreteTestItem(auth_context)
@@ -160,9 +163,9 @@ class TestItemBase:
         """Test that ItemBase properties are properly initialized to None."""
 
         # Arrange - Mock all service dependencies
-        with patch('services.fabric.item_metadata_store.get_item_metadata_store'), \
-             patch('services.fabric.onelake_client_service.get_onelake_client_service'), \
-             patch('services.auth.authentication.get_authentication_service'):
+        with patch('domain.items.base_item.get_item_metadata_store'), \
+             patch('domain.items.base_item.get_onelake_client_service'), \
+             patch('domain.items.base_item.get_authentication_service'):
 
             # Act
             item = ConcreteTestItem(auth_context)
@@ -178,9 +181,9 @@ class TestItemBase:
         """Test that the logger is properly initialized with the correct naming pattern."""
 
         # Arrange - Mock all service dependencies
-        with patch('services.fabric.item_metadata_store.get_item_metadata_store'), \
-             patch('services.fabric.onelake_client_service.get_onelake_client_service'), \
-             patch('services.auth.authentication.get_authentication_service'):
+        with patch('domain.items.base_item.get_item_metadata_store'), \
+             patch('domain.items.base_item.get_onelake_client_service'), \
+             patch('domain.items.base_item.get_authentication_service'):
 
             # Act
             item = ConcreteTestItem(auth_context)
@@ -201,9 +204,9 @@ class TestItemBase:
         mock_onelake_service = AsyncMock(spec=OneLakeClientService)
         mock_auth_service = AsyncMock(spec=AuthenticationService)
 
-        with patch('services.fabric.item_metadata_store.get_item_metadata_store', return_value=mock_item_store) as mock_get_item_store, \
-             patch('services.fabric.onelake_client_service.get_onelake_client_service', return_value=mock_onelake_service) as mock_get_onelake, \
-             patch('services.auth.authentication.get_authentication_service', return_value=mock_auth_service) as mock_get_auth:
+        with patch('domain.items.base_item.get_item_metadata_store', return_value=mock_item_store) as mock_get_item_store, \
+             patch('domain.items.base_item.get_onelake_client_service', return_value=mock_onelake_service) as mock_get_onelake, \
+             patch('domain.items.base_item.get_authentication_service', return_value=mock_auth_service) as mock_get_auth:
 
             # Act
             item = ConcreteTestItem(auth_context)
@@ -233,7 +236,6 @@ class TestItemBase:
         tenant_id = TestFixtures.TENANT_ID
 
         # Mock successful metadata loading
-        from domain.models.common_item_metadata import CommonItemMetadata
 
         # Create mock metadata structures
         common_metadata = CommonItemMetadata(
@@ -256,9 +258,9 @@ class TestItemBase:
         mock_item_metadata_store.exists.return_value = True
         mock_item_metadata_store.load.return_value = mock_item_metadata
 
-        with patch('services.fabric.item_metadata_store.get_item_metadata_store', return_value=mock_item_metadata_store), \
-             patch('services.fabric.onelake_client_service.get_onelake_client_service', return_value=mock_onelake_client_service), \
-             patch('services.auth.authentication.get_authentication_service', return_value=mock_authentication_service):
+        with patch('domain.items.base_item.get_item_metadata_store', return_value=mock_item_metadata_store), \
+             patch('domain.items.base_item.get_onelake_client_service', return_value=mock_onelake_client_service), \
+             patch('domain.items.base_item.get_authentication_service', return_value=mock_authentication_service):
 
             # Act - Load the item
             item = ConcreteTestItem(auth_context)
@@ -294,9 +296,9 @@ class TestItemBase:
 
         mock_item_metadata_store.exists.return_value = False
 
-        with patch('services.fabric.item_metadata_store.get_item_metadata_store', return_value=mock_item_metadata_store), \
-             patch('services.fabric.onelake_client_service.get_onelake_client_service', return_value=mock_onelake_client_service), \
-             patch('services.auth.authentication.get_authentication_service', return_value=mock_authentication_service):
+        with patch('domain.items.base_item.get_item_metadata_store', return_value=mock_item_metadata_store), \
+             patch('domain.items.base_item.get_onelake_client_service', return_value=mock_onelake_client_service), \
+             patch('domain.items.base_item.get_authentication_service', return_value=mock_authentication_service):
 
             # Act & Assert - Verify exception is raised
             item = ConcreteTestItem(auth_context)
@@ -323,9 +325,9 @@ class TestItemBase:
         mock_item_metadata_store.exists.return_value = True
         mock_item_metadata_store.load.return_value = None
 
-        with patch('services.fabric.item_metadata_store.get_item_metadata_store', return_value=mock_item_metadata_store), \
-             patch('services.fabric.onelake_client_service.get_onelake_client_service', return_value=mock_onelake_client_service), \
-             patch('services.auth.authentication.get_authentication_service', return_value=mock_authentication_service):
+        with patch('domain.items.base_item.get_item_metadata_store', return_value=mock_item_metadata_store), \
+             patch('domain.items.base_item.get_onelake_client_service', return_value=mock_onelake_client_service), \
+             patch('domain.items.base_item.get_authentication_service', return_value=mock_authentication_service):
 
             item = ConcreteTestItem(auth_context)
 
@@ -340,9 +342,9 @@ class TestItemBase:
         mock_item_metadata_2.type_specific_metadata = {"test": "data"}
         mock_item_metadata_store.load.return_value = mock_item_metadata_2
 
-        with patch('services.fabric.item_metadata_store.get_item_metadata_store', return_value=mock_item_metadata_store), \
-             patch('services.fabric.onelake_client_service.get_onelake_client_service', return_value=mock_onelake_client_service), \
-             patch('services.auth.authentication.get_authentication_service', return_value=mock_authentication_service):
+        with patch('domain.items.base_item.get_item_metadata_store', return_value=mock_item_metadata_store), \
+             patch('domain.items.base_item.get_onelake_client_service', return_value=mock_onelake_client_service), \
+             patch('domain.items.base_item.get_authentication_service', return_value=mock_authentication_service):
 
             item = ConcreteTestItem(auth_context)
 
@@ -361,7 +363,6 @@ class TestItemBase:
         item_id = TestFixtures.ITEM_ID
 
         # Mock metadata with different tenant ID
-        from domain.models.common_item_metadata import CommonItemMetadata
 
         common_metadata = CommonItemMetadata(
             type="TestableItem",
@@ -379,9 +380,9 @@ class TestItemBase:
         mock_item_metadata_store.exists.return_value = True
         mock_item_metadata_store.load.return_value = mock_item_metadata
 
-        with patch('services.fabric.item_metadata_store.get_item_metadata_store', return_value=mock_item_metadata_store), \
-             patch('services.fabric.onelake_client_service.get_onelake_client_service', return_value=mock_onelake_client_service), \
-             patch('services.auth.authentication.get_authentication_service', return_value=mock_authentication_service):
+        with patch('domain.items.base_item.get_item_metadata_store', return_value=mock_item_metadata_store), \
+             patch('domain.items.base_item.get_onelake_client_service', return_value=mock_onelake_client_service), \
+             patch('domain.items.base_item.get_authentication_service', return_value=mock_authentication_service):
 
             # Act & Assert - Verify access denied exception
             item = ConcreteTestItem(auth_context)
@@ -401,7 +402,6 @@ class TestItemBase:
         item_id = TestFixtures.ITEM_ID
         tenant_id = TestFixtures.TENANT_ID
 
-        from domain.models.common_item_metadata import CommonItemMetadata
 
         common_metadata = CommonItemMetadata(
             type="WrongItemType",  # Different from ConcreteTestItem.item_type
@@ -419,9 +419,9 @@ class TestItemBase:
         mock_item_metadata_store.exists.return_value = True
         mock_item_metadata_store.load.return_value = mock_item_metadata
 
-        with patch('services.fabric.item_metadata_store.get_item_metadata_store', return_value=mock_item_metadata_store), \
-             patch('services.fabric.onelake_client_service.get_onelake_client_service', return_value=mock_onelake_client_service), \
-             patch('services.auth.authentication.get_authentication_service', return_value=mock_authentication_service):
+        with patch('domain.items.base_item.get_item_metadata_store', return_value=mock_item_metadata_store), \
+             patch('domain.items.base_item.get_onelake_client_service', return_value=mock_onelake_client_service), \
+             patch('domain.items.base_item.get_authentication_service', return_value=mock_authentication_service):
 
             # Act & Assert - Verify type error
             item = ConcreteTestItem(auth_context)
@@ -444,7 +444,6 @@ class TestItemBase:
         tenant_id = TestFixtures.TENANT_ID
         test_metadata = {"calculation": "result", "operand1": 42}
 
-        from domain.models.common_item_metadata import CommonItemMetadata
 
         common_metadata = CommonItemMetadata(
             type="TestableItem",
@@ -462,9 +461,9 @@ class TestItemBase:
         mock_item_metadata_store.exists.return_value = True
         mock_item_metadata_store.load.return_value = mock_item_metadata
 
-        with patch('services.fabric.item_metadata_store.get_item_metadata_store', return_value=mock_item_metadata_store), \
-             patch('services.fabric.onelake_client_service.get_onelake_client_service', return_value=mock_onelake_client_service), \
-             patch('services.auth.authentication.get_authentication_service', return_value=mock_authentication_service):
+        with patch('domain.items.base_item.get_item_metadata_store', return_value=mock_item_metadata_store), \
+             patch('domain.items.base_item.get_onelake_client_service', return_value=mock_onelake_client_service), \
+             patch('domain.items.base_item.get_authentication_service', return_value=mock_authentication_service):
 
             # Act - Load the item
             item = ConcreteTestItem(auth_context)
@@ -492,16 +491,15 @@ class TestItemBase:
         workspace_id = TestFixtures.WORKSPACE_ID
         item_id = TestFixtures.ITEM_ID
 
-        from fabric_api.models.create_item_request import CreateItemRequest
         create_request = CreateItemRequest(
             display_name="Test Item Creation",
             description="Test item creation description",
             creation_payload={"metadata": {"operand1": 100, "operand2": 200, "operator": "Add"}}
         )
 
-        with patch('services.fabric.item_metadata_store.get_item_metadata_store', return_value=mock_item_metadata_store), \
-             patch('services.fabric.onelake_client_service.get_onelake_client_service', return_value=mock_onelake_client_service), \
-             patch('services.auth.authentication.get_authentication_service', return_value=mock_authentication_service):
+        with patch('domain.items.base_item.get_item_metadata_store', return_value=mock_item_metadata_store), \
+             patch('domain.items.base_item.get_onelake_client_service', return_value=mock_onelake_client_service), \
+             patch('domain.items.base_item.get_authentication_service', return_value=mock_authentication_service):
 
             # Act
             item = ConcreteTestItem(auth_context)
@@ -530,16 +528,15 @@ class TestItemBase:
         workspace_id = TestFixtures.WORKSPACE_ID
         item_id = TestFixtures.ITEM_ID
 
-        from fabric_api.models.create_item_request import CreateItemRequest
         create_request = CreateItemRequest(
             display_name="Property Test Item",
             description="Testing property assignment",
             creation_payload={"test_data": "test_value"}
         )
 
-        with patch('services.fabric.item_metadata_store.get_item_metadata_store', return_value=mock_item_metadata_store), \
-             patch('services.fabric.onelake_client_service.get_onelake_client_service', return_value=mock_onelake_client_service), \
-             patch('services.auth.authentication.get_authentication_service', return_value=mock_authentication_service):
+        with patch('domain.items.base_item.get_item_metadata_store', return_value=mock_item_metadata_store), \
+             patch('domain.items.base_item.get_onelake_client_service', return_value=mock_onelake_client_service), \
+             patch('domain.items.base_item.get_authentication_service', return_value=mock_authentication_service):
 
             # Act
             item = ConcreteTestItem(auth_context)
@@ -569,16 +566,15 @@ class TestItemBase:
         workspace_id = TestFixtures.WORKSPACE_ID
         item_id = TestFixtures.ITEM_ID
 
-        from fabric_api.models.update_item_request import UpdateItemRequest
         update_request = UpdateItemRequest(
             display_name="Updated Item Name",
             description="Updated item description",
             update_payload={"metadata": {"operand1": 300, "operand2": 400, "operator": "Multiply"}}
         )
 
-        with patch('services.fabric.item_metadata_store.get_item_metadata_store', return_value=mock_item_metadata_store), \
-             patch('services.fabric.onelake_client_service.get_onelake_client_service', return_value=mock_onelake_client_service), \
-             patch('services.auth.authentication.get_authentication_service', return_value=mock_authentication_service):
+        with patch('domain.items.base_item.get_item_metadata_store', return_value=mock_item_metadata_store), \
+             patch('domain.items.base_item.get_onelake_client_service', return_value=mock_onelake_client_service), \
+             patch('domain.items.base_item.get_authentication_service', return_value=mock_authentication_service):
 
             # Act
             item = ConcreteTestItem(auth_context)
@@ -609,9 +605,9 @@ class TestItemBase:
         """Test validation of update requests with invalid data."""
 
         # Arrange
-        with patch('services.fabric.item_metadata_store.get_item_metadata_store', return_value=mock_item_metadata_store), \
-             patch('services.fabric.onelake_client_service.get_onelake_client_service', return_value=mock_onelake_client_service), \
-             patch('services.auth.authentication.get_authentication_service', return_value=mock_authentication_service):
+        with patch('domain.items.base_item.get_item_metadata_store', return_value=mock_item_metadata_store), \
+             patch('domain.items.base_item.get_onelake_client_service', return_value=mock_onelake_client_service), \
+             patch('domain.items.base_item.get_authentication_service', return_value=mock_authentication_service):
 
             item = ConcreteTestItem(auth_context)
 
@@ -636,9 +632,9 @@ class TestItemBase:
         """Verify deletion calls correct services."""
 
         # Arrange
-        with patch('services.fabric.item_metadata_store.get_item_metadata_store', return_value=mock_item_metadata_store), \
-             patch('services.fabric.onelake_client_service.get_onelake_client_service', return_value=mock_onelake_client_service), \
-             patch('services.auth.authentication.get_authentication_service', return_value=mock_authentication_service):
+        with patch('domain.items.base_item.get_item_metadata_store', return_value=mock_item_metadata_store), \
+             patch('domain.items.base_item.get_onelake_client_service', return_value=mock_onelake_client_service), \
+             patch('domain.items.base_item.get_authentication_service', return_value=mock_authentication_service):
 
             item = ConcreteTestItem(auth_context)
 
@@ -661,9 +657,9 @@ class TestItemBase:
         """Test that save_changes calls all required methods in sequence."""
 
         # Arrange
-        with patch('services.fabric.item_metadata_store.get_item_metadata_store', return_value=mock_item_metadata_store), \
-             patch('services.fabric.onelake_client_service.get_onelake_client_service', return_value=mock_onelake_client_service), \
-             patch('services.auth.authentication.get_authentication_service', return_value=mock_authentication_service):
+        with patch('domain.items.base_item.get_item_metadata_store', return_value=mock_item_metadata_store), \
+             patch('domain.items.base_item.get_onelake_client_service', return_value=mock_onelake_client_service), \
+             patch('domain.items.base_item.get_authentication_service', return_value=mock_authentication_service):
 
             item = ConcreteTestItem(auth_context)
 
@@ -693,9 +689,9 @@ class TestItemBase:
         """Test that store creates the correct metadata structure."""
 
         # Arrange
-        with patch('services.fabric.item_metadata_store.get_item_metadata_store', return_value=mock_item_metadata_store), \
-             patch('services.fabric.onelake_client_service.get_onelake_client_service', return_value=mock_onelake_client_service), \
-             patch('services.auth.authentication.get_authentication_service', return_value=mock_authentication_service):
+        with patch('domain.items.base_item.get_item_metadata_store', return_value=mock_item_metadata_store), \
+             patch('domain.items.base_item.get_onelake_client_service', return_value=mock_onelake_client_service), \
+             patch('domain.items.base_item.get_authentication_service', return_value=mock_authentication_service):
 
             item = ConcreteTestItem(auth_context)
 
@@ -741,16 +737,15 @@ class TestItemBase:
         workspace_id = TestFixtures.WORKSPACE_ID
         item_id = TestFixtures.ITEM_ID
 
-        from fabric_api.models.create_item_request import CreateItemRequest
         create_request = CreateItemRequest(
             display_name="Empty Payload Item",
             description="Item with empty payload",
             creation_payload={}
         )
 
-        with patch('services.fabric.item_metadata_store.get_item_metadata_store', return_value=mock_item_metadata_store), \
-             patch('services.fabric.onelake_client_service.get_onelake_client_service', return_value=mock_onelake_client_service), \
-             patch('services.auth.authentication.get_authentication_service', return_value=mock_authentication_service):
+        with patch('domain.items.base_item.get_item_metadata_store', return_value=mock_item_metadata_store), \
+             patch('domain.items.base_item.get_onelake_client_service', return_value=mock_onelake_client_service), \
+             patch('domain.items.base_item.get_authentication_service', return_value=mock_authentication_service):
 
             # Act
             item = ConcreteTestItem(auth_context)
@@ -767,16 +762,15 @@ class TestItemBase:
         """Test that update only changes specified properties."""
 
         # Arrange
-        from fabric_api.models.update_item_request import UpdateItemRequest
         update_request = UpdateItemRequest(
             display_name="New Display Name",
             description="New Description",
             update_payload={"new_data": "new_value"}
         )
 
-        with patch('services.fabric.item_metadata_store.get_item_metadata_store', return_value=mock_item_metadata_store), \
-             patch('services.fabric.onelake_client_service.get_onelake_client_service', return_value=mock_onelake_client_service), \
-             patch('services.auth.authentication.get_authentication_service', return_value=mock_authentication_service):
+        with patch('domain.items.base_item.get_item_metadata_store', return_value=mock_item_metadata_store), \
+             patch('domain.items.base_item.get_onelake_client_service', return_value=mock_onelake_client_service), \
+             patch('domain.items.base_item.get_authentication_service', return_value=mock_authentication_service):
 
             item = ConcreteTestItem(auth_context)
 
@@ -818,9 +812,9 @@ class TestItemBase:
         mock_item_metadata_store.exists_job.return_value = False
         mock_item_metadata_store.upsert_job.return_value = None
 
-        with patch('services.fabric.item_metadata_store.get_item_metadata_store', return_value=mock_item_metadata_store), \
-             patch('services.fabric.onelake_client_service.get_onelake_client_service', return_value=mock_onelake_client_service), \
-             patch('services.auth.authentication.get_authentication_service', return_value=mock_authentication_service):
+        with patch('domain.items.base_item.get_item_metadata_store', return_value=mock_item_metadata_store), \
+             patch('domain.items.base_item.get_onelake_client_service', return_value=mock_onelake_client_service), \
+             patch('domain.items.base_item.get_authentication_service', return_value=mock_authentication_service):
 
             item = ConcreteTestItem(auth_context)
 
@@ -829,7 +823,7 @@ class TestItemBase:
             item.item_object_id = str(TestFixtures.ITEM_ID)
 
             # Mock JobMetadata import and creation
-            with patch('domain.models.job_metadata.JobMetadata') as mock_job_metadata_class:
+            with patch('domain.items.base_item.JobMetadata') as mock_job_metadata_class:
                 mock_job_metadata = MagicMock()
                 mock_job_metadata.is_canceled = False
                 mock_job_metadata_class.return_value = mock_job_metadata
@@ -883,9 +877,9 @@ class TestItemBase:
         mock_item_metadata_store.exists_job.return_value = True
         mock_item_metadata_store.load_job.return_value = mock_job_metadata
 
-        with patch('services.fabric.item_metadata_store.get_item_metadata_store', return_value=mock_item_metadata_store), \
-             patch('services.fabric.onelake_client_service.get_onelake_client_service', return_value=mock_onelake_client_service), \
-             patch('services.auth.authentication.get_authentication_service', return_value=mock_authentication_service):
+        with patch('domain.items.base_item.get_item_metadata_store', return_value=mock_item_metadata_store), \
+             patch('domain.items.base_item.get_onelake_client_service', return_value=mock_onelake_client_service), \
+             patch('domain.items.base_item.get_authentication_service', return_value=mock_authentication_service):
 
             item = ConcreteTestItem(auth_context)
 
@@ -934,9 +928,9 @@ class TestItemBase:
         mock_item_metadata_store.load_job.return_value = mock_job_metadata
         mock_item_metadata_store.upsert_job.return_value = None
 
-        with patch('services.fabric.item_metadata_store.get_item_metadata_store', return_value=mock_item_metadata_store), \
-             patch('services.fabric.onelake_client_service.get_onelake_client_service', return_value=mock_onelake_client_service), \
-             patch('services.auth.authentication.get_authentication_service', return_value=mock_authentication_service):
+        with patch('domain.items.base_item.get_item_metadata_store', return_value=mock_item_metadata_store), \
+             patch('domain.items.base_item.get_onelake_client_service', return_value=mock_onelake_client_service), \
+             patch('domain.items.base_item.get_authentication_service', return_value=mock_authentication_service):
 
             item = ConcreteTestItem(auth_context)
 
@@ -984,9 +978,9 @@ class TestItemBase:
         mock_item_metadata_store.load_job.return_value = mock_job_metadata
         mock_item_metadata_store.upsert_job.return_value = None
 
-        with patch('services.fabric.item_metadata_store.get_item_metadata_store', return_value=mock_item_metadata_store), \
-             patch('services.fabric.onelake_client_service.get_onelake_client_service', return_value=mock_onelake_client_service), \
-             patch('services.auth.authentication.get_authentication_service', return_value=mock_authentication_service):
+        with patch('domain.items.base_item.get_item_metadata_store', return_value=mock_item_metadata_store), \
+             patch('domain.items.base_item.get_onelake_client_service', return_value=mock_onelake_client_service), \
+             patch('domain.items.base_item.get_authentication_service', return_value=mock_authentication_service):
 
             item = ConcreteTestItem(auth_context)
 
@@ -1038,9 +1032,9 @@ class TestItemBase:
         mock_item_metadata_store.exists_job.return_value = False
         mock_item_metadata_store.upsert_job.return_value = None
 
-        with patch('services.fabric.item_metadata_store.get_item_metadata_store', return_value=mock_item_metadata_store), \
-             patch('services.fabric.onelake_client_service.get_onelake_client_service', return_value=mock_onelake_client_service), \
-             patch('services.auth.authentication.get_authentication_service', return_value=mock_authentication_service):
+        with patch('domain.items.base_item.get_item_metadata_store', return_value=mock_item_metadata_store), \
+             patch('domain.items.base_item.get_onelake_client_service', return_value=mock_onelake_client_service), \
+             patch('domain.items.base_item.get_authentication_service', return_value=mock_authentication_service):
 
             item = ConcreteTestItem(auth_context)
 
@@ -1049,7 +1043,7 @@ class TestItemBase:
             item.item_object_id = str(TestFixtures.ITEM_ID)
 
             # Mock JobMetadata and logger
-            with patch('domain.models.job_metadata.JobMetadata') as mock_job_metadata_class, \
+            with patch('domain.items.base_item.JobMetadata') as mock_job_metadata_class, \
                  patch.object(item, 'logger') as mock_logger:
 
                 mock_job_metadata = MagicMock()

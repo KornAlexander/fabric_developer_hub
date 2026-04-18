@@ -10,12 +10,16 @@ from domain.exceptions.exceptions import (
     ItemMetadataNotFoundException,
     UnexpectedItemTypeException,
 )
+from domain.models.authentication_models import AuthorizationContext
+from domain.models.common_item_metadata import CommonItemMetadata
+from domain.models.job_metadata import JobMetadata
 from fabric_api.models.create_item_request import CreateItemRequest
 from fabric_api.models.item_job_instance_state import ItemJobInstanceState
 from fabric_api.models.job_invoke_type import JobInvokeType
 from fabric_api.models.update_item_request import UpdateItemRequest
-from domain.models.authentication_models import AuthorizationContext
-from domain.models.common_item_metadata import CommonItemMetadata
+from services.auth.authentication import get_authentication_service
+from services.fabric.item_metadata_store import get_item_metadata_store
+from services.fabric.onelake_client_service import get_onelake_client_service
 
 # Define type variables for metadata
 TItemMetadata = TypeVar('TItemMetadata')
@@ -28,10 +32,6 @@ class ItemBase[TItemMetadata, TItemClientMetadata](ABC):
 
     def __init__(self, auth_context: AuthorizationContext):
         """Initialize a base item."""
-        from services.auth.authentication import get_authentication_service
-        from services.fabric.item_metadata_store import get_item_metadata_store
-        from services.fabric.onelake_client_service import get_onelake_client_service
-
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
 
         self.auth_context = auth_context
@@ -204,9 +204,6 @@ class ItemBase[TItemMetadata, TItemClientMetadata](ABC):
 
     async def cancel_job(self, job_type: str, job_instance_id: UUID) -> None:
         """Cancel a job instance."""
-        # Import JobMetadata here to avoid circular imports
-        from domain.models.job_metadata import JobMetadata
-
         # Check if job metadata exists
         job_metadata = None
 

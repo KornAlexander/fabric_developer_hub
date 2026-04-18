@@ -8,6 +8,7 @@ from typing import Any, TypeVar
 
 import aiofiles
 
+from app.core.service_registry import get_service_registry
 from domain.constants.workload_constants import WorkloadConstants
 from domain.models.common_item_metadata import CommonItemMetadata
 from domain.models.item_metadata import ItemMetadata
@@ -249,7 +250,6 @@ class ItemMetadataStore:
 
 def get_item_metadata_store() -> ItemMetadataStore:
     """Get the singleton ItemMetadataStore from ServiceRegistry."""
-    from app.core.service_registry import get_service_registry
     try:
         return get_service_registry().get(ItemMetadataStore)
     except KeyError:

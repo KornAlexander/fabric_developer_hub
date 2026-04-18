@@ -8,9 +8,11 @@ import logging
 import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from datetime import UTC, datetime
+from typing import Any
 
 import httpx
 
+from app.core.service_registry import get_service_registry
 from domain.models.agent_models import (
     AgentAction,
     AgentAssignment,
@@ -24,6 +26,7 @@ from domain.models.agent_models import (
     ReasoningPhase,
 )
 from services.agenthub.agent_registry import AGENT_TEMPLATES, get_template
+from services.agenthub.attachments import process_attachments
 from services.agenthub.session_store import log_audit, update_session
 
 logger = logging.getLogger(__name__)
@@ -113,6 +116,7 @@ class OrchestratorEngine:
         workspace_id: str,
         copilot_token: str,
         context: dict | None = None,
+        attachments: list[dict] | None = None,
     ) -> ExecutionPlan:
         """Use the LLM to decompose a task into an ExecutionPlan."""
         agent_list = "\n".join(
@@ -123,12 +127,37 @@ class OrchestratorEngine:
         workspace_name = ""
         if context and context.get("workspace_name"):
             workspace_name = context["workspace_name"]
-        user_content = f"Task: {task_description}\nWorkspace ID: {workspace_id}"
+
+        # Process any file attachments into a text block (inlined into the
+        # prompt) and image parts (appended as multi-part content so GPT-4o
+        # can see them). Pydantic models come through as dicts via FastAPI;
+        # tests pass dicts directly. Either is fine.
+        att_dicts: list[dict] = []
+        for a in attachments or []:
+            att_dicts.append(a.model_dump() if hasattr(a, "model_dump") else a)
+        text_block, image_parts, att_warnings = process_attachments(att_dicts)
+        if att_warnings:
+            logger.info("[ORCHESTRATOR] Attachment warnings: %s", att_warnings)
+
+        user_text = f"Task: {task_description}\nWorkspace ID: {workspace_id}"
         if workspace_name:
-            user_content += f"\nWorkspace Name: {workspace_name}"
-            user_content += "\nIMPORTANT: Use the workspace name (not the ID) when describing the plan to the user."
+            user_text += f"\nWorkspace Name: {workspace_name}"
+            user_text += "\nIMPORTANT: Use the workspace name (not the ID) when describing the plan to the user."
         if context:
-            user_content += f"\nAdditional context: {json.dumps(context)}"
+            # Strip non-serializable / internal keys before dumping.
+            ctx_public = {k: v for k, v in context.items() if k != "image_attachments"}
+            if ctx_public:
+                user_text += f"\nAdditional context: {json.dumps(ctx_public)}"
+        if text_block:
+            user_text += text_block
+
+        # Build OpenAI-style message content. Plain string when no images;
+        # multi-part list when we have images (so vision models can ingest
+        # them directly).
+        if image_parts:
+            user_content: Any = [{"type": "text", "text": user_text}, *image_parts]
+        else:
+            user_content = user_text
 
         body = {
             "model": TOOL_MODEL,
@@ -692,7 +721,6 @@ def _detect_action_from_tool(tool_name: str, tool_args: dict, result: str) -> Ag
 
 def get_orchestrator_engine() -> OrchestratorEngine:
     """Get the singleton OrchestratorEngine from ServiceRegistry."""
-    from app.core.service_registry import get_service_registry
     registry = get_service_registry()
     if not registry.has(OrchestratorEngine):
         registry.register(OrchestratorEngine, OrchestratorEngine())

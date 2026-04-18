@@ -12,7 +12,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from api import agenthub_controller
-from services.agenthub import session_store
+from services.agenthub import _db, session_store
+from api import github_chat_controller
+from fastapi import HTTPException
 
 
 @pytest.fixture(autouse=True)
@@ -21,10 +23,10 @@ def _isolated_agenthub_db(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     cache table exists and is empty for each case."""
     db = tmp_path / "agenthub.db"
     monkeypatch.setenv("AGENTHUB_DB_PATH", str(db))
-    monkeypatch.setattr(session_store, "_DB_PATH", None)
+    monkeypatch.setattr(_db, "_DB_PATH", None)
     session_store.init_db()
     yield
-    monkeypatch.setattr(session_store, "_DB_PATH", None)
+    monkeypatch.setattr(_db, "_DB_PATH", None)
 
 
 @pytest.fixture
@@ -44,7 +46,6 @@ def isolated_client(isolated_app: FastAPI) -> TestClient:
 @pytest.fixture(autouse=True)
 def _reset_mcp_manager(monkeypatch: pytest.MonkeyPatch) -> None:
     """Ensure each test starts with a fresh _mcp_manager state."""
-    from api import github_chat_controller
     monkeypatch.setattr(github_chat_controller, "_mcp_manager", None, raising=False)
 
 
@@ -107,7 +108,6 @@ def test_list_workspaces_propagates_inner_httpexception(
 ) -> None:
     """An ``HTTPException`` raised by ``_acquire_mcp_tokens`` must propagate
     with its original status — not be swallowed into a 500 by the catch-all."""
-    from fastapi import HTTPException
 
     async def _fake_acquire(_token: str) -> dict:
         raise HTTPException(status_code=401, detail="bad fabric token")

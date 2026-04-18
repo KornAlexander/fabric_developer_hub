@@ -12,6 +12,7 @@ import pytest
 from domain.models.common_item_metadata import CommonItemMetadata
 from domain.models.job_metadata import JobMetadata
 from services.fabric.item_metadata_store import ItemMetadataStore, get_item_metadata_store
+from app.core.service_registry import ServiceRegistry
 
 
 @pytest.fixture
@@ -197,7 +198,6 @@ async def test_delete_job_silent_when_missing(store) -> None:
 def test_get_item_metadata_store_raises_runtime_error_when_unregistered(monkeypatch) -> None:
     """When the registry has no ItemMetadataStore, the accessor must raise
     RuntimeError (not KeyError)."""
-    from app.core.service_registry import ServiceRegistry
     monkeypatch.setattr(ServiceRegistry, "_instance", None)
     with pytest.raises(RuntimeError, match="ItemMetadataStore not initialized"):
         get_item_metadata_store()

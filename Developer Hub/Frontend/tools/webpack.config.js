@@ -10,17 +10,51 @@ console.log('process.env.WORKLOAD_NAME: ' + process.env.WORKLOAD_NAME);
 console.log('process.env.WORKLOAD_BE_URL: ' + process.env.WORKLOAD_BE_URL);
 console.log('*********************************************************************');
 
+// True when running `webpack serve` (dev middleware). We tune the config
+// aggressively for fast rebuilds in that case.
+const isDevServer = process.env.WEBPACK_SERVE === 'true'
+    || process.argv.some(a => a === 'serve');
+
 module.exports = {
     mode: "development",
     entry: "./src/index.ts",
     output: {
-        filename: "bundle.[fullhash].js",
+        // contenthash keeps unchanged chunks stable across rebuilds so the
+        // browser can re-use them instead of redownloading the whole vendor
+        // bundle on every edit.
+        filename: "bundle.[contenthash].js",
         path: path.resolve(__dirname, "dist"),
         publicPath: '/',
+        // Skip emitting absolute request paths as comments — noticeably
+        // speeds up emit over ~4k modules and reduces bundle size in dev.
+        pathinfo: false,
     },
-    devtool: "eval-source-map",
+    // In dev we skip source maps entirely for the first pass — they are the
+    // single biggest cost when bundling the ~34 MB Fluent UI tree. Re-enable
+    // with WEBPACK_DEV_SOURCEMAPS=1 when you actually need to step through TS.
+    devtool: isDevServer
+        ? (process.env.WEBPACK_DEV_SOURCEMAPS === '1' ? 'eval-cheap-module-source-map' : 'eval')
+        : 'eval-source-map',
+    // Persistent filesystem cache. First build is ~full time; subsequent
+    // cold starts (e.g. after container restart) drop from ~35s to ~3-5s
+    // because parsed/transpiled modules are reused.
+    cache: {
+        type: 'filesystem',
+        cacheDirectory: path.resolve(__dirname, '../.webpack-cache'),
+        buildDependencies: {
+            config: [__filename],
+        },
+    },
+    // Tell webpack not to hash the contents of node_modules on every build —
+    // mtime is enough and dramatically cheaper on large trees.
+    snapshot: {
+        managedPaths: [path.resolve(__dirname, '../node_modules')],
+    },
     plugins: [
-        new CleanWebpackPlugin(),
+        // CleanWebpackPlugin wipes output/ on every build. That's fine for
+        // CI prod builds, but under webpack-dev-server it defeats caching
+        // without any benefit because the dev server serves from memory.
+        ...(isDevServer ? [] : [new CleanWebpackPlugin()]),
         new Webpack.DefinePlugin({
             "process.env.WORKLOAD_NAME": JSON.stringify(process.env.WORKLOAD_NAME),
             "process.env.WORKLOAD_BE_URL": JSON.stringify(process.env.WORKLOAD_BE_URL),
@@ -52,9 +86,14 @@ module.exports = {
             {
                 test: /\.tsx?$/,
                 exclude: /node_modules/,
-                loader: "ts-loader",
+                // esbuild-loader transpiles TS/TSX ~10x faster than ts-loader.
+                // Types are checked separately (tsc --noEmit) — the dev
+                // bundler doesn't need to do it on every keystroke.
+                loader: "esbuild-loader",
                 options: {
-                    transpileOnly: true,
+                    loader: "tsx",
+                    target: "es2019",
+                    tsconfigRaw: require('../tsconfig.json'),
                 },
             },
             {
@@ -71,6 +110,13 @@ module.exports = {
             },
         ],
     },
+    // Don't re-walk node_modules on every change — massively reduces CPU
+    // on Docker bind mounts where inotify events are expensive.
+    watchOptions: {
+        ignored: /node_modules/,
+        aggregateTimeout: 200,
+    },
+    stats: isDevServer ? 'minimal' : 'normal',
     devServer: {
         port: 60006,
         open: false,

@@ -57,24 +57,67 @@ services:
       retries: 3
       start_period: 40s
 
-  # ── 3. Frontend (webpack-dev-server) ───────────────────────
+  # ── 3. Frontend ───────────────────────────────────────────
+  #
+  # Two modes, selected by compose profiles:
+  #
+  #   DEFAULT (no profile): production build — multi-stage Dockerfile
+  #   compiles a static bundle and serves it from nginx. Zero host
+  #   prerequisites, ~30 MB image, no HMR. This is what non-dev users get.
+  #
+  #     docker compose up
+  #
+  #   DEV PROFILE: webpack-dev-server with hot-reload. Requires host
+  #   Node for fast iteration. Bind-mounts host node_modules.
+  #
+  #     # one-time (or whenever package-lock.json changes):
+  #     (cd Frontend && npm ci)
+  #     docker compose --profile dev up
+  #
   frontend:
+    profiles: ["prod"]
     build:
       context: .
       dockerfile: Frontend/Dockerfile
+      target: production
+    ports:
+      - "60006:60006"
+    volumes:
+      # nginx doesn't need the manifest package, but the dev-gateway probes
+      # /manifests_new → so we proxy it through a volume here too.
+      - manifest-pkg:/usr/share/nginx/html/manifests_new:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:60006/"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    depends_on:
+      backend:
+        condition: service_healthy
+      manifest-generator:
+        condition: service_completed_successfully
+
+  frontend-dev:
+    profiles: ["dev"]
+    build:
+      context: .
+      dockerfile: Frontend/Dockerfile
+      target: dev
     ports:
       - "60006:60006"
     env_file:
       - .env
     environment:
-      # webpack + @fluentui needs more heap than Node's default 2 GB
       NODE_OPTIONS: "--max-old-space-size=4096"
     volumes:
       - ./Frontend/src:/app/src
       - ./Frontend/tools:/app/tools
       - ./Frontend/Package:/app/Package
-      # The manifest-generator writes the .nupkg into the manifest-pkg volume.
-      # Webpack serves it from /manifests_new → Backend/bin/Debug/
+      # Host-installed node_modules. Run `npm ci` in Frontend/ first.
+      - ./Frontend/node_modules:/app/node_modules
+      - ./Frontend/package.json:/app/package.json:ro
+      - ./Frontend/package-lock.json:/app/package-lock.json:ro
       - manifest-pkg:/app/../Backend/bin/Debug:ro
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:60006/',r=>{r.resume();process.exit(r.statusCode<400?0:1)}).on('error',()=>process.exit(1))"]
@@ -159,8 +202,6 @@ services:
     depends_on:
       manifest-generator:
         condition: service_completed_successfully
-      frontend:
-        condition: service_healthy
 
 volumes:
   manifest-pkg:

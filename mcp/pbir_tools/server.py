@@ -17,8 +17,10 @@ Environment:
 """
 
 import os
+import shlex
 import shutil
 import subprocess
+import sys
 from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
@@ -41,7 +43,6 @@ def _find_pbir() -> str:
     if found:
         return found
     # Check alongside the current Python interpreter (same venv)
-    import sys
     venv_bin = os.path.join(os.path.dirname(sys.executable), "pbir.exe")
     if os.path.isfile(venv_bin):
         return venv_bin
@@ -114,7 +115,6 @@ def pbir_run(
         timeout: Max seconds to wait (default 120).
     """
     # Split respecting quotes — use the shell's own parsing
-    import shlex
     try:
         args = shlex.split(command)
     except ValueError:
@@ -136,7 +136,6 @@ def pbir_help(command: Optional[str] = None) -> str:
     """
     args = ["--help"]
     if command:
-        import shlex
         try:
             parts = shlex.split(command)
         except ValueError:
@@ -334,7 +333,6 @@ def pbir_add(
         data_bindings: Field bindings as list (e.g. ['Values:Sales.Revenue', 'Category:Products.Name']).
         cwd: Working directory.
     """
-    import shlex
     args = ["add"] + shlex.split(object_type) + [path]
     if name:
         args.extend(["-n", name])
@@ -478,7 +476,6 @@ def pbir_visuals(
         force: Add -f flag for bulk operations.
         cwd: Working directory.
     """
-    import shlex
     args = ["visuals", subcommand, path]
     if extra_args:
         try:
@@ -508,7 +505,6 @@ def pbir_pages(
         extra_args: Additional flags as a string (e.g. '--width 1920 --height 1080').
         cwd: Working directory.
     """
-    import shlex
     args = ["pages", subcommand, path]
     if extra_args:
         try:
@@ -535,7 +531,6 @@ def pbir_fields(
         extra_args: Additional flags.
         cwd: Working directory.
     """
-    import shlex
     args = ["fields", path]
     if extra_args:
         try:
@@ -558,7 +553,6 @@ def pbir_filters(
         extra_args: Additional flags.
         cwd: Working directory.
     """
-    import shlex
     args = ["filters", path]
     if extra_args:
         try:
@@ -581,7 +575,6 @@ def pbir_dax(
         extra_args: Additional flags (e.g. '--add "MeasureName" "SUM(Sales[Amount])"').
         cwd: Working directory.
     """
-    import shlex
     args = ["dax", path]
     if extra_args:
         try:
@@ -604,7 +597,6 @@ def pbir_bookmarks(
         extra_args: Additional flags.
         cwd: Working directory.
     """
-    import shlex
     args = ["bookmarks", path]
     if extra_args:
         try:
@@ -627,7 +619,6 @@ def pbir_annotations(
         extra_args: Additional flags.
         cwd: Working directory.
     """
-    import shlex
     args = ["annotations", path]
     if extra_args:
         try:
@@ -656,7 +647,6 @@ def pbir_theme(
         extra_args: Additional flags.
         cwd: Working directory.
     """
-    import shlex
     args = ["theme", subcommand, path]
     if extra_args:
         try:
@@ -679,7 +669,6 @@ def pbir_schema(
         extra_args: Additional arguments.
         cwd: Working directory.
     """
-    import shlex
     args = ["schema", subcommand]
     if extra_args:
         try:
@@ -840,7 +829,6 @@ def pbir_report(
         extra_args: Additional flags (e.g. '--format pbir', '--name "New Name"').
         cwd: Working directory.
     """
-    import shlex
     args = ["report", subcommand, path]
     if extra_args:
         try:
@@ -869,7 +857,6 @@ def pbir_batch(
         root: Report root path for plan/run (e.g. 'Report.Report').
         cwd: Working directory.
     """
-    import shlex
     args = ["batch"]
     try:
         args.extend(shlex.split(action))

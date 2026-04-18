@@ -1,5 +1,6 @@
 import logging
 
+from app.core.service_registry import get_service_registry
 from domain.constants.workload_constants import WorkloadConstants
 from domain.exceptions.exceptions import UnexpectedItemTypeException
 from domain.items.agenthub_item import AgentHubItem
@@ -25,7 +26,6 @@ class ItemFactory:
 
 def get_item_factory() -> ItemFactory:
     """Get the singleton ItemFactory from ServiceRegistry."""
-    from app.core.service_registry import get_service_registry
     try:
         return get_service_registry().get(ItemFactory)
     except KeyError:

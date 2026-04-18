@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useHistory, useRouteMatch } from "react-router-dom";
 import {
     Badge,
@@ -10,6 +10,11 @@ import {
     Body1,
     Caption1,
     Divider,
+    Menu,
+    MenuTrigger,
+    MenuPopover,
+    MenuList,
+    MenuItem,
 } from "@fluentui/react-components";
 import {
     Sparkle24Regular,
@@ -21,6 +26,10 @@ import {
     PeopleTeam20Regular,
     Attach20Regular,
     History20Regular,
+    Dismiss16Regular,
+    DocumentPdf20Regular,
+    Image20Regular,
+    Document20Regular,
     Flash20Regular,
     ShieldCheckmark20Regular,
     Warning20Regular,
@@ -41,8 +50,28 @@ import ReactFlow, {
 } from "reactflow";
 import "reactflow/dist/style.css";
 import { WorkloadClientAPI } from "@ms-fabric/workload-client";
-import { callAuthAcquireAccessToken } from "../../controller/AgentHubController";
+import { callAuthAcquireAccessToken, callDatahubOpen } from "../../controller/AgentHubController";
 import * as api from "../../controller/AgentHubApi";
+
+// Common Fabric data item types surfaced in the Datahub item picker.
+// The picker itself will show workspace navigation so any item the user can
+// reach is pickable; this just restricts the initial filter.
+const FABRIC_PICKER_SUPPORTED_TYPES = [
+    "Lakehouse",
+    "Warehouse",
+    "KustoEventHouse",
+    "KustoDatabase",
+    "SemanticModel",
+    "Notebook",
+    "SynapseNotebook",
+    "Pipeline",
+    "DataflowFabric",
+    "SparkJobDefinition",
+    "Report",
+    "EventStream",
+    "SqlAnalyticsEndpoint",
+    "SQLDbNative",
+] as any;
 
 interface OrchestratorPageProps {
     workloadClient: WorkloadClientAPI;
@@ -166,6 +195,41 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
     const [approving, setApproving] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
+    // Attached files. Sent to the backend as a structured `attachments`
+    // array alongside the prompt so multimodal models (GPT-4o via Copilot
+    // Chat API) can see images directly, and the server can extract text
+    // from PDFs. For each kind:
+    //   - text:  `content` is the raw UTF-8 string.
+    //   - image: `content` is a data URI (`data:image/...;base64,…`).
+    //   - pdf:   `content` is a data URI (`data:application/pdf;base64,…`).
+    const fileInputRef = useRef<HTMLInputElement | null>(null);
+    type AttachmentKind = "text" | "image" | "pdf";
+    interface UiAttachment {
+        name: string;
+        size: number;
+        kind: AttachmentKind;
+        mime: string;
+        content: string;
+        /** Object URL for thumbnail (images only); revoked on removal. */
+        previewUrl?: string;
+    }
+    const [attachedFiles, setAttachedFiles] = useState<UiAttachment[]>([]);
+    const [uploadError, setUploadError] = useState<string | null>(null);
+
+    // Recent prompts popover. We fetch on first open (cheap, ~1 roundtrip to
+    // /api/sessions) and cache in state for the rest of the component's life.
+    // Selecting a prompt only populates the textarea — it does NOT re-apply
+    // the old session's workspace/toggles/attachments, because users almost
+    // always want to tweak the prompt before submitting.
+    const recentBtnRef = useRef<HTMLButtonElement | null>(null);
+    const [recentOpen, setRecentOpen] = useState(false);
+    const [recentPrompts, setRecentPrompts] = useState<
+        { prompt: string; createdAt: string; workspace?: string }[] | null
+    >(null);
+    const [recentLoading, setRecentLoading] = useState(false);
+    const [recentError, setRecentError] = useState<string | null>(null);
+    const [recentIndex, setRecentIndex] = useState(0);
+
     // Workspace selection
     const [workspaces, setWorkspaces] = useState<{ id: string; name: string }[]>([]);
     const [selectedWorkspace, setSelectedWorkspace] = useState("");
@@ -179,7 +243,15 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
     const [branchName, setBranchName] = useState("agent/sales-ingestion-pipeline");
 
     // Context pills (Fabric items + workspaces attached to the prompt)
-    const [contextItems, setContextItems] = useState<{ name: string; type: "lakehouse" | "warehouse" | "workspace" }[]>([]);
+    // `type` is the Fabric item type string (e.g. "Lakehouse", "Warehouse",
+    // "Notebook") or the special "workspace" marker. `id` / `workspaceId` are
+    // carried through to the backend so plan steps can resolve the item.
+    const [contextItems, setContextItems] = useState<Array<{
+        name: string;
+        type: string;
+        id?: string;
+        workspaceId?: string;
+    }>>([]);
 
     const history = useHistory();
     const match = useRouteMatch();
@@ -234,6 +306,178 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
         }
     }
 
+    // Per-file cap. Applies to raw file size for binary (images/PDFs) and
+    // to encoded-byte length for text. The backend enforces a matching cap.
+    const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10 MB
+    const MAX_TOTAL_BYTES = 25 * 1024 * 1024; // 25 MB combined
+
+    // ── Recent prompts ────────────────────────────────────────────────
+    async function loadRecentPrompts() {
+        if (!githubToken) {
+            setRecentPrompts([]);
+            return;
+        }
+        setRecentLoading(true);
+        setRecentError(null);
+        try {
+            const sessions: any[] = await api.listSessions({ githubToken });
+            // Dedupe by prompt text (keep most recent), cap at 10.
+            const seen = new Set<string>();
+            const result: { prompt: string; createdAt: string; workspace?: string }[] = [];
+            for (const s of sessions) {
+                const p: string = (s.task_description || "").trim();
+                if (!p || seen.has(p)) continue;
+                seen.add(p);
+                result.push({
+                    prompt: p,
+                    createdAt: s.created_at || "",
+                    workspace: s.context?.workspace_name,
+                });
+                if (result.length >= 10) break;
+            }
+            setRecentPrompts(result);
+        } catch (e: any) {
+            setRecentError(e.message || "Failed to load recent prompts.");
+            setRecentPrompts([]);
+        } finally {
+            setRecentLoading(false);
+        }
+    }
+
+    function openRecentPopover() {
+        setRecentIndex(0);
+        setRecentOpen(true);
+        if (recentPrompts === null) loadRecentPrompts();
+    }
+
+    function pickRecentPrompt(prompt: string) {
+        setTaskText(prompt);
+        setRecentOpen(false);
+    }
+
+    // Close on outside click / Escape.
+    useEffect(() => {
+        if (!recentOpen) return;
+        function onDown(e: MouseEvent) {
+            const t = e.target as Node;
+            if (recentBtnRef.current?.contains(t)) return;
+            const popover = document.getElementById("recent-prompts-popover");
+            if (popover?.contains(t)) return;
+            setRecentOpen(false);
+        }
+        function onKey(e: KeyboardEvent) {
+            if (e.key === "Escape") { setRecentOpen(false); return; }
+            const n = recentPrompts?.length ?? 0;
+            if (!n) return;
+            if (e.key === "ArrowDown") { e.preventDefault(); setRecentIndex(i => (i + 1) % n); }
+            else if (e.key === "ArrowUp") { e.preventDefault(); setRecentIndex(i => (i - 1 + n) % n); }
+            else if (e.key === "Enter") {
+                e.preventDefault();
+                const p = recentPrompts?.[recentIndex];
+                if (p) pickRecentPrompt(p.prompt);
+            }
+        }
+        document.addEventListener("mousedown", onDown);
+        document.addEventListener("keydown", onKey);
+        return () => {
+            document.removeEventListener("mousedown", onDown);
+            document.removeEventListener("keydown", onKey);
+        };
+    }, [recentOpen, recentPrompts, recentIndex]);
+
+    function formatRelativeTime(iso: string): string {
+        if (!iso) return "";
+        const t = new Date(iso).getTime();
+        if (!t) return "";
+        const diff = Date.now() - t;
+        const m = Math.floor(diff / 60000);
+        if (m < 1) return "just now";
+        if (m < 60) return `${m}m ago`;
+        const h = Math.floor(m / 60);
+        if (h < 24) return `${h}h ago`;
+        const d = Math.floor(h / 24);
+        if (d < 7) return `${d}d ago`;
+        return new Date(iso).toLocaleDateString();
+    }
+
+    function classifyFile(f: File): { kind: AttachmentKind; mime: string } {
+        const mime = f.type || "";
+        const name = f.name.toLowerCase();
+        if (mime.startsWith("image/")) return { kind: "image", mime };
+        if (mime === "application/pdf" || name.endsWith(".pdf")) {
+            return { kind: "pdf", mime: "application/pdf" };
+        }
+        // Anything else — treat as text. Final read-as-text attempt will
+        // surface an error if the file isn't valid UTF-8.
+        return { kind: "text", mime: mime || "text/plain" };
+    }
+
+    function readAsDataUrl(f: File): Promise<string> {
+        return new Promise((resolve, reject) => {
+            const r = new FileReader();
+            r.onerror = () => reject(new Error("read error"));
+            r.onload = () => resolve(String(r.result || ""));
+            r.readAsDataURL(f);
+        });
+    }
+
+    async function handleUploadFile(e: React.ChangeEvent<HTMLInputElement>) {
+        const input = e.target;
+        const files = Array.from(input.files || []);
+        input.value = ""; // allow re-selecting the same file later
+        if (!files.length) return;
+        setUploadError(null);
+        const accepted: UiAttachment[] = [];
+        let runningTotal = attachedFiles.reduce((acc, a) => acc + a.size, 0);
+        for (const f of files) {
+            if (f.size > MAX_FILE_BYTES) {
+                setUploadError(`"${f.name}" is ${(f.size / (1024 * 1024)).toFixed(1)} MB — max is ${MAX_FILE_BYTES / (1024 * 1024)} MB per file.`);
+                continue;
+            }
+            if (runningTotal + f.size > MAX_TOTAL_BYTES) {
+                setUploadError(`Adding "${f.name}" would exceed the ${MAX_TOTAL_BYTES / (1024 * 1024)} MB total attachment limit.`);
+                continue;
+            }
+            const { kind, mime } = classifyFile(f);
+            try {
+                if (kind === "text") {
+                    const content = await f.text();
+                    accepted.push({ name: f.name, size: f.size, kind, mime, content });
+                } else {
+                    const dataUrl = await readAsDataUrl(f);
+                    const previewUrl = kind === "image" ? URL.createObjectURL(f) : undefined;
+                    accepted.push({ name: f.name, size: f.size, kind, mime, content: dataUrl, previewUrl });
+                }
+                runningTotal += f.size;
+            } catch {
+                setUploadError(`Could not read "${f.name}".`);
+            }
+        }
+        if (accepted.length) {
+            setAttachedFiles(prev => [...prev, ...accepted]);
+        }
+    }
+
+    function removeAttachedFile(name: string) {
+        setAttachedFiles(prev => {
+            const target = prev.find(f => f.name === name);
+            if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl);
+            return prev.filter(f => f.name !== name);
+        });
+    }
+
+    // Revoke preview object URLs on unmount.
+    useEffect(() => {
+        return () => {
+            attachedFiles.forEach(f => {
+                if (f.previewUrl) URL.revokeObjectURL(f.previewUrl);
+            });
+        };
+    // We intentionally only revoke on unmount, not on every change — the
+    // remove-file path already revokes individually.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
     async function handleGeneratePlan() {
         if (!taskText.trim() || !selectedWorkspace) return;
         setPlanning(true);
@@ -242,6 +486,15 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
         try {
             const fabricToken = await getFabricToken();
             const wsName = workspaces.find(w => w.id === selectedWorkspace)?.name || selectedWorkspace;
+            // Attachments go as a structured array; the backend extracts PDF
+            // text, inlines text files into the prompt, and passes images to
+            // the vision model as multi-part image_url content parts.
+            const apiAttachments = attachedFiles.map(f => ({
+                name: f.name,
+                kind: f.kind,
+                mime: f.mime,
+                content: f.content,
+            }));
             const job = await api.createSession(
                 taskText, selectedWorkspace,
                 {
@@ -253,6 +506,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                     context_items: contextItems,
                 },
                 { githubToken, fabricToken },
+                apiAttachments,
             );
             setSessionId(job.id);
             setPlan(job.plan);
@@ -286,6 +540,40 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
 
     function removeContext(name: string) {
         setContextItems(prev => prev.filter(c => c.name !== name));
+    }
+
+    async function addFabricItem() {
+        try {
+            const picked = await callDatahubOpen(
+                FABRIC_PICKER_SUPPORTED_TYPES,
+                "Select a Fabric item to attach as context",
+                /* multiSelectionEnabled */ false,
+                workloadClient,
+                /* workspaceNavigationEnabled */ true,
+            );
+            if (!picked) return; // user cancelled
+            setContextItems(prev => {
+                if (prev.some(c => c.id === picked.id && c.type !== "workspace")) return prev;
+                return [
+                    ...prev,
+                    {
+                        name: picked.displayName || picked.id,
+                        type: String(picked.type || "item"),
+                        id: picked.id,
+                        workspaceId: picked.workspaceId,
+                    },
+                ];
+            });
+        } catch (e) {
+            console.warn("Datahub picker failed:", e);
+        }
+    }
+
+    function addWorkspaceContext(ws: { id: string; name: string }) {
+        setContextItems(prev => {
+            if (prev.some(c => c.type === "workspace" && c.id === ws.id)) return prev;
+            return [...prev, { name: ws.name, type: "workspace", id: ws.id }];
+        });
     }
 
     const { nodes, edges } = buildGraph(plan);
@@ -323,44 +611,126 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
 
                             {/* Context pills */}
                             <div className="composer-pills">
-                                {contextItems.map(item => (
-                                    <span key={item.name} className={`ctx-pill ctx-pill--${item.type}`}>
-                                        {item.type === "lakehouse" && <Database20Regular />}
-                                        {item.type === "warehouse" && <BuildingFactory20Regular />}
-                                        {item.type === "workspace" && <PeopleTeam20Regular />}
-                                        {item.name}
-                                        <button
-                                            type="button"
-                                            className="ctx-pill-close"
-                                            onClick={() => removeContext(item.name)}
-                                            aria-label={`Remove ${item.name}`}
+                                {contextItems.map(item => {
+                                    const isWorkspace = item.type === "workspace";
+                                    const isLakehouse = item.type === "lakehouse" || item.type === "Lakehouse";
+                                    const isWarehouse = item.type === "warehouse" || item.type === "Warehouse";
+                                    const pillVariant = isWorkspace
+                                        ? "workspace"
+                                        : isLakehouse
+                                            ? "lakehouse"
+                                            : isWarehouse
+                                                ? "warehouse"
+                                                : "item";
+                                    return (
+                                        <span
+                                            key={`${item.type}:${item.id || item.name}`}
+                                            className={`ctx-pill ctx-pill--${pillVariant}`}
+                                            title={item.type !== pillVariant ? `${item.name} · ${item.type}` : item.name}
                                         >
-                                            <Dismiss24Regular />
-                                        </button>
-                                    </span>
-                                ))}
+                                            {isWorkspace
+                                                ? <PeopleTeam20Regular />
+                                                : isWarehouse
+                                                    ? <BuildingFactory20Regular />
+                                                    : <Database20Regular />}
+                                            {item.name}
+                                            <button
+                                                type="button"
+                                                className="ctx-pill-close"
+                                                onClick={() => removeContext(item.name)}
+                                                aria-label={`Remove ${item.name}`}
+                                            >
+                                                <Dismiss24Regular />
+                                            </button>
+                                        </span>
+                                    );
+                                })}
                                 <button
                                     type="button"
                                     className="ctx-pill-add"
-                                    onClick={() => setContextItems(prev => [
-                                        ...prev,
-                                        { name: `item-${prev.length + 1}`, type: "lakehouse" },
-                                    ])}
+                                    onClick={addFabricItem}
                                 >
                                     <Add20Regular /> Add Fabric item
                                 </button>
                                 <span className="ctx-divider" />
-                                <button
-                                    type="button"
-                                    className="ctx-pill-add"
-                                    onClick={() => setContextItems(prev => [
-                                        ...prev,
-                                        { name: `workspace-${prev.length + 1}`, type: "workspace" },
-                                    ])}
-                                >
-                                    <Add20Regular /> Add workspace
-                                </button>
+                                <Menu>
+                                    <MenuTrigger disableButtonEnhancement>
+                                        <button type="button" className="ctx-pill-add">
+                                            <Add20Regular /> Add workspace
+                                        </button>
+                                    </MenuTrigger>
+                                    <MenuPopover>
+                                        <MenuList>
+                                            {workspaces.length === 0 && (
+                                                <MenuItem disabled>
+                                                    {loadingWorkspaces ? "Loading workspaces…" : "No workspaces available"}
+                                                </MenuItem>
+                                            )}
+                                            {workspaces.map(w => {
+                                                const alreadyAdded = contextItems.some(
+                                                    c => c.type === "workspace" && c.id === w.id,
+                                                );
+                                                return (
+                                                    <MenuItem
+                                                        key={w.id}
+                                                        disabled={alreadyAdded}
+                                                        onClick={() => addWorkspaceContext(w)}
+                                                    >
+                                                        {w.name}
+                                                    </MenuItem>
+                                                );
+                                            })}
+                                        </MenuList>
+                                    </MenuPopover>
+                                </Menu>
                             </div>
+
+                            {(attachedFiles.length > 0 || uploadError) && (
+                                <div className="composer-attachments">
+                                    {attachedFiles.map(f => {
+                                        const sizeLabel = f.size > 1024 * 1024
+                                            ? `${(f.size / (1024 * 1024)).toFixed(1)} MB`
+                                            : `${(f.size / 1024).toFixed(1)} KB`;
+                                        const kindClass =
+                                            f.kind === "image" ? "ctx-pill--image"
+                                            : f.kind === "pdf" ? "ctx-pill--pdf"
+                                            : "ctx-pill--attachment";
+                                        return (
+                                            <span
+                                                key={f.name}
+                                                className={`ctx-pill ${kindClass}`}
+                                                title={`${f.name} · ${sizeLabel}`}
+                                            >
+                                                {f.kind === "image" && f.previewUrl ? (
+                                                    <img
+                                                        src={f.previewUrl}
+                                                        alt=""
+                                                        className="ctx-pill-thumb"
+                                                    />
+                                                ) : f.kind === "pdf" ? (
+                                                    <DocumentPdf20Regular />
+                                                ) : f.kind === "image" ? (
+                                                    <Image20Regular />
+                                                ) : (
+                                                    <Document20Regular />
+                                                )}
+                                                <span className="ctx-pill-name">{f.name}</span>
+                                                <button
+                                                    type="button"
+                                                    className="ctx-pill-close"
+                                                    onClick={() => removeAttachedFile(f.name)}
+                                                    aria-label={`Remove ${f.name}`}
+                                                >
+                                                    <Dismiss16Regular />
+                                                </button>
+                                            </span>
+                                        );
+                                    })}
+                                    {uploadError && (
+                                        <span className="composer-upload-error">{uploadError}</span>
+                                    )}
+                                </div>
+                            )}
 
                             <div className="composer-actionbar">
                                 {/* Toggles row */}
@@ -437,7 +807,21 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
 
                                 {/* Destination workspace (always shown) */}
                                 <div className="branchpanel-field branchpanel-field--full">
-                                    <label>DESTINATION WORKSPACE</label>
+                                    <label>
+                                        DESTINATION WORKSPACE
+                                        <button
+                                            type="button"
+                                            className="workspace-refresh-btn"
+                                            onClick={() => loadWorkspaces(true)}
+                                            disabled={loadingWorkspaces}
+                                            title={workspacesCachedAt
+                                                ? `Updated ${formatCacheAge(workspacesCachedAt)} — click to refresh`
+                                                : "Refresh workspaces"}
+                                            aria-label="Refresh workspaces"
+                                        >
+                                            <ArrowClockwise16Regular className={loadingWorkspaces ? "spin" : undefined} />
+                                        </button>
+                                    </label>
                                     <div className="select-wrap">
                                         <PeopleTeam20Regular className="select-leadicon" />
                                         {loadingWorkspaces ? (
@@ -459,12 +843,94 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                                 {/* Actions row */}
                                 <div className="composer-actions">
                                     <div className="composer-actions-left">
-                                        <button type="button" className="composer-link-btn">
-                                            <Attach20Regular /> Upload file
+                                        <input
+                                            ref={fileInputRef}
+                                            type="file"
+                                            multiple
+                                            accept="image/*,application/pdf,.txt,.md,.json,.yaml,.yml,.csv,.tsv,.log,.sql,.py,.js,.ts,.tsx,.jsx,.xml,.html,.cfg,.ini,.toml,text/*"
+                                            style={{ display: "none" }}
+                                            onChange={handleUploadFile}
+                                        />
+                                        <button
+                                            type="button"
+                                            className="composer-link-btn"
+                                            onClick={() => fileInputRef.current?.click()}
+                                            title="Attach images, PDFs, or text files (10 MB per file, 25 MB total)"
+                                        >
+                                            <Attach20Regular /> Attach files
                                         </button>
-                                        <button type="button" className="composer-link-btn">
-                                            <History20Regular /> Recent prompts
-                                        </button>
+                                        <div className="recent-prompts-wrap">
+                                            <button
+                                                ref={recentBtnRef}
+                                                type="button"
+                                                className={`composer-link-btn${recentOpen ? " is-active" : ""}`}
+                                                onClick={() => recentOpen ? setRecentOpen(false) : openRecentPopover()}
+                                                aria-haspopup="listbox"
+                                                aria-expanded={recentOpen}
+                                            >
+                                                <History20Regular /> Recent prompts
+                                            </button>
+                                            {recentOpen && (
+                                                <div
+                                                    id="recent-prompts-popover"
+                                                    className="recent-prompts-popover"
+                                                    role="listbox"
+                                                >
+                                                    {recentLoading && (
+                                                        <div className="recent-prompts-empty">
+                                                            <Spinner size="tiny" /> <span>Loading…</span>
+                                                        </div>
+                                                    )}
+                                                    {!recentLoading && recentError && (
+                                                        <div className="recent-prompts-empty recent-prompts-error">
+                                                            {recentError}
+                                                        </div>
+                                                    )}
+                                                    {!recentLoading && !recentError && recentPrompts && recentPrompts.length === 0 && (
+                                                        <div className="recent-prompts-empty">
+                                                            No previous tasks yet.<br />
+                                                            Your prompts will appear here after your first session.
+                                                        </div>
+                                                    )}
+                                                    {!recentLoading && !recentError && recentPrompts && recentPrompts.length > 0 && (
+                                                        <>
+                                                            <div className="recent-prompts-header">Click to reuse — you can edit before sending</div>
+                                                            <ul className="recent-prompts-list">
+                                                                {recentPrompts.map((p, i) => (
+                                                                    <li
+                                                                        key={`${p.createdAt}-${i}`}
+                                                                        role="option"
+                                                                        aria-selected={i === recentIndex}
+                                                                        className={`recent-prompts-item${i === recentIndex ? " is-active" : ""}`}
+                                                                        onMouseEnter={() => setRecentIndex(i)}
+                                                                        onClick={() => pickRecentPrompt(p.prompt)}
+                                                                        title={p.prompt}
+                                                                    >
+                                                                        <div className="recent-prompts-text">{p.prompt}</div>
+                                                                        <div className="recent-prompts-meta">
+                                                                            <span>{formatRelativeTime(p.createdAt)}</span>
+                                                                            {p.workspace && <span className="recent-prompts-ws">· {p.workspace}</span>}
+                                                                        </div>
+                                                                    </li>
+                                                                ))}
+                                                            </ul>
+                                                            <div className="recent-prompts-footer">
+                                                                <button
+                                                                    type="button"
+                                                                    className="recent-prompts-viewall"
+                                                                    onClick={() => {
+                                                                        setRecentOpen(false);
+                                                                        history.push(match.url.replace(/\/orchestrator$/, "/home"));
+                                                                    }}
+                                                                >
+                                                                    View all in Sessions →
+                                                                </button>
+                                                            </div>
+                                                        </>
+                                                    )}
+                                                </div>
+                                            )}
+                                        </div>
                                     </div>
                                     <Button
                                         appearance="primary"

@@ -21,12 +21,30 @@ else
 fi
 
 # ── Clean up previous run ────────────────────────────────────
-# Stop containers and remove the manifest volume so it gets regenerated
-docker compose down -v 2>/dev/null || true
+# Stop containers and regenerate the manifest volume.
+docker compose --profile prod --profile dev down 2>/dev/null || true
+docker volume rm developerhub_manifest-pkg 2>/dev/null || true
+
+# ── Frontend dev-mode host-install guard ────────────────────
+# When running `./start.sh dev`, we need node_modules on the host
+# (bind-mounted into the frontend-dev container).
+if [ "${1:-}" = "dev" ]; then
+  export COMPOSE_PROFILES=dev
+  shift
+  if [ ! -d Frontend/node_modules ] || [ Frontend/package-lock.json -nt Frontend/node_modules ]; then
+    if command -v npm &>/dev/null; then
+      echo "📦 Installing frontend deps on host (dev mode)..."
+      (cd Frontend && npm ci --no-audit --no-fund)
+    else
+      echo "❌ Dev mode requires Node/npm on the host. Install Node 20+ or use prod mode."
+      exit 1
+    fi
+  fi
+  echo "🔧 Launching in DEV mode (webpack-dev-server + HMR)"
+else
+  echo "🚀 Launching in PROD mode (nginx, static bundle, no host Node required)"
+  echo "   (use './start.sh dev' for HMR during active development)"
+fi
 
 # ── Launch all services ─────────────────────────────────────
-# --build: ensure images reflect any Dockerfile / non-mounted source changes.
-# Manifest XML templates are bind-mounted (see docker-compose.yaml), so
-# editing WorkloadManifest.xml / Item1.xml is picked up without a rebuild —
-# but --build is cheap thanks to layer caching and covers everything else.
 exec docker compose up --build --abort-on-container-failure "$@"

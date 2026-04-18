@@ -8,6 +8,7 @@ from fabric_api.models.job_instance_status import JobInstanceStatus
 from tests.constants import ExpectedResponses
 from tests.test_fixtures import TestFixtures
 from tests.test_helpers import TestHelpers
+from domain.exceptions.exceptions import AuthenticationException
 
 
 @pytest.mark.unit
@@ -36,7 +37,6 @@ class TestJobsAPI:
         headers = {"x_ms_client_tenant_id": str(TestFixtures.TENANT_ID)}
 
         # Configure mock to raise exception for missing auth
-        from domain.exceptions.exceptions import AuthenticationException
         mock_authentication_service.authenticate_control_plane_call.side_effect = AuthenticationException("Missing authorization header")
 
         response = client.post(
@@ -97,7 +97,6 @@ class TestJobsAPI:
         """Test getting job state without authorization."""
         headers = {"x_ms_client_tenant_id": str(TestFixtures.TENANT_ID)}
 
-        from domain.exceptions.exceptions import AuthenticationException
         mock_authentication_service.authenticate_control_plane_call.side_effect = AuthenticationException("Missing authorization")
 
         response = client.get(
@@ -127,7 +126,6 @@ class TestJobsAPI:
         """Test cancelling job without tenant ID."""
         headers = {"authorization": "Bearer token"}
 
-        from domain.exceptions.exceptions import AuthenticationException
         mock_authentication_service.authenticate_control_plane_call.side_effect = AuthenticationException("tenant_id header is missing")
 
         response = client.post(

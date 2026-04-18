@@ -6,3 +6,16 @@
 # Local virtualenv — we want the Dockerfile to build a fresh one inside the image
 **/.venv
 **/*.egg-info
+# Frontend build artifacts — regenerated inside the container; copying
+# them from the host into the image layer adds 100s+ to `exporting layers`
+# because they're hundreds of MB of small files.
+**/.webpack-cache
+**/dist
+Frontend/tools/dist
+# IDE / OS noise
+**/.DS_Store
+**/.vscode
+**/.idea
+# Tests & docs aren't needed in the runtime image
+**/__tests__
+**/*.log

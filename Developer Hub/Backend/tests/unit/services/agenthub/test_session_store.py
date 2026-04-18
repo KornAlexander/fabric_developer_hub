@@ -19,7 +19,8 @@ from domain.models.agent_models import (
     PlannedAgent,
     UserAgentConfig,
 )
-from services.agenthub import session_store
+from services.agenthub import _db, session_store
+import json as _json
 
 
 @pytest.fixture(autouse=True)
@@ -27,10 +28,10 @@ def _isolated_db(tmp_path, monkeypatch):
     """Each test gets a fresh sqlite file."""
     db_path = tmp_path / "agenthub.db"
     monkeypatch.setenv("AGENTHUB_DB_PATH", str(db_path))
-    monkeypatch.setattr(session_store, "_DB_PATH", None)
+    monkeypatch.setattr(_db, "_DB_PATH", None)
     session_store.init_db()
     yield
-    monkeypatch.setattr(session_store, "_DB_PATH", None)
+    monkeypatch.setattr(_db, "_DB_PATH", None)
 
 
 def _make_job(job_id: str = "j-1", user_id: str = "u-1",
@@ -191,7 +192,6 @@ def test_log_audit_and_retrieve_in_chronological_order() -> None:
     assert len(rows) == 2
     assert [r["tool_name"] for r in rows] == ["fabric_list_workspaces", "fabric_create_item"]
     # tool_args is JSON-serialised
-    import json as _json
     assert _json.loads(rows[1]["tool_args"]) == {"display_name": "lh"}
 
 

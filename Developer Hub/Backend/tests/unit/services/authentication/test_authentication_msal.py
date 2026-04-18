@@ -13,6 +13,7 @@ from domain.exceptions.exceptions import (
 )
 from domain.models.authentication_models import AuthorizationContext
 from services.auth.authentication import AuthenticationService
+import asyncio
 
 
 @pytest.mark.unit
@@ -326,7 +327,6 @@ class TestMSALAppManagement:
             mock_msal.ConfidentialClientApplication.return_value = mock_app
 
             # Simulate concurrent access
-            import asyncio
 
             async def get_app():
                 return service._get_msal_app(tenant_id)

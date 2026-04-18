@@ -12,6 +12,10 @@ from domain.exceptions.exceptions import AuthenticationException
 from domain.models.authentication_models import AuthorizationContext, SubjectAndAppToken
 from services.auth.authentication import AuthenticationService
 from services.auth.open_id_connect_configuration import OpenIdConnectConfiguration
+from app.core.service_registry import ServiceRegistry
+import asyncio
+import threading
+import time
 
 
 @pytest.mark.integration
@@ -21,7 +25,6 @@ class TestAuthenticationServiceIntegration:
 
     def test_service_registry_integration(self, auth_fixtures):
         """Test AuthenticationService integration with ServiceRegistry."""
-        from app.core.service_registry import ServiceRegistry
 
         registry = ServiceRegistry()
         registry.clear()
@@ -238,7 +241,6 @@ class TestErrorRecoveryScenarios:
     @pytest.mark.asyncio
     async def test_service_initialization_under_load(self, auth_fixtures):
         """Test service initialization behavior under load conditions."""
-        import asyncio
 
         async def create_service():
             mock_openid_manager, mock_config_service = auth_fixtures.get_basic_mocks()
@@ -276,8 +278,6 @@ class TestConcurrencyAndThreadSafety:
             mock_msal.ConfidentialClientApplication.return_value = mock_app
 
             # Simulate concurrent access from multiple threads
-            import threading
-            import time
 
             apps_retrieved = []
             errors = []
@@ -325,7 +325,6 @@ class TestConcurrencyAndThreadSafety:
             }
             mock_msal.ConfidentialClientApplication.side_effect = tenant_apps.values()
 
-            import asyncio
 
             async def get_app_for_tenant(tenant_id):
                 return service._get_msal_app(tenant_id)

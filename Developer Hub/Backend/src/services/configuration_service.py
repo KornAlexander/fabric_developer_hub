@@ -6,6 +6,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from app.core.service_registry import get_service_registry
+
 # .env is loaded once at process start by src/bootstrap.py, which every
 # entrypoint (main.py, tests/conftest.py) imports first. Do not re-load here.
 
@@ -439,8 +441,6 @@ def get_configuration_service() -> ConfigurationService:
     Get the ConfigurationService instance from ServiceRegistry.
     This ensures proper lifecycle management and dependency injection.
     """
-    from app.core.service_registry import get_service_registry
-
     registry = get_service_registry()
 
     # Check if already registered

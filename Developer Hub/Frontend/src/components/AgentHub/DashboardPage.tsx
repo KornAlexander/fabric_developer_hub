@@ -2,15 +2,15 @@ import React, { useEffect, useState } from "react";
 import { useHistory, useRouteMatch } from "react-router-dom";
 import {
     Button,
-    Spinner,
     Body1,
+    Spinner,
     MessageBar,
     MessageBarBody,
     MessageBarTitle,
     MessageBarActions,
 } from "@fluentui/react-components";
 import {
-    Add24Regular,
+    Add20Regular,
     ArrowRight16Regular,
     ArrowSync24Regular,
     PlugConnected24Regular,
@@ -26,11 +26,13 @@ import {
     Warning20Regular,
     Play16Regular,
     ArrowClockwise16Regular,
+    Dismiss16Regular,
 } from "@fluentui/react-icons";
 import { WorkloadClientAPI } from "@ms-fabric/workload-client";
 import * as api from "../../controller/AgentHubApi";
 import { callAuthAcquireAccessToken } from "../../controller/AgentHubController";
 import { useItemContext } from "./ItemContext";
+import { readPreloaded, setPreloaded } from "./pagePreloadCache";
 
 interface DashboardPageProps {
     workloadClient: WorkloadClientAPI;
@@ -76,8 +78,13 @@ function statusLabel(status: string): string {
 }
 
 export function DashboardPage({ workloadClient }: DashboardPageProps) {
-    const [jobs, setJobs] = useState<any[]>([]);
-    const [loading, setLoading] = useState(true);
+    // If navTo() prefetched the session list before route-changing, use it
+    // directly so the page mounts fully populated with no skeleton flicker.
+    const preloaded = readPreloaded<any[]>("sessions");
+    const [jobs, setJobs] = useState<any[]>(preloaded ?? []);
+    const [loading, setLoading] = useState(preloaded === undefined);
+    const [slowLoading, setSlowLoading] = useState(false);
+    const [loadError, setLoadError] = useState<string | null>(null);
     const [creating, setCreating] = useState(false);
     const history = useHistory();
     const match = useRouteMatch();
@@ -86,12 +93,17 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
     const githubToken = sessionStorage.getItem("github_token") || "";
 
     useEffect(() => {
+        // If we already have preloaded data, skip the initial fetch.
+        if (!loading) return;
         loadJobs();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     async function loadJobs() {
         setLoading(true);
+        setSlowLoading(false);
+        setLoadError(null);
+        const slowTimer = window.setTimeout(() => setSlowLoading(true), 1200);
         try {
             // Need the Fabric token so the backend can identify the user by
             // UPN (same key sessions were written under). Without it the
@@ -105,10 +117,25 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
             }
             const data = await api.listSessions({ githubToken, fabricToken });
             setJobs(data || []);
-        } catch (e) {
+            setPreloaded("sessions", data || []);
+        } catch (e: any) {
             console.error("Failed to load jobs:", e);
+            // Surface the error instead of silently showing an empty state —
+            // otherwise a dead backend looks identical to a user with no
+            // sessions, which is confusing.
+            const msg = e?.message || String(e) || "Unknown error";
+            // TypeError: Failed to fetch → classic offline-backend signature.
+            const isNetwork = /failed to fetch|networkerror|load failed/i.test(msg);
+            setLoadError(
+                isNetwork
+                    ? "Can't reach the Developer Hub backend. Check that it's running, then retry."
+                    : `Failed to load sessions: ${msg}`,
+            );
+            setJobs([]);
         } finally {
+            window.clearTimeout(slowTimer);
             setLoading(false);
+            setSlowLoading(false);
         }
     }
 
@@ -126,6 +153,36 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
         history.push(match.url.replace(/\/home$/, "/orchestrator"));
     }
 
+    async function dismissSession(job: any) {
+        const isRunning = job.status === "running";
+        const verb = isRunning ? "cancel" : "delete";
+        const ok = window.confirm(
+            isRunning
+                ? `Cancel "${job.task_description?.slice(0, 80) || "this session"}"? Running agents will be stopped.`
+                : `Delete "${job.task_description?.slice(0, 80) || "this session"}"? This cannot be undone.`,
+        );
+        if (!ok) return;
+
+        // Optimistic removal — we'll restore on failure.
+        const snapshot = jobs;
+        setJobs(prev => prev.filter(j => j.id !== job.id));
+        setPreloaded("sessions", snapshot.filter(j => j.id !== job.id));
+
+        try {
+            let fabricToken: string | undefined;
+            try {
+                const tok = await callAuthAcquireAccessToken(workloadClient, undefined);
+                fabricToken = tok?.token;
+            } catch { /* best-effort */ }
+            await api.cancelSession(job.id, { githubToken, fabricToken });
+        } catch (e: any) {
+            console.error(`Failed to ${verb} session:`, e);
+            setJobs(snapshot);
+            setPreloaded("sessions", snapshot);
+            window.alert(`Could not ${verb} session: ${e?.message || e}`);
+        }
+    }
+
     return (
         <div className="sessions-page">
             {/* Page header */}
@@ -137,7 +194,7 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
                     </p>
                 </div>
                 <button className="sessions-cta" onClick={gotoNew}>
-                    <Add24Regular />
+                    <Add20Regular />
                     <span>Create New Job</span>
                 </button>
             </div>
@@ -195,7 +252,50 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
                 </div>
 
                 {loading ? (
-                    <div className="sessions-loading"><Spinner label="Loading agents..." /></div>
+                    <div className="agent-cards-scroller" aria-busy="true" aria-label="Loading active agents">
+                        <div className="agent-cards-row">
+                            {[0, 1, 2].map(i => (
+                                <article key={i} className="session-card session-card--skeleton" aria-hidden="true">
+                                    <header className="session-card-head">
+                                        <div className="session-card-identity">
+                                            <div className="skeleton skeleton-icon" />
+                                            <div className="skeleton-lines">
+                                                <div className="skeleton skeleton-line skeleton-line--title" />
+                                                <div className="skeleton skeleton-line skeleton-line--sub" />
+                                            </div>
+                                        </div>
+                                        <div className="skeleton skeleton-pill" />
+                                    </header>
+                                    <div className="session-card-body">
+                                        <div className="skeleton skeleton-line skeleton-line--eyebrow" />
+                                        <div className="skeleton skeleton-line skeleton-line--goal" />
+                                        <div className="skeleton skeleton-line skeleton-line--goal-short" />
+                                    </div>
+                                    <footer className="session-card-foot">
+                                        <div className="skeleton skeleton-line skeleton-line--meta" />
+                                        <div className="skeleton skeleton-line skeleton-line--action" />
+                                    </footer>
+                                </article>
+                            ))}
+                        </div>
+                        {slowLoading && (
+                            <div className="agents-slow-hint" role="status">
+                                <Spinner size="tiny" />
+                                <span>Still loading—this is taking longer than usual…</span>
+                            </div>
+                        )}
+                    </div>
+                ) : loadError ? (
+                    <div className="sessions-error" role="alert">
+                        <Warning20Regular />
+                        <div className="sessions-error-body">
+                            <div className="sessions-error-title">Couldn't load sessions</div>
+                            <div className="sessions-error-msg">{loadError}</div>
+                        </div>
+                        <Button appearance="primary" size="small" onClick={loadJobs}>
+                            Retry
+                        </Button>
+                    </div>
                 ) : activeJobs.length === 0 ? (
                     <div className="sessions-empty">
                         <Body1>No active agents. Submit a task to get started.</Body1>
@@ -226,12 +326,23 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
                                                     <div className="session-card-role">{agentSubtitle}</div>
                                                 </div>
                                             </div>
-                                            <span className={`status-pill status-pill--${variant}`}>
-                                                {variant === "running" && <span className="status-dot status-dot--running" />}
-                                                {variant === "waiting" && <span className="status-dot status-dot--waiting" />}
-                                                {variant === "error" && <Warning20Regular />}
-                                                <span>{statusLabel(job.status)}</span>
-                                            </span>
+                                            <div className="session-card-head-right">
+                                                <span className={`status-pill status-pill--${variant}`}>
+                                                    {variant === "running" && <span className="status-dot status-dot--running" />}
+                                                    {variant === "waiting" && <span className="status-dot status-dot--waiting" />}
+                                                    {variant === "error" && <Warning20Regular />}
+                                                    <span>{statusLabel(job.status)}</span>
+                                                </span>
+                                                <button
+                                                    type="button"
+                                                    className="session-card-dismiss"
+                                                    aria-label={job.status === "running" ? "Cancel session" : "Delete session"}
+                                                    title={job.status === "running" ? "Cancel session" : "Delete session"}
+                                                    onClick={(e) => { e.stopPropagation(); dismissSession(job); }}
+                                                >
+                                                    <Dismiss16Regular />
+                                                </button>
+                                            </div>
                                         </header>
 
                                         <div className="session-card-body">
@@ -276,7 +387,8 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
                 )}
             </section>
 
-            {/* ── Recent Jobs ── */}
+            {/* ── Recent Jobs ── (hidden while loading so layout doesn't shift) */}
+            {!loading && !loadError && (
             <section className="sessions-section">
                 <h2 className="sessions-h2">Recent Sessions</h2>
                 {completedJobs.length === 0 ? (
@@ -333,6 +445,7 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
                     </div>
                 )}
             </section>
+            )}
         </div>
     );
 }

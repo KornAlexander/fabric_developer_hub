@@ -29,6 +29,7 @@ from services.fabric.item_metadata_store import ItemMetadataStore
 from services.fabric.lakehouse_client_service import LakehouseClientService
 from services.fabric.onelake_client_service import OneLakeClientService
 from services.auth.open_id_connect_configuration import OpenIdConnectConfigurationManager
+from tests.test_helpers import TestHelpers
 
 
 @pytest.fixture(scope="session")
@@ -92,9 +93,6 @@ def mock_authentication_service(mock_auth_context):
 def mock_item_factory():
     """Create a mock item factory."""
     mock_factory = Mock(spec=ItemFactory)
-
-    # Import test helpers here to avoid circular imports
-    from tests.test_helpers import TestHelpers
 
     # Create a default mock item that will be returned
     mock_item = TestHelpers.create_mock_item()

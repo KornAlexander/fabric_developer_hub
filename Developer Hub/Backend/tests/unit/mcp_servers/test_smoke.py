@@ -6,23 +6,25 @@ syntax errors, missing imports) — exactly the failure mode that shipped
 ``semantic_link`` as DOA before the Phase-5 refactor.
 """
 from __future__ import annotations
+from mcp_servers import fabric
+from mcp_servers import semantic_link
+import subprocess
+import sys
+from pathlib import Path
 
 
 def test_fabric_module_imports() -> None:
-    from mcp_servers import fabric
 
     assert fabric.mcp is not None
 
 
 def test_semantic_link_module_imports() -> None:
-    from mcp_servers import semantic_link
 
     assert semantic_link.mcp is not None
 
 
 def test_fabric_tool_count() -> None:
     """Lock the public tool surface so accidental removals are caught."""
-    from mcp_servers import fabric
 
     tool_names = sorted(n for n in dir(fabric) if n.startswith("fabric_"))
     assert len(tool_names) == 9, f"expected 9 fabric_* tools, got {tool_names}"
@@ -35,7 +37,6 @@ def test_semantic_link_tool_count() -> None:
     """Lock the sl_* tool surface — a regression from the FastMCP-signature
     bug would manifest as zero tools registered (because the module crashed
     on import)."""
-    from mcp_servers import semantic_link
 
     tool_names = sorted(n for n in dir(semantic_link) if n.startswith("sl_"))
     assert len(tool_names) == 43, f"expected 43 sl_* tools, got {len(tool_names)}"
@@ -61,9 +62,6 @@ def test_mcp_server_scripts_import_when_spawned_as_subprocess() -> None:
     ``ModuleNotFoundError`` unless the script first inserts ``src/`` on
     ``sys.path``. This test reproduces the exact spawn invocation.
     """
-    import subprocess
-    import sys
-    from pathlib import Path
 
     src_dir = Path(__file__).resolve().parents[3] / "src"
     for script in ("fabric.py", "semantic_link.py"):

@@ -6,6 +6,7 @@ from jose import jwt
 from jose.exceptions import ExpiredSignatureError, JWTClaimsError, JWTError
 from msal.exceptions import MsalServiceError
 
+from app.core.service_registry import get_service_registry
 from domain.constants.environment_constants import EnvironmentConstants
 from domain.constants.http_constants import AuthorizationSchemes
 from domain.constants.workload_scopes import WorkloadScopes
@@ -592,7 +593,6 @@ class AuthenticationService:
 
 def get_authentication_service() -> AuthenticationService:
     """Get the singleton AuthenticationService from ServiceRegistry."""
-    from app.core.service_registry import get_service_registry
     try:
         return get_service_registry().get(AuthenticationService)
     except KeyError:

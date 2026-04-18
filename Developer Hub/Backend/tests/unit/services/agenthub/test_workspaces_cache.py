@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from services.agenthub import session_store, workspaces_cache
+from services.agenthub import _db, session_store, workspaces_cache
 
 
 pytestmark = [pytest.mark.unit, pytest.mark.services]
@@ -15,10 +15,10 @@ def isolated_db(tmp_path, monkeypatch):
     """Point the store at a per-test SQLite file."""
     db = tmp_path / "agenthub.db"
     monkeypatch.setenv("AGENTHUB_DB_PATH", str(db))
-    monkeypatch.setattr(session_store, "_DB_PATH", None)
+    monkeypatch.setattr(_db, "_DB_PATH", None)
     session_store.init_db()
     yield
-    monkeypatch.setattr(session_store, "_DB_PATH", None)
+    monkeypatch.setattr(_db, "_DB_PATH", None)
 
 
 def test_get_cached_returns_empty_when_no_rows():

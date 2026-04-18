@@ -12,6 +12,8 @@ Run:      python -m mcp.pbi_fixer.server
 
 from __future__ import annotations
 
+import importlib
+import inspect
 import io
 import logging
 from contextlib import redirect_stdout
@@ -52,7 +54,6 @@ def _capture(fn, **kwargs) -> str:
 
 def _import(module_path: str, func_name: str):
     """Lazy-import a function from sempy_labs."""
-    import importlib
     mod = importlib.import_module(module_path)
     return getattr(mod, func_name)
 
@@ -65,7 +66,6 @@ def _build_kwargs(explicit: dict[str, Any]) -> dict[str, Any]:
 def _sm_fix(mod: str, func: str, dataset: str, workspace: str | None, scan_only: bool) -> str:
     """Generic handler for SM fixers that take (dataset|report, workspace, scan_only)."""
     fn = _import(mod, func)
-    import inspect
     first_param = list(inspect.signature(fn).parameters.keys())[0]
     kw: dict[str, Any] = {first_param: dataset, "scan_only": scan_only}
     if workspace:
@@ -525,7 +525,6 @@ def scan_semantic_model(
     for mod, func_name in fixers:
         try:
             fn = _import(mod, func_name)
-            import inspect
             first_param = list(inspect.signature(fn).parameters.keys())[0]
             kw: dict[str, Any] = {first_param: dataset, "scan_only": True}
             if workspace:

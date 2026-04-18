@@ -23,6 +23,8 @@ from fabric_api.models.job_instance_status import JobInstanceStatus
 from fabric_api.models.job_invoke_type import JobInvokeType
 from tests.test_fixtures import TestFixtures
 from tests.test_helpers import TestHelpers
+from domain.items.agenthub_item import AgentHubItem
+from fabric_api.impl.jobs_controller import cleanup_background_tasks
 
 
 @pytest.mark.unit
@@ -127,7 +129,6 @@ class TestJobsController:
         """Test job creation when item doesn't exist."""
         # Arrange
         # Create a real item instance (not a mock) or a partial mock
-        from domain.items.agenthub_item import AgentHubItem
         mock_item = AgentHubItem(mock_authentication_service.authenticate_control_plane_call.return_value)
 
         # Mock the item_metadata_store to simulate item not found
@@ -603,7 +604,6 @@ class TestJobsController:
         _background_tasks.add(task2)
 
         # Act
-        from fabric_api.impl.jobs_controller import cleanup_background_tasks
         await cleanup_background_tasks(timeout=0.1)
 
         # Assert
@@ -626,7 +626,6 @@ class TestJobsController:
         _background_tasks.add(task)
 
         # Act
-        from fabric_api.impl.jobs_controller import cleanup_background_tasks
         await cleanup_background_tasks()
 
         # Assert

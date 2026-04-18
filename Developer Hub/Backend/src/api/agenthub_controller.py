@@ -10,7 +10,9 @@ from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
+from jose import jwt as _jwt
 
+from api import github_chat_controller
 from domain.models.agent_models import (
     AgentConfigRequest,
     ApprovePlanRequest,
@@ -47,7 +49,6 @@ def _user_id_from_request(request: Request) -> str:
     fabric_token = fabric_header.removeprefix("Bearer ").strip()
     if fabric_token:
         try:
-            from jose import jwt as _jwt
             claims = _jwt.get_unverified_claims(fabric_token)
         except Exception:
             claims = None
@@ -69,9 +70,8 @@ def _user_id_from_request(request: Request) -> str:
 
 async def _copilot_token(request: Request) -> str:
     """Get a Copilot token from the GitHub auth header."""
-    from api.github_chat_controller import _extract_github_token, _get_copilot_token
-    github_token = _extract_github_token(request)
-    return await _get_copilot_token(github_token)
+    github_token = github_chat_controller._extract_github_token(request)
+    return await github_chat_controller._get_copilot_token(github_token)
 
 
 async def _mcp_tokens(request: Request) -> dict | None:
@@ -80,18 +80,16 @@ async def _mcp_tokens(request: Request) -> dict | None:
     fabric_token = fabric_header.removeprefix("Bearer ").strip() or None
     if not fabric_token:
         return None
-    from api.github_chat_controller import _acquire_mcp_tokens
-    return await _acquire_mcp_tokens(fabric_token)
+    return await github_chat_controller._acquire_mcp_tokens(fabric_token)
 
 
 # ── Workspace listing ────────────────────────────────────────────────
 
 async def _fetch_and_reconcile_workspaces(user_id: str, mcp_tokens: dict) -> list[dict]:
     """Call Fabric, normalize, and reconcile the per-user workspace cache."""
-    from api.github_chat_controller import _mcp_manager
-    if not _mcp_manager:
+    if not github_chat_controller._mcp_manager:
         raise HTTPException(503, "MCP manager not available")
-    result = await _mcp_manager.call_tool("fabric_list_workspaces", {}, mcp_tokens)
+    result = await github_chat_controller._mcp_manager.call_tool("fabric_list_workspaces", {}, mcp_tokens)
     raw = json.loads(str(result))
     fresh = [
         {"id": w.get("id"), "name": w.get("displayName", w.get("id"))}
@@ -101,9 +99,16 @@ async def _fetch_and_reconcile_workspaces(user_id: str, mcp_tokens: dict) -> lis
     return fresh
 
 
-async def _background_refresh_workspaces(user_id: str, mcp_tokens: dict) -> None:
-    """Best-effort background refresh — never raises into the request."""
+async def _background_refresh_workspaces(user_id: str, fabric_token: str) -> None:
+    """Best-effort background refresh — never raises into the request.
+
+    Does the OBO exchange itself so the /preload request handler can return
+    immediately without blocking the event loop on MSAL.
+    """
     try:
+        mcp_tokens = await github_chat_controller._acquire_mcp_tokens(fabric_token)
+        if not mcp_tokens:
+            return
         await _fetch_and_reconcile_workspaces(user_id, mcp_tokens)
     except Exception:
         logger.warning("Background workspace refresh failed for user=%s", user_id, exc_info=True)
@@ -173,15 +178,18 @@ async def preload_workspaces(request: Request, background_tasks: BackgroundTasks
     """Schedule a background refresh of the user's workspaces.
 
     Called by the frontend right after GitHub auth so the workspace selector
-    is instant on the user's first navigation. Returns immediately.
+    is instant on the user's first navigation. Returns immediately — the
+    OBO exchange happens inside the background task so the event loop is
+    not blocked on MSAL during page load.
     """
     user_id = _user_id_from_request(request)
-    mcp_tokens = await _mcp_tokens(request)
-    if not mcp_tokens:
+    fabric_header = request.headers.get("X-Fabric-Token", "")
+    fabric_token = fabric_header.removeprefix("Bearer ").strip()
+    if not fabric_token:
         # Without a Fabric token we can't fetch — ignore quietly so the call
         # is safe to make unconditionally from the frontend.
         return {"status": "skipped", "reason": "no fabric token"}
-    background_tasks.add_task(_background_refresh_workspaces, user_id, mcp_tokens)
+    background_tasks.add_task(_background_refresh_workspaces, user_id, fabric_token)
     return {"status": "scheduled"}
 
 
@@ -195,6 +203,7 @@ async def create_session(req: CreateJobRequest, request: Request):
 
     plan = await get_orchestrator_engine().generate_plan(
         req.task_description, req.workspace_id, copilot_token, req.context,
+        attachments=req.attachments,
     )
 
     job = Job(
@@ -278,6 +287,7 @@ async def generate_plan_endpoint(req: GeneratePlanRequest, request: Request):
     copilot_token = await _copilot_token(request)
     plan = await get_orchestrator_engine().generate_plan(
         req.task_description, req.workspace_id, copilot_token, req.context,
+        attachments=req.attachments,
     )
     return plan.model_dump(mode="json")
 

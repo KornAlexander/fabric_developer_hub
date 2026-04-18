@@ -1,17 +1,56 @@
-FROM node:20-alpine AS base
+# syntax=docker/dockerfile:1.7
+#
+# Two stages:
+#
+#   dev        — webpack-dev-server with HMR. Requires node_modules on a
+#                bind mount or named volume (populated by the host or by
+#                the `frontend-installer` service in docker-compose.yaml).
+#                Used via `docker compose --profile dev up`.
+#
+#   production — builds a static bundle in a throwaway node stage, then
+#                copies dist/ into nginx:alpine. Final image ~30 MB,
+#                zero host prerequisites, zero Node at runtime.
+#                Used via the default `docker compose up`.
+#
+# ─────────────────────────────────────────────────────────────────────
+# Stage 1: dev image (tiny — just Node + tsconfig, node_modules mounted)
+# ─────────────────────────────────────────────────────────────────────
+FROM node:20-alpine AS dev
 WORKDIR /app
-
-# Install dependencies first for better caching
-COPY Frontend/package.json Frontend/package-lock.json* ./
-# Raise heap limit — @fluentui tree exceeds Node's default 2GB during npm ci
-RUN NODE_OPTIONS="--max-old-space-size=4096" npm ci
-
-# Copy frontend source
-COPY Frontend/ ./
-# Copy root .env for env-cmd
+COPY Frontend/tsconfig.json ./tsconfig.json
 COPY .env ../.env
-
 EXPOSE 60006
-
-# webpack-dev-server with hot reload
 CMD ["npx", "env-cmd", "-f", "../.env", "webpack", "serve", "--config", "./tools/webpack.config.js", "--host", "0.0.0.0"]
+
+# ─────────────────────────────────────────────────────────────────────
+# Stage 2: builder — full npm ci + production webpack build
+# ─────────────────────────────────────────────────────────────────────
+FROM node:20-alpine AS builder
+WORKDIR /app
+# Production build of the @fluentui tree is memory-hungry during minification.
+ENV NODE_OPTIONS="--max-old-space-size=8192"
+
+# Install deps (cached layer — only re-runs when lockfile changes)
+COPY Frontend/package.json Frontend/package-lock.json* ./
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --no-audit --no-fund
+
+# Copy sources and build
+COPY Frontend/tsconfig.json ./tsconfig.json
+COPY Frontend/src ./src
+COPY Frontend/tools ./tools
+COPY Frontend/Package ./Package
+COPY .env ../.env
+RUN npx env-cmd -f ../.env webpack --config ./tools/webpack.config.js --mode production
+
+# ─────────────────────────────────────────────────────────────────────
+# Stage 3: production — nginx serving the static bundle
+# ─────────────────────────────────────────────────────────────────────
+FROM nginx:alpine AS production
+# Default nginx config serves /usr/share/nginx/html on :80 — repoint to :60006
+# to stay compatible with the published port in docker-compose.yaml.
+RUN sed -i 's/listen       80;/listen       60006;/' /etc/nginx/conf.d/default.conf \
+    && sed -i 's/listen  \[::\]:80;/listen  [::]:60006;/' /etc/nginx/conf.d/default.conf || true
+COPY --from=builder /app/tools/dist /usr/share/nginx/html
+EXPOSE 60006
+CMD ["nginx", "-g", "daemon off;"]

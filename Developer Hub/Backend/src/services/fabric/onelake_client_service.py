@@ -2,7 +2,9 @@ import json
 import logging
 from uuid import UUID
 
+from app.core.service_registry import get_service_registry
 from domain.constants.environment_constants import EnvironmentConstants
+from services.http_client import get_http_client_service
 
 
 class OneLakeClientService:
@@ -14,7 +16,6 @@ class OneLakeClientService:
     def http_client_service(self):
         """Lazy load HTTP client service."""
         if self._http_client_service is None:
-            from services.http_client import get_http_client_service
             self._http_client_service = get_http_client_service()
         return self._http_client_service
 
@@ -226,7 +227,6 @@ class OneLakeClientService:
 
 def get_onelake_client_service() -> OneLakeClientService:
     """Get the singleton OneLakeClientService from ServiceRegistry."""
-    from app.core.service_registry import get_service_registry
     try:
         return get_service_registry().get(OneLakeClientService)
     except KeyError:

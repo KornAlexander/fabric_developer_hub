@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useCallback, useEffect } from "react";
+import React, { useMemo, useState, useCallback, useEffect, Suspense, lazy } from "react";
 import { Route, Switch, useHistory, useRouteMatch } from "react-router-dom";
 import "../../styles.scss";
 import {
@@ -21,20 +21,68 @@ import {
     AddCircle24Regular,
     ChatMultiple24Regular,
     MoreHorizontal24Regular,
-    ChevronLeft24Regular,
-    ChevronRight24Regular,
+    PanelLeftContract24Regular,
+    PanelLeftExpand24Regular,
 } from "@fluentui/react-icons";
 import { WorkloadClientAPI } from "@ms-fabric/workload-client";
-import { DashboardPage } from "./DashboardPage";
+// OrchestratorPage stays eager — it's the default landing route, so lazy
+// loading it just adds a Suspense flash on first paint. Everything else is
+// code-split into its own chunk via React.lazy below.
 import { OrchestratorPage } from "./OrchestratorPage";
-import { AgentsPage } from "./AgentsPage";
-import { SettingsPage } from "./SettingsPage";
-import { SessionDetailPage } from "./SessionDetailPage";
+
+// ─── Lazy-loaded pages ────────────────────────────────────────────
+// Each page becomes its own webpack chunk. `preload()` is attached so the
+// existing nav-intent logic (hover / click-before-navigate) can trigger the
+// chunk fetch before we actually mount the component — hiding latency.
+function lazyWithPreload<T extends Record<string, any>>(
+    factory: () => Promise<T>,
+    exportName: keyof T,
+) {
+    const Component: any = lazy(() =>
+        factory().then(m => ({ default: m[exportName] })),
+    );
+    Component.preload = factory;
+    return Component as React.LazyExoticComponent<any> & { preload: () => Promise<any> };
+}
+
+const DashboardPage = lazyWithPreload(() => import("./DashboardPage"), "DashboardPage");
+const AgentsPage = lazyWithPreload(() => import("./AgentsPage"), "AgentsPage");
+const SettingsPage = lazyWithPreload(() => import("./SettingsPage"), "SettingsPage");
+const SessionDetailPage = lazyWithPreload(() => import("./SessionDetailPage"), "SessionDetailPage");
+const PbiFixerPage = lazyWithPreload(
+    () => import("../PbiFixer").then(m => ({ PbiFixerPage: m.PbiFixerPage })),
+    "PbiFixerPage",
+);
 import { useGitHubAuth } from "./useGitHubAuth";
 import { ItemProvider } from "./ItemContext";
-import { PbiFixerPage } from "../PbiFixer";
 import { callAuthAcquireAccessToken } from "../../controller/AgentHubController";
 import * as api from "../../controller/AgentHubApi";
+import {
+    setPreloaded,
+    setPending,
+    getPending,
+    type PreloadKey,
+} from "./pagePreloadCache";
+
+/** Max time we linger on the current page while prefetching the target. */
+const NAV_PREFETCH_TIMEOUT_MS = 1000;
+
+/** Maps a nav page id to the preload key for its data dependency. */
+function preloadKeyFor(page: string): PreloadKey | null {
+    if (page === "home" || page === "sessions") return "sessions";
+    if (page === "agents") return "agents";
+    return null;
+}
+
+/** Kick off the webpack chunk for a page so it's warm by the time we navigate. */
+function preloadChunkFor(page: string): void {
+    try {
+        if (page === "home" || page === "sessions") DashboardPage.preload();
+        else if (page === "agents") AgentsPage.preload();
+        else if (page === "pbifixer") PbiFixerPage.preload();
+        else if (page === "settings") SettingsPage.preload();
+    } catch { /* preload failures are recoverable — Suspense will retry */ }
+}
 
 interface AgentHubLayoutProps {
     workloadClient: WorkloadClientAPI;
@@ -189,9 +237,67 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
         return () => window.removeEventListener("storage", onStorage);
     }, []);
 
-    function navTo(page: string) {
-        nav(page);
+    // When the user clicks a sidebar item, kick off the target page's data
+    // fetch *before* we route-change. We wait for it to finish, capped at
+    // NAV_PREFETCH_TIMEOUT_MS (1s). Fast loads therefore switch straight
+    // from the current page to the fully-populated target with no skeleton
+    // in between. Slow loads still flip over after the cap and show the
+    // skeleton + "still loading" hint.
+    const [navPending, setNavPending] = useState(false);
+
+    const startPreload = useCallback(
+        (key: PreloadKey): Promise<unknown> => {
+            const existing = getPending(key);
+            if (existing) return existing;
+            const githubToken = auth.githubToken!;
+            let fetchPromise: Promise<unknown>;
+            if (key === "sessions") {
+                fetchPromise = (async () => {
+                    let fabricToken: string | undefined;
+                    try {
+                        const t = await callAuthAcquireAccessToken(workloadClient);
+                        fabricToken = t.token;
+                    } catch { /* best-effort */ }
+                    const data = await api.listSessions({ githubToken, fabricToken });
+                    setPreloaded(key, data);
+                    return data;
+                })();
+            } else {
+                fetchPromise = (async () => {
+                    const [tpls, configs] = await Promise.all([
+                        api.listAgentTemplates({ githubToken }),
+                        api.listMyAgents({ githubToken }).catch(() => [] as unknown),
+                    ]);
+                    const payload = { templates: tpls, myConfigs: configs };
+                    setPreloaded(key, payload);
+                    return payload;
+                })();
+            }
+            setPending(key, fetchPromise);
+            return fetchPromise.catch(() => undefined);
+        },
+        [auth.githubToken, workloadClient],
+    );
+
+    async function navTo(page: string) {
+        const key = preloadKeyFor(page);
         closeSidebar();
+        // Kick off the lazy chunk fetch as early as we know the target — in
+        // parallel with the data prefetch. `preload` is a no-op if the chunk
+        // is already loaded/in-flight.
+        preloadChunkFor(page);
+        if (!key || !auth.githubToken) {
+            nav(page);
+            return;
+        }
+        setNavPending(true);
+        const fetchPromise = startPreload(key);
+        const timeoutPromise = new Promise<void>((resolve) =>
+            window.setTimeout(resolve, NAV_PREFETCH_TIMEOUT_MS),
+        );
+        await Promise.race([fetchPromise, timeoutPromise]);
+        setNavPending(false);
+        nav(page);
     }
 
     return (
@@ -245,7 +351,7 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
                             aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
                             title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
                         >
-                            {sidebarCollapsed ? <ChevronRight24Regular /> : <ChevronLeft24Regular />}
+                            {sidebarCollapsed ? <PanelLeftExpand24Regular /> : <PanelLeftContract24Regular />}
                         </button>
                     </div>
 
@@ -254,6 +360,10 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
                         <SideNavItem icon={<AddCircle24Regular />} label="New Session" active={activePage === "newsession"} collapsed={sidebarCollapsed} onClick={() => navTo("orchestrator")} />
                         <SideNavItem icon={<ChatMultiple24Regular />} label="Sessions" active={activePage === "sessions"} collapsed={sidebarCollapsed} onClick={() => navTo("home")} />
                         <SideNavItem icon={<Bot24Regular />} label="Agents and Skills" active={activePage === "agents"} collapsed={sidebarCollapsed} onClick={() => navTo("agents")} />
+
+                        {/* Visible only in collapsed mode — visually separates the two sections
+                            when the text labels are hidden. Matches Design/_shared/sidebar.js. */}
+                        <div className="sidenav-rail-divider" aria-hidden="true" />
 
                         <div className="sidenav-section-label sidenav-section-label--spaced">Tools</div>
                         <SideNavItem icon={<Wrench24Regular />} label="Power BI Fixer" active={activePage === "pbifixer"} collapsed={sidebarCollapsed} onClick={() => navTo("pbifixer")} />
@@ -276,15 +386,18 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
 
                 {/* Main content */}
                 <main className="agenthub-main">
-                    <Switch>
-                        <Route path={`${match.path}/home`}><DashboardPage workloadClient={workloadClient} /></Route>
-                        <Route path={`${match.path}/orchestrator`}><OrchestratorPage workloadClient={workloadClient} /></Route>
-                        <Route path={`${match.path}/agents`}><AgentsPage workloadClient={workloadClient} /></Route>
-                        <Route path={`${match.path}/pbifixer`}><PbiFixerPage workloadClient={workloadClient} /></Route>
-                        <Route path={`${match.path}/settings`}><SettingsPage workloadClient={workloadClient} /></Route>
-                        <Route path={`${match.path}/session/:sessionId`}><SessionDetailPage workloadClient={workloadClient} /></Route>
-                        <Route path={match.path}><OrchestratorPage workloadClient={workloadClient} /></Route>
-                    </Switch>
+                    {navPending && <div className="nav-progress" aria-hidden="true" />}
+                    <Suspense fallback={<div className="page-suspense-fallback"><Spinner size="small" /></div>}>
+                        <Switch>
+                            <Route path={`${match.path}/home`}><DashboardPage workloadClient={workloadClient} /></Route>
+                            <Route path={`${match.path}/orchestrator`}><OrchestratorPage workloadClient={workloadClient} /></Route>
+                            <Route path={`${match.path}/agents`}><AgentsPage workloadClient={workloadClient} /></Route>
+                            <Route path={`${match.path}/pbifixer`}><PbiFixerPage workloadClient={workloadClient} /></Route>
+                            <Route path={`${match.path}/settings`}><SettingsPage workloadClient={workloadClient} /></Route>
+                            <Route path={`${match.path}/session/:sessionId`}><SessionDetailPage workloadClient={workloadClient} /></Route>
+                            <Route path={match.path}><OrchestratorPage workloadClient={workloadClient} /></Route>
+                        </Switch>
+                    </Suspense>
                 </main>
             </div>
         </div>

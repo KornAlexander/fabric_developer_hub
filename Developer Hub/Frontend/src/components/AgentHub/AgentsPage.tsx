@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Spinner } from "@fluentui/react-components";
+import { Spinner, Button } from "@fluentui/react-components";
 import {
     Search20Regular,
     Add20Regular,
@@ -26,9 +26,11 @@ import {
     ShieldCheckmark20Regular,
     PlayCircle16Regular,
     Delete20Regular,
+    Warning20Regular,
 } from "@fluentui/react-icons";
 import { WorkloadClientAPI } from "@ms-fabric/workload-client";
 import * as api from "../../controller/AgentHubApi";
+import { readPreloaded, setPreloaded } from "./pagePreloadCache";
 
 interface AgentsPageProps {
     workloadClient: WorkloadClientAPI;
@@ -75,23 +77,36 @@ function skillIcon(kind: "authoring" | "consumption" | "tool") {
 }
 
 export function AgentsPage({ workloadClient: _workloadClient }: AgentsPageProps) {
-    const [templates, setTemplates] = useState<any[]>([]);
-    const [myConfigs, setMyConfigs] = useState<any[]>([]);
-    const [loading, setLoading] = useState(true);
+    // If navTo() prefetched agent data before route-changing, use it
+    // directly so the page mounts fully populated with no skeleton flicker.
+    const preloaded = readPreloaded<{ templates: any[]; myConfigs: any[] }>("agents");
+    const [templates, setTemplates] = useState<any[]>(preloaded?.templates ?? []);
+    const [myConfigs, setMyConfigs] = useState<any[]>(preloaded?.myConfigs ?? []);
+    const [loading, setLoading] = useState(preloaded === undefined);
+    const [slowLoading, setSlowLoading] = useState(false);
     const [activeTab, setActiveTab] = useState<"my-agents" | "skill-library" | "marketplace">("my-agents");
     const [search, setSearch] = useState("");
-    const [selectedId, setSelectedId] = useState<string | null>(null);
+    const [selectedId, setSelectedId] = useState<string | null>(
+        () => preloaded?.templates?.[0]?.id ?? null,
+    );
     const [savingId, setSavingId] = useState<string | null>(null);
     const [removingId, setRemovingId] = useState<string | null>(null);
+    const [loadError, setLoadError] = useState<string | null>(null);
 
     const githubToken = sessionStorage.getItem("github_token") || "";
 
     useEffect(() => {
+        // If we already have preloaded data, skip the initial fetch.
+        if (!loading) return;
         loadData();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     async function loadData() {
         setLoading(true);
+        setSlowLoading(false);
+        setLoadError(null);
+        const slowTimer = window.setTimeout(() => setSlowLoading(true), 1200);
         try {
             const [tpls, configs] = await Promise.all([
                 api.listAgentTemplates({ githubToken }),
@@ -100,10 +115,21 @@ export function AgentsPage({ workloadClient: _workloadClient }: AgentsPageProps)
             setTemplates(tpls || []);
             setMyConfigs(configs || []);
             setSelectedId(prev => prev || ((tpls || [])[0]?.id ?? null));
-        } catch (e) {
+            setPreloaded("agents", { templates: tpls || [], myConfigs: configs || [] });
+        } catch (e: any) {
             console.error("Failed to load agents:", e);
+            const msg = e?.message || String(e) || "Unknown error";
+            const isNetwork = /failed to fetch|networkerror|load failed/i.test(msg);
+            setLoadError(
+                isNetwork
+                    ? "Can't reach the Developer Hub backend. Check that it's running, then retry."
+                    : `Failed to load agents: ${msg}`,
+            );
+            setTemplates([]);
         } finally {
+            window.clearTimeout(slowTimer);
             setLoading(false);
+            setSlowLoading(false);
         }
     }
 
@@ -237,19 +263,35 @@ export function AgentsPage({ workloadClient: _workloadClient }: AgentsPageProps)
                     <div className="agents-statsbar">
                         <div className="agents-stat">
                             <Bot24Regular className="agents-stat-icon" />
-                            <span className="agents-stat-num">{visibleAgents.length}</span>
-                            <span className="agents-stat-label">{activeTab === "skill-library" ? "skills shown" : "agents"}</span>
+                            {loading ? (
+                                <span className="skeleton skeleton-line skeleton-line--stat" />
+                            ) : (
+                                <>
+                                    <span className="agents-stat-num">{visibleAgents.length}</span>
+                                    <span className="agents-stat-label">{activeTab === "skill-library" ? "skills shown" : "agents"}</span>
+                                </>
+                            )}
                         </div>
                         <div className="agents-stat">
                             <Wrench24Regular className="agents-stat-icon" />
-                            <span className="agents-stat-num">{skillsCount}</span>
-                            <span className="agents-stat-label">skills installed</span>
+                            {loading ? (
+                                <span className="skeleton skeleton-line skeleton-line--stat" />
+                            ) : (
+                                <>
+                                    <span className="agents-stat-num">{skillsCount}</span>
+                                    <span className="agents-stat-label">skills installed</span>
+                                </>
+                            )}
                         </div>
                         <div className="agents-stat">
                             <CheckmarkCircle16Filled className="agents-stat-icon agents-stat-icon--ok" />
-                            <span className="agents-stat-label agents-stat-label--ok">
-                                {enabledCount > 0 ? "All healthy" : "None enabled"}
-                            </span>
+                            {loading ? (
+                                <span className="skeleton skeleton-line skeleton-line--stat" />
+                            ) : (
+                                <span className="agents-stat-label agents-stat-label--ok">
+                                    {enabledCount > 0 ? "All healthy" : "None enabled"}
+                                </span>
+                            )}
                         </div>
                         <div className="agents-search-wrap">
                             <Search20Regular className="agents-search-icon" />
@@ -259,12 +301,42 @@ export function AgentsPage({ workloadClient: _workloadClient }: AgentsPageProps)
                                 value={search}
                                 onChange={(e) => setSearch(e.target.value)}
                                 className="agents-search-input"
+                                disabled={loading}
                             />
                         </div>
                     </div>
 
                     {loading ? (
-                        <div className="agents-loading"><Spinner label="Loading agents…" /></div>
+                        <div className="agent-card-list" aria-busy="true" aria-label="Loading agents">
+                            {[0, 1].map(i => (
+                                <div key={i} className="agent-card agent-card--skeleton" aria-hidden="true">
+                                    <div className="skeleton skeleton-icon skeleton-icon--lg" />
+                                    <div className="agent-card-body">
+                                        <div className="agent-card-header">
+                                            <div className="skeleton skeleton-line skeleton-line--title" />
+                                            <div className="skeleton skeleton-pill skeleton-pill--sm" />
+                                        </div>
+                                        <div className="skeleton skeleton-line skeleton-line--goal" />
+                                        <div className="skeleton skeleton-line skeleton-line--goal-short" />
+                                        <div className="agent-card-skills">
+                                            <div className="skeleton skeleton-pill skeleton-pill--wide" />
+                                            <div className="skeleton skeleton-pill skeleton-pill--wide" />
+                                            <div className="skeleton skeleton-pill skeleton-pill--wide" />
+                                        </div>
+                                    </div>
+                                    <div className="agent-card-meta">
+                                        <div className="skeleton skeleton-line skeleton-line--meta" />
+                                        <div className="skeleton skeleton-line skeleton-line--action" />
+                                    </div>
+                                </div>
+                            ))}
+                            {slowLoading && (
+                                <div className="agents-slow-hint" role="status">
+                                    <Spinner size="tiny" />
+                                    <span>Still loading—this is taking longer than usual…</span>
+                                </div>
+                            )}
+                        </div>
                     ) : activeTab === "skill-library" ? (
                         <div className="skill-library-grid">
                             {allSkills.map(tag => {
@@ -342,11 +414,24 @@ export function AgentsPage({ workloadClient: _workloadClient }: AgentsPageProps)
                                 );
                             })}
 
-                            {visibleAgents.length === 0 && (
+                            {visibleAgents.length === 0 && !loadError && (
                                 <div className="agents-empty">
                                     {activeTab === "my-agents"
                                         ? "No agents enabled yet. Switch to Marketplace to add agents."
                                         : "No agents match your search."}
+                                </div>
+                            )}
+
+                            {loadError && (
+                                <div className="sessions-error" role="alert">
+                                    <Warning20Regular />
+                                    <div className="sessions-error-body">
+                                        <div className="sessions-error-title">Couldn't load agents</div>
+                                        <div className="sessions-error-msg">{loadError}</div>
+                                    </div>
+                                    <Button appearance="primary" size="small" onClick={loadData}>
+                                        Retry
+                                    </Button>
                                 </div>
                             )}
 

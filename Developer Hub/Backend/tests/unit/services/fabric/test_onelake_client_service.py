@@ -18,6 +18,8 @@ from services.fabric.onelake_client_service import (
     OneLakeClientService,
     get_onelake_client_service,
 )
+import json as _json
+from app.core.service_registry import ServiceRegistry
 
 
 def _resp(status: int, text: str = "", json_body: dict | None = None) -> MagicMock:
@@ -25,7 +27,6 @@ def _resp(status: int, text: str = "", json_body: dict | None = None) -> MagicMo
     r.status_code = status
     r.text = text
     if json_body is not None:
-        import json as _json
         r.text = _json.dumps(json_body)
     return r
 
@@ -203,7 +204,6 @@ def test_build_query_parameter_helpers() -> None:
 
 
 def test_get_onelake_client_service_raises_when_not_registered(monkeypatch) -> None:
-    from app.core.service_registry import ServiceRegistry
 
     ServiceRegistry._instance = None
     with pytest.raises(RuntimeError, match="not initialized"):

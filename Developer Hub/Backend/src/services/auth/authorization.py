@@ -4,6 +4,7 @@ from uuid import UUID
 import httpx
 from pydantic import BaseModel
 
+from app.core.service_registry import get_service_registry
 from domain.constants.api_constants import ApiConstants
 from domain.constants.environment_constants import EnvironmentConstants
 from domain.exceptions.exceptions import (
@@ -12,6 +13,7 @@ from domain.exceptions.exceptions import (
     UnauthorizedException,
 )
 from domain.models.authentication_models import AuthorizationContext
+from services.auth.authentication import get_authentication_service
 from services.http_client import get_http_client_service
 
 logger = logging.getLogger(__name__)
@@ -30,7 +32,6 @@ class AuthorizationHandler:
     def auth_service(self):
         """Lazy load authentication service to avoid circular dependencies."""
         if self._auth_service is None:
-            from services.auth.authentication import get_authentication_service
             self._auth_service = get_authentication_service()
         return self._auth_service
 
@@ -160,7 +161,6 @@ class AuthorizationHandler:
 
 def get_authorization_service() -> AuthorizationHandler:
     """Get the singleton AuthorizationHandler from ServiceRegistry."""
-    from app.core.service_registry import get_service_registry
     try:
         return get_service_registry().get(AuthorizationHandler)
     except KeyError:

@@ -22,14 +22,32 @@ function headers(opts: FetchOpts): Record<string, string> {
 
 // ── Sessions ────────────────────────────────────────────────────────
 
+/** A file attached to a prompt. Content shape depends on kind:
+ *  - "text":  raw UTF-8 file contents
+ *  - "image": base64 data URI (data:image/...;base64,...)
+ *  - "pdf":   base64 data URI (data:application/pdf;base64,...)
+ */
+export interface PromptAttachment {
+    name: string;
+    kind: "text" | "image" | "pdf";
+    mime?: string;
+    content: string;
+}
+
 export async function createSession(
     taskDescription: string, workspaceId: string,
     context: Record<string, unknown> | null, opts: FetchOpts,
+    attachments?: PromptAttachment[],
 ) {
     const res = await fetch(`${BE}/api/sessions`, {
         method: 'POST',
         headers: headers(opts),
-        body: JSON.stringify({ task_description: taskDescription, workspace_id: workspaceId, context }),
+        body: JSON.stringify({
+            task_description: taskDescription,
+            workspace_id: workspaceId,
+            context,
+            attachments: attachments && attachments.length ? attachments : undefined,
+        }),
     });
     if (!res.ok) throw new Error(await res.text());
     return res.json();

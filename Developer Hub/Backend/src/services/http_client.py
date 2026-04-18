@@ -4,6 +4,8 @@ from typing import Any
 
 import httpx
 
+from app.core.service_registry import get_service_registry
+
 
 class HttpClientService:
     """
@@ -193,7 +195,6 @@ def get_http_client_service() -> HttpClientService:
     Get the singleton HttpClientService instance from ServiceRegistry.
     This ensures proper lifecycle management and dependency injection.
     """
-    from app.core.service_registry import get_service_registry
     registry = get_service_registry()
     try:
         return registry.get(HttpClientService)

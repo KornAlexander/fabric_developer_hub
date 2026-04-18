@@ -160,16 +160,35 @@ class SSEEvent(BaseModel):
 
 # ── API Request / Response Models ───────────────────────────────────
 
+class PromptAttachment(BaseModel):
+    """A file the user attached to their prompt.
+
+    ``kind`` determines how ``content`` is interpreted:
+
+    * ``"text"``  — raw UTF-8 file contents (code, markdown, CSV, etc.).
+    * ``"image"`` — base64 data URI (``data:image/png;base64,…``).
+    * ``"pdf"``   — base64 data URI (``data:application/pdf;base64,…``);
+      the backend extracts text via ``pypdf``.
+    """
+
+    name: str
+    kind: str  # "text" | "image" | "pdf"
+    mime: str | None = None
+    content: str
+
+
 class CreateJobRequest(BaseModel):
     task_description: str
     workspace_id: str
     context: dict[str, Any] | None = None
+    attachments: list[PromptAttachment] | None = None
 
 
 class GeneratePlanRequest(BaseModel):
     task_description: str
     workspace_id: str
     context: dict[str, Any] | None = None
+    attachments: list[PromptAttachment] | None = None
 
 
 class ApprovePlanRequest(BaseModel):

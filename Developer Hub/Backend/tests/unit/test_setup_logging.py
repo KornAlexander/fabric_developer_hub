@@ -19,6 +19,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from main import setup_logging
+
 
 @pytest.fixture
 def fake_config() -> MagicMock:
@@ -47,7 +49,6 @@ def test_setup_logging_creates_log_dir_unix(
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(os, "name", "posix", raising=False)
 
-    from main import setup_logging
 
     try:
         logger = setup_logging(fake_config)
@@ -74,7 +75,6 @@ def test_setup_logging_creates_log_dir_windows_branch(
     monkeypatch.setenv("APPDATA", str(appdata))
     monkeypatch.setattr(os, "name", "nt", raising=False)
 
-    from main import setup_logging
 
     try:
         logger = setup_logging(fake_config)
@@ -96,7 +96,6 @@ def test_setup_logging_windows_fallback_when_appdata_missing(
     monkeypatch.setenv("HOME", str(tmp_path))         # used on Unix expanduser
     monkeypatch.setattr(os, "name", "nt", raising=False)
 
-    from main import setup_logging
 
     try:
         # Just verify no exception is raised; the actual fallback path differs
@@ -118,7 +117,6 @@ def test_setup_logging_unknown_log_level_falls_back_to_info(
     cs.get_log_level.return_value = "GarbageLevel"
     cs.get_app_name.return_value = "App"
 
-    from main import setup_logging
 
     try:
         setup_logging(cs)
