@@ -650,8 +650,8 @@ html, body, #root {
     align-items: center;
     justify-content: space-between;
     padding: 8px 24px;
-    background: #ffffff;
-    border-bottom: 1px solid #e8e6e3;
+    background: #faf9f8;             /* surface */
+    border-bottom: 1px solid rgba(192, 199, 212, 0.1); /* outline-variant/10 */
     flex-shrink: 0;
     height: 48px;
 }
@@ -680,22 +680,32 @@ html, body, #root {
 .agenthub-topbar-right {
     display: flex;
     align-items: center;
-    gap: 16px;
-    color: #605e5c;
+    gap: 8px;
+    color: #404752;                  /* on-surface-variant */
 }
 
 .topbar-icon {
     cursor: pointer;
-    &:hover { color: #323130; }
+    padding: 6px;
+    border-radius: 8px;
+    color: #404752;
+    transition: background 0.12s;
+    &:hover { background: #f4f3f2; color: #1a1c1c; }
 }
 
 .agenthub-avatar {
-    width: 32px;
-    height: 32px;
+    width: 28px;
+    height: 28px;
     border-radius: 50%;
     overflow: hidden;
     cursor: pointer;
-    color: #0078d4;
+    color: #ffffff;
+    background: #0078d4;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-left: 4px;
+    border: 1px solid rgba(192, 199, 212, 0.2);
 }
 
 /* Body = sidebar + main */
@@ -707,12 +717,12 @@ html, body, #root {
 
 /* Sidebar */
 .agenthub-sidebar {
-    width: 220px;
-    min-width: 220px;
+    width: 224px;                    /* design w-56 */
+    min-width: 224px;
     display: flex;
     flex-direction: column;
-    background: #ffffff;
-    border-right: 1px solid #e8e6e3;
+    background: #f4f3f2;             /* surface-container-low */
+    border-right: none;
     padding: 0;
 }
 
@@ -729,22 +739,23 @@ html, body, #root {
 }
 
 .agenthub-brand-icon {
-    width: 36px;
-    height: 36px;
+    width: 32px;
+    height: 32px;
     display: flex;
     align-items: center;
     justify-content: center;
-    background: #e8f0fe;
+    background: #0078d4;             /* primary-container */
     border-radius: 8px;
-    color: #0078d4;
+    color: #ffffff;
 }
 
 .agenthub-brand-sub {
     display: block;
-    color: #a19f9d;
+    color: #5f5e5e;                  /* secondary */
     text-transform: uppercase;
-    letter-spacing: 0.5px;
-    font-size: 10px;
+    letter-spacing: 0.08em;
+    font-size: 9px;
+    font-weight: 700;
 }
 
 .agenthub-sidenav {
@@ -753,31 +764,45 @@ html, body, #root {
 }
 
 .sidenav-item {
+    position: relative;
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 10px 16px;
-    margin: 2px 8px;
-    border-radius: 6px;
+    padding: 10px 12px;
+    margin: 2px 10px;
+    border-radius: 8px;
     cursor: pointer;
-    color: #605e5c;
+    color: #404752;                  /* on-surface-variant */
     transition: background 0.12s;
 
     &:hover {
-        background: #f3f2f1;
-        color: #323130;
+        background: rgba(233, 232, 231, 0.5); /* surface-container-high/50 */
+        color: #1a1c1c;
     }
 
     &--active {
-        background: #e8f0fe;
-        color: #0078d4;
-        border-left: 3px solid #0078d4;
-        padding-left: 13px;
+        background: #ffffff;          /* surface-container-lowest */
+        color: #1a1c1c;               /* on-surface */
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+        font-weight: 500;
+
+        &::before {
+            content: "";
+            position: absolute;
+            left: 0;
+            top: 25%;
+            bottom: 25%;
+            width: 3px;
+            background: #005faa;       /* primary */
+            border-radius: 999px;
+        }
+
+        svg { color: #005faa; }
     }
 }
 
 .agenthub-sidebar-footer {
-    border-top: 1px solid #e8e6e3;
+    border-top: 1px solid rgba(192, 199, 212, 0.1); /* outline-variant/10 */
     padding: 12px 8px;
 }
 
@@ -785,15 +810,15 @@ html, body, #root {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 8px 16px;
+    padding: 8px 12px;
     cursor: pointer;
-    color: #605e5c;
-    border-radius: 6px;
-    font-size: 13px;
+    color: #404752;                  /* on-surface-variant */
+    border-radius: 8px;
+    font-size: 12px;
 
     &:hover {
-        background: #f3f2f1;
-        color: #323130;
+        background: rgba(233, 232, 231, 0.5);
+        color: #1a1c1c;
     }
 }
 
@@ -1537,7 +1562,7 @@ html, body, #root {
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.12em;
-    color: #8a8a8a;
+    color: rgba(95, 94, 94, 0.7);    /* secondary/70 */
     padding: 12px 16px 6px;
 }
 .sidenav-section-label--spaced {
