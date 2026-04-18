@@ -4,7 +4,7 @@
     "displayNamePlural": "Item_1_DisplayName_Plural",
     "version": "1.100",
     "editor": {
-      "path": "/agent-hub/home"
+      "path": "/agent-hub/orchestrator"
     },
     "icon": {
       "name": "assets/images/execute.png"

@@ -16,7 +16,7 @@ export async function initialize(params: InitParams) {
                 return workloadClient.page.open({
                     workloadName: workloadName,
                     route: {
-                        path: agentHubWsId ? `/agent-hub/home?ws=${agentHubWsId}` : `/agent-hub/home`,
+                        path: agentHubWsId ? `/agent-hub/orchestrator?ws=${agentHubWsId}` : `/agent-hub/orchestrator`,
                     },
                 });
 
