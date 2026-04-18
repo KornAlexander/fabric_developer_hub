@@ -41,13 +41,42 @@ class MCPClientManager:
             raw = json.load(f)
         # Resolve template variables in the config
         self._resolve_variables(raw, config_path)
+        # Drop servers whose entrypoint script doesn't exist on disk so that
+        # missing optional MCPs (e.g. host-only ${REPO_DIR}/... in Docker)
+        # degrade gracefully instead of failing tool discovery.
+        self._prune_missing_servers(raw)
         return raw
 
-    def _resolve_variables(self, config: dict, config_path: str):
+    @staticmethod
+    def _resolve_repo_dir(config_path: str) -> str:
+        """Resolve ${REPO_DIR} robustly across Docker / local layouts.
+
+        Precedence:
+          1. ``MCP_REPO_DIR`` env var (explicit override — preferred in containers).
+          2. Walk up from ``config_path`` looking for a project marker
+             (``.git`` directory or ``pyproject.toml``).
+          3. Fall back to the immediate parent of the config file.
+
+        Notably this does NOT use ``Path(config_path).parents[N]`` with a
+        hard-coded ``N`` — that crashed with IndexError on shallow Docker
+        paths like ``/app/src/mcp_servers.json``.
+        """
+        override = os.environ.get("MCP_REPO_DIR")
+        if override:
+            return override
+
+        path = Path(config_path).resolve()
+        for candidate in path.parents:
+            if (candidate / ".git").exists() or (candidate / "pyproject.toml").exists():
+                return str(candidate)
+
+        # No marker found — fall back to the directory containing the config.
+        return str(path.parent)
+
+    def _resolve_variables(self, config: dict, config_path: str) -> None:
         """Replace ${PYTHON}, ${SRC_DIR}, and ${REPO_DIR} placeholders in server configs."""
         src_dir = str(Path(config_path).parent)
-        # REPO_DIR = repo root (fabric_agenthub/), 4 levels above src/
-        repo_dir = str(Path(config_path).parents[4])
+        repo_dir = self._resolve_repo_dir(config_path)
         python_exe = sys.executable
 
         def _sub(val: str) -> str:
@@ -61,6 +90,24 @@ class MCPClientManager:
                 server_config["command"] = _sub(server_config["command"])
             if "args" in server_config:
                 server_config["args"] = [_sub(arg) for arg in server_config["args"]]
+
+    @staticmethod
+    def _prune_missing_servers(config: dict) -> None:
+        """Drop servers whose first arg (the script path) does not exist.
+
+        Keeps the manager usable when some MCPs are only available in the
+        host dev layout (e.g. ``${REPO_DIR}/mcp/...``) but not inside a
+        container that only ships ``src/``.
+        """
+        servers = config.get("servers", {})
+        for name in list(servers.keys()):
+            args = servers[name].get("args") or []
+            if args and not Path(args[0]).exists():
+                logger.warning(
+                    "MCP server %s: script %s not found on disk; skipping",
+                    name, args[0],
+                )
+                del servers[name]
 
     def has_tools(self) -> bool:
         return len(self.tools) > 0

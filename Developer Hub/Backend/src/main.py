@@ -195,10 +195,20 @@ async def lifespan(app: FastAPI):
         initializer = get_service_initializer()
         await initializer.initialize_all_services()
 
-        # Initialize MCP client manager for agentic chat
+        # Initialize MCP client manager for agentic chat.
+        # Construction (config load + variable resolution) is treated as
+        # fatal — it would only fail on a code/config bug, and silently
+        # masking it (as a previous version did) hid an IndexError that
+        # broke MCP entirely in production. Per-server discovery failures
+        # are still tolerated inside ``discover_tools``.
         try:
             mcp_config_path = os.path.join(os.path.dirname(__file__), "mcp_servers.json")
             mcp_manager = MCPClientManager(mcp_config_path)
+        except Exception:
+            logger.exception("\u2717 MCP manager construction failed (config bug)")
+            raise
+
+        try:
             await mcp_manager.discover_tools()
             set_mcp_manager(mcp_manager)
             tool_count = len(mcp_manager.tools)
@@ -207,7 +217,7 @@ async def lifespan(app: FastAPI):
                 tool_count, len(mcp_manager.config.get('servers', {})),
             )
         except Exception:
-            logger.warning("\u26a0 MCP initialization failed (chat will work without tools)", exc_info=True)
+            logger.warning("\u26a0 MCP tool discovery failed (chat will work without tools)", exc_info=True)
             mcp_manager = None
 
         # Initialize AgentHub database
