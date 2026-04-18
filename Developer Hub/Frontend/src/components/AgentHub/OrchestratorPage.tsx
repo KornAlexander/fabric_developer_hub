@@ -174,8 +174,8 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
     const [workspacesCachedAt, setWorkspacesCachedAt] = useState<string | null>(null);
 
     // Composer toggles
-    const [requireApprovals, setRequireApprovals] = useState(true);
-    const [branchOut, setBranchOut] = useState(true);
+    const [requireApprovals, setRequireApprovals] = useState(false);
+    const [branchOut, setBranchOut] = useState(false);
     const [branchName, setBranchName] = useState("agent/sales-ingestion-pipeline");
 
     // Context pills (Fabric items + workspaces attached to the prompt)

@@ -29,6 +29,7 @@ import {
 } from "@fluentui/react-icons";
 import { WorkloadClientAPI } from "@ms-fabric/workload-client";
 import * as api from "../../controller/AgentHubApi";
+import { callAuthAcquireAccessToken } from "../../controller/AgentHubController";
 import { useItemContext } from "./ItemContext";
 
 interface DashboardPageProps {
@@ -74,7 +75,7 @@ function statusLabel(status: string): string {
     return status.charAt(0).toUpperCase() + status.slice(1);
 }
 
-export function DashboardPage({ workloadClient: _workloadClient }: DashboardPageProps) {
+export function DashboardPage({ workloadClient }: DashboardPageProps) {
     const [jobs, setJobs] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [creating, setCreating] = useState(false);
@@ -92,7 +93,17 @@ export function DashboardPage({ workloadClient: _workloadClient }: DashboardPage
     async function loadJobs() {
         setLoading(true);
         try {
-            const data = await api.listSessions({ githubToken });
+            // Need the Fabric token so the backend can identify the user by
+            // UPN (same key sessions were written under). Without it the
+            // backend falls back to an Authorization hash and returns nothing.
+            let fabricToken: string | undefined;
+            try {
+                const tok = await callAuthAcquireAccessToken(workloadClient, undefined);
+                fabricToken = tok?.token;
+            } catch (e) {
+                console.warn("Could not acquire Fabric token for sessions list:", e);
+            }
+            const data = await api.listSessions({ githubToken, fabricToken });
             setJobs(data || []);
         } catch (e) {
             console.error("Failed to load jobs:", e);
