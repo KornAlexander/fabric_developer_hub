@@ -173,7 +173,7 @@ class GeneratePlanRequest(BaseModel):
 
 
 class ApprovePlanRequest(BaseModel):
-    job_id: str
+    session_id: str
 
 
 class SendMessageRequest(BaseModel):

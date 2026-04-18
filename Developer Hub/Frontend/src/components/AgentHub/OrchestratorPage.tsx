@@ -150,7 +150,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
     const [taskText, setTaskText] = useState("");
     const [planning, setPlanning] = useState(false);
     const [plan, setPlan] = useState<any | null>(null);
-    const [jobId, setJobId] = useState<string | null>(null);
+    const [sessionId, setSessionId] = useState<string | null>(null);
     const [approving, setApproving] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
@@ -224,7 +224,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
         try {
             const fabricToken = await getFabricToken();
             const wsName = workspaces.find(w => w.id === selectedWorkspace)?.name || selectedWorkspace;
-            const job = await api.createJob(
+            const job = await api.createSession(
                 taskText, selectedWorkspace,
                 {
                     workspace_name: wsName,
@@ -236,7 +236,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                 },
                 { githubToken, fabricToken },
             );
-            setJobId(job.id);
+            setSessionId(job.id);
             setPlan(job.plan);
         } catch (e: any) {
             setError(e.message || "Plan generation failed");
@@ -246,12 +246,12 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
     }
 
     async function handleApprove() {
-        if (!jobId) return;
+        if (!sessionId) return;
         setApproving(true);
         try {
             const fabricToken = await getFabricToken();
-            await api.approvePlan(jobId, { githubToken, fabricToken });
-            history.push(match.url.replace(/\/orchestrator$/, `/job/${jobId}`));
+            await api.approvePlan(sessionId, { githubToken, fabricToken });
+            history.push(match.url.replace(/\/orchestrator$/, `/session/${sessionId}`));
         } catch (e: any) {
             setError(e.message || "Failed to start job");
         } finally {
@@ -260,10 +260,10 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
     }
 
     async function handleReject() {
-        if (!jobId) return;
-        try { await api.rejectPlan(jobId, { githubToken }); } catch { /* ok */ }
+        if (!sessionId) return;
+        try { await api.rejectPlan(sessionId, { githubToken }); } catch { /* ok */ }
         setPlan(null);
-        setJobId(null);
+        setSessionId(null);
     }
 
     function removeContext(name: string) {

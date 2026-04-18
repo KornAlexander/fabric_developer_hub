@@ -92,7 +92,7 @@ export function DashboardPage({ workloadClient: _workloadClient }: DashboardPage
     async function loadJobs() {
         setLoading(true);
         try {
-            const data = await api.listJobs({ githubToken });
+            const data = await api.listSessions({ githubToken });
             setJobs(data || []);
         } catch (e) {
             console.error("Failed to load jobs:", e);
@@ -107,8 +107,8 @@ export function DashboardPage({ workloadClient: _workloadClient }: DashboardPage
     const waitingCount = jobs.filter(j => ["planned", "approved", "waiting"].includes(j.status)).length;
     const errorCount = jobs.filter(j => ["failed", "error"].includes(j.status)).length;
 
-    function gotoJob(jobId: string) {
-        history.push(match.url.replace(/\/home$/, `/job/${jobId}`));
+    function gotoSession(sessionId: string) {
+        history.push(match.url.replace(/\/home$/, `/session/${sessionId}`));
     }
 
     function gotoNew() {
@@ -203,7 +203,7 @@ export function DashboardPage({ workloadClient: _workloadClient }: DashboardPage
                                     <article
                                         key={job.id}
                                         className={`session-card session-card--${variant}`}
-                                        onClick={() => gotoJob(job.id)}
+                                        onClick={() => gotoSession(job.id)}
                                     >
                                         <header className="session-card-head">
                                             <div className="session-card-identity">
@@ -250,7 +250,7 @@ export function DashboardPage({ workloadClient: _workloadClient }: DashboardPage
                                             </span>
                                             <button
                                                 className={`session-card-action session-card-action--${variant}`}
-                                                onClick={(e) => { e.stopPropagation(); gotoJob(job.id); }}
+                                                onClick={(e) => { e.stopPropagation(); gotoSession(job.id); }}
                                             >
                                                 {variant === "waiting" ? <>Resume <Play16Regular /></>
                                                   : variant === "error" ? <>Restart <ArrowClockwise16Regular /></>
@@ -292,7 +292,7 @@ export function DashboardPage({ workloadClient: _workloadClient }: DashboardPage
                                     const isOk = job.status === "completed";
                                     const agentName = job.agents?.[0]?.role || job.agents?.[0]?.agent_id || "Agent";
                                     return (
-                                        <tr key={job.id} className="recent-jobs-row" onClick={() => gotoJob(job.id)}>
+                                        <tr key={job.id} className="recent-jobs-row" onClick={() => gotoSession(job.id)}>
                                             <td>
                                                 <span className="recent-jobs-agent">
                                                     <CheckmarkCircle16Filled className={isOk ? "recent-jobs-check" : "recent-jobs-check--err"} />
@@ -307,7 +307,7 @@ export function DashboardPage({ workloadClient: _workloadClient }: DashboardPage
                                                 </span>
                                             </td>
                                             <td className="recent-jobs-more">
-                                                <button onClick={(e) => { e.stopPropagation(); gotoJob(job.id); }} title="More">
+                                                <button onClick={(e) => { e.stopPropagation(); gotoSession(job.id); }} title="More">
                                                     <MoreVertical20Regular />
                                                 </button>
                                             </td>

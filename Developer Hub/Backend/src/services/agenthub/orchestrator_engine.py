@@ -24,7 +24,7 @@ from domain.models.agent_models import (
     ReasoningPhase,
 )
 from services.agenthub.agent_registry import AGENT_TEMPLATES, get_template
-from services.agenthub.job_store import log_audit, update_job
+from services.agenthub.session_store import log_audit, update_session
 
 logger = logging.getLogger(__name__)
 
@@ -216,7 +216,7 @@ class OrchestratorEngine:
                     )
                 )
 
-        update_job(job)
+        update_session(job)
 
         execution = _JobExecution(job, copilot_token, mcp_tokens)
         self._active_jobs[job.id] = execution
@@ -250,7 +250,7 @@ class OrchestratorEngine:
         any_error = any(a.status == AgentStatus.ERROR for a in job.agents)
         job.status = JobStatus.FAILED if any_error else JobStatus.COMPLETED
         job.completed_at = datetime.now(UTC)
-        update_job(job)
+        update_session(job)
 
         duration = ""
         if job.started_at:
@@ -280,7 +280,7 @@ class OrchestratorEngine:
         logger.info("[AGENT:%s] Starting — goal: %s", agent_label, assignment.goal)
 
         assignment.status = AgentStatus.RUNNING
-        update_job(job)
+        update_session(job)
         execution.emit("agent_status", agentId=assignment.session_id,
                         agentName=template.display_name, status="running",
                         currentStep="Starting...", role=assignment.role,
@@ -347,7 +347,7 @@ class OrchestratorEngine:
                 status=PhaseStatus.EXECUTING,
             )
             assignment.phases.append(phase)
-            update_job(job)
+            update_session(job)
             execution.emit("phase_start", agentId=assignment.session_id,
                             agentName=template.display_name,
                             phase={"number": phase_counter, "title": phase_title,
@@ -380,7 +380,7 @@ class OrchestratorEngine:
                 logger.error("[AGENT:%s] LLM call failed round %d: %s", agent_label, round_num + 1, e)
                 assignment.status = AgentStatus.ERROR
                 assignment.current_step = f"LLM error: {str(e)[:100]}"
-                update_job(job)
+                update_session(job)
                 execution.emit("agent_error", agentId=assignment.session_id,
                                 agentName=template.display_name,
                                 error=str(e)[:200], phase=phase_counter)
@@ -460,7 +460,7 @@ class OrchestratorEngine:
                                             decision=clean[:300])
                 assignment.status = AgentStatus.COMPLETED
                 assignment.current_step = "Completed"
-                update_job(job)
+                update_session(job)
                 execution.emit("agent_status", agentId=assignment.session_id,
                                 agentName=template.display_name, status="completed",
                                 currentStep="Completed")
@@ -478,7 +478,7 @@ class OrchestratorEngine:
                     tool_args = {}
 
                 assignment.current_step = f"Calling {tool_name}..."
-                update_job(job)
+                update_session(job)
                 execution.emit("agent_status", agentId=assignment.session_id,
                                 agentName=template.display_name, status="running",
                                 currentStep=f"Calling {tool_name}...")
@@ -512,12 +512,12 @@ class OrchestratorEngine:
                 execution.emit("phase_complete", agentId=assignment.session_id,
                                 agentName=template.display_name,
                                 phaseNumber=assignment.phases[-1].phase_number)
-            update_job(job)
+            update_session(job)
 
         # Hit round limit
         assignment.status = AgentStatus.COMPLETED
         assignment.current_step = "Reached max rounds"
-        update_job(job)
+        update_session(job)
         execution.emit("agent_status", agentId=assignment.session_id,
                         agentName=template.display_name, status="completed",
                         currentStep="Reached max rounds")

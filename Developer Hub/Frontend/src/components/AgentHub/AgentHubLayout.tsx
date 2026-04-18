@@ -29,7 +29,7 @@ import { DashboardPage } from "./DashboardPage";
 import { OrchestratorPage } from "./OrchestratorPage";
 import { AgentsPage } from "./AgentsPage";
 import { SettingsPage } from "./SettingsPage";
-import { JobDetailPage } from "./JobDetailPage";
+import { SessionDetailPage } from "./SessionDetailPage";
 import { useGitHubAuth } from "./useGitHubAuth";
 import { ItemProvider } from "./ItemContext";
 import { PbiFixerPage } from "../PbiFixer";
@@ -67,7 +67,7 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
     else if (currentPath.includes("/sessions") || currentPath.includes("/home")) activePage = "sessions";
     else if (currentPath.includes("/agents")) activePage = "agents";
     else if (currentPath.includes("/pbifixer")) activePage = "pbifixer";
-    else if (currentPath.includes("/job/")) activePage = "sessions";
+    else if (currentPath.includes("/session/")) activePage = "sessions";
 
     function nav(page: string) {
         history.push(`${match.url}/${page}`);
@@ -253,7 +253,7 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
                         <Route path={`${match.path}/agents`}><AgentsPage workloadClient={workloadClient} /></Route>
                         <Route path={`${match.path}/pbifixer`}><PbiFixerPage workloadClient={workloadClient} /></Route>
                         <Route path={`${match.path}/settings`}><SettingsPage workloadClient={workloadClient} /></Route>
-                        <Route path={`${match.path}/job/:jobId`}><JobDetailPage workloadClient={workloadClient} /></Route>
+                        <Route path={`${match.path}/session/:sessionId`}><SessionDetailPage workloadClient={workloadClient} /></Route>
                         <Route path={match.path}><OrchestratorPage workloadClient={workloadClient} /></Route>
                     </Switch>
                 </main>

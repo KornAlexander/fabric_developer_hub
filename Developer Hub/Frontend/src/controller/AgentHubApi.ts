@@ -20,13 +20,13 @@ function headers(opts: FetchOpts): Record<string, string> {
     return h;
 }
 
-// ── Jobs ────────────────────────────────────────────────────────────
+// ── Sessions ────────────────────────────────────────────────────────
 
-export async function createJob(
+export async function createSession(
     taskDescription: string, workspaceId: string,
     context: Record<string, unknown> | null, opts: FetchOpts,
 ) {
-    const res = await fetch(`${BE}/api/jobs`, {
+    const res = await fetch(`${BE}/api/sessions`, {
         method: 'POST',
         headers: headers(opts),
         body: JSON.stringify({ task_description: taskDescription, workspace_id: workspaceId, context }),
@@ -35,27 +35,27 @@ export async function createJob(
     return res.json();
 }
 
-export async function listJobs(opts: FetchOpts, status?: string) {
+export async function listSessions(opts: FetchOpts, status?: string) {
     const qs = status ? `?status=${status}` : '';
-    const res = await fetch(`${BE}/api/jobs${qs}`, { headers: headers(opts) });
+    const res = await fetch(`${BE}/api/sessions${qs}`, { headers: headers(opts) });
     if (!res.ok) throw new Error(await res.text());
     return res.json();
 }
 
-export async function getJob(jobId: string, opts: FetchOpts) {
-    const res = await fetch(`${BE}/api/jobs/${jobId}`, { headers: headers(opts) });
+export async function getSession(sessionId: string, opts: FetchOpts) {
+    const res = await fetch(`${BE}/api/sessions/${sessionId}`, { headers: headers(opts) });
     if (!res.ok) throw new Error(await res.text());
     return res.json();
 }
 
-export async function cancelJob(jobId: string, opts: FetchOpts) {
-    const res = await fetch(`${BE}/api/jobs/${jobId}`, { method: 'DELETE', headers: headers(opts) });
+export async function cancelSession(sessionId: string, opts: FetchOpts) {
+    const res = await fetch(`${BE}/api/sessions/${sessionId}`, { method: 'DELETE', headers: headers(opts) });
     if (!res.ok) throw new Error(await res.text());
     return res.json();
 }
 
-export async function sendMessage(jobId: string, message: string, targetAgentId: string | null, opts: FetchOpts) {
-    const res = await fetch(`${BE}/api/jobs/${jobId}/message`, {
+export async function sendMessage(sessionId: string, message: string, targetAgentId: string | null, opts: FetchOpts) {
+    const res = await fetch(`${BE}/api/sessions/${sessionId}/message`, {
         method: 'POST',
         headers: headers(opts),
         body: JSON.stringify({ message, target_agent_id: targetAgentId }),
@@ -64,8 +64,8 @@ export async function sendMessage(jobId: string, message: string, targetAgentId:
     return res.json();
 }
 
-export function subscribeToJobEvents(jobId: string): EventSource {
-    return new EventSource(`${BE}/api/jobs/${jobId}/events`);
+export function subscribeToSessionEvents(sessionId: string): EventSource {
+    return new EventSource(`${BE}/api/sessions/${sessionId}/events`);
 }
 
 // ── Orchestration ───────────────────────────────────────────────────
@@ -80,21 +80,21 @@ export async function generatePlan(taskDescription: string, workspaceId: string,
     return res.json();
 }
 
-export async function approvePlan(jobId: string, opts: FetchOpts) {
+export async function approvePlan(sessionId: string, opts: FetchOpts) {
     const res = await fetch(`${BE}/api/orchestrate/approve`, {
         method: 'POST',
         headers: headers(opts),
-        body: JSON.stringify({ job_id: jobId }),
+        body: JSON.stringify({ session_id: sessionId }),
     });
     if (!res.ok) throw new Error(await res.text());
     return res.json();
 }
 
-export async function rejectPlan(jobId: string, opts: FetchOpts) {
+export async function rejectPlan(sessionId: string, opts: FetchOpts) {
     const res = await fetch(`${BE}/api/orchestrate/reject`, {
         method: 'POST',
         headers: headers(opts),
-        body: JSON.stringify({ job_id: jobId }),
+        body: JSON.stringify({ session_id: sessionId }),
     });
     if (!res.ok) throw new Error(await res.text());
     return res.json();

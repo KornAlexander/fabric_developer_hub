@@ -21,7 +21,7 @@ from domain.models.agent_models import (
     SendMessageRequest,
     UserAgentConfig,
 )
-from services.agenthub import job_store
+from services.agenthub import session_store
 from services.agenthub.agent_registry import get_template, list_templates
 from services.agenthub.orchestrator_engine import get_orchestrator_engine
 
@@ -86,11 +86,11 @@ async def list_workspaces(request: Request):
         raise HTTPException(500, "Failed to list workspaces") from e
 
 
-# ── Job endpoints ────────────────────────────────────────────────────
+# ── Session endpoints ────────────────────────────────────────────────
 
-@router.post("/jobs")
-async def create_job(req: CreateJobRequest, request: Request):
-    """Create a new job and generate an execution plan."""
+@router.post("/sessions")
+async def create_session(req: CreateJobRequest, request: Request):
+    """Create a new session and generate an execution plan."""
     user_id = _user_id_from_request(request)
     copilot_token = await _copilot_token(request)
 
@@ -107,58 +107,58 @@ async def create_job(req: CreateJobRequest, request: Request):
         status=JobStatus.PLANNED,
         plan=plan,
     )
-    job_store.create_job(job)
-    logger.info("[AGENTHUB] Job %s created — plan: %s", job.id, plan.summary[:100])
+    session_store.create_session(job)
+    logger.info("[AGENTHUB] Session %s created — plan: %s", job.id, plan.summary[:100])
     return job.model_dump(mode="json")
 
 
-@router.get("/jobs")
-async def list_jobs(request: Request, status: str | None = None, limit: int = 50):
+@router.get("/sessions")
+async def list_sessions(request: Request, status: str | None = None, limit: int = 50):
     user_id = _user_id_from_request(request)
-    jobs = job_store.list_jobs(user_id, status=status, limit=limit)
+    jobs = session_store.list_sessions(user_id, status=status, limit=limit)
     return [j.model_dump(mode="json") for j in jobs]
 
 
-@router.get("/jobs/{job_id}")
-async def get_job(job_id: UUID):
-    job = job_store.get_job(str(job_id))
+@router.get("/sessions/{session_id}")
+async def get_session(session_id: UUID):
+    job = session_store.get_session(str(session_id))
     if not job:
-        raise HTTPException(404, "Job not found")
+        raise HTTPException(404, "Session not found")
     return job.model_dump(mode="json")
 
 
-@router.delete("/jobs/{job_id}")
-async def cancel_or_delete_job(job_id: UUID):
-    job_id_str = str(job_id)
-    job = job_store.get_job(job_id_str)
+@router.delete("/sessions/{session_id}")
+async def cancel_or_delete_session(session_id: UUID):
+    session_id_str = str(session_id)
+    job = session_store.get_session(session_id_str)
     if not job:
-        raise HTTPException(404, "Job not found")
+        raise HTTPException(404, "Session not found")
 
     if job.status == JobStatus.RUNNING:
-        get_orchestrator_engine().cancel_job(job_id_str)
+        get_orchestrator_engine().cancel_job(session_id_str)
         job.status = JobStatus.CANCELLED
         job.completed_at = datetime.now(UTC)
-        job_store.update_job(job)
+        session_store.update_session(job)
         return {"status": "cancelled"}
     else:
-        job_store.delete_job(job_id_str)
+        session_store.delete_session(session_id_str)
         return {"status": "deleted"}
 
 
-@router.post("/jobs/{job_id}/message")
-async def send_message_to_job(job_id: UUID, req: SendMessageRequest):
-    ok = get_orchestrator_engine().inject_message(str(job_id), req.message, req.target_agent_id)
+@router.post("/sessions/{session_id}/message")
+async def send_message_to_session(session_id: UUID, req: SendMessageRequest):
+    ok = get_orchestrator_engine().inject_message(str(session_id), req.message, req.target_agent_id)
     if not ok:
-        raise HTTPException(404, "Job not running or not found")
+        raise HTTPException(404, "Session not running or not found")
     return {"status": "sent"}
 
 
-@router.get("/jobs/{job_id}/events")
-async def job_events_sse(job_id: UUID):
-    """SSE stream of real-time job events."""
-    execution = get_orchestrator_engine().get_job_execution(str(job_id))
+@router.get("/sessions/{session_id}/events")
+async def session_events_sse(session_id: UUID):
+    """SSE stream of real-time session events."""
+    execution = get_orchestrator_engine().get_job_execution(str(session_id))
     if not execution:
-        raise HTTPException(404, "No active execution for this job")
+        raise HTTPException(404, "No active execution for this session")
 
     async def event_stream():
         async for ev in execution.events():
@@ -175,7 +175,7 @@ async def job_events_sse(job_id: UUID):
 
 @router.post("/orchestrate/plan")
 async def generate_plan_endpoint(req: GeneratePlanRequest, request: Request):
-    """Generate an execution plan without creating a job."""
+    """Generate an execution plan without creating a session."""
     copilot_token = await _copilot_token(request)
     plan = await get_orchestrator_engine().generate_plan(
         req.task_description, req.workspace_id, copilot_token, req.context,
@@ -185,31 +185,31 @@ async def generate_plan_endpoint(req: GeneratePlanRequest, request: Request):
 
 @router.post("/orchestrate/approve")
 async def approve_plan(req: ApprovePlanRequest, request: Request):
-    """Approve a planned job and start execution."""
-    job = job_store.get_job(req.job_id)
+    """Approve a planned session and start execution."""
+    job = session_store.get_session(req.session_id)
     if not job:
-        raise HTTPException(404, "Job not found")
+        raise HTTPException(404, "Session not found")
     if job.status != JobStatus.PLANNED:
-        raise HTTPException(400, f"Job is {job.status.value}, not planned")
+        raise HTTPException(400, f"Session is {job.status.value}, not planned")
 
     job.status = JobStatus.APPROVED
-    job_store.update_job(job)
+    session_store.update_session(job)
 
     copilot_token = await _copilot_token(request)
     mcp_tokens = await _mcp_tokens(request)
 
     await get_orchestrator_engine().start_job(job, copilot_token, mcp_tokens)
-    return {"status": "running", "job_id": job.id}
+    return {"status": "running", "session_id": job.id}
 
 
 @router.post("/orchestrate/reject")
 async def reject_plan(req: ApprovePlanRequest):
-    job = job_store.get_job(req.job_id)
+    job = session_store.get_session(req.session_id)
     if not job:
-        raise HTTPException(404, "Job not found")
+        raise HTTPException(404, "Session not found")
     job.status = JobStatus.CANCELLED
     job.completed_at = datetime.now(UTC)
-    job_store.update_job(job)
+    session_store.update_session(job)
     return {"status": "rejected"}
 
 
@@ -240,14 +240,14 @@ async def configure_agent(req: AgentConfigRequest, request: Request):
         runtime_schedule=req.runtime_schedule,
         custom_prompt_additions=req.custom_prompt_additions,
     )
-    job_store.save_agent_config(config)
+    session_store.save_agent_config(config)
     return config.model_dump(mode="json")
 
 
 @router.get("/agents/my")
 async def my_agents(request: Request):
     user_id = _user_id_from_request(request)
-    configs = job_store.get_user_agent_configs(user_id)
+    configs = session_store.get_user_agent_configs(user_id)
     # Enrich with template info
     result = []
     for c in configs:
@@ -261,14 +261,14 @@ async def my_agents(request: Request):
 
 @router.delete("/agents/my/{config_id}")
 async def delete_my_agent(config_id: UUID):
-    ok = job_store.delete_agent_config(str(config_id))
+    ok = session_store.delete_agent_config(str(config_id))
     if not ok:
         raise HTTPException(404, "Config not found")
     return {"status": "deleted"}
 
 
-# ── Audit ───────────────────────────────────────────────────────────────
+# ── Audit ─────────────────────────────────────────────────────────────
 
-@router.get("/jobs/{job_id}/audit")
-async def get_audit(job_id: UUID):
-    return job_store.get_audit_log(str(job_id))
+@router.get("/sessions/{session_id}/audit")
+async def get_audit(session_id: UUID):
+    return session_store.get_audit_log(str(session_id))

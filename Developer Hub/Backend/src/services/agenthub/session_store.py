@@ -1,4 +1,8 @@
-"""SQLite-backed persistence for AgentHub jobs, agent configs, and audit trail."""
+"""SQLite-backed persistence for AgentHub sessions, agent configs, and audit trail.
+
+Note: the in-memory Pydantic model is still called ``Job`` (legacy domain
+name). User-facing terminology and the persistence layer use ``session``.
+"""
 
 from __future__ import annotations
 
@@ -86,12 +90,12 @@ def _connect() -> sqlite3.Connection:
 
 
 def init_db() -> None:
-    """Create tables if they don't exist."""
+    """Create tables if they don't exist, then migrate any pre-rename schema."""
     conn = _connect()
     try:
         conn.executescript(
             """
-            CREATE TABLE IF NOT EXISTS jobs (
+            CREATE TABLE IF NOT EXISTS sessions (
                 id          TEXT PRIMARY KEY,
                 user_id     TEXT NOT NULL,
                 workspace_id TEXT NOT NULL,
@@ -105,8 +109,8 @@ def init_db() -> None:
                 agents      TEXT NOT NULL DEFAULT '[]'
             );
 
-            CREATE INDEX IF NOT EXISTS idx_jobs_user ON jobs(user_id);
-            CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
+            CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+            CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
 
             CREATE TABLE IF NOT EXISTS user_agent_configs (
                 id                  TEXT PRIMARY KEY,
@@ -123,7 +127,7 @@ def init_db() -> None:
 
             CREATE TABLE IF NOT EXISTS audit_log (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                job_id      TEXT NOT NULL,
+                session_id  TEXT NOT NULL,
                 agent_id    TEXT,
                 tool_name   TEXT,
                 tool_args   TEXT,
@@ -132,22 +136,50 @@ def init_db() -> None:
                 user_id     TEXT
             );
 
-            CREATE INDEX IF NOT EXISTS idx_audit_job ON audit_log(job_id);
+            CREATE INDEX IF NOT EXISTS idx_audit_session ON audit_log(session_id);
             """
         )
+        _migrate_legacy_jobs_table(conn)
         conn.commit()
         logger.info("AgentHub database initialized at %s", _db_path())
     finally:
         conn.close()
 
 
-# ── Job CRUD ─────────────────────────────────────────────────────────
+def _migrate_legacy_jobs_table(conn: sqlite3.Connection) -> None:
+    """One-shot migration: copy rows from legacy ``jobs`` table into ``sessions``
+    and from legacy ``audit_log.job_id`` into ``audit_log.session_id``.
 
-def create_job(job: Job) -> Job:
+    Idempotent: it's safe to call on every startup.
+    """
+    legacy = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='jobs'"
+    ).fetchone()
+    if legacy:
+        moved = conn.execute(
+            "INSERT OR IGNORE INTO sessions "
+            "(id, user_id, workspace_id, task_description, context, status, plan, "
+            " created_at, started_at, completed_at, agents) "
+            "SELECT id, user_id, workspace_id, task_description, context, status, plan, "
+            "       created_at, started_at, completed_at, agents FROM jobs"
+        ).rowcount
+        conn.execute("DROP TABLE jobs")
+        logger.info("Migrated %d row(s) from legacy 'jobs' table to 'sessions'", moved)
+
+    # audit_log column rename: detect old job_id column.
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(audit_log)").fetchall()}
+    if "job_id" in cols and "session_id" not in cols:
+        conn.execute("ALTER TABLE audit_log RENAME COLUMN job_id TO session_id")
+        logger.info("Renamed audit_log.job_id -> audit_log.session_id")
+
+
+# ── Session CRUD ────────────────────────────────────────────
+
+def create_session(job: Job) -> Job:
     conn = _connect()
     try:
         conn.execute(
-            "INSERT INTO jobs (id, user_id, workspace_id, task_description, context, status, plan, created_at, started_at, completed_at, agents) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO sessions (id, user_id, workspace_id, task_description, context, status, plan, created_at, started_at, completed_at, agents) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (
                 job.id,
                 job.user_id,
@@ -168,40 +200,40 @@ def create_job(job: Job) -> Job:
         conn.close()
 
 
-def get_job(job_id: str) -> Job | None:
+def get_session(session_id: str) -> Job | None:
     conn = _connect()
     try:
-        row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        row = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
         if not row:
             return None
-        return _row_to_job(row)
+        return _row_to_session(row)
     finally:
         conn.close()
 
 
-def list_jobs(user_id: str, status: str | None = None, limit: int = 50) -> list[Job]:
+def list_sessions(user_id: str, status: str | None = None, limit: int = 50) -> list[Job]:
     conn = _connect()
     try:
         if status:
             rows = conn.execute(
-                "SELECT * FROM jobs WHERE user_id = ? AND status = ? ORDER BY created_at DESC LIMIT ?",
+                "SELECT * FROM sessions WHERE user_id = ? AND status = ? ORDER BY created_at DESC LIMIT ?",
                 (user_id, status, limit),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT * FROM jobs WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
+                "SELECT * FROM sessions WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
                 (user_id, limit),
             ).fetchall()
-        return [_row_to_job(r) for r in rows]
+        return [_row_to_session(r) for r in rows]
     finally:
         conn.close()
 
 
-def update_job(job: Job) -> Job:
+def update_session(job: Job) -> Job:
     conn = _connect()
     try:
         conn.execute(
-            "UPDATE jobs SET status=?, plan=?, started_at=?, completed_at=?, agents=? WHERE id=?",
+            "UPDATE sessions SET status=?, plan=?, started_at=?, completed_at=?, agents=? WHERE id=?",
             (
                 job.status.value,
                 job.plan.model_dump_json() if job.plan else None,
@@ -217,17 +249,17 @@ def update_job(job: Job) -> Job:
         conn.close()
 
 
-def delete_job(job_id: str) -> bool:
+def delete_session(session_id: str) -> bool:
     conn = _connect()
     try:
-        cursor = conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+        cursor = conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
         conn.commit()
         return cursor.rowcount > 0
     finally:
         conn.close()
 
 
-def _row_to_job(row: sqlite3.Row) -> Job:
+def _row_to_session(row: sqlite3.Row) -> Job:
     agents_raw = json.loads(row["agents"]) if row["agents"] else []
     agents = []
     for a in agents_raw:
@@ -314,7 +346,7 @@ def _row_to_config(row: sqlite3.Row) -> UserAgentConfig:
 # ── Audit Log ────────────────────────────────────────────────────────
 
 def log_audit(
-    job_id: str,
+    session_id: str,
     agent_id: str | None,
     tool_name: str | None,
     tool_args: dict[str, Any] | None,
@@ -324,9 +356,9 @@ def log_audit(
     conn = _connect()
     try:
         conn.execute(
-            "INSERT INTO audit_log (job_id, agent_id, tool_name, tool_args, result_summary, timestamp, user_id) VALUES (?,?,?,?,?,?,?)",
+            "INSERT INTO audit_log (session_id, agent_id, tool_name, tool_args, result_summary, timestamp, user_id) VALUES (?,?,?,?,?,?,?)",
             (
-                job_id,
+                session_id,
                 agent_id,
                 tool_name,
                 json.dumps(tool_args) if tool_args else None,
@@ -340,11 +372,11 @@ def log_audit(
         conn.close()
 
 
-def get_audit_log(job_id: str) -> list[dict[str, Any]]:
+def get_audit_log(session_id: str) -> list[dict[str, Any]]:
     conn = _connect()
     try:
         rows = conn.execute(
-            "SELECT * FROM audit_log WHERE job_id = ? ORDER BY timestamp", (job_id,)
+            "SELECT * FROM audit_log WHERE session_id = ? ORDER BY timestamp", (session_id,)
         ).fetchall()
         return [dict(r) for r in rows]
     finally:

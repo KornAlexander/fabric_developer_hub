@@ -36,7 +36,7 @@ import {
 import { WorkloadClientAPI } from "@ms-fabric/workload-client";
 import * as api from "../../controller/AgentHubApi";
 
-interface JobDetailPageProps {
+interface SessionDetailPageProps {
     workloadClient: WorkloadClientAPI;
 }
 
@@ -58,8 +58,8 @@ interface Action {
     timestamp: string;
 }
 
-export function JobDetailPage({ workloadClient }: JobDetailPageProps) {
-    const { jobId } = useParams<{ jobId: string }>();
+export function SessionDetailPage({ workloadClient }: SessionDetailPageProps) {
+    const { sessionId } = useParams<{ sessionId: string }>();
     const history = useHistory();
 
     const [job, setJob] = useState<any>(null);
@@ -80,12 +80,12 @@ export function JobDetailPage({ workloadClient }: JobDetailPageProps) {
     // Load job
     useEffect(() => {
         loadJob();
-    }, [jobId]);
+    }, [sessionId]);
 
     async function loadJob() {
         setLoading(true);
         try {
-            const data = await api.getJob(jobId, { githubToken });
+            const data = await api.getSession(sessionId, { githubToken });
             setJob(data);
 
             // Populate from stored data
@@ -119,7 +119,7 @@ export function JobDetailPage({ workloadClient }: JobDetailPageProps) {
     useEffect(() => {
         if (!job || job.status !== "running") return undefined;
 
-        const es = api.subscribeToJobEvents(jobId);
+        const es = api.subscribeToSessionEvents(sessionId);
         es.onmessage = (event) => {
             try {
                 const data = JSON.parse(event.data);
@@ -231,7 +231,7 @@ export function JobDetailPage({ workloadClient }: JobDetailPageProps) {
     async function handleSendMessage() {
         if (!chatInput.trim()) return;
         try {
-            await api.sendMessage(jobId, chatInput, null, { githubToken });
+            await api.sendMessage(sessionId, chatInput, null, { githubToken });
             setChatInput("");
         } catch (e) {
             console.error("Failed to send message:", e);
@@ -240,7 +240,7 @@ export function JobDetailPage({ workloadClient }: JobDetailPageProps) {
 
     async function handleTerminate() {
         try {
-            await api.cancelJob(jobId, { githubToken });
+            await api.cancelSession(sessionId, { githubToken });
             if (timerRef.current) clearInterval(timerRef.current);
             loadJob();
         } catch (e) {

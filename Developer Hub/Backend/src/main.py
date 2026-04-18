@@ -38,7 +38,7 @@ from api.github_chat_controller import router as github_chat_router
 from api.lakehouse_controller import router as lakehouse_controller
 from api.onelake_controller import router as onelake_controller
 from app.exception_handlers import register_exception_handlers
-from services.agenthub import job_store as agenthub_store
+from services.agenthub import session_store as agenthub_store
 from services.agenthub.orchestrator_engine import get_orchestrator_engine
 from services.configuration_service import get_configuration_service
 from services.mcp.mcp_client_manager import MCPClientManager
@@ -226,7 +226,7 @@ async def lifespan(app: FastAPI):
             logger.info("\u2713 AgentHub database initialized")
         except Exception:
             logger.error(
-                "\u2717 AgentHub DB init failed \u2014 /api/jobs and related endpoints "
+                "\u2717 AgentHub DB init failed \u2014 /api/sessions and related endpoints "
                 "will return 500 until the DB path is reachable",
                 exc_info=True,
             )
