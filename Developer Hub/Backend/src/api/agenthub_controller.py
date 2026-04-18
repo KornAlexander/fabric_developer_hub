@@ -8,7 +8,7 @@ import uuid
 from datetime import UTC, datetime
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from domain.models.agent_models import (
@@ -21,7 +21,7 @@ from domain.models.agent_models import (
     SendMessageRequest,
     UserAgentConfig,
 )
-from services.agenthub import session_store
+from services.agenthub import session_store, workspaces_cache
 from services.agenthub.agent_registry import get_template, list_templates
 from services.agenthub.orchestrator_engine import get_orchestrator_engine
 
@@ -61,29 +61,102 @@ async def _mcp_tokens(request: Request) -> dict | None:
 
 # ── Workspace listing ────────────────────────────────────────────────
 
-@router.get("/workspaces")
-async def list_workspaces(request: Request):
-    """List Fabric workspaces the user has access to (for workspace selector)."""
-    mcp_tokens = await _mcp_tokens(request)
-    if not mcp_tokens:
-        raise HTTPException(400, "Fabric token required to list workspaces")
-
+async def _fetch_and_reconcile_workspaces(user_id: str, mcp_tokens: dict) -> list[dict]:
+    """Call Fabric, normalize, and reconcile the per-user workspace cache."""
     from api.github_chat_controller import _mcp_manager
     if not _mcp_manager:
         raise HTTPException(503, "MCP manager not available")
+    result = await _mcp_manager.call_tool("fabric_list_workspaces", {}, mcp_tokens)
+    raw = json.loads(str(result))
+    fresh = [
+        {"id": w.get("id"), "name": w.get("displayName", w.get("id"))}
+        for w in raw if w.get("id")
+    ]
+    workspaces_cache.reconcile(user_id, fresh)
+    return fresh
+
+
+async def _background_refresh_workspaces(user_id: str, mcp_tokens: dict) -> None:
+    """Best-effort background refresh — never raises into the request."""
+    try:
+        await _fetch_and_reconcile_workspaces(user_id, mcp_tokens)
+    except Exception:
+        logger.warning("Background workspace refresh failed for user=%s", user_id, exc_info=True)
+
+
+@router.get("/workspaces")
+async def list_workspaces(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    refresh: bool = Query(False, description="Force a synchronous refresh from Fabric."),
+):
+    """List Fabric workspaces for the workspace selector.
+
+    Returns the cached list when fresh (TTL = workspaces_cache.CACHE_TTL).
+    When stale, fetches from Fabric and reconciles the cache (insert / update
+    / delete). Pass ``?refresh=true`` to force a synchronous refresh.
+    """
+    user_id = _user_id_from_request(request)
+    mcp_tokens = await _mcp_tokens(request)
+
+    cached, newest = workspaces_cache.get_cached(user_id)
+    cache_fresh = workspaces_cache.is_fresh(newest)
+
+    # Cached and not asked to refresh → serve cache.
+    if cached and cache_fresh and not refresh:
+        return {
+            "workspaces": [{"id": w.id, "name": w.name} for w in cached],
+            "cached_at": newest.isoformat() if newest else None,
+            "source": "cache",
+        }
+
+    # Need a network call — the Fabric token is required.
+    if not mcp_tokens:
+        if cached:
+            # Serve stale cache rather than fail when token is missing.
+            return {
+                "workspaces": [{"id": w.id, "name": w.name} for w in cached],
+                "cached_at": newest.isoformat() if newest else None,
+                "source": "stale-cache",
+            }
+        raise HTTPException(400, "Fabric token required to list workspaces")
 
     try:
-        import json
-        result = await _mcp_manager.call_tool("fabric_list_workspaces", {}, mcp_tokens)
-        workspaces = json.loads(str(result))
-        return [{"id": w.get("id"), "name": w.get("displayName", w.get("id"))} for w in workspaces]
+        fresh = await _fetch_and_reconcile_workspaces(user_id, mcp_tokens)
     except HTTPException:
         raise
-    except Exception as e:
-        # Don't echo the underlying exception message back to the user — it can
-        # leak internal SDK details. Log full traceback server-side.
+    except Exception:
         logger.exception("Failed to list workspaces")
-        raise HTTPException(500, "Failed to list workspaces") from e
+        if cached:
+            return {
+                "workspaces": [{"id": w.id, "name": w.name} for w in cached],
+                "cached_at": newest.isoformat() if newest else None,
+                "source": "stale-cache",
+            }
+        raise HTTPException(500, "Failed to list workspaces")
+
+    return {
+        "workspaces": fresh,
+        "cached_at": datetime.now(UTC).isoformat(),
+        "source": "refreshed",
+    }
+
+
+@router.post("/workspaces/preload")
+async def preload_workspaces(request: Request, background_tasks: BackgroundTasks):
+    """Schedule a background refresh of the user's workspaces.
+
+    Called by the frontend right after GitHub auth so the workspace selector
+    is instant on the user's first navigation. Returns immediately.
+    """
+    user_id = _user_id_from_request(request)
+    mcp_tokens = await _mcp_tokens(request)
+    if not mcp_tokens:
+        # Without a Fabric token we can't fetch — ignore quietly so the call
+        # is safe to make unconditionally from the frontend.
+        return {"status": "skipped", "reason": "no fabric token"}
+    background_tasks.add_task(_background_refresh_workspaces, user_id, mcp_tokens)
+    return {"status": "scheduled"}
 
 
 # ── Session endpoints ────────────────────────────────────────────────

@@ -12,6 +12,19 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from api import agenthub_controller
+from services.agenthub import session_store
+
+
+@pytest.fixture(autouse=True)
+def _isolated_agenthub_db(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point the agenthub store at a per-test SQLite file so the workspace
+    cache table exists and is empty for each case."""
+    db = tmp_path / "agenthub.db"
+    monkeypatch.setenv("AGENTHUB_DB_PATH", str(db))
+    monkeypatch.setattr(session_store, "_DB_PATH", None)
+    session_store.init_db()
+    yield
+    monkeypatch.setattr(session_store, "_DB_PATH", None)
 
 
 @pytest.fixture
@@ -135,7 +148,10 @@ def test_list_workspaces_ok_returns_simplified_shape(
         "/api/workspaces", headers={"X-Fabric-Token": "Bearer test"},
     )
     assert resp.status_code == 200
-    assert resp.json() == [
+    body = resp.json()
+    assert body["workspaces"] == [
         {"id": "ws-1", "name": "WS One"},
         {"id": "ws-2", "name": "WS Two"},
     ]
+    assert body["source"] == "refreshed"
+    assert body["cached_at"] is not None

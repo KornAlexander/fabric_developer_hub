@@ -140,6 +140,10 @@ def init_db() -> None:
             """
         )
         _migrate_legacy_jobs_table(conn)
+        # Workspace cache lives in the same DB so all SQLite state is
+        # under one bind-mounted file.
+        from services.agenthub import workspaces_cache
+        workspaces_cache.init_schema(conn)
         conn.commit()
         logger.info("AgentHub database initialized at %s", _db_path())
     finally:

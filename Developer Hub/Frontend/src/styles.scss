@@ -2809,7 +2809,33 @@ html, body, #root {
         color: #5f5e5e;
         letter-spacing: 0.1em;
         text-transform: uppercase;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
     }
+}
+
+.workspace-refresh-btn {
+    background: transparent;
+    border: none;
+    padding: 2px;
+    border-radius: 4px;
+    color: #5f5e5e;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.12s, color 0.12s;
+
+    &:hover:not(:disabled) { background: rgba(192, 199, 212, 0.25); color: #1a1c1c; }
+    &:disabled { opacity: 0.5; cursor: default; }
+
+    .spin { animation: workspace-refresh-spin 0.9s linear infinite; }
+}
+
+@keyframes workspace-refresh-spin {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
 }
 .branchpanel-field--full {
     width: 100%;

@@ -28,6 +28,7 @@ import {
     BranchFork20Regular,
     Info16Regular,
     ChevronDown16Regular,
+    ArrowClockwise16Regular,
 } from "@fluentui/react-icons";
 import ReactFlow, {
     Background,
@@ -144,6 +145,17 @@ const DISCOVERY_CARDS: DiscoveryCard[] = [
     },
 ];
 
+/** Format a workspace cache timestamp as "just now" / "5 min ago" / "2 hr ago". */
+function formatCacheAge(iso: string | null): string {
+    if (!iso) return "never";
+    const ageMs = Date.now() - new Date(iso).getTime();
+    if (ageMs < 60_000) return "just now";
+    const mins = Math.floor(ageMs / 60_000);
+    if (mins < 60) return `${mins} min ago`;
+    const hrs = Math.floor(mins / 60);
+    return `${hrs} hr ago`;
+}
+
 /* ── Component ────────────────────────────────────────────────── */
 
 export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
@@ -159,6 +171,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
     const [selectedWorkspace, setSelectedWorkspace] = useState("");
     const [destinationWorkspace, setDestinationWorkspace] = useState("");
     const [loadingWorkspaces, setLoadingWorkspaces] = useState(false);
+    const [workspacesCachedAt, setWorkspacesCachedAt] = useState<string | null>(null);
 
     // Composer toggles
     const [requireApprovals, setRequireApprovals] = useState(true);
@@ -185,30 +198,27 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
         }
     }
 
-    useEffect(() => { loadWorkspaces(); }, []);
+    useEffect(() => { loadWorkspaces(false); }, []);
 
-    async function loadWorkspaces() {
+    async function loadWorkspaces(forceRefresh: boolean) {
         setLoadingWorkspaces(true);
         try {
             const fabricToken = await getFabricToken();
-            const resp = await fetch(
-                `${(process as any).env.WORKLOAD_BE_URL || 'http://localhost:5000'}/api/workspaces`,
-                {
-                    headers: {
-                        'Authorization': `Bearer ${githubToken}`,
-                        ...(fabricToken ? { 'X-Fabric-Token': `Bearer ${fabricToken}` } : {}),
-                    },
-                }
-            );
-            if (resp.ok) {
-                const data = await resp.json();
-                setWorkspaces(data || []);
-                const initial = (defaultWs && data.some((w: any) => w.id === defaultWs))
-                    ? defaultWs
-                    : (data[0]?.id || "");
-                setSelectedWorkspace(initial);
-                setDestinationWorkspace(initial);
-            }
+            const data = await api.getWorkspaces({ githubToken, fabricToken }, forceRefresh);
+            const list = data.workspaces || [];
+            setWorkspaces(list);
+            setWorkspacesCachedAt(data.cached_at);
+            // Preserve selection if it still exists, otherwise pick a default.
+            setSelectedWorkspace(prev => {
+                if (prev && list.some(w => w.id === prev)) return prev;
+                if (defaultWs && list.some(w => w.id === defaultWs)) return defaultWs;
+                return list[0]?.id || "";
+            });
+            setDestinationWorkspace(prev => {
+                if (prev && list.some(w => w.id === prev)) return prev;
+                if (defaultWs && list.some(w => w.id === defaultWs)) return defaultWs;
+                return list[0]?.id || "";
+            });
         } catch (e) {
             console.warn("Failed to load workspaces:", e);
         } finally {
@@ -366,7 +376,21 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                                     <div className="composer-branchpanel">
                                         <div className="branchpanel-row">
                                             <div className="branchpanel-field">
-                                                <label>SOURCE WORKSPACE</label>
+                                                <label>
+                                                    SOURCE WORKSPACE
+                                                    <button
+                                                        type="button"
+                                                        className="workspace-refresh-btn"
+                                                        onClick={() => loadWorkspaces(true)}
+                                                        disabled={loadingWorkspaces}
+                                                        title={workspacesCachedAt
+                                                            ? `Updated ${formatCacheAge(workspacesCachedAt)} — click to refresh`
+                                                            : "Refresh workspaces"}
+                                                        aria-label="Refresh workspaces"
+                                                    >
+                                                        <ArrowClockwise16Regular className={loadingWorkspaces ? "spin" : undefined} />
+                                                    </button>
+                                                </label>
                                                 <div className="select-wrap">
                                                     <PeopleTeam20Regular className="select-leadicon" />
                                                     {loadingWorkspaces ? (

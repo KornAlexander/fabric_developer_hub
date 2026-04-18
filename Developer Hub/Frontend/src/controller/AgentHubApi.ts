@@ -135,3 +135,28 @@ export async function deleteMyAgent(configId: string, opts: FetchOpts) {
     if (!res.ok) throw new Error(await res.text());
     return res.json();
 }
+
+// ── Workspaces (cached, with manual refresh) ────────────────────────
+
+export interface WorkspacesResponse {
+    workspaces: { id: string; name: string }[];
+    cached_at: string | null;
+    /** "cache" | "refreshed" | "stale-cache" */
+    source: string;
+}
+
+export async function getWorkspaces(opts: FetchOpts, refresh = false): Promise<WorkspacesResponse> {
+    const qs = refresh ? '?refresh=true' : '';
+    const res = await fetch(`${BE}/api/workspaces${qs}`, { headers: headers(opts) });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+}
+
+/** Fire-and-forget background preload after auth. Safe to call without a Fabric token. */
+export async function preloadWorkspaces(opts: FetchOpts): Promise<void> {
+    try {
+        await fetch(`${BE}/api/workspaces/preload`, { method: 'POST', headers: headers(opts) });
+    } catch {
+        /* best effort */
+    }
+}

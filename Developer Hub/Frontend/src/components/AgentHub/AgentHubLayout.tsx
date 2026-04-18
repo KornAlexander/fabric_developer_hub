@@ -33,6 +33,8 @@ import { SessionDetailPage } from "./SessionDetailPage";
 import { useGitHubAuth } from "./useGitHubAuth";
 import { ItemProvider } from "./ItemContext";
 import { PbiFixerPage } from "../PbiFixer";
+import { callAuthAcquireAccessToken } from "../../controller/AgentHubController";
+import * as api from "../../controller/AgentHubApi";
 
 interface AgentHubLayoutProps {
     workloadClient: WorkloadClientAPI;
@@ -84,6 +86,25 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
     function nav(page: string) {
         history.push(`${match.url}/${page}`);
     }
+
+    // ── Background workspace preload (fire-and-forget) ────────────
+    // Once GitHub auth lands, acquire a Fabric token and ask the backend to
+    // warm the per-user workspace cache so the workspace selector is instant
+    // on first navigation. Safe to call without a Fabric token (no-op).
+    useEffect(() => {
+        if (!auth.githubToken) return;
+        let cancelled = false;
+        (async () => {
+            let fabricToken: string | undefined;
+            try {
+                const t = await callAuthAcquireAccessToken(workloadClient);
+                fabricToken = t.token;
+            } catch { /* ignore — preload is best-effort */ }
+            if (cancelled) return;
+            await api.preloadWorkspaces({ githubToken: auth.githubToken!, fabricToken });
+        })();
+        return () => { cancelled = true; };
+    }, [auth.githubToken, workloadClient]);
 
     // ── GitHub auth gate ──────────────────────────────────────────
     if (!auth.githubToken) {
