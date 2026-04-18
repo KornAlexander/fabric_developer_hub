@@ -1,35 +1,31 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
+import { Spinner } from "@fluentui/react-components";
 import {
-    Badge,
-    Button,
-    Card,
-    CardHeader,
-    Text,
-    Spinner,
-    Subtitle1,
-    Body1,
-    Caption1,
-    Tab,
-    TabList,
-    SelectTabEvent,
-    SelectTabData,
-    Input,
-    Checkbox,
-    Divider,
-    DrawerBody,
-    DrawerHeader,
-    DrawerHeaderTitle,
-    DrawerFooter,
-    OverlayDrawer,
-    CheckboxOnChangeData,
-} from "@fluentui/react-components";
-import {
-    Search24Regular,
-    Dismiss24Regular,
+    Search20Regular,
+    Add20Regular,
+    ArrowSync20Regular,
     Bot24Regular,
-    Wrench24Regular,
-    Shield24Regular,
+    DataUsage24Regular,
+    DataPie24Regular,
+    ShieldCheckmark24Regular,
+    Stream24Regular,
     DataBarVertical24Regular,
+    Wrench24Regular,
+    Code20Regular,
+    Database20Regular,
+    Edit16Regular,
+    DataHistogram16Regular,
+    Wrench16Regular,
+    Add16Regular,
+    AddCircle20Regular,
+    Settings16Regular,
+    Dismiss16Regular,
+    Copy20Regular,
+    MoreVertical20Regular,
+    CheckmarkCircle16Filled,
+    ShieldCheckmark20Regular,
+    PlayCircle16Regular,
+    Delete20Regular,
 } from "@fluentui/react-icons";
 import { WorkloadClientAPI } from "@ms-fabric/workload-client";
 import * as api from "../../controller/AgentHubApi";
@@ -38,34 +34,55 @@ interface AgentsPageProps {
     workloadClient: WorkloadClientAPI;
 }
 
-function categoryColor(cat: string): "informative" | "success" | "warning" | "important" | "danger" {
-    switch (cat) {
-        case "ENGINEERING": return "informative";
-        case "ANALYTICS": return "success";
-        case "ADMIN": return "warning";
-        default: return "important";
-    }
+type AgentTone = "blue" | "purple" | "teal" | "amber" | "emerald";
+
+interface AgentVisual {
+    icon: React.ReactNode;
+    tone: AgentTone;
 }
 
-function categoryIcon(cat: string) {
-    switch (cat) {
-        case "ENGINEERING": return <Wrench24Regular />;
-        case "ANALYTICS": return <DataBarVertical24Regular />;
-        case "ADMIN": return <Shield24Regular />;
-        default: return <Bot24Regular />;
+function pickVisual(category?: string, name?: string): AgentVisual {
+    const lower = `${category || ""} ${name || ""}`.toLowerCase();
+    if (lower.includes("engineer") || lower.includes("etl")) {
+        return { icon: <DataUsage24Regular />, tone: "blue" };
     }
+    if (lower.includes("admin") || lower.includes("govern") || lower.includes("secur")) {
+        return { icon: <ShieldCheckmark24Regular />, tone: "purple" };
+    }
+    if (lower.includes("realtime") || lower.includes("stream") || lower.includes("event")) {
+        return { icon: <Stream24Regular />, tone: "teal" };
+    }
+    if (lower.includes("report") || lower.includes("sales")) {
+        return { icon: <DataBarVertical24Regular />, tone: "amber" };
+    }
+    if (lower.includes("dashboard") || lower.includes("bi") || lower.includes("powerbi") || lower.includes("analy")) {
+        return { icon: <DataPie24Regular />, tone: "emerald" };
+    }
+    return { icon: <Bot24Regular />, tone: "blue" };
 }
 
-export function AgentsPage({ workloadClient }: AgentsPageProps) {
+function skillKind(tag: string): "authoring" | "consumption" | "tool" {
+    const t = tag.toLowerCase();
+    if (t.includes("author")) return "authoring";
+    if (t.includes("consum") || t.includes("query")) return "consumption";
+    return "tool";
+}
+
+function skillIcon(kind: "authoring" | "consumption" | "tool") {
+    if (kind === "authoring") return <Edit16Regular />;
+    if (kind === "consumption") return <DataHistogram16Regular />;
+    return <Wrench16Regular />;
+}
+
+export function AgentsPage({ workloadClient: _workloadClient }: AgentsPageProps) {
     const [templates, setTemplates] = useState<any[]>([]);
     const [myConfigs, setMyConfigs] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
-    const [activeTab, setActiveTab] = useState("marketplace");
+    const [activeTab, setActiveTab] = useState<"my-agents" | "skill-library" | "marketplace">("my-agents");
     const [search, setSearch] = useState("");
-    const [selectedAgent, setSelectedAgent] = useState<any | null>(null);
-    const [drawerOpen, setDrawerOpen] = useState(false);
-    const [configState, setConfigState] = useState<Record<string, boolean>>({});
-    const [saving, setSaving] = useState(false);
+    const [selectedId, setSelectedId] = useState<string | null>(null);
+    const [savingId, setSavingId] = useState<string | null>(null);
+    const [removingId, setRemovingId] = useState<string | null>(null);
 
     const githubToken = sessionStorage.getItem("github_token") || "";
 
@@ -82,6 +99,7 @@ export function AgentsPage({ workloadClient }: AgentsPageProps) {
             ]);
             setTemplates(tpls || []);
             setMyConfigs(configs || []);
+            setSelectedId(prev => prev || ((tpls || [])[0]?.id ?? null));
         } catch (e) {
             console.error("Failed to load agents:", e);
         } finally {
@@ -89,255 +107,466 @@ export function AgentsPage({ workloadClient }: AgentsPageProps) {
         }
     }
 
-    function openConfig(agent: any) {
-        setSelectedAgent(agent);
-        setConfigState({
-            warehouse_read: true,
-            warehouse_write: false,
-            sql_warehouse: true,
-            data_factory: false,
-            teams: false,
-            outlook: false,
-        });
-        setDrawerOpen(true);
-    }
+    const myTemplateIds = useMemo(() => new Set(myConfigs.map((c: any) => c.agent_template_id)), [myConfigs]);
 
-    async function handleDeploy() {
-        if (!selectedAgent) return;
-        setSaving(true);
+    const visibleAgents = useMemo(() => {
+        const term = search.trim().toLowerCase();
+        let list: any[];
+        if (activeTab === "my-agents") {
+            list = templates.filter(t => myTemplateIds.has(t.id));
+        } else if (activeTab === "marketplace") {
+            list = templates.filter(t => !myTemplateIds.has(t.id));
+        } else {
+            list = templates;
+        }
+        if (!term) return list;
+        return list.filter(t =>
+            (t.name || "").toLowerCase().includes(term) ||
+            (t.display_name || "").toLowerCase().includes(term) ||
+            (t.description || "").toLowerCase().includes(term) ||
+            (t.tags || []).some((tag: string) => tag.toLowerCase().includes(term))
+        );
+    }, [templates, myTemplateIds, activeTab, search]);
+
+    const skillsCount = useMemo(() => {
+        const s = new Set<string>();
+        templates.forEach(t => (t.tags || []).forEach((tag: string) => s.add(tag)));
+        return s.size;
+    }, [templates]);
+
+    const allSkills = useMemo(() => {
+        const s = new Set<string>();
+        templates.forEach(t => (t.tags || []).forEach((tag: string) => s.add(tag)));
+        return Array.from(s).sort();
+    }, [templates]);
+
+    const selected = useMemo(() => {
+        if (!selectedId) return null;
+        return templates.find(t => t.id === selectedId) || null;
+    }, [selectedId, templates]);
+
+    const selectedConfig = useMemo(() => {
+        if (!selected) return null;
+        return myConfigs.find((c: any) => c.agent_template_id === selected.id) || null;
+    }, [selected, myConfigs]);
+
+    async function enableAgent(agent: any) {
+        setSavingId(agent.id);
         try {
             await api.configureAgent({
-                agent_template_id: selectedAgent.id,
-                access_levels: {
-                    warehouse_read: configState.warehouse_read ?? true,
-                    warehouse_write: configState.warehouse_write ?? false,
-                },
-                tool_integrations: {
-                    sql_warehouse: configState.sql_warehouse ?? true,
-                    data_factory: configState.data_factory ?? false,
-                    teams: configState.teams ?? false,
-                    outlook: configState.outlook ?? false,
-                },
+                agent_template_id: agent.id,
+                access_levels: { warehouse_read: true, warehouse_write: false },
+                tool_integrations: { sql_warehouse: true, data_factory: false, teams: false, outlook: false },
             }, { githubToken });
-            setDrawerOpen(false);
             await loadData();
         } catch (e) {
-            console.error("Failed to configure agent:", e);
+            console.error("Failed to enable agent:", e);
         } finally {
-            setSaving(false);
+            setSavingId(null);
         }
     }
 
-    const filtered = templates.filter(t =>
-        !search || t.name.toLowerCase().includes(search.toLowerCase()) ||
-        t.description.toLowerCase().includes(search.toLowerCase()) ||
-        t.tags.some((tag: string) => tag.toLowerCase().includes(search.toLowerCase()))
-    );
+    async function removeAgent(config: any) {
+        setRemovingId(config.id);
+        try {
+            await api.deleteMyAgent(config.id, { githubToken });
+            await loadData();
+        } catch (e) {
+            console.error("Failed to remove agent:", e);
+        } finally {
+            setRemovingId(null);
+        }
+    }
 
-    const myTemplateIds = new Set(myConfigs.map((c: any) => c.agent_template_id));
+    const newInMarketplace = templates.filter(t => !myTemplateIds.has(t.id)).length;
+    const enabledCount = myConfigs.length;
 
     return (
         <div className="agents-page">
-            <div className="agents-page-header">
-                <TabList
-                    selectedValue={activeTab}
-                    onTabSelect={(_: SelectTabEvent, d: SelectTabData) => setActiveTab(d.value as string)}
-                >
-                    <Tab value="marketplace">Marketplace</Tab>
-                    <Tab value="my-agents">My Agents</Tab>
-                    <Tab value="analytics">Analytics</Tab>
-                </TabList>
+            {/* ── Header with tabs ── */}
+            <div className="agents-header">
+                <div className="agents-header-row">
+                    <div>
+                        <h1 className="agents-title">Agents &amp; Skills</h1>
+                        <p className="agents-subtitle">
+                            Build, compose, and manage AI agents from modular skills. Powered by{" "}
+                            <span className="agents-subtitle-accent">skills-for-fabric</span>.
+                        </p>
+                    </div>
+                    <div className="agents-header-actions">
+                        <button type="button" className="agents-btn-secondary" onClick={loadData}>
+                            <ArrowSync20Regular /> Check updates
+                        </button>
+                        <button type="button" className="agents-btn-primary">
+                            <Add20Regular /> Create Agent
+                        </button>
+                    </div>
+                </div>
+                <div className="agents-tabs">
+                    <button
+                        type="button"
+                        className={`agents-tab ${activeTab === "my-agents" ? "agents-tab--active" : ""}`}
+                        onClick={() => setActiveTab("my-agents")}
+                    >
+                        My Agents
+                    </button>
+                    <button
+                        type="button"
+                        className={`agents-tab ${activeTab === "skill-library" ? "agents-tab--active" : ""}`}
+                        onClick={() => setActiveTab("skill-library")}
+                    >
+                        Skill Library
+                    </button>
+                    <button
+                        type="button"
+                        className={`agents-tab ${activeTab === "marketplace" ? "agents-tab--active" : ""}`}
+                        onClick={() => setActiveTab("marketplace")}
+                    >
+                        Marketplace
+                        {newInMarketplace > 0 && (
+                            <span className="agents-tab-badge">{newInMarketplace} new</span>
+                        )}
+                    </button>
+                </div>
             </div>
 
-            {activeTab === "marketplace" && (
-                <div className="marketplace-content">
-                    <Text size={700} weight="bold" as="h2">Agent Marketplace</Text>
-                    <Body1 className="marketplace-subtitle">
-                        Discover and deploy specialized AI agents across your Fabric environment.
-                        Scale your data engineering and analysis workflows automatically.
-                    </Body1>
-
-                    <Input
-                        contentBefore={<Search24Regular />}
-                        placeholder="Search agents..."
-                        value={search}
-                        onChange={(_, d) => setSearch(d.value)}
-                        className="agents-search"
-                    />
+            {/* ── Body: list + detail panel ── */}
+            <div className="agents-body">
+                <div className="agents-list-col">
+                    {/* Stats / search bar */}
+                    <div className="agents-statsbar">
+                        <div className="agents-stat">
+                            <Bot24Regular className="agents-stat-icon" />
+                            <span className="agents-stat-num">{visibleAgents.length}</span>
+                            <span className="agents-stat-label">{activeTab === "skill-library" ? "skills shown" : "agents"}</span>
+                        </div>
+                        <div className="agents-stat">
+                            <Wrench24Regular className="agents-stat-icon" />
+                            <span className="agents-stat-num">{skillsCount}</span>
+                            <span className="agents-stat-label">skills installed</span>
+                        </div>
+                        <div className="agents-stat">
+                            <CheckmarkCircle16Filled className="agents-stat-icon agents-stat-icon--ok" />
+                            <span className="agents-stat-label agents-stat-label--ok">
+                                {enabledCount > 0 ? "All healthy" : "None enabled"}
+                            </span>
+                        </div>
+                        <div className="agents-search-wrap">
+                            <Search20Regular className="agents-search-icon" />
+                            <input
+                                type="text"
+                                placeholder="Search agents, skills, or capabilities…"
+                                value={search}
+                                onChange={(e) => setSearch(e.target.value)}
+                                className="agents-search-input"
+                            />
+                        </div>
+                    </div>
 
                     {loading ? (
-                        <div className="agents-loading"><Spinner label="Loading agents..." /></div>
-                    ) : (
-                        <div className="agent-marketplace-grid">
-                            {filtered.map((agent) => (
-                                <Card key={agent.id} className="marketplace-card">
-                                    <CardHeader
-                                        image={<div className="marketplace-card-icon">{categoryIcon(agent.category)}</div>}
-                                        header={
-                                            <div className="marketplace-card-header">
-                                                <Text weight="semibold" size={400}>{agent.display_name || agent.name}</Text>
-                                                <Badge appearance="filled" color={categoryColor(agent.category)} size="small">
-                                                    {agent.category}
-                                                </Badge>
-                                            </div>
-                                        }
-                                    />
-                                    <Body1 className="marketplace-card-desc">
-                                        {agent.description?.slice(0, 120)}
-                                    </Body1>
-                                    <div className="marketplace-card-tags">
-                                        {agent.tags?.map((tag: string) => (
-                                            <Badge key={tag} appearance="outline" size="small">{tag}</Badge>
-                                        ))}
-                                    </div>
-                                    <div className="marketplace-card-footer">
-                                        <Caption1>v{agent.version}</Caption1>
-                                        {myTemplateIds.has(agent.id) ? (
-                                            <Badge appearance="filled" color="success" size="small">Enabled</Badge>
-                                        ) : (
-                                            <Button
-                                                appearance="transparent"
-                                                size="small"
-                                                onClick={() => openConfig(agent)}
-                                            >
-                                                Configure →
-                                            </Button>
-                                        )}
-                                    </div>
-                                </Card>
-                            ))}
-                        </div>
-                    )}
-                </div>
-            )}
-
-            {activeTab === "my-agents" && (
-                <div className="my-agents-content">
-                    <Subtitle1>My Agents</Subtitle1>
-                    {myConfigs.length === 0 ? (
-                        <Body1>No agents configured yet. Visit the Marketplace to add agents.</Body1>
-                    ) : (
-                        <div className="agent-marketplace-grid">
-                            {myConfigs.map((config: any) => {
-                                const tpl = config.template;
+                        <div className="agents-loading"><Spinner label="Loading agents…" /></div>
+                    ) : activeTab === "skill-library" ? (
+                        <div className="skill-library-grid">
+                            {allSkills.map(tag => {
+                                const kind = skillKind(tag);
                                 return (
-                                    <Card key={config.id} className="marketplace-card">
-                                        <CardHeader
-                                            header={
-                                                <Text weight="semibold" size={400}>
-                                                    {tpl?.display_name || config.agent_template_id}
-                                                </Text>
-                                            }
-                                        />
-                                        <Body1>{tpl?.description?.slice(0, 100)}</Body1>
-                                        <div className="marketplace-card-footer">
-                                            <Caption1>Configured</Caption1>
-                                            <Button
-                                                appearance="subtle"
-                                                size="small"
-                                                icon={<Dismiss24Regular />}
-                                                onClick={async () => {
-                                                    await api.deleteMyAgent(config.id, { githubToken });
-                                                    await loadData();
-                                                }}
-                                            >
-                                                Remove
-                                            </Button>
-                                        </div>
-                                    </Card>
+                                    <div key={tag} className={`skill-tile skill-tile--${kind}`}>
+                                        <div className="skill-tile-icon">{skillIcon(kind)}</div>
+                                        <div className="skill-tile-name">{tag}</div>
+                                        <div className="skill-tile-kind">{kind}</div>
+                                    </div>
                                 );
                             })}
+                            {allSkills.length === 0 && (
+                                <div className="agents-empty">No skills found.</div>
+                            )}
                         </div>
-                    )}
-                </div>
-            )}
+                    ) : (
+                        <div className="agent-card-list">
+                            {visibleAgents.map((agent: any) => {
+                                const visual = pickVisual(agent.category, agent.name);
+                                const isEnabled = myTemplateIds.has(agent.id);
+                                const isSelected = agent.id === selectedId;
+                                const tags: string[] = (agent.tags || []).slice(0, 4);
+                                return (
+                                    <div
+                                        key={agent.id}
+                                        className={`agent-card ${isSelected ? "agent-card--selected" : ""}`}
+                                        onClick={() => setSelectedId(agent.id)}
+                                    >
+                                        <div className={`agent-card-icon agent-card-icon--${visual.tone}`}>
+                                            {visual.icon}
+                                        </div>
+                                        <div className="agent-card-body">
+                                            <div className="agent-card-header">
+                                                <h3 className="agent-card-name">{agent.display_name || agent.name}</h3>
+                                                <span className="agent-card-publisher">
+                                                    {agent.publisher || "Microsoft"}
+                                                </span>
+                                                {isEnabled ? (
+                                                    <span className="agent-card-status agent-card-status--active">
+                                                        <span className="status-dot status-dot--green" />
+                                                        Active
+                                                    </span>
+                                                ) : (
+                                                    <span className="agent-card-status agent-card-status--available">
+                                                        <span className="status-dot" />
+                                                        Available
+                                                    </span>
+                                                )}
+                                            </div>
+                                            <p className="agent-card-desc">
+                                                {(agent.description || "").slice(0, 180)}
+                                            </p>
+                                            <div className="agent-card-skills">
+                                                {tags.map((tag: string) => {
+                                                    const kind = skillKind(tag);
+                                                    return (
+                                                        <span key={tag} className={`skill-pill skill-pill--${kind}`}>
+                                                            {skillIcon(kind)}
+                                                            {tag}
+                                                        </span>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                        <div className="agent-card-meta">
+                                            <div className="agent-card-meta-num">
+                                                {(agent.tags || []).length} skill{(agent.tags || []).length === 1 ? "" : "s"}
+                                            </div>
+                                            <div className="agent-card-meta-sub">
+                                                v{agent.version || "1.0.0"}
+                                            </div>
+                                        </div>
+                                    </div>
+                                );
+                            })}
 
-            {activeTab === "analytics" && (
-                <div className="analytics-content">
-                    <Subtitle1>Analytics</Subtitle1>
-                    <Body1>Usage analytics will be available in a future update.</Body1>
-                </div>
-            )}
+                            {visibleAgents.length === 0 && (
+                                <div className="agents-empty">
+                                    {activeTab === "my-agents"
+                                        ? "No agents enabled yet. Switch to Marketplace to add agents."
+                                        : "No agents match your search."}
+                                </div>
+                            )}
 
-            {/* Agent Configuration Drawer */}
-            <OverlayDrawer
-                open={drawerOpen}
-                onOpenChange={(_, { open }) => setDrawerOpen(open)}
-                position="end"
-                size="medium"
-            >
-                <DrawerHeader>
-                    <DrawerHeaderTitle
-                        action={
-                            <Button
-                                appearance="subtle"
-                                icon={<Dismiss24Regular />}
-                                onClick={() => setDrawerOpen(false)}
-                            />
-                        }
-                    >
-                        Agent Configuration
-                    </DrawerHeaderTitle>
-                </DrawerHeader>
-                <DrawerBody>
-                    {selectedAgent && (
-                        <div className="agent-config-body">
-                            <div className="agent-config-identity">
-                                <div className="agent-config-icon">{categoryIcon(selectedAgent.category)}</div>
+                            {/* Create new agent prompt card */}
+                            <div className="agent-create-card">
+                                <div className="agent-create-icon"><Add20Regular /></div>
                                 <div>
-                                    <Text weight="bold" size={500}>{selectedAgent.display_name || selectedAgent.name}</Text>
-                                    <Caption1>{selectedAgent.category} SPECIALIST</Caption1>
+                                    <div className="agent-create-title">Create a new agent</div>
+                                    <div className="agent-create-sub">Compose from existing skills or start from scratch</div>
                                 </div>
                             </div>
-
-                            <Divider />
-
-                            <Subtitle1>Access Levels</Subtitle1>
-                            <div className="config-checkboxes">
-                                <Checkbox
-                                    label="Read-Only Warehouse — View access to production data"
-                                    checked={configState.warehouse_read ?? true}
-                                    onChange={(_: any, d: CheckboxOnChangeData) => setConfigState(s => ({ ...s, warehouse_read: !!d.checked }))}
-                                />
-                                <Checkbox
-                                    label="Write Permissions — Ability to update staging tables"
-                                    checked={configState.warehouse_write ?? false}
-                                    onChange={(_: any, d: CheckboxOnChangeData) => setConfigState(s => ({ ...s, warehouse_write: !!d.checked }))}
-                                />
-                            </div>
-
-                            <Divider />
-
-                            <Subtitle1>Tool Integrations</Subtitle1>
-                            <div className="config-toggles">
-                                {[
-                                    { key: "sql_warehouse", label: "SQL Warehouse" },
-                                    { key: "data_factory", label: "Data Factory" },
-                                    { key: "teams", label: "Teams" },
-                                    { key: "outlook", label: "Outlook" },
-                                ].map(({ key, label }) => (
-                                    <Button
-                                        key={key}
-                                        appearance={configState[key] ? "primary" : "outline"}
-                                        size="small"
-                                        onClick={() => setConfigState(s => ({ ...s, [key]: !s[key] }))}
-                                    >
-                                        {configState[key] ? "✓ " : ""}{label}
-                                    </Button>
-                                ))}
-                            </div>
                         </div>
                     )}
-                </DrawerBody>
-                <DrawerFooter>
-                    <Button appearance="primary" onClick={handleDeploy} disabled={saving}>
-                        {saving ? <Spinner size="tiny" /> : "Enable Agent"}
-                    </Button>
-                    <Button appearance="secondary" onClick={() => setDrawerOpen(false)}>
-                        Discard
-                    </Button>
-                </DrawerFooter>
-            </OverlayDrawer>
+                </div>
+
+                {/* ── Detail panel ── */}
+                <aside className="agent-detail">
+                    {selected ? (
+                        <DetailPanel
+                            agent={selected}
+                            config={selectedConfig}
+                            isEnabled={myTemplateIds.has(selected.id)}
+                            saving={savingId === selected.id}
+                            removing={selectedConfig ? removingId === selectedConfig.id : false}
+                            onEnable={() => enableAgent(selected)}
+                            onRemove={() => selectedConfig && removeAgent(selectedConfig)}
+                        />
+                    ) : (
+                        <div className="agent-detail-empty">
+                            Select an agent to see details.
+                        </div>
+                    )}
+                </aside>
+            </div>
+        </div>
+    );
+}
+
+function DetailPanel({
+    agent, config: _config, isEnabled, saving, removing, onEnable, onRemove,
+}: {
+    agent: any;
+    config: any | null;
+    isEnabled: boolean;
+    saving: boolean;
+    removing: boolean;
+    onEnable: () => void;
+    onRemove: () => void;
+}) {
+    const visual = pickVisual(agent.category, agent.name);
+    const tags: string[] = agent.tags || [];
+
+    return (
+        <div className="agent-detail-inner">
+            {/* Header */}
+            <div className="agent-detail-header">
+                <div className="agent-detail-identity">
+                    <div className={`agent-card-icon agent-card-icon--${visual.tone} agent-card-icon--lg`}>
+                        {visual.icon}
+                    </div>
+                    <div>
+                        <h2 className="agent-detail-name">{agent.display_name || agent.name}</h2>
+                        <div className="agent-detail-meta-row">
+                            <span className="agent-card-publisher">{agent.publisher || "Microsoft"}</span>
+                            <span className="agent-detail-version">v{agent.version || "1.0.0"}</span>
+                        </div>
+                    </div>
+                </div>
+                <div className="agent-detail-actions-top">
+                    <button type="button" className="icon-btn" title="Clone agent">
+                        <Copy20Regular />
+                    </button>
+                    <button type="button" className="icon-btn" title="More options">
+                        <MoreVertical20Regular />
+                    </button>
+                </div>
+            </div>
+
+            <p className="agent-detail-desc">{agent.description}</p>
+
+            {/* Personas */}
+            <div className="agent-detail-section">
+                <div className="agent-detail-label">Personas</div>
+                <div className="agent-detail-pills">
+                    {(agent.personas || ["Developer", "Data Engineer"]).map((p: string) => (
+                        <span key={p} className="persona-pill">
+                            {p.toLowerCase().includes("dev") ? <Code20Regular /> : <Database20Regular />}
+                            {p}
+                        </span>
+                    ))}
+                </div>
+            </div>
+
+            {/* Skills composition */}
+            <div className="agent-detail-section">
+                <div className="agent-detail-section-head">
+                    <div className="agent-detail-label">Skills ({tags.length})</div>
+                    <button type="button" className="agent-detail-add">
+                        <Add16Regular /> Add skill
+                    </button>
+                </div>
+                <div className="agent-detail-skill-list">
+                    {tags.map(tag => {
+                        const kind = skillKind(tag);
+                        return (
+                            <div key={tag} className={`skill-row skill-row--${kind}`}>
+                                <div className="skill-row-icon">{skillIcon(kind)}</div>
+                                <div className="skill-row-body">
+                                    <div className="skill-row-name">
+                                        {tag}
+                                        <span className={`skill-row-kind skill-row-kind--${kind}`}>
+                                            {kind === "authoring" ? "Authoring" : kind === "consumption" ? "Consumption" : "Tool"}
+                                        </span>
+                                    </div>
+                                </div>
+                                <div className="skill-row-actions">
+                                    <button type="button" className="icon-btn icon-btn--xs" title="Configure skill">
+                                        <Settings16Regular />
+                                    </button>
+                                    <button type="button" className="icon-btn icon-btn--xs" title="Remove skill">
+                                        <Dismiss16Regular />
+                                    </button>
+                                </div>
+                            </div>
+                        );
+                    })}
+                    <button type="button" className="skill-add-dropzone">
+                        <AddCircle20Regular /> Add skill from library
+                    </button>
+                </div>
+            </div>
+
+            {/* Authentication */}
+            <div className="agent-detail-section">
+                <div className="agent-detail-label">Authentication</div>
+                <div className="agent-detail-auth">
+                    <div className="agent-detail-auth-row">
+                        <ShieldCheckmark20Regular className="agent-detail-auth-icon" />
+                        <span className="agent-detail-auth-title">Azure AD authenticated</span>
+                    </div>
+                    <p className="agent-detail-auth-sub">
+                        All operations use your Azure AD identity. No secrets or tokens stored by skills.
+                    </p>
+                </div>
+            </div>
+
+            {/* Security & Responsible AI */}
+            <div className="agent-detail-section">
+                <div className="agent-detail-label">Security &amp; Responsible AI</div>
+                <div className="agent-detail-checks">
+                    {[
+                        "Prompt-injection safe",
+                        "No arbitrary execution",
+                        "Secret scanning",
+                        "OWASP LLM Top 10",
+                    ].map(label => (
+                        <div key={label} className="agent-detail-check">
+                            <CheckmarkCircle16Filled className="agent-detail-check-icon" />
+                            {label}
+                        </div>
+                    ))}
+                </div>
+            </div>
+
+            {/* Example use cases */}
+            <div className="agent-detail-section">
+                <div className="agent-detail-label">Example use cases</div>
+                <div className="agent-detail-examples">
+                    {(agent.examples || ["NYC Taxi Medallion Pipeline", "Document My Workspace", "Analytics PDF Report"]).map((ex: string) => (
+                        <div key={ex} className="agent-detail-example">
+                            <PlayCircle16Regular />
+                            <span>{ex}</span>
+                        </div>
+                    ))}
+                </div>
+            </div>
+
+            {/* Footer actions */}
+            <div className="agent-detail-footer">
+                {isEnabled ? (
+                    <>
+                        <button
+                            type="button"
+                            className="agents-btn-primary agent-detail-cta"
+                            disabled
+                        >
+                            <CheckmarkCircle16Filled /> Enabled
+                        </button>
+                        <button
+                            type="button"
+                            className="agents-btn-secondary agent-detail-cta"
+                            onClick={onRemove}
+                            disabled={removing}
+                        >
+                            {removing ? <Spinner size="tiny" /> : <Delete20Regular />}
+                            Remove
+                        </button>
+                    </>
+                ) : (
+                    <>
+                        <button
+                            type="button"
+                            className="agents-btn-primary agent-detail-cta"
+                            onClick={onEnable}
+                            disabled={saving}
+                        >
+                            {saving ? <Spinner size="tiny" /> : <Copy20Regular />}
+                            Enable agent
+                        </button>
+                        <button
+                            type="button"
+                            className="agents-btn-secondary agent-detail-cta"
+                            disabled
+                        >
+                            <Copy20Regular /> Clone &amp; Customize
+                        </button>
+                    </>
+                )}
+            </div>
+
         </div>
     );
 }
