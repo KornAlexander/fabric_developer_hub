@@ -62,20 +62,11 @@
   }
 
   function renderExpanded(host, activeKey) {
-    host.className = 'w-56 bg-surface-container-low flex flex-col py-5 shrink-0';
+    host.className = 'w-56 bg-surface-container-low flex flex-col py-3 shrink-0';
     host.innerHTML =
-      '<div class="px-5 mb-8 flex items-center justify-between">' +
-        '<div class="flex items-center gap-2.5">' +
-          '<div class="w-8 h-8 bg-primary-container rounded-lg flex items-center justify-center text-white">' +
-            '<span class="material-symbols-outlined text-[16px] filled">dataset</span>' +
-          '</div>' +
-          '<div>' +
-            '<div class="text-sm font-bold text-on-surface leading-tight">AgentHub</div>' +
-            '<div class="text-[9px] text-on-surface-variant uppercase tracking-widest font-bold">Fabric Enterprise</div>' +
-          '</div>' +
-        '</div>' +
-        '<button data-agenthub-toggle class="p-1 text-on-surface-variant hover:bg-surface-container-high/50 rounded transition-colors" title="Collapse sidebar">' +
-          '<span class="material-symbols-outlined text-[18px]">chevron_left</span>' +
+      '<div class="px-3 mb-3 flex items-center justify-end">' +
+        '<button data-agenthub-toggle class="p-1.5 text-on-surface-variant hover:bg-surface-container-high/60 hover:text-on-surface rounded-md transition-colors" title="Collapse sidebar" aria-label="Collapse sidebar">' +
+          '<span class="material-symbols-outlined text-[18px]">left_panel_close</span>' +
         '</button>' +
       '</div>' +
       '<nav class="flex-1 px-2.5 space-y-4 overflow-y-auto smooth-scroll">' +
@@ -113,14 +104,11 @@
   }
 
   function renderCollapsed(host, activeKey) {
-    host.className = 'w-12 bg-surface-container-low flex flex-col items-center py-4 gap-3 shrink-0 border-r border-outline-variant/5';
+    host.className = 'w-12 bg-surface-container-low flex flex-col items-center py-3 gap-3 shrink-0 border-r border-outline-variant/5';
     const sections = Object.keys(NAV);
     host.innerHTML =
-      '<div class="w-8 h-8 bg-primary-container rounded-lg flex items-center justify-center text-white mb-1">' +
-        '<span class="material-symbols-outlined text-[18px] filled">dataset</span>' +
-      '</div>' +
-      '<button data-agenthub-toggle class="p-1.5 text-on-surface-variant hover:bg-surface-container-high rounded transition-colors mb-2" title="Expand sidebar">' +
-        '<span class="material-symbols-outlined text-[16px]">chevron_right</span>' +
+      '<button data-agenthub-toggle class="p-1.5 text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface rounded-md transition-colors" title="Expand sidebar" aria-label="Expand sidebar">' +
+        '<span class="material-symbols-outlined text-[18px]">left_panel_open</span>' +
       '</button>' +
       sections.map((t, idx) => {
         const html = collapsedSection(NAV[t], activeKey);
