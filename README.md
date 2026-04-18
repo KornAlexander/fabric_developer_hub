@@ -141,12 +141,12 @@ The Orchestrator follows a 3-step workflow:
 fabric_agenthub/
 ├── README.md
 ├── Design/
-│   ├── home_dashboard.html              # Home — Agent Dashboard with active agents & job history
-│   ├── agent_marketplace.html           # Agents & Skills — composition, marketplace, detail panel
-│   ├── orchestrator_step1_compose.html   # Orchestrator Step 1 — NL prompt with context & config
-│   ├── orchestrator_step2_plan_review.html    # Step 2 — Plan review with approval gates
-│   ├── orchestrator_step2_plan_review_b.html  # Step 2B — Plan review (no approvals, no branching)
-│   └── job_execution_streaming.html      # Step 3 — Live streaming execution with HITL approvals
+│   ├── sessions_overview.html                  # Sessions Overview — active agents & session history
+│   ├── agents_and_skills.html                  # Agents & Skills — composition, marketplace, detail panel
+│   ├── new_session_step1_compose.html          # New Session — Step 1: NL prompt with context & config
+│   ├── new_session_step2_plan_review.html      # New Session — Step 2: plan review with approval gates
+│   ├── new_session_step2_plan_review_auto.html # New Session — Step 2 (automatic, no approvals/branching)
+│   └── session_live_execution.html             # Session — Live streaming execution with HITL approvals
 └── docs/
     └── screenshots/                      # UI screenshots for documentation
         ├── 01_home_dashboard.png
