@@ -203,11 +203,29 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
     async function loadWorkspaces(forceRefresh: boolean) {
         setLoadingWorkspaces(true);
         try {
-            const fabricToken = await getFabricToken();
-            const data = await api.getWorkspaces({ githubToken, fabricToken }, forceRefresh);
+            // Try a cheap call first — if the backend has a fresh cache it will
+            // serve it without needing a Fabric token. Only acquire the token
+            // when we're forcing a refresh, or when the backend tells us the
+            // cache is empty/stale (400 "Fabric token required").
+            let fabricToken: string | undefined = forceRefresh ? await getFabricToken() : undefined;
+            let data;
+            try {
+                data = await api.getWorkspaces({ githubToken, fabricToken }, forceRefresh);
+            } catch (err) {
+                const status = (err as { status?: number })?.status;
+                if (!forceRefresh && status === 400) {
+                    fabricToken = await getFabricToken();
+                    data = await api.getWorkspaces({ githubToken, fabricToken }, false);
+                } else {
+                    throw err;
+                }
+            }
             const list = data.workspaces || [];
             setWorkspaces(list);
             setWorkspacesCachedAt(data.cached_at);
+            if (data.source) {
+                console.debug(`[workspaces] source=${data.source} count=${list.length}`);
+            }
             // Preserve selection if it still exists, otherwise pick a default.
             setSelectedWorkspace(prev => {
                 if (prev && list.some(w => w.id === prev)) return prev;

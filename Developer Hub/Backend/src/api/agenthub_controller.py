@@ -97,20 +97,21 @@ async def list_workspaces(
     / delete). Pass ``?refresh=true`` to force a synchronous refresh.
     """
     user_id = _user_id_from_request(request)
-    mcp_tokens = await _mcp_tokens(request)
 
     cached, newest = workspaces_cache.get_cached(user_id)
     cache_fresh = workspaces_cache.is_fresh(newest)
 
-    # Cached and not asked to refresh → serve cache.
+    # Cached and not asked to refresh → serve cache without doing OBO.
     if cached and cache_fresh and not refresh:
+        logger.debug("workspaces cache hit user=%s count=%d", user_id, len(cached))
         return {
             "workspaces": [{"id": w.id, "name": w.name} for w in cached],
             "cached_at": newest.isoformat() if newest else None,
             "source": "cache",
         }
 
-    # Need a network call — the Fabric token is required.
+    # Cache miss / stale / forced refresh — now we need a Fabric token.
+    mcp_tokens = await _mcp_tokens(request)
     if not mcp_tokens:
         if cached:
             # Serve stale cache rather than fail when token is missing.

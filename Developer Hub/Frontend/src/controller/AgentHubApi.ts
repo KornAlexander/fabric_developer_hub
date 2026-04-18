@@ -148,7 +148,11 @@ export interface WorkspacesResponse {
 export async function getWorkspaces(opts: FetchOpts, refresh = false): Promise<WorkspacesResponse> {
     const qs = refresh ? '?refresh=true' : '';
     const res = await fetch(`${BE}/api/workspaces${qs}`, { headers: headers(opts) });
-    if (!res.ok) throw new Error(await res.text());
+    if (!res.ok) {
+        const err: Error & { status?: number } = new Error(await res.text());
+        err.status = res.status;
+        throw err;
+    }
     return res.json();
 }
 
