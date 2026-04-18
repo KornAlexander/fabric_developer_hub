@@ -52,6 +52,12 @@ def init_schema(conn: sqlite3.Connection) -> None:
             ON workspace_cache(user_id);
         """
     )
+    # One-time cleanup: drop rows keyed by the old hashed-Authorization
+    # identifier ('user-NNNNN'). Those are orphaned once we switched to
+    # deriving user_id from the Fabric JWT's UPN / oid claim.
+    conn.execute(
+        "DELETE FROM workspace_cache WHERE user_id GLOB 'user-[0-9][0-9][0-9][0-9][0-9]'"
+    )
 
 
 def get_cached(user_id: str) -> tuple[list[CachedWorkspace], datetime | None]:

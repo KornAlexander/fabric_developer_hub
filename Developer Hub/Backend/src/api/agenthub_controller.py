@@ -33,9 +33,34 @@ router = APIRouter(prefix="/api", tags=["AgentHub"])
 # ── Helpers ──────────────────────────────────────────────────────────
 
 def _user_id_from_request(request: Request) -> str:
-    """Extract a user identifier.  Falls back to 'anonymous'."""
-    # In production this comes from the decoded Fabric/OBO token.
-    # For now extract from Authorization header hash.
+    """Extract a stable user identifier.
+
+    Preference order:
+    1. ``upn`` / ``preferred_username`` claim from the Fabric JWT
+       (``X-Fabric-Token`` header) — the user's UPN (e.g. ``alice@contoso.com``).
+    2. ``oid`` claim — Entra object ID, stable across token refreshes.
+    3. ``sub`` claim — subject identifier.
+    4. Hash of the Authorization header (dev fallback when no Fabric token).
+    5. ``"anonymous"`` for completely unauthenticated requests.
+    """
+    fabric_header = request.headers.get("X-Fabric-Token", "")
+    fabric_token = fabric_header.removeprefix("Bearer ").strip()
+    if fabric_token:
+        try:
+            from jose import jwt as _jwt
+            claims = _jwt.get_unverified_claims(fabric_token)
+        except Exception:
+            claims = None
+        if claims:
+            for key in ("upn", "preferred_username", "email", "unique_name"):
+                val = claims.get(key)
+                if val:
+                    return str(val).lower()
+            for key in ("oid", "sub"):
+                val = claims.get(key)
+                if val:
+                    return f"oid:{val}"
+
     auth = request.headers.get("Authorization", "")
     if auth:
         return f"user-{abs(hash(auth)) % 100000:05d}"

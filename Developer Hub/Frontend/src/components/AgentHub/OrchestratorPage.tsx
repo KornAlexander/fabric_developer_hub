@@ -203,23 +203,13 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
     async function loadWorkspaces(forceRefresh: boolean) {
         setLoadingWorkspaces(true);
         try {
-            // Try a cheap call first — if the backend has a fresh cache it will
-            // serve it without needing a Fabric token. Only acquire the token
-            // when we're forcing a refresh, or when the backend tells us the
-            // cache is empty/stale (400 "Fabric token required").
-            let fabricToken: string | undefined = forceRefresh ? await getFabricToken() : undefined;
-            let data;
-            try {
-                data = await api.getWorkspaces({ githubToken, fabricToken }, forceRefresh);
-            } catch (err) {
-                const status = (err as { status?: number })?.status;
-                if (!forceRefresh && status === 400) {
-                    fabricToken = await getFabricToken();
-                    data = await api.getWorkspaces({ githubToken, fabricToken }, false);
-                } else {
-                    throw err;
-                }
-            }
+            // Always pass the Fabric token so the backend can identify the
+            // user via UPN from the JWT (same cache key on first load and on
+            // refresh). The workload-client caches the token locally, so this
+            // is cheap after the first call. The expensive OBO exchange is
+            // only done on cache miss / stale / forced refresh.
+            const fabricToken = await getFabricToken();
+            const data = await api.getWorkspaces({ githubToken, fabricToken }, forceRefresh);
             const list = data.workspaces || [];
             setWorkspaces(list);
             setWorkspacesCachedAt(data.cached_at);
