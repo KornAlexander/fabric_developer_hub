@@ -172,7 +172,7 @@ cd fabric_agenthub
 npx http-server -p 3000
 
 # Open in browser
-# http://localhost:3000/Design/home_dashboard.html
+# http://localhost:3000/Design/sessions_overview.html
 ```
 
 ### Running the Developer Hub stack locally (Docker)
@@ -223,12 +223,12 @@ sudo service docker restart
 
 | Page | URL Path | Description |
 |------|----------|-------------|
-| Home Dashboard | `/Design/home_dashboard.html` | Active agents overview, job history |
-| Agents & Skills | `/Design/agent_marketplace.html` | Agent list, skill composition, detail panel |
-| Orchestrator — Compose | `/Design/orchestrator_step1_compose.html` | New job creation with NL prompt |
-| Plan Review (with approvals) | `/Design/orchestrator_step2_plan_review.html` | Execution plan with approval gates |
-| Plan Review (automatic) | `/Design/orchestrator_step2_plan_review_b.html` | Fully automatic execution plan |
-| Job Execution | `/Design/job_execution_streaming.html` | Live streaming execution view |
+| Sessions Overview | `/Design/sessions_overview.html` | Active agents overview, job history |
+| Agents & Skills | `/Design/agents_and_skills.html` | Agent list, skill composition, detail panel |
+| New Session — Compose | `/Design/new_session_step1_compose.html` | New job creation with NL prompt |
+| New Session — Plan Review (with approvals) | `/Design/new_session_step2_plan_review.html` | Execution plan with approval gates |
+| New Session — Plan Review (automatic) | `/Design/new_session_step2_plan_review_auto.html` | Fully automatic execution plan |
+| Session — Live Execution | `/Design/session_live_execution.html` | Live streaming execution view |
 
 ---
 

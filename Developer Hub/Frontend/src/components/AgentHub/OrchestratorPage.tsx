@@ -284,7 +284,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                     </div>
                     <h1 className="compose-hero-title">Orchestrate your vision.</h1>
                     <p className="compose-hero-sub">
-                        Describe what you need done. The orchestrator will decompose your goal into steps,
+                        Describe what you need done. We’ll decompose your goal into steps,
                         select the right agents, and execute—with your approval at every critical decision.
                     </p>
                 </section>

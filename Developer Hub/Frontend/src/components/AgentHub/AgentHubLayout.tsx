@@ -39,6 +39,17 @@ interface AgentHubLayoutProps {
     itemObjectId?: string;
 }
 
+/** Breadcrumb label for the topbar — mirrors the design's per-page page title. */
+function topbarBreadcrumbLabel(activePage: string): string {
+    switch (activePage) {
+        case "sessions": return "Sessions";
+        case "newsession": return "New Session";
+        case "agents": return "Agents and Skills";
+        case "pbifixer": return "Power BI Fixer";
+        default: return "Developer Hub";
+    }
+}
+
 export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId }: AgentHubLayoutProps) {
     const history = useHistory();
     const match = useRouteMatch();
@@ -68,7 +79,7 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
             <div className="agenthub-root">
                 <div className="agenthub-auth-gate">
                     <BrainCircuit24Regular style={{ fontSize: 48, color: "#0078d4" }} />
-                    <Text size={700} weight="bold">AgentHub</Text>
+                    <Text size={700} weight="bold">Developer Hub</Text>
                     <Body1 style={{ color: "#605e5c", textAlign: "center" }}>
                         Sign in with GitHub to access the Agent Dashboard.
                         <br />A GitHub Copilot subscription is required.
@@ -163,19 +174,17 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
                     <button className="hamburger-btn" onClick={toggleSidebar} aria-label="Toggle navigation">
                         {sidebarOpen ? <Dismiss24Regular /> : <Navigation24Regular />}
                     </button>
-                    <span className="topbar-brand">AgentHub</span>
+                    <span className="topbar-brand">Developer Hub</span>
                     <span className="topbar-divider" />
                     <div className="topbar-breadcrumb">
                         <BrainCircuit24Regular className="topbar-breadcrumb-icon" />
-                        <span>Orchestrator</span>
-                        <span className="topbar-breadcrumb-chev">›</span>
-                        <span>New Session</span>
+                        <span>{topbarBreadcrumbLabel(activePage)}</span>
                     </div>
                 </div>
                 <div className="agenthub-topbar-search">
                     <input
                         type="text"
-                        placeholder="Search orchestrated jobs..."
+                        placeholder="Search Developer Hub…"
                         aria-label="Search"
                     />
                 </div>
@@ -197,7 +206,7 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
                     <div className="agenthub-sidebar-brand">
                         <div className="agenthub-brand-icon"><BrainCircuit24Regular /></div>
                         <div className="agenthub-brand-text">
-                            <Text weight="bold" size={300}>AgentHub</Text>
+                            <Text weight="bold" size={300}>Developer Hub</Text>
                             <Text size={100} className="agenthub-brand-sub">FABRIC ENTERPRISE</Text>
                         </div>
                         <button

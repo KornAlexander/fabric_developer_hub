@@ -267,7 +267,7 @@ export function DashboardPage({ workloadClient: _workloadClient }: DashboardPage
 
             {/* ── Recent Jobs ── */}
             <section className="sessions-section">
-                <h2 className="sessions-h2">Recent Jobs</h2>
+                <h2 className="sessions-h2">Recent Sessions</h2>
                 {completedJobs.length === 0 ? (
                     <div className="sessions-empty">
                         <Body1>No completed tasks yet.</Body1>

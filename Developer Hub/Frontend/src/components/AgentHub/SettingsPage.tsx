@@ -114,13 +114,13 @@ export function SettingsPage({ workloadClient }: SettingsPageProps) {
     return (
         <div className="settings-page">
             <Text size={700} weight="bold" as="h2">Settings</Text>
-            <Body1 className="settings-subtitle">Configure AgentHub defaults and workspace preferences.</Body1>
+            <Body1 className="settings-subtitle">Configure Developer Hub defaults and workspace preferences.</Body1>
 
             <Card className="settings-card">
                 <Subtitle1>Workspace</Subtitle1>
                 <Body1>Current workspace: <Text weight="semibold">{workspaceId}</Text></Body1>
                 <Body1 style={{ color: "#605e5c", fontSize: 12 }}>
-                    The workspace is automatically set from the Fabric context. You can override it per task in the Orchestrator.
+                    The workspace is automatically set from the Fabric context. You can override it per task in New Session.
                 </Body1>
             </Card>
 

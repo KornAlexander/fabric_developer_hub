@@ -282,11 +282,11 @@ export function JobDetailPage({ workloadClient }: JobDetailPageProps) {
         : actions.filter(a => !a.entity_type.toLowerCase().includes("file"));
 
     if (loading) {
-        return <div className="job-detail-loading"><Spinner label="Loading job..." size="large" /></div>;
+        return <div className="job-detail-loading"><Spinner label="Loading session…" size="large" /></div>;
     }
 
     if (!job) {
-        return <div className="job-detail-error"><Body1>Job not found.</Body1></div>;
+        return <div className="job-detail-error"><Body1>Session not found.</Body1></div>;
     }
 
     const primaryAgent = Object.values(agentStatuses)[0] as any || job.agents?.[0];
