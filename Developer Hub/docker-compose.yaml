@@ -34,6 +34,11 @@ services:
       - .env
     environment:
       PYTHON_ENVIRONMENT: Development
+      # Override any host-style AGENTHUB_DB_PATH that may live in .env so the
+      # SQLite file lands inside the container's writable /app tree (owned by
+      # appuser, uid 1000). The job_store module creates /app/data on first
+      # use and falls back to the user-config dir if this path is unwritable.
+      AGENTHUB_DB_PATH: /app/data/agenthub.db
     volumes:
       # Mount source for hot reload (uvicorn --reload watches these)
       - ./Backend/src:/app/src

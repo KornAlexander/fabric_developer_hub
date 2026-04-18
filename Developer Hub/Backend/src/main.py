@@ -225,7 +225,11 @@ async def lifespan(app: FastAPI):
             agenthub_store.init_db()
             logger.info("\u2713 AgentHub database initialized")
         except Exception:
-            logger.warning("\u26a0 AgentHub DB init failed", exc_info=True)
+            logger.error(
+                "\u2717 AgentHub DB init failed \u2014 /api/jobs and related endpoints "
+                "will return 500 until the DB path is reachable",
+                exc_info=True,
+            )
 
         # Configure orchestrator engine
         if mcp_manager:

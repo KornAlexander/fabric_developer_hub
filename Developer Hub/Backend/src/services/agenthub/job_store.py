@@ -41,17 +41,39 @@ def _default_db_path() -> str:
 
 
 def _db_path() -> str:
+    """Resolve the SQLite path; ensure its parent directory exists.
+
+    If ``AGENTHUB_DB_PATH`` is set but the parent directory cannot be created
+    (e.g. the .env contains a host path that doesn't exist inside the
+    container), fall back to the default user-config location so the app
+    stays usable instead of failing every request with
+    ``unable to open database file``.
+    """
     global _DB_PATH
-    if _DB_PATH is None:
-        _DB_PATH = os.environ.get("AGENTHUB_DB_PATH") or _default_db_path()
-        # Ensure the parent directory exists when the path comes from env —
-        # _default_db_path() already creates its own dir.
-        parent = os.path.dirname(_DB_PATH)
-        if parent:
-            try:
-                os.makedirs(parent, exist_ok=True)
-            except OSError as exc:
-                logger.warning("Could not create DB parent dir %s: %s", parent, exc)
+    if _DB_PATH is not None:
+        return _DB_PATH
+
+    env_path = os.environ.get("AGENTHUB_DB_PATH")
+    if env_path:
+        parent = os.path.dirname(env_path) or "."
+        try:
+            os.makedirs(parent, exist_ok=True)
+            # Probe writability — makedirs can succeed on a parent we can't
+            # actually write to (mounted read-only, etc.).
+            if os.access(parent, os.W_OK):
+                _DB_PATH = env_path
+                return _DB_PATH
+            logger.warning(
+                "AGENTHUB_DB_PATH=%s parent dir %s is not writable; falling back to default",
+                env_path, parent,
+            )
+        except OSError as exc:
+            logger.warning(
+                "AGENTHUB_DB_PATH=%s parent dir %s could not be created (%s); falling back to default",
+                env_path, parent, exc,
+            )
+
+    _DB_PATH = _default_db_path()
     return _DB_PATH
 
 
