@@ -42,11 +42,7 @@ COPY --from=builder /app/.venv /app/.venv
 COPY src/ ./src/
 
 # Create a non-root user and hand over /app.
-# Also pre-create /data (mount point for the AgentHub SQLite store) so
-# the named volume inherits appuser ownership on first creation.
-RUN useradd -m -u 1000 appuser \
- && mkdir -p /data \
- && chown -R appuser:appuser /app /data
+RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 USER appuser
 
 ENV PYTHON_ENVIRONMENT=Production \
