@@ -8,10 +8,8 @@ import {
     Body1,
 } from "@fluentui/react-components";
 import {
-    Home24Regular,
     BrainCircuit24Regular,
     Bot24Regular,
-    Settings24Regular,
     SignOut24Regular,
     QuestionCircle24Regular,
     Chat24Regular,
@@ -20,6 +18,9 @@ import {
     Navigation24Regular,
     Dismiss24Regular,
     Wrench24Regular,
+    AddCircle24Regular,
+    ChatMultiple24Regular,
+    MoreHorizontal24Regular,
 } from "@fluentui/react-icons";
 import { WorkloadClientAPI } from "@ms-fabric/workload-client";
 import { DashboardPage } from "./DashboardPage";
@@ -48,12 +49,12 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
     }, []);
 
     const currentPath = history.location.pathname;
-    let activePage = "home";
-    if (currentPath.includes("/orchestrator")) activePage = "orchestrator";
+    let activePage = "newsession";
+    if (currentPath.includes("/orchestrator")) activePage = "newsession";
+    else if (currentPath.includes("/sessions") || currentPath.includes("/home")) activePage = "sessions";
     else if (currentPath.includes("/agents")) activePage = "agents";
     else if (currentPath.includes("/pbifixer")) activePage = "pbifixer";
-    else if (currentPath.includes("/settings")) activePage = "settings";
-    else if (currentPath.includes("/job/")) activePage = "orchestrator";
+    else if (currentPath.includes("/job/")) activePage = "sessions";
 
     function nav(page: string) {
         history.push(`${match.url}/${page}`);
@@ -167,11 +168,15 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
                     </div>
 
                     <nav className="agenthub-sidenav">
-                        <SideNavItem icon={<Home24Regular />} label="Home" active={activePage === "home"} onClick={() => navTo("home")} />
-                        <SideNavItem icon={<BrainCircuit24Regular />} label="Orchestrator" active={activePage === "orchestrator"} onClick={() => navTo("orchestrator")} />
-                        <SideNavItem icon={<Bot24Regular />} label="Agents" active={activePage === "agents"} onClick={() => navTo("agents")} />
-                        <SideNavItem icon={<Wrench24Regular />} label="PBI Fixer" active={activePage === "pbifixer"} onClick={() => navTo("pbifixer")} />
-                        <SideNavItem icon={<Settings24Regular />} label="Settings" active={activePage === "settings"} onClick={() => navTo("settings")} />
+                        <div className="sidenav-section-label">Agent Hub</div>
+                        <SideNavItem icon={<AddCircle24Regular />} label="New Session" active={activePage === "newsession"} onClick={() => navTo("orchestrator")} />
+                        <SideNavItem icon={<ChatMultiple24Regular />} label="Sessions" active={activePage === "sessions"} onClick={() => navTo("home")} />
+                        <SideNavItem icon={<Bot24Regular />} label="Agents and Skills" active={activePage === "agents"} onClick={() => navTo("agents")} />
+
+                        <div className="sidenav-section-label sidenav-section-label--spaced">Tools</div>
+                        <SideNavItem icon={<Wrench24Regular />} label="Power BI Fixer" active={activePage === "pbifixer"} onClick={() => navTo("pbifixer")} />
+                        <SideNavItem icon={<MoreHorizontal24Regular />} label="…" active={false} onClick={() => { /* placeholder */ }} disabled />
+                        <SideNavItem icon={<MoreHorizontal24Regular />} label="…" active={false} onClick={() => { /* placeholder */ }} disabled />
                     </nav>
 
                     <div className="agenthub-sidebar-footer">
@@ -196,7 +201,7 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
                         <Route path={`${match.path}/pbifixer`}><PbiFixerPage workloadClient={workloadClient} /></Route>
                         <Route path={`${match.path}/settings`}><SettingsPage workloadClient={workloadClient} /></Route>
                         <Route path={`${match.path}/job/:jobId`}><JobDetailPage workloadClient={workloadClient} /></Route>
-                        <Route path={match.path}><DashboardPage workloadClient={workloadClient} /></Route>
+                        <Route path={match.path}><OrchestratorPage workloadClient={workloadClient} /></Route>
                     </Switch>
                 </main>
             </div>
@@ -205,11 +210,14 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
     );
 }
 
-function SideNavItem({ icon, label, active, onClick }: {
-    icon: React.ReactNode; label: string; active: boolean; onClick: () => void;
+function SideNavItem({ icon, label, active, onClick, disabled }: {
+    icon: React.ReactNode; label: string; active: boolean; onClick: () => void; disabled?: boolean;
 }) {
     return (
-        <div className={`sidenav-item ${active ? "sidenav-item--active" : ""}`} onClick={onClick}>
+        <div
+            className={`sidenav-item ${active ? "sidenav-item--active" : ""} ${disabled ? "sidenav-item--disabled" : ""}`}
+            onClick={disabled ? undefined : onClick}
+        >
             {icon}
             <Text size={300} weight={active ? "semibold" : "regular"}>{label}</Text>
         </div>

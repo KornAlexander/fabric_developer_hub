@@ -181,24 +181,45 @@
                 </div>
             </div>
         </div>
-        <nav class="flex-1 px-2.5 space-y-0.5">
-            <a class="flex items-center text-on-surface-variant py-2.5 px-3 hover:bg-surface-container-high/50 rounded-lg transition-all text-sm" href="#">
-                <span class="material-symbols-outlined mr-2.5 text-[20px]">home</span>
-                Home
-            </a>
-            <a class="relative flex items-center bg-surface-container-lowest text-on-surface py-2.5 px-3 rounded-lg shadow-sm font-medium text-sm" href="#">
-                <div class="absolute left-0 top-1/4 bottom-1/4 w-[3px] bg-primary rounded-full"></div>
-                <span class="material-symbols-outlined mr-2.5 text-[20px] filled" style="color: #005faa;">account_tree</span>
-                Orchestrator
-            </a>
-            <a class="flex items-center text-on-surface-variant py-2.5 px-3 hover:bg-surface-container-high/50 rounded-lg transition-all text-sm" href="#">
-                <span class="material-symbols-outlined mr-2.5 text-[20px]">smart_toy</span>
-                Agents
-            </a>
-            <a class="flex items-center text-on-surface-variant py-2.5 px-3 hover:bg-surface-container-high/50 rounded-lg transition-all text-sm" href="#">
-                <span class="material-symbols-outlined mr-2.5 text-[20px]">settings</span>
-                Settings
-            </a>
+        <nav class="flex-1 px-2.5 space-y-4 overflow-y-auto smooth-scroll">
+            <!-- Section: Agent Hub -->
+            <div>
+                <div class="px-3 mb-1.5 text-[10px] font-bold text-on-surface-variant/70 uppercase tracking-widest">Agent Hub</div>
+                <div class="space-y-0.5">
+                    <a class="relative flex items-center bg-surface-container-lowest text-on-surface py-2.5 px-3 rounded-lg shadow-sm font-medium text-sm" href="#">
+                        <div class="absolute left-0 top-1/4 bottom-1/4 w-[3px] bg-primary rounded-full"></div>
+                        <span class="material-symbols-outlined mr-2.5 text-[20px] filled" style="color: #005faa;">add_circle</span>
+                        New Session
+                    </a>
+                    <a class="flex items-center text-on-surface-variant py-2.5 px-3 hover:bg-surface-container-high/50 rounded-lg transition-all text-sm" href="#">
+                        <span class="material-symbols-outlined mr-2.5 text-[20px]">forum</span>
+                        Sessions
+                    </a>
+                    <a class="flex items-center text-on-surface-variant py-2.5 px-3 hover:bg-surface-container-high/50 rounded-lg transition-all text-sm" href="#">
+                        <span class="material-symbols-outlined mr-2.5 text-[20px]">smart_toy</span>
+                        Agents and Skills
+                    </a>
+                </div>
+            </div>
+
+            <!-- Section: Tools -->
+            <div>
+                <div class="px-3 mb-1.5 text-[10px] font-bold text-on-surface-variant/70 uppercase tracking-widest">Tools</div>
+                <div class="space-y-0.5">
+                    <a class="flex items-center text-on-surface-variant py-2.5 px-3 hover:bg-surface-container-high/50 rounded-lg transition-all text-sm" href="#">
+                        <span class="material-symbols-outlined mr-2.5 text-[20px]">build</span>
+                        Power BI Fixer
+                    </a>
+                    <a class="flex items-center text-on-surface-variant/60 py-2.5 px-3 hover:bg-surface-container-high/50 rounded-lg transition-all text-sm" href="#">
+                        <span class="material-symbols-outlined mr-2.5 text-[20px]">more_horiz</span>
+                        …
+                    </a>
+                    <a class="flex items-center text-on-surface-variant/60 py-2.5 px-3 hover:bg-surface-container-high/50 rounded-lg transition-all text-sm" href="#">
+                        <span class="material-symbols-outlined mr-2.5 text-[20px]">more_horiz</span>
+                        …
+                    </a>
+                </div>
+            </div>
         </nav>
         <div class="px-2.5 pt-4 border-t border-outline-variant/10 space-y-0.5">
             <a class="flex items-center text-on-surface-variant py-2 px-3 hover:bg-surface-container-high/50 rounded-lg transition-all text-xs" href="#">
