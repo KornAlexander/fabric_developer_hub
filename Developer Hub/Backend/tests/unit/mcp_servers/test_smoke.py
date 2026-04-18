@@ -51,3 +51,44 @@ def test_semantic_link_tool_count() -> None:
         "sl_admin_list_workspaces",
     ):
         assert required in tool_names, f"missing {required}"
+
+
+def test_mcp_server_scripts_import_when_spawned_as_subprocess() -> None:
+    """REGRESSION: MCPClientManager spawns each server as a standalone
+    script (``python /app/src/mcp_servers/fabric.py``). In that mode
+    ``sys.path[0]`` is the script's own directory, NOT ``src/`` — so a
+    sibling import like ``from mcp_servers._common import ...`` raises
+    ``ModuleNotFoundError`` unless the script first inserts ``src/`` on
+    ``sys.path``. This test reproduces the exact spawn invocation.
+    """
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    src_dir = Path(__file__).resolve().parents[3] / "src"
+    for script in ("fabric.py", "semantic_link.py"):
+        script_path = src_dir / "mcp_servers" / script
+        # Run with --help-style probe: import-only by patching FastMCP.run
+        # would require monkey-patching at subprocess level. Instead, use
+        # ``-c`` to import the module without invoking ``mcp.run()``.
+        result = subprocess.run(
+            [sys.executable, "-c",
+             f"import runpy; "
+             f"import sys; sys.path.insert(0, {str(script_path.parent)!r}); "
+             # Read the file and exec only its top-level imports + module
+             # body — but stop before mcp.run(). Easiest: import the file
+             # via importlib at its real path WITHOUT ``src/`` on path.
+             f"import importlib.util; "
+             f"spec = importlib.util.spec_from_file_location('mcp_server_under_test', {str(script_path)!r}); "
+             f"mod = importlib.util.module_from_spec(spec); "
+             f"spec.loader.exec_module(mod); "
+             f"print('OK')"],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        assert result.returncode == 0, (
+            f"{script} failed to import as a standalone script:\n"
+            f"STDOUT: {result.stdout}\nSTDERR: {result.stderr}"
+        )
+        assert "OK" in result.stdout

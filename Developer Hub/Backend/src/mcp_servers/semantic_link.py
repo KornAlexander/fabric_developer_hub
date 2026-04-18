@@ -18,6 +18,14 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sys
+
+# When spawned as a standalone script (``python semantic_link.py``),
+# ``sys.path[0]`` is this file's directory; insert ``src/`` so the sibling
+# import below resolves.
+_SRC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _SRC_DIR not in sys.path:
+    sys.path.insert(0, _SRC_DIR)
 
 import httpx
 from mcp.server.fastmcp import FastMCP

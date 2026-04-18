@@ -24,6 +24,15 @@ Tools:
 import base64
 import json
 import os
+import sys
+
+# When this file is spawned as a standalone script (``python fabric.py``),
+# ``sys.path[0]`` is its own directory and the ``mcp_servers`` package is
+# not importable. Insert the parent (``src/``) so the sibling import below
+# resolves the same way it does when imported as a module under pytest.
+_SRC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _SRC_DIR not in sys.path:
+    sys.path.insert(0, _SRC_DIR)
 
 import httpx
 from jose import jwt
