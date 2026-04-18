@@ -13,8 +13,10 @@ src_path = Path(__file__).parent.parent / "src"
 if str(src_path) not in sys.path:
     sys.path.insert(0, str(src_path))
 
-from core.service_registry import ServiceRegistry
-from main import app as application
+import bootstrap  # noqa: F401, E402  # MUST precede project imports: loads .env
+
+from core.service_registry import ServiceRegistry  # noqa: E402
+from main import app as application  # noqa: E402
 from models.authentication_models import AuthorizationContext
 from services.authentication import AuthenticationService
 from services.authorization import AuthorizationHandler

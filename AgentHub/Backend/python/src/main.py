@@ -1,3 +1,5 @@
+import bootstrap  # noqa: F401  # MUST be first import: loads .env before anything reads os.environ
+
 import asyncio
 import logging
 import logging.config

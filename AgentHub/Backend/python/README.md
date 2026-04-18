@@ -84,19 +84,10 @@ LOG_LEVEL=Information
 #### Configuration Files
 The application uses JSON configuration files in [`src/`](src/) directory:
 
-- [`appsettings.json`](src/appsettings.json) - Base configuration
+- [`appsettings.json`](src/appsettings.json) - Non-secret application defaults (server, logging, storage). **Do not put identity/secrets here.**
 - [`appsettings.Development.json`](src/appsettings.Development.json) - Development overrides
 
-**Important**: Update the authentication values in your configuration:
-
-```json
-{
-    "PublisherTenantId": "your-tenant-id",
-    "ClientId": "your-client-id", 
-    "ClientSecret": "your-client-secret",
-    "Audience": "your-audience"
-}
-```
+**Identity & secrets** (`PublisherTenantId`, `ClientId`, `ClientSecret`, `Audience`, `GitHubClientId`) are the single source of truth in [`AgentHub/.env`](../../.env) (gitignored). Copy [`AgentHub/.env.example`](../../.env.example) to `AgentHub/.env` and fill in your own values. Docker Compose injects these via `env_file:`; native runs load them via `python-dotenv` from `main.py`.
 
 ## 🚀 Running the Application
 
