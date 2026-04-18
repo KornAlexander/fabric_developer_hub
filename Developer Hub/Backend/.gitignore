@@ -206,4 +206,6 @@ openapi.json
 alembic.ini.local
 
 # Project specific - add your own
-# /path/to/specific/ignoreagenthub.db*
+# AgentHub SQLite database (bind-mounted from docker-compose to ./Backend/.data)
+.data/
+agenthub.db*

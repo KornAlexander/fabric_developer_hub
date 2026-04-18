@@ -37,7 +37,7 @@ services/
 ### `agenthub/`
 | File | Role |
 |---|---|
-| `job_store.py` | SQLite (WAL) persistence. DB path configurable via `AGENTHUB_DB_PATH`; default `~/.config/<workload>/agenthub.db`. |
+| `session_store.py` | SQLite (WAL) persistence for sessions/agents/audit. DB path is set by docker-compose (`/app/data/agenthub.db`, bind-mounted to `./Backend/.data/`); native runs default to `~/.config/<workload>/agenthub.db`. |
 | `agent_registry.py` | Built-in agent templates (system prompts, tool whitelists). |
 | `orchestrator_engine.py` | `OrchestratorEngine` class — plans jobs, runs multi-agent loop, streams events. Retrieved via `get_orchestrator_engine()`. |
 

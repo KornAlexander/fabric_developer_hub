@@ -27,7 +27,7 @@ _DB_PATH: str | None = None
 _SCHEMA_VERSION = 1
 
 # Resolved once on first use. Precedence:
-# 1. AGENTHUB_DB_PATH env var (set by .env / docker-compose).
+# 1. AGENTHUB_DB_PATH env var (set by docker-compose for containers).
 # 2. ~/.config/<workload>/agenthub.db (matches ItemMetadataStore location).
 # Do not persist state inside the source tree.
 
