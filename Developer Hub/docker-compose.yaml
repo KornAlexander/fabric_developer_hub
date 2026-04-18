@@ -43,6 +43,8 @@ services:
       # are also injected via env_file: above; this mount just makes the
       # file visible inside the container for transparency / debugging).
       - ./.env:/app/.env:ro
+      # Persistent SQLite store for AgentHub (matches AGENTHUB_DB_PATH).
+      - agenthub-data:/data
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health').read()"]
       interval: 30s
@@ -157,3 +159,4 @@ services:
 
 volumes:
   manifest-pkg:
+  agenthub-data:

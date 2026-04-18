@@ -44,6 +44,14 @@ def _db_path() -> str:
     global _DB_PATH
     if _DB_PATH is None:
         _DB_PATH = os.environ.get("AGENTHUB_DB_PATH") or _default_db_path()
+        # Ensure the parent directory exists when the path comes from env —
+        # _default_db_path() already creates its own dir.
+        parent = os.path.dirname(_DB_PATH)
+        if parent:
+            try:
+                os.makedirs(parent, exist_ok=True)
+            except OSError as exc:
+                logger.warning("Could not create DB parent dir %s: %s", parent, exc)
     return _DB_PATH
 
 
