@@ -204,27 +204,39 @@ python/
 
 ## 🧪 Testing
 
-### Running Tests
+All test configuration lives in **`pyproject.toml`** (`[tool.pytest.ini_options]` for
+pytest, `[dependency-groups].dev` for test deps). There is no separate runner script
+or `requirements-test.txt` — `pyproject.toml` is the single source of truth.
+
+### Install dev dependencies (once)
 
 ```bash
-# Run all tests
-python run_tests.py
-
-# Run specific test types
-python run_tests.py unit              # Unit tests only
-python run_tests.py integration       # Integration tests
-python run_tests.py controllers       # Controller tests
-python run_tests.py api               # API endpoint tests
-python run_tests.py coverage          # With coverage report
-
-# Run specific test patterns
-python run_tests.py specific test_item_lifecycle
-
-# Advanced testing
-python run_tests.py parallel          # Parallel execution
-python run_tests.py debug             # Debug mode
-python run_tests.py watch             # Watch mode (requires pytest-watch)
+uv sync --group dev      # installs runtime + dev deps into .venv
 ```
+
+### Run tests
+
+```bash
+# All tests (uses addopts from pyproject: -v, coverage, strict markers)
+uv run pytest
+
+# Subsets via markers (declared in pyproject)
+uv run pytest -m unit
+uv run pytest -m integration
+uv run pytest -m "unit and not slow"
+
+# A single file or test
+uv run pytest tests/unit/services/agenthub/test_session_store.py
+uv run pytest -k test_create_session
+
+# Parallel (pytest-xdist is in dev deps)
+uv run pytest -n auto
+
+# HTML coverage report (terminal coverage runs by default)
+uv run pytest --cov-report=html
+```
+
+If you have an activated venv you can drop the `uv run` prefix and call `pytest` directly.
 
 ### Test Structure
 
@@ -236,7 +248,6 @@ tests/
 │   └── services/         # Service tests
 ├── integration/          # Integration tests
 ├── conftest.py          # Test configuration
-├── requirements-test.txt # Test dependencies
 └── test_helpers.py      # Test utilities
 ```
 

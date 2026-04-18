@@ -1,253 +1,126 @@
-# Testing Guide for Python Backend
+# Testing Guide — Developer Hub Backend
 
-This guide explains how to set up and run tests for the Developer Hub Python Backend.
+All test configuration is in **`pyproject.toml`** — there is no `pytest.ini`,
+no `requirements-test.txt`, and no `run_tests.py`. One source of truth.
+
+- **Test deps** → `[dependency-groups].dev` in `pyproject.toml`
+- **Pytest config** → `[tool.pytest.ini_options]` in `pyproject.toml`
+  (testpaths, pythonpath, asyncio mode, addopts including coverage,
+  registered markers, warning filters)
 
 ## 📋 Prerequisites
 
-- **Python 3.8+** installed on your system
-- **pip** package manager
-- **Virtual environment** (strongly recommended)
+- **Python 3.13+**
+- **[uv](https://docs.astral.sh/uv/)** (recommended) or `pip`
 
 ## 🚀 Quick Start
 
-### 1. Set up your environment
-
-First, navigate to the Python Backend directory:
 ```bash
-cd Backend
-cd python
+cd "Developer Hub/Backend"
+
+# Install runtime + dev dependencies into .venv
+uv sync --group dev
+
+# Run the full suite (uses pyproject addopts: -v, coverage, strict markers)
+uv run pytest
 ```
 
-Create and activate a virtual environment:
+If you have a venv already activated, you can drop `uv run` and call `pytest` directly.
 
-**Windows:**
-```bash
-python -m venv venv
-.\venv\Scripts\activate
-```
-
-**Linux/macOS:**
-```bash
-python3 -m venv venv
-source venv/bin/activate
-```
-
-### 2. Install dependencies
-
-Install both application and test dependencies:
-```bash
-pip install -r requirements.txt
-pip install -r tests/requirements-test.txt
-```
-
-### 3. Run tests
-
-The easiest way is to use our cross-platform test runner:
-```bash
-python run_tests.py
-```
-
-## 📊 Test Commands
-
-### Using the Test Runner Script
-
-| Command | Description |
-|---------|-------------|
-| `python run_tests.py` | Run all tests |
-| `python run_tests.py unit` | Run only unit tests |
-| `python run_tests.py integration` | Run only integration tests |
-| `python run_tests.py coverage` | Run tests with coverage report |
-| `python run_tests.py specific test_name` | Run tests matching a pattern |
-| `python run_tests.py parallel` | Run tests in parallel (faster) |
-| `python run_tests.py watch` | Auto-run tests on file changes |
-| `python run_tests.py debug` | Run with verbose debugging output |
-
-### Using pytest Directly
-
-For more control, you can use pytest commands:
+## 📊 Common Commands
 
 ```bash
-# Run all tests with verbose output
-pytest tests/ -v
+# Subsets via markers (declared in pyproject)
+uv run pytest -m unit
+uv run pytest -m integration
+uv run pytest -m "unit and not slow"
 
-# Run with coverage and generate HTML report
-pytest tests/ --cov=src --cov-report=html --cov-report=term
+# A single file or test
+uv run pytest tests/unit/services/agenthub/test_session_store.py
+uv run pytest tests/unit/services/agenthub/test_session_store.py::test_create_session
+uv run pytest -k test_create_session
 
-# Run specific test file
-pytest tests/unit/controllers/test_item_lifecycle_controller.py -v
+# Parallel execution (pytest-xdist is in dev deps)
+uv run pytest -n auto
 
-# Run tests matching a keyword
-pytest tests/ -k "test_create_item" -v
+# Verbose / debug
+uv run pytest -vv -s --tb=long
 
-# Run tests by marker
-pytest tests/ -m unit        # Unit tests only
-pytest tests/ -m integration  # Integration tests only
-pytest tests/ -m api         # API tests only
+# Coverage HTML report (terminal coverage already runs by default)
+uv run pytest --cov-report=html
+# → open htmlcov/index.html
 ```
 
 ## 📁 Test Structure
 
 ```
-python/
-├── src/                     # Application source code
-├── tests/
-│   ├── __init__.py         # Package initialization
-│   ├── conftest.py         # Pytest configuration and shared fixtures
-│   ├── test_fixtures.py    # Common test data (UUIDs, payloads, etc.)
-│   ├── test_helpers.py     # Helper utilities for tests
-│   ├── constants.py        # Test constants and expected responses
-│   ├── requirements-test.txt    # Test-specific dependencies
-│   └── unit/               # Unit tests
-│       ├── api/            # API endpoint tests
-│       └── controllers/    # Controller tests
-├── run_tests.py            # Cross-platform test runner
-└── pytest.ini              # Pytest configuration
+Backend/
+├── pyproject.toml          # Single source of truth (deps + pytest config)
+├── src/                    # Application source code (added to sys.path via pythonpath)
+└── tests/
+    ├── conftest.py         # Pytest fixtures and shared setup
+    ├── test_fixtures.py    # Common test data
+    ├── test_helpers.py     # Helper utilities
+    ├── constants/          # Test constants
+    ├── unit/               # Unit tests (marker: unit)
+    │   ├── api/
+    │   ├── controllers/
+    │   └── services/
+    └── integration/        # Integration tests (marker: integration)
 ```
 
-## 📈 Coverage Reports
+## 📈 Coverage
 
-After running tests with coverage (`python run_tests.py coverage`):
-
-1. **HTML Report**: Open `htmlcov/index.html` in your browser
-2. **Terminal Report**: Coverage summary is displayed in the terminal
-3. **XML Report**: `coverage.xml` is generated for CI/CD integration
-
-The project has a minimum coverage requirement of **80%**.
+Coverage is enabled by default via `addopts` in `pyproject.toml` with a
+minimum threshold (`--cov-fail-under`). Adjust the threshold in
+`pyproject.toml` if needed; do not duplicate it elsewhere.
 
 ## ✍️ Writing Tests
 
-### Test File Naming
-- Test files must start with `test_`
-- Example: `test_item_lifecycle_controller.py`
+### Naming
+- Files: `test_*.py`
+- Classes: `Test*`
+- Functions: `test_*`
 
-### Test Structure
-```python
-import pytest
-from tests.test_fixtures import TestFixtures
-from tests.test_helpers import TestHelpers
+### Markers (registered in pyproject.toml)
+- `unit` — fast, isolated unit tests
+- `integration` — multi-component tests
+- `api` — API endpoint tests
+- `controllers` — controller layer tests
+- `services` — service layer tests
+- `models` — model / domain entity tests
+- `slow` — long-running tests
+- `smoke` — critical CI/CD smoke tests
 
-@pytest.mark.unit  # Mark the test type
-@pytest.mark.controllers  # Mark the component being tested
-class TestYourFeature:
-    """Test cases for YourFeature."""
-    
-    @pytest.mark.asyncio  # For async tests
-    async def test_something_works(self, client, mock_authentication_service):
-        """Test that something works correctly."""
-        # Arrange
-        headers = {"authorization": "Bearer token"}
-        
-        # Act
-        response = client.get("/endpoint", headers=headers)
-        
-        # Assert
-        assert response.status_code == 200
-```
+### Async tests
+`asyncio_mode = "auto"` is set in `pyproject.toml`, so async test
+functions do not need an explicit `@pytest.mark.asyncio` decorator.
 
-### Available Test Markers
-- `@pytest.mark.unit` - Fast, isolated unit tests
-- `@pytest.mark.integration` - Tests integrating multiple components
-- `@pytest.mark.api` - API endpoint tests
-- `@pytest.mark.controllers` - Controller layer tests
-- `@pytest.mark.services` - Service layer tests
-- `@pytest.mark.slow` - Long-running tests
-- `@pytest.mark.smoke` - Critical tests for CI/CD
-
-### Common Fixtures (from conftest.py)
-- `client` - FastAPI test client
-- `valid_headers` - Pre-configured valid request headers
-- `mock_authentication_service` - Mocked authentication service
-- `mock_item_factory` - Mocked item factory
-- `app` - FastAPI application instance
+### Common fixtures (from `conftest.py`)
+- `client` — FastAPI test client
+- `valid_headers` — pre-configured request headers
+- `mock_authentication_service`, `mock_item_factory`
+- `app` — FastAPI app instance
 
 ## 🔧 Troubleshooting
 
-### Common Issues
+**Import errors** — ensure you ran `uv sync --group dev` and that
+`pythonpath = ["src"]` is present in `[tool.pytest.ini_options]`.
 
-**1. Import Errors**
-```bash
-# Ensure you're in the python directory
-cd Backend
-cd python
+**Coverage below threshold** — run `uv run pytest --cov-report=term-missing`
+to see uncovered lines, or `--cov-report=html` for a clickable report.
 
-# Verify PYTHONPATH includes src
-echo $PYTHONPATH  # Linux/macOS
-echo %PYTHONPATH%  # Windows
-```
+**Marker warnings** — add the marker to `[tool.pytest.ini_options].markers`
+in `pyproject.toml`; do not silence with inline ignores.
 
-**2. Missing Dependencies**
-```bash
-# Reinstall all dependencies
-pip install -r requirements.txt -r tests/requirements-test.txt
-```
+## 🚀 CI/CD
 
-**3. Virtual Environment Not Active**
-- Look for `(venv)` prefix in your terminal
-- If missing, activate it again (see Quick Start)
-
-**4. Tests Failing Due to Async Issues**
-- Ensure you're using `@pytest.mark.asyncio` for async tests
-- Check that mocks are created with `AsyncMock` for async methods
-
-**5. Coverage Not Meeting Threshold**
-- Run `python run_tests.py coverage` to see uncovered lines
-- Focus on testing error cases and edge conditions
-
-## 🚀 CI/CD Integration
-
-### GitHub Actions Example
 ```yaml
-name: Run Tests
-
-on: [push, pull_request]
-
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v3
-    
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.8'
-    
-    - name: Install dependencies
-      run: |
-        cd Backend
-        cd python
-        pip install -r requirements.txt
-        pip install -r tests/requirements-test.txt
-    
-    - name: Run tests with coverage
-      run: |
-        cd Backend
-        cd python
-        python run_tests.py coverage
-    
-    - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v3
-      with:
-        file: ./python/coverage.xml
-        fail_ci_if_error: true
+- uses: actions/setup-python@v5
+  with: { python-version: '3.13' }
+- uses: astral-sh/setup-uv@v3
+- run: uv sync --group dev
+  working-directory: Developer Hub/Backend
+- run: uv run pytest
+  working-directory: Developer Hub/Backend
 ```
-
-## 💡 Tips and Best Practices
-
-1. **Always use a virtual environment** to avoid dependency conflicts
-2. **Run tests before committing** code changes
-3. **Write tests for new features** as you develop them
-4. **Use descriptive test names** that explain what is being tested
-5. **Keep tests focused** - one test should verify one behavior
-6. **Use fixtures** to avoid code duplication
-7. **Mock external dependencies** to keep tests fast and isolated
-
-## 📞 Need Help?
-
-If you encounter issues:
-1. Check the troubleshooting section above
-2. Review the test output carefully - pytest provides detailed error messages
-3. Check existing tests for examples
-4. Ensure all dependencies are installed correctly
-
-Happy testing! 🎉
