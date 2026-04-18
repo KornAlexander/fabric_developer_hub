@@ -1,0 +1,155 @@
+services:
+  # ── 1. Generate the manifest package (.nupkg) ──────────────
+  # Runs once at startup, writes the package to a shared volume.
+  manifest-generator:
+    build:
+      context: Backend
+      target: production
+      dockerfile: Dockerfile
+    user: "0"   # run as root — one-shot job needs to write to the named volume
+    env_file:
+      - .env
+    volumes:
+      - manifest-pkg:/app/bin/Debug
+      - ./Backend/tools:/app/tools:ro
+      # Mount the manifest templates (WorkloadManifest.xml, Item1.xml, *.nuspec)
+      # so edits on the host are picked up on the next `docker compose up`
+      # without needing an image rebuild.
+      - ./Backend/manifest:/app/manifest:ro
+      - ./Frontend/Package:/Frontend/Package:ro
+    command: >
+      python3 tools/manifest_package_generator.py
+        --version 1.0.0
+        --project-root /app
+
+  # ── 2. Backend (Python / FastAPI) ──────────────────────────
+  backend:
+    build:
+      context: Backend
+      target: production
+      dockerfile: Dockerfile
+    ports:
+      - "5000:5000"
+    env_file:
+      - .env
+    environment:
+      PYTHON_ENVIRONMENT: Development
+    volumes:
+      # Mount source for hot reload (uvicorn --reload watches these)
+      - ./Backend/src:/app/src
+      - ./Backend/src/appsettings.json:/app/src/appsettings.json:ro
+      - ./Backend/src/appsettings.Development.json:/app/src/appsettings.Development.json:ro
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health').read()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ── 3. Frontend (webpack-dev-server) ───────────────────────
+  frontend:
+    build:
+      context: .
+      dockerfile: Frontend/Dockerfile
+    ports:
+      - "60006:60006"
+    env_file:
+      - .env
+    environment:
+      # webpack + @fluentui needs more heap than Node's default 2 GB
+      NODE_OPTIONS: "--max-old-space-size=4096"
+    volumes:
+      - ./Frontend/src:/app/src
+      - ./Frontend/tools:/app/tools
+      - ./Frontend/Package:/app/Package
+      # The manifest-generator writes the .nupkg into the manifest-pkg volume.
+      # Webpack serves it from /manifests_new → Backend/bin/Debug/
+      - manifest-pkg:/app/../Backend/bin/Debug:ro
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:60006/',r=>{r.resume();process.exit(r.statusCode<400?0:1)}).on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+    depends_on:
+      backend:
+        condition: service_healthy
+      manifest-generator:
+        condition: service_completed_successfully
+
+  # ── 4. DevGateway (registers workload with Fabric) ────────
+  # Token flow: if DEVGATEWAY_TOKEN is set (from host `az` CLI), it is used
+  # directly and device-code login is skipped. Otherwise falls back to
+  # interactive device-code auth inside the container.
+  #
+  # Quick start (no device-code prompt):
+  #   export DEVGATEWAY_TOKEN=$(az account get-access-token \
+  #     --scope https://analysis.windows.net/powerbi/api/.default \
+  #     --query accessToken -o tsv)
+  #   docker compose up
+  dev-gateway:
+    build:
+      context: tools/DevGatewayContainer
+      dockerfile: Dockerfile
+    platform: linux/amd64
+    user: "0"
+    env_file:
+      - .env
+    environment:
+      ENTRA_TENANT_ID: ${PUBLISHER_TENANT_ID}
+      WORKSPACE_GUID: ${WORKSPACE_GUID}
+      LOCAL_BACKEND_PORT: ${PORT:-5000}
+      # Set on the host to skip device-code login:
+      #   export DEVGATEWAY_TOKEN=$(az account get-access-token --scope https://analysis.windows.net/powerbi/api/.default --query accessToken -o tsv)
+      DEVGATEWAY_TOKEN: ${DEVGATEWAY_TOKEN:-}
+    volumes:
+      - manifest-pkg:/app/manifest:ro
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        set -e
+        cp /app/manifest/ManifestPackage.1.0.0.nupkg /app/ManifestPackage.nupkg
+
+        # ── Try host-provided token first ──
+        if [ -n "$$DEVGATEWAY_TOKEN" ]; then
+          echo "✅ Using token from host environment (DEVGATEWAY_TOKEN)"
+          token="$$DEVGATEWAY_TOKEN"
+        else
+          echo "══════════════════════════════════════════════════════════"
+          echo "  No DEVGATEWAY_TOKEN set — falling back to device-code  "
+          echo "══════════════════════════════════════════════════════════"
+
+          # Authenticate to Azure
+          if ! az account show > /dev/null 2>&1; then
+            az config set core.login_experience_v2=off
+            az login -t "$$ENTRA_TENANT_ID" --allow-no-subscriptions --use-device-code
+          fi
+
+          token=$$(az account get-access-token \
+            --scope https://analysis.windows.net/powerbi/api/.default \
+            --query accessToken -o tsv)
+        fi
+
+        if [ -z "$$token" ]; then
+          echo "ERROR: Failed to obtain Azure access token."
+          echo "  Either set DEVGATEWAY_TOKEN on the host, or complete device-code login."
+          exit 1
+        fi
+
+        exec dotnet DevGateway/Microsoft.Fabric.Workload.DevGateway.dll \
+          -LogLevel "$$LOG_LEVEL" \
+          -DevMode:UserAuthorizationToken "$$token" \
+          -DevMode:ManifestPackageFilePath /app/ManifestPackage.nupkg \
+          -DevMode:WorkspaceGuid "$$WORKSPACE_GUID" \
+          -DevMode:WorkloadEndpointUrl "http://host.docker.internal:$${LOCAL_BACKEND_PORT}/workload"
+    tty: true
+    stdin_open: true
+    depends_on:
+      manifest-generator:
+        condition: service_completed_successfully
+      frontend:
+        condition: service_healthy
+
+volumes:
+  manifest-pkg:

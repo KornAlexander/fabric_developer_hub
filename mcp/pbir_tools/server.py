@@ -16,7 +16,6 @@ Environment:
   PBIR_PATH can override the `pbir` binary location (default: found on PATH).
 """
 
-import json
 import os
 import shutil
 import subprocess

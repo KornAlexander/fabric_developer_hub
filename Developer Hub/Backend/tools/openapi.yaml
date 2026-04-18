@@ -1,0 +1,1055 @@
+openapi: 3.0.1
+info:
+  description: APIs to be implemented by workloads for integration with Microsoft
+    Fabric
+  title: Workload REST APIs
+  version: v1
+servers:
+- url: https://workload.contoso.com/workload-api-path-placeholder
+tags: []
+paths:
+  /workspaces/{workspaceId}/items/{itemType}/{itemId}:
+    delete:
+      description: "Upon item deletion Fabric performs basic validations and calls\
+        \ this API to notify the workload. The workload is expected to delete the\
+        \ item metadata and free resources. \n\nThis API should accept SubjectAndApp\
+        \ authentication. However, the subject token may be unavailable in some cases.\n\
+        \n## Permissions\n\nPermissions are checked by Microsoft Fabric."
+      operationId: ItemLifecycle_DeleteItem
+      parameters:
+      - description: The workspace ID.
+        in: path
+        name: workspaceId
+        required: true
+        schema:
+          format: uuid
+          type: string
+      - description: The item type.
+        in: path
+        name: itemType
+        required: true
+        schema:
+          type: string
+      - description: The item ID.
+        in: path
+        name: itemId
+        required: true
+        schema:
+          format: uuid
+          type: string
+      - description: A unique ID for correlating the request with your system when
+          a user interacts with your workload.
+        in: header
+        name: ActivityId
+        required: true
+        schema:
+          type: string
+      - description: A globally unique ID that helps Fabric correlate your request
+          with our logs. Provide this ID when reporting an issue.
+        in: header
+        name: RequestId
+        required: true
+        schema:
+          type: string
+      - description: "A dual token authorization header that allows the workload to\
+          \ validate the request origin, provide user context, and call other services.\
+          \ This header has the following format: `SubjectAndAppToken1.0 subjectToken=\"\
+          delegated token\", appToken=\"S2S token\"`."
+        in: header
+        name: Authorization
+        required: true
+        schema:
+          type: string
+      - description: The tenant ID of the client making the request.
+        in: header
+        name: x-ms-client-tenant-id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content: {}
+          description: Successfully deleted.
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: "For error conditions the workload should return an appropriate\
+            \ HTTP error status code (4xx, 5xx) with detailed error information in\
+            \ the response body."
+      summary: Called by Microsoft Fabric for deleting an existing item.
+      tags:
+      - ItemLifecycle
+    patch:
+      description: |-
+        Upon item update Fabric performs basic validations and calls this API to notify the workload. The workload is expected to perform required validations, store the item metadata, allocate and/or free resources, and update the Fabric item metadata cache with item relations and ETag.
+
+        This API should accept SubjectAndApp authentication.
+
+        ## Permissions
+
+        Permissions are checked by Microsoft Fabric.
+      operationId: ItemLifecycle_UpdateItem
+      parameters:
+      - description: The workspace ID.
+        in: path
+        name: workspaceId
+        required: true
+        schema:
+          format: uuid
+          type: string
+      - description: The item type.
+        in: path
+        name: itemType
+        required: true
+        schema:
+          type: string
+      - description: The item ID.
+        in: path
+        name: itemId
+        required: true
+        schema:
+          format: uuid
+          type: string
+      - description: A unique ID for correlating the request with your system when
+          a user interacts with your workload.
+        in: header
+        name: ActivityId
+        required: true
+        schema:
+          type: string
+      - description: A globally unique ID that helps Fabric correlate your request
+          with our logs. Provide this ID when reporting an issue.
+        in: header
+        name: RequestId
+        required: true
+        schema:
+          type: string
+      - description: "A dual token authorization header that allows the workload to\
+          \ validate the request origin, provide user context, and call other services.\
+          \ This header has the following format: `SubjectAndAppToken1.0 subjectToken=\"\
+          delegated token\", appToken=\"S2S token\"`."
+        in: header
+        name: Authorization
+        required: true
+        schema:
+          type: string
+      - description: The tenant ID of the client making the request.
+        in: header
+        name: x-ms-client-tenant-id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateItemRequest'
+        description: The item update request.
+        required: true
+      responses:
+        "200":
+          content: {}
+          description: Successfully updated.
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: "For error conditions the workload should return an appropriate\
+            \ HTTP error status code (4xx, 5xx) with detailed error information in\
+            \ the response body."
+      summary: Called by Microsoft Fabric for updating an existing item.
+      tags:
+      - ItemLifecycle
+      x-codegen-request-body-name: updateItemRequest
+    post:
+      description: |-
+        Upon item creation Fabric performs basic validations, creates the item in a provisioning state and calls this API to notify the workload. The workload is expected to perform required validations, store the item metadata, allocate required resources, and update the Fabric item metadata cache with item relations and ETag.
+
+        This API should accept SubjectAndApp authentication.
+
+        ## Permissions
+
+        Permissions are checked by Microsoft Fabric.
+      operationId: ItemLifecycle_CreateItem
+      parameters:
+      - description: The workspace ID.
+        in: path
+        name: workspaceId
+        required: true
+        schema:
+          format: uuid
+          type: string
+      - description: The item type.
+        in: path
+        name: itemType
+        required: true
+        schema:
+          type: string
+      - description: The item ID.
+        in: path
+        name: itemId
+        required: true
+        schema:
+          format: uuid
+          type: string
+      - description: A unique ID for correlating the request with your system when
+          a user interacts with your workload.
+        in: header
+        name: ActivityId
+        required: true
+        schema:
+          type: string
+      - description: A globally unique ID that helps Fabric correlate your request
+          with our logs. Provide this ID when reporting an issue.
+        in: header
+        name: RequestId
+        required: true
+        schema:
+          type: string
+      - description: "A dual token authorization header that allows the workload to\
+          \ validate the request origin, provide user context, and call other services.\
+          \ This header has the following format: `SubjectAndAppToken1.0 subjectToken=\"\
+          delegated token\", appToken=\"S2S token\"`."
+        in: header
+        name: Authorization
+        required: true
+        schema:
+          type: string
+      - description: The tenant ID of the client making the request.
+        in: header
+        name: x-ms-client-tenant-id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateItemRequest'
+        description: The item creation request.
+        required: true
+      responses:
+        "200":
+          content: {}
+          description: Successfully created.
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: "For error conditions the workload should return an appropriate\
+            \ HTTP error status code (4xx, 5xx) with detailed error information in\
+            \ the response body."
+      summary: Called by Microsoft Fabric for creating a new item.
+      tags:
+      - ItemLifecycle
+      x-codegen-request-body-name: createItemRequest
+  /workspaces/{workspaceId}/items/{itemType}/{itemId}/payload:
+    get:
+      description: |-
+        When the item editor &lt;iframe&gt; requests an item, Fabric performs basic validations and calls this API to retrieve the payload from the workload.
+
+        This API accepts SubjectAndApp authentication.
+
+        ## Permissions
+
+        Permissions are checked by Microsoft Fabric.
+      operationId: ItemLifecycle_GetItemPayload
+      parameters:
+      - description: The workspace ID.
+        in: path
+        name: workspaceId
+        required: true
+        schema:
+          format: uuid
+          type: string
+      - description: The item type.
+        in: path
+        name: itemType
+        required: true
+        schema:
+          type: string
+      - description: The item ID.
+        in: path
+        name: itemId
+        required: true
+        schema:
+          format: uuid
+          type: string
+      - description: A unique ID for correlating the request with your system when
+          a user interacts with your workload.
+        in: header
+        name: ActivityId
+        required: true
+        schema:
+          type: string
+      - description: A globally unique ID that helps Fabric correlate your request
+          with our logs. Provide this ID when reporting an issue.
+        in: header
+        name: RequestId
+        required: true
+        schema:
+          type: string
+      - description: "A dual token authorization header that allows the workload to\
+          \ validate the request origin, provide user context, and call other services.\
+          \ This header has the following format: `SubjectAndAppToken1.0 subjectToken=\"\
+          delegated token\", appToken=\"S2S token\"`."
+        in: header
+        name: Authorization
+        required: true
+        schema:
+          type: string
+      - description: The tenant ID of the client making the request.
+        in: header
+        name: x-ms-client-tenant-id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetItemPayloadResponse'
+          description: Completed successfully.
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: "For error conditions the workload should return an appropriate\
+            \ HTTP error status code (4xx, 5xx) with detailed error information in\
+            \ the response body."
+      summary: Called by Microsoft Fabric for retrieving the workload payload for
+        an item.
+      tags:
+      - ItemLifecycle
+  /workspaces/{workspaceId}/items/{itemType}/{itemId}/jobTypes/{jobType}/instances/{jobInstanceId}:
+    get:
+      description: |-
+        Fabric performs basic validations and calls this API to retrieve the item job instance state in the workload.
+
+        This API should accept SubjectAndApp authentication.
+
+        ## Permissions
+
+        Permissions are checked by Microsoft Fabric.
+      operationId: Jobs_GetItemJobInstanceState
+      parameters:
+      - description: The workspace ID.
+        in: path
+        name: workspaceId
+        required: true
+        schema:
+          format: uuid
+          type: string
+      - description: The item type.
+        in: path
+        name: itemType
+        required: true
+        schema:
+          type: string
+      - description: The item ID.
+        in: path
+        name: itemId
+        required: true
+        schema:
+          format: uuid
+          type: string
+      - description: The job type.
+        in: path
+        name: jobType
+        required: true
+        schema:
+          type: string
+      - description: The job instance ID.
+        in: path
+        name: jobInstanceId
+        required: true
+        schema:
+          format: uuid
+          type: string
+      - description: A unique ID for correlating the request with your system when
+          a user interacts with your workload.
+        in: header
+        name: ActivityId
+        required: true
+        schema:
+          type: string
+      - description: A globally unique ID that helps Fabric correlate your request
+          with our logs. Provide this ID when reporting an issue.
+        in: header
+        name: RequestId
+        required: true
+        schema:
+          type: string
+      - description: "A dual token authorization header that allows the workload to\
+          \ validate the request origin, provide user context, and call other services.\
+          \ This header has the following format: `SubjectAndAppToken1.0 subjectToken=\"\
+          delegated token\", appToken=\"S2S token\"`."
+        in: header
+        name: Authorization
+        required: true
+        schema:
+          type: string
+      - description: The tenant ID of the client making the request.
+        in: header
+        name: x-ms-client-tenant-id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ItemJobInstanceState'
+          description: Completed successfully.
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: "For error conditions the workload should return an appropriate\
+            \ HTTP error status code (4xx, 5xx) with detailed error information in\
+            \ the response body."
+      summary: Called by Microsoft Fabric for retrieving a job instance state.
+      tags:
+      - Jobs
+    post:
+      description: |-
+        Fabric performs basic validations and calls this API to start a new instance of the job in the workload.
+
+        This API should accept SubjectAndApp authentication.
+
+        ## Permissions
+
+        Permissions are checked by Microsoft Fabric.
+      operationId: Jobs_CreateItemJobInstance
+      parameters:
+      - description: The workspace ID.
+        in: path
+        name: workspaceId
+        required: true
+        schema:
+          format: uuid
+          type: string
+      - description: The item type.
+        in: path
+        name: itemType
+        required: true
+        schema:
+          type: string
+      - description: The item ID.
+        in: path
+        name: itemId
+        required: true
+        schema:
+          format: uuid
+          type: string
+      - description: The job type.
+        in: path
+        name: jobType
+        required: true
+        schema:
+          type: string
+      - description: The job instance ID.
+        in: path
+        name: jobInstanceId
+        required: true
+        schema:
+          format: uuid
+          type: string
+      - description: A unique ID for correlating the request with your system when
+          a user interacts with your workload.
+        in: header
+        name: ActivityId
+        required: true
+        schema:
+          type: string
+      - description: A globally unique ID that helps Fabric correlate your request
+          with our logs. Provide this ID when reporting an issue.
+        in: header
+        name: RequestId
+        required: true
+        schema:
+          type: string
+      - description: "A dual token authorization header that allows the workload to\
+          \ validate the request origin, provide user context, and call other services.\
+          \ This header has the following format: `SubjectAndAppToken1.0 subjectToken=\"\
+          delegated token\", appToken=\"S2S token\"`."
+        in: header
+        name: Authorization
+        required: true
+        schema:
+          type: string
+      - description: The tenant ID of the client making the request.
+        in: header
+        name: x-ms-client-tenant-id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateItemJobInstanceRequest'
+        description: The job instance properties.
+        required: true
+      responses:
+        "202":
+          content: {}
+          description: Successfully scheduled.
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: "For error conditions the workload should return an appropriate\
+            \ HTTP error status code (4xx, 5xx) with detailed error information in\
+            \ the response body."
+      summary: Called by Microsoft Fabric for starting a new job instance.
+      tags:
+      - Jobs
+      x-codegen-request-body-name: createItemJobInstanceRequest
+  /workspaces/{workspaceId}/items/{itemType}/{itemId}/jobTypes/{jobType}/instances/{jobInstanceId}/cancel:
+    post:
+      description: |-
+        Fabric performs basic validations and calls this API to cancel an item job instance in the workload.
+
+        This API should accept SubjectAndApp authentication.
+
+        ## Permissions
+
+        Permissions are checked by Microsoft Fabric.
+      operationId: Jobs_CancelItemJobInstance
+      parameters:
+      - description: The workspace ID.
+        in: path
+        name: workspaceId
+        required: true
+        schema:
+          format: uuid
+          type: string
+      - description: The item type.
+        in: path
+        name: itemType
+        required: true
+        schema:
+          type: string
+      - description: The item ID.
+        in: path
+        name: itemId
+        required: true
+        schema:
+          format: uuid
+          type: string
+      - description: The job type.
+        in: path
+        name: jobType
+        required: true
+        schema:
+          type: string
+      - description: The job instance ID.
+        in: path
+        name: jobInstanceId
+        required: true
+        schema:
+          format: uuid
+          type: string
+      - description: A unique ID for correlating the request with your system when
+          a user interacts with your workload.
+        in: header
+        name: ActivityId
+        required: true
+        schema:
+          type: string
+      - description: A globally unique ID that helps Fabric correlate your request
+          with our logs. Provide this ID when reporting an issue.
+        in: header
+        name: RequestId
+        required: true
+        schema:
+          type: string
+      - description: "A dual token authorization header that allows the workload to\
+          \ validate the request origin, provide user context, and call other services.\
+          \ This header has the following format: `SubjectAndAppToken1.0 subjectToken=\"\
+          delegated token\", appToken=\"S2S token\"`."
+        in: header
+        name: Authorization
+        required: true
+        schema:
+          type: string
+      - description: The tenant ID of the client making the request.
+        in: header
+        name: x-ms-client-tenant-id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ItemJobInstanceState'
+          description: Completed successfully.
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: "For error conditions the workload should return an appropriate\
+            \ HTTP error status code (4xx, 5xx) with detailed error information in\
+            \ the response body."
+      summary: Called by Microsoft Fabric for cancelling a job instance.
+      tags:
+      - Jobs
+  /resolve-api-path-placeholder:
+    post:
+      description: |-
+        Resolves the endpoint for a given service called by Microsoft Fabric based on the tenant's region and workspace region. Fabric provides a set of context properties and returns the appropriate service endpoint URL and its time-to-live (TTL).
+
+        The Endpoint Resolution API is crucial for services that require dynamic endpoint determination based on operational context. This allows for optimized routing and regional compliance.
+
+        To resolve an endpoint, Fabric will send a POST request with the required context properties in the request body. The response will contain the resolved URL and its TTL, which indicates how long the URL is considered valid.
+
+        For a sample implementation and usage examples, please refer to the [Endpoint Resolution Sample Code](https://github.com/microsoft/Microsoft-Fabric-workload-development-sample/blob/main/Backend/src/Controllers/EndpointResolutionControllerImpl.cs).
+      operationId: EndpointResolution_Resolve
+      parameters:
+      - description: A unique ID for correlating the request with your system when
+          a user interacts with your workload.
+        in: header
+        name: ActivityId
+        required: true
+        schema:
+          type: string
+      - description: A globally unique ID that helps Fabric correlate your request
+          with our logs. Provide this ID when reporting an issue.
+        in: header
+        name: RequestId
+        required: true
+        schema:
+          type: string
+      - description: "A dual token authorization header that allows the workload to\
+          \ validate the request origin, provide user context, and call other services.\
+          \ This header has the following format: `SubjectAndAppToken1.0 subjectToken=\"\
+          delegated token\", appToken=\"S2S token\"`."
+        in: header
+        name: Authorization
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EndpointResolutionRequest'
+        description: Endpoint resolution request payload
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EndpointResolutionResponse'
+          description: Endpoint resolution response
+        default:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: "For error conditions the workload should return an appropriate\
+            \ HTTP error status code (4xx, 5xx) with detailed error information in\
+            \ the response body."
+      summary: Resolve an endpoint for a given service called by Microsoft Fabric
+      tags:
+      - EndpointResolution
+      x-codegen-request-body-name: body
+components:
+  responses:
+    StandardErrorResponse:
+      content:
+        '*/*':
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+      description: "For error conditions the workload should return an appropriate\
+        \ HTTP error status code (4xx, 5xx) with detailed error information in the\
+        \ response body."
+  schemas:
+    ErrorSource:
+      description: The source of the error.
+      enum:
+      - System
+      - User
+      - External
+      title: ErrorSource
+      type: string
+    JobInvokeType:
+      description: The job invoke type.
+      enum:
+      - UnknownFutureValue
+      - Scheduled
+      - Manual
+      title: JobInvokeType
+      type: string
+    JobInstanceStatus:
+      description: The status of an item job instance.
+      enum:
+      - NotStarted
+      - InProgress
+      - Completed
+      - Failed
+      - Cancelled
+      title: JobInstanceStatus
+      type: string
+    NameValuePair:
+      additionalProperties: false
+      description: A name-value pair.
+      example:
+        name: name
+        value: value
+      properties:
+        name:
+          description: The name.
+          readOnly: true
+          title: name
+          type: string
+        value:
+          description: The value.
+          readOnly: true
+          title: value
+          type: string
+      required:
+      - name
+      - value
+      title: NameValuePair
+      type: object
+    ErrorBasicInformation:
+      additionalProperties: false
+      description: The basic error information
+      properties:
+        errorCode:
+          description: The error code.
+          readOnly: true
+          title: errorCode
+          type: string
+        message:
+          description: The error message.
+          readOnly: true
+          title: message
+          type: string
+        messageParameters:
+          description: A list of parameters for formatting a localized message.
+          items:
+            readOnly: true
+            type: string
+          readOnly: true
+          title: messageParameters
+          type: array
+      required:
+      - errorCode
+      - message
+      title: ErrorBasicInformation
+      type: object
+    ErrorExtendedInformation:
+      allOf:
+      - $ref: '#/components/schemas/ErrorBasicInformation'
+      description: The extended error information.
+      example:
+        additionalParameters:
+        - name: name
+          value: value
+        - name: name
+          value: value
+      properties:
+        additionalParameters:
+          description: A list of additional parameters specific to the error.
+          items:
+            $ref: '#/components/schemas/NameValuePair'
+          readOnly: true
+          title: additionalParameters
+          type: array
+      title: ErrorExtendedInformation
+    ErrorDetails:
+      allOf:
+      - $ref: '#/components/schemas/ErrorBasicInformation'
+      description: The error details.
+      example:
+        isPermanent: true
+        moreDetails:
+        - additionalParameters:
+          - name: name
+            value: value
+          - name: name
+            value: value
+        - additionalParameters:
+          - name: name
+            value: value
+          - name: name
+            value: value
+        source: System
+      properties:
+        source:
+          $ref: '#/components/schemas/ErrorSource'
+        isPermanent:
+          description: Indicates whether the error is permanent or the operation can
+            be retried.
+          readOnly: true
+          title: isPermanent
+          type: boolean
+        moreDetails:
+          description: A list of additional error details.
+          items:
+            $ref: '#/components/schemas/ErrorExtendedInformation'
+          readOnly: true
+          title: moreDetails
+          type: array
+      required:
+      - source
+      title: ErrorDetails
+    ErrorResponse:
+      allOf:
+      - $ref: '#/components/schemas/ErrorDetails'
+      description: The error response.
+      example:
+        isPermanent: true
+        moreDetails:
+        - additionalParameters:
+          - name: name
+            value: value
+          - name: name
+            value: value
+        - additionalParameters:
+          - name: name
+            value: value
+          - name: name
+            value: value
+        source: System
+      title: ErrorResponse
+    CreateItemPayload:
+      additionalProperties: true
+      description: Creation payload specific to the workload and item type. Fabric
+        forwards this payload as-is to your backend system without storing or examining
+        its contents.
+      title: creationPayload
+      type: object
+    UpdateItemPayload:
+      additionalProperties: true
+      description: Update payload specific to the workload and item type.
+      title: updatePayload
+      type: object
+    ItemPayload:
+      additionalProperties: true
+      description: Item payload specific to the workload and item type.
+      title: itemPayload
+      type: object
+    CreateItemJobInstancePayload:
+      additionalProperties: true
+      description: "Job instance creation payload specific to the workload, item and\
+        \ job type."
+      title: creationPayload
+      type: object
+    CreateItemRequest:
+      additionalProperties: false
+      description: Create item request content.
+      example:
+        displayName: displayName
+        description: description
+        creationPayload:
+          key: ""
+      properties:
+        displayName:
+          description: The item display name. Cannot exceed 256 characters.
+          maxLength: 256
+          title: displayName
+          type: string
+        description:
+          description: The item description.
+          title: description
+          type: string
+        creationPayload:
+          additionalProperties: true
+          description: Creation payload specific to the workload and item type. Fabric
+            forwards this payload as-is to your backend system without storing or
+            examining its contents.
+          title: creationPayload
+          type: object
+      required:
+      - displayName
+      title: CreateItemRequest
+      type: object
+    UpdateItemRequest:
+      additionalProperties: false
+      description: "Update item request content. This content has 'PATCH' semantics:\
+        \ for properties which are not provided (null) the item current values should\
+        \ be preserved."
+      example:
+        updatePayload:
+          key: ""
+        displayName: displayName
+        description: description
+      properties:
+        displayName:
+          description: The item display name. Cannot exceed 256 characters.
+          maxLength: 256
+          title: displayName
+          type: string
+        description:
+          description: The item description.
+          title: description
+          type: string
+        updatePayload:
+          additionalProperties: true
+          description: Update payload specific to the workload and item type.
+          title: updatePayload
+          type: object
+      title: UpdateItemRequest
+      type: object
+    GetItemPayloadResponse:
+      additionalProperties: false
+      description: The item payload for the item editor.
+      example:
+        itemPayload:
+          key: ""
+      properties:
+        itemPayload:
+          additionalProperties: true
+          description: Item payload specific to the workload and item type.
+          title: itemPayload
+          type: object
+      title: GetItemPayloadResponse
+      type: object
+    CreateItemJobInstanceRequest:
+      additionalProperties: false
+      description: The parameters controlling the job instance execution.
+      example:
+        invokeType: UnknownFutureValue
+        creationPayload:
+          key: ""
+      properties:
+        invokeType:
+          $ref: '#/components/schemas/JobInvokeType'
+        creationPayload:
+          additionalProperties: true
+          description: "Job instance creation payload specific to the workload, item\
+            \ and job type."
+          title: creationPayload
+          type: object
+      required:
+      - invokeType
+      title: CreateItemJobInstanceRequest
+      type: object
+    ItemJobInstanceState:
+      additionalProperties: false
+      description: The job instance state.
+      example:
+        endTimeUtc: 2000-01-23T04:56:07.000+00:00
+        startTimeUtc: 2000-01-23T04:56:07.000+00:00
+        status: NotStarted
+        errorDetails:
+          isPermanent: true
+          moreDetails:
+          - additionalParameters:
+            - name: name
+              value: value
+            - name: name
+              value: value
+          - additionalParameters:
+            - name: name
+              value: value
+            - name: name
+              value: value
+          source: System
+      properties:
+        status:
+          $ref: '#/components/schemas/JobInstanceStatus'
+        startTimeUtc:
+          description: The job instance start time.
+          format: date-time
+          readOnly: true
+          title: startTimeUtc
+          type: string
+        endTimeUtc:
+          description: The job instance end time.
+          format: date-time
+          readOnly: true
+          title: endTimeUtc
+          type: string
+        errorDetails:
+          $ref: '#/components/schemas/ErrorDetails'
+      required:
+      - status
+      title: ItemJobInstanceState
+      type: object
+    EndpointResolutionContextPropertyName:
+      description: The name of the property for endpoint resolution context.
+      enum:
+      - EndpointName
+      - TenantRegion
+      - WorkspaceRegion
+      - TenantId
+      title: EndpointResolutionContextPropertyName
+      type: string
+    EndpointResolutionContextProperty:
+      additionalProperties: false
+      description: Defines a context property used in endpoint resolution. This property
+        must be specified in the workload manifest to ensure correct endpoint determination
+        by Fabric.
+      example:
+        name: EndpointName
+        value: value
+      properties:
+        name:
+          $ref: '#/components/schemas/EndpointResolutionContextPropertyName'
+        value:
+          description: The value of the context property.
+          title: value
+          type: string
+      required:
+      - name
+      - value
+      title: EndpointResolutionContextProperty
+      type: object
+    EndpointResolutionRequest:
+      additionalProperties: false
+      example:
+        context:
+        - name: EndpointName
+          value: value
+        - name: EndpointName
+          value: value
+      properties:
+        context:
+          description: Array of context properties for endpoint resolution.
+          items:
+            $ref: '#/components/schemas/EndpointResolutionContextProperty'
+          title: context
+          type: array
+      required:
+      - context
+      title: EndpointResolutionRequest
+      type: object
+    EndpointResolutionResponse:
+      additionalProperties: false
+      example:
+        ttlInMinutes: 0
+        url: url
+      properties:
+        url:
+          description: The resolved URL of the service.
+          title: url
+          type: string
+        ttlInMinutes:
+          description: Time to live in minutes for the resolved URL.
+          format: int32
+          title: ttlInMinutes
+          type: integer
+      required:
+      - ttlInMinutes
+      - url
+      title: EndpointResolutionResponse
+      type: object
+x-original-swagger-version: "2.0"

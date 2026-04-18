@@ -1,0 +1,24 @@
+{
+  "servers": {
+    "fabric": {
+      "command": "${PYTHON}",
+      "args": ["${SRC_DIR}/mcp_servers/fabric.py"],
+      "requires_auth": true
+    },
+    "semantic-link": {
+      "command": "${PYTHON}",
+      "args": ["${SRC_DIR}/mcp_servers/semantic_link.py"],
+      "requires_auth": true
+    },
+    "pbi-fixer": {
+      "command": "${PYTHON}",
+      "args": ["${REPO_DIR}/mcp/pbi_fixer/server.py"],
+      "requires_auth": false
+    },
+    "pbir-tools": {
+      "command": "${PYTHON}",
+      "args": ["${REPO_DIR}/mcp/pbir_tools/server.py"],
+      "requires_auth": false
+    }
+  }
+}

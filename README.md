@@ -1,8 +1,8 @@
-# Fabric AgentHub
+# Fabric Developer Hub
 
 **Enterprise AI Agent Orchestration Platform for Microsoft Fabric**
 
-Fabric AgentHub is a UI design prototype for a next-generation platform that enables users to monitor, orchestrate, and deploy enterprise-grade AI agents across their Microsoft Fabric ecosystem. It introduces a skill-based composition model where agents are built from modular, reusable capabilities — powered by `skills-for-fabric`.
+Fabric Developer Hub is a UI design prototype for a next-generation platform that enables users to monitor, orchestrate, and deploy enterprise-grade AI agents across their Microsoft Fabric ecosystem. It introduces a skill-based composition model where agents are built from modular, reusable capabilities — powered by `skills-for-fabric`.
 
 > **Status:** Design Phase — HTML/CSS prototypes with Tailwind CSS + Material Design 3
 
@@ -175,12 +175,12 @@ npx http-server -p 3000
 # http://localhost:3000/Design/home_dashboard.html
 ```
 
-### Running the AgentHub stack locally (Docker)
+### Running the Developer Hub stack locally (Docker)
 
 The full backend + frontend + Fabric DevGateway runs via `docker compose`:
 
 ```bash
-cd AgentHub
+cd "Developer Hub"
 cp .env.example .env      # fill in tenant, app, workspace IDs
 ./start.sh
 ```
