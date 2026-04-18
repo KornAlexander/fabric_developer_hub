@@ -2614,16 +2614,16 @@ html, body, #root {
 
 /* Composer */
 .composer-wrap {
-    max-width: 768px;
+    max-width: 720px;
     margin: 0 auto;
     width: 100%;
 }
 .composer-card {
     background: #ffffff;
-    border-radius: 24px;
-    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.05);
+    border-radius: 16px;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
     border: 1px solid rgba(192, 199, 212, 0.3);
-    padding: 24px;
+    padding: 20px;
     position: relative;
     overflow: hidden;
 }
@@ -2643,24 +2643,24 @@ html, body, #root {
     z-index: 1;
 }
 .composer-label {
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 700;
     color: #005faa;
-    letter-spacing: 0.15em;
+    letter-spacing: 0.14em;
     text-transform: uppercase;
-    margin-bottom: 12px;
+    margin-bottom: 8px;
 }
 .composer-textarea {
     width: 100%;
     border: none;
     outline: none;
     background: transparent;
-    font-size: 20px;
-    font-weight: 500;
+    font-size: 14px;
+    font-weight: 400;
     color: #1a1c1c;
     line-height: 1.5;
     resize: none;
-    height: 112px;
+    height: 84px;
     font-family: inherit;
     &::placeholder { color: rgba(95, 94, 94, 0.4); }
 }
