@@ -190,3 +190,112 @@ async def test_call_tool_unknown_raises(tmp_path) -> None:
     mgr = MCPClientManager(str(tmp_path / "missing.json"))
     with pytest.raises(ValueError, match="Unknown tool"):
         await mgr.call_tool("does_not_exist", {})
+
+
+# ── Security: tool policy enforcement ───────────────────────────────
+#
+# These tests exercise the pre-dispatch gate that hardens the tool surface
+# against prompt injection. They deliberately use synthetic
+# ``tool_server_map`` entries so we never actually spawn a subprocess.
+
+
+def _mgr_with_fake_tool(tmp_path, tool_name: str = "fabric_write_file"):
+    mgr = MCPClientManager(str(tmp_path / "missing.json"))
+    mgr.tool_server_map[tool_name] = "fabric"
+    mgr.config["servers"] = {"fabric": {"command": "x", "args": []}}
+    return mgr
+
+
+@pytest.mark.asyncio
+async def test_call_tool_rejects_tool_outside_allowlist(tmp_path) -> None:
+    """A prompt-injected / hallucinated tool call must be rejected at the
+    manager even if the tool itself is registered with the manager."""
+    from services.mcp.mcp_client_manager import ToolPolicyViolation
+    mgr = _mgr_with_fake_tool(tmp_path, "fabric_delete_item")
+    with pytest.raises(ToolPolicyViolation, match="not permitted"):
+        await mgr.call_tool(
+            "fabric_delete_item",
+            {"item_id": "abc"},
+            allowed_tools={"fabric_list_items"},
+        )
+
+
+@pytest.mark.asyncio
+async def test_call_tool_rejects_cross_workspace_pivot(tmp_path) -> None:
+    """Policy must reject a tool call whose ``workspace_id`` disagrees with
+    the Job's pinned workspace — preventing prompt-injection pivots to a
+    different workspace the user also has access to."""
+    from services.mcp.mcp_client_manager import ToolPolicyViolation
+    mgr = _mgr_with_fake_tool(tmp_path, "fabric_list_items")
+    with pytest.raises(ToolPolicyViolation, match="does not match"):
+        await mgr.call_tool(
+            "fabric_list_items",
+            {"workspace_id": "11111111-1111-1111-1111-111111111111"},
+            allowed_tools={"fabric_list_items"},
+            workspace_id="22222222-2222-2222-2222-222222222222",
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "bad_path",
+    [
+        "../../etc/passwd",
+        "foo/../../../escape",
+        "/absolute/leak",
+        "C:\\windows\\passwd",
+        "mixed\\slashes",
+        "has\x00null",
+    ],
+)
+async def test_call_tool_rejects_path_traversal(tmp_path, bad_path: str) -> None:
+    """Path-like args must reject traversal, absolute paths, backslashes,
+    and null bytes — the classic filesystem-abuse vectors an injected
+    prompt could slip into a tool call."""
+    from services.mcp.mcp_client_manager import ToolPolicyViolation
+    mgr = _mgr_with_fake_tool(tmp_path, "fabric_write_file")
+    with pytest.raises(ToolPolicyViolation):
+        await mgr.call_tool(
+            "fabric_write_file",
+            {"file_path": bad_path, "content": "x"},
+            allowed_tools={"fabric_write_file"},
+        )
+
+
+@pytest.mark.asyncio
+async def test_call_tool_rejects_oversized_argument(tmp_path) -> None:
+    """Arg-structure guards cap string length to prevent a crafted dict
+    from exhausting downstream JSON encoders or LLM context windows."""
+    from services.mcp.mcp_client_manager import (
+        _MAX_ARG_STRING_LEN,
+        ToolPolicyViolation,
+    )
+    mgr = _mgr_with_fake_tool(tmp_path, "fabric_write_file")
+    with pytest.raises(ToolPolicyViolation, match="exceeds"):
+        await mgr.call_tool(
+            "fabric_write_file",
+            {"file_path": "ok.txt", "content": "a" * (_MAX_ARG_STRING_LEN + 1)},
+            allowed_tools={"fabric_write_file"},
+        )
+
+
+def test_env_allowlist_excludes_secrets(monkeypatch) -> None:
+    """The MCP subprocess env must NOT inherit arbitrary backend env vars
+    like ClientSecret — only the explicit allow-list + server-declared env
+    + per-request tokens are forwarded."""
+    from services.mcp.mcp_client_manager import _BASE_ENV_ALLOWLIST
+    # Secrets an operator might have configured on the backend — none of
+    # these should ever be in the allow-list.
+    forbidden = {
+        "ClientSecret", "CLIENT_SECRET", "AZURE_CLIENT_SECRET",
+        "AAD_CLIENT_SECRET", "DATABASE_URL", "AGENTHUB_DB_PATH",
+        "GITHUB_TOKEN", "FABRIC_API_TOKEN_STATIC",
+    }
+    for name in forbidden:
+        assert name not in _BASE_ENV_ALLOWLIST, (
+            f"{name} must not be in the MCP subprocess env allow-list"
+        )
+    # Sanity: the allow-list does include the essentials.
+    for name in ("PATH", "HOME", "SSL_CERT_FILE"):
+        assert name in _BASE_ENV_ALLOWLIST
+

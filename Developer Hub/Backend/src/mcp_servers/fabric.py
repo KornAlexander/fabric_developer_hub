@@ -10,6 +10,7 @@ MCPClientManager.
 Tools:
   Fabric REST API (requires FABRIC_API_TOKEN):
     - fabric_list_workspaces
+    - fabric_create_workspace
     - fabric_list_items
     - fabric_create_item
 
@@ -148,6 +149,44 @@ async def fabric_list_workspaces() -> str:
             "capacityId": ws.get("capacityId"),
         })
     return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+async def fabric_create_workspace(
+    display_name: str,
+    description: str | None = None,
+    capacity_id: str | None = None,
+) -> str:
+    """Create a new Microsoft Fabric workspace.
+
+    Args:
+        display_name: Human-readable name for the new workspace. Must be
+            unique within the tenant.
+        description: Optional description.
+        capacity_id: Optional capacity UUID to assign. If omitted, the
+            workspace is created without an assigned capacity (user can
+            attach one later in Fabric).
+    """
+    body: dict = {"displayName": display_name}
+    if description:
+        body["description"] = description
+    if capacity_id:
+        body["capacityId"] = capacity_id
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(
+            f"{FABRIC_API_BASE}/workspaces",
+            json=body,
+            headers=_fabric_headers(),
+        )
+    if resp.status_code not in (200, 201, 202):
+        return format_http_error(resp, 'creating workspace')
+    created = resp.json()
+    return json.dumps({
+        "id": created.get("id"),
+        "displayName": created.get("displayName"),
+        "type": created.get("type"),
+        "capacityId": created.get("capacityId"),
+    })
 
 
 @mcp.tool()

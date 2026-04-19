@@ -22,6 +22,8 @@ import {
     ArrowSwap24Regular,
     Bot24Regular,
     CheckmarkCircle16Filled,
+    DismissCircle16Filled,
+    ErrorCircle16Filled,
     MoreVertical20Regular,
     Warning20Regular,
     Play16Regular,
@@ -33,6 +35,8 @@ import * as api from "../../controller/AgentHubApi";
 import { callAuthAcquireAccessToken } from "../../controller/AgentHubController";
 import { useItemContext } from "./ItemContext";
 import { readPreloaded, setPreloaded } from "./pagePreloadCache";
+import { useSearch } from "./SearchContext";
+import { fuzzyMatches } from "./fuzzySearch";
 
 interface DashboardPageProps {
     workloadClient: WorkloadClientAPI;
@@ -86,6 +90,13 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
     const [slowLoading, setSlowLoading] = useState(false);
     const [loadError, setLoadError] = useState<string | null>(null);
     const [creating, setCreating] = useState(false);
+    // Session-cancel confirmation. We render an in-app dialog because
+    // window.confirm() is blocked by the browser inside Fabric's cross-origin
+    // iframe sandbox — clicking the dismiss button on a session card would
+    // otherwise appear to do nothing.
+    const [pendingCancel, setPendingCancel] = useState<any | null>(null);
+    const [cancelBusy, setCancelBusy] = useState(false);
+    const [showAllHistory, setShowAllHistory] = useState(false);
     const history = useHistory();
     const match = useRouteMatch();
     const { itemObjectId, workspaceObjectId, createItem } = useItemContext();
@@ -145,6 +156,33 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
     const waitingCount = jobs.filter(j => ["planned", "approved", "waiting"].includes(j.status)).length;
     const errorCount = jobs.filter(j => ["failed", "error"].includes(j.status)).length;
 
+    // ── Topbar search: filter sessions by task / plan / attachment filename ──
+    const { query: searchQuery } = useSearch();
+    function matchesSearch(job: any): boolean {
+        if (!searchQuery.trim()) return true;
+        const haystacks: (string | null | undefined)[] = [
+            job.task_description,
+            job.id,
+            job.status,
+            job.plan?.summary,
+            job.plan?.title,
+            job.agent?.name,
+            job.agent?.role_description,
+            job.agent?.specialty,
+            job.agent?.current_step,
+            job.error_message,
+            ...(Array.isArray(job.plan?.steps)
+                ? job.plan.steps.map((s: any) => s?.description ?? s?.title ?? "")
+                : []),
+            ...(Array.isArray(job.attachments)
+                ? job.attachments.map((a: any) => a?.filename ?? a?.name ?? "")
+                : []),
+        ];
+        return fuzzyMatches(searchQuery, ...haystacks);
+    }
+    const visibleActiveJobs = activeJobs.filter(matchesSearch);
+    const visibleCompletedJobs = completedJobs.filter(matchesSearch);
+
     function gotoSession(sessionId: string) {
         history.push(match.url.replace(/\/home$/, `/session/${sessionId}`));
     }
@@ -154,19 +192,39 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
     }
 
     async function dismissSession(job: any) {
-        const isRunning = job.status === "running";
-        const verb = isRunning ? "cancel" : "delete";
-        const ok = window.confirm(
-            isRunning
-                ? `Cancel "${job.task_description?.slice(0, 80) || "this session"}"? Running agents will be stopped.`
-                : `Delete "${job.task_description?.slice(0, 80) || "this session"}"? This cannot be undone.`,
-        );
-        if (!ok) return;
+        // Open the in-app confirm dialog. We can't use window.confirm()
+        // because Chrome/Edge block it inside cross-origin iframes such as
+        // the one Fabric hosts us in.
+        setPendingCancel(job);
+    }
 
-        // Optimistic removal — we'll restore on failure.
+    async function performCancel(job: any) {
+        setCancelBusy(true);
+
+        // Optimistic update — flip the card to cancelled locally so the
+        // dashboard reacts instantly. If the API call fails we restore.
         const snapshot = jobs;
-        setJobs(prev => prev.filter(j => j.id !== job.id));
-        setPreloaded("sessions", snapshot.filter(j => j.id !== job.id));
+        const nowIso = new Date().toISOString();
+        const optimistic = jobs.map(j =>
+            j.id === job.id
+                ? {
+                    ...j,
+                    status: "cancelled",
+                    completed_at: nowIso,
+                    cancelled_at: nowIso,
+                    // Stamp the canceller so the "Cancelled by …" audit
+                    // line renders consistently on the optimistic row
+                    // (before the backend response arrives). The caller
+                    // of performCancel is always the session owner, so
+                    // falling back to the job's own user_upn/user_id is
+                    // safe.
+                    cancelled_by_upn: j.cancelled_by_upn || j.user_upn,
+                    cancelled_by_user_id: j.cancelled_by_user_id || j.user_id,
+                }
+                : j,
+        );
+        setJobs(optimistic);
+        setPreloaded("sessions", optimistic);
 
         try {
             let fabricToken: string | undefined;
@@ -175,11 +233,14 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
                 fabricToken = tok?.token;
             } catch { /* best-effort */ }
             await api.cancelSession(job.id, { githubToken, fabricToken });
+            setPendingCancel(null);
         } catch (e: any) {
-            console.error(`Failed to ${verb} session:`, e);
+            console.error("Failed to cancel session:", e);
             setJobs(snapshot);
             setPreloaded("sessions", snapshot);
-            window.alert(`Could not ${verb} session: ${e?.message || e}`);
+            window.alert(`Could not cancel session: ${e?.message || e}`);
+        } finally {
+            setCancelBusy(false);
         }
     }
 
@@ -237,10 +298,10 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
                 </MessageBar>
             )}
 
-            {/* ── Active Agents ── */}
+            {/* ── Active Sessions ── */}
             <section className="sessions-section">
                 <div className="sessions-section-head">
-                    <h2 className="sessions-h2">Active Agents</h2>
+                    <h2 className="sessions-h2">Active Sessions</h2>
                     <div className="sessions-status-pills">
                         {runningCount > 0 && <span className="status-count status-count--neutral">{runningCount} Running</span>}
                         {waitingCount > 0 && <span className="status-count status-count--neutral">{waitingCount} Waiting</span>}
@@ -252,7 +313,7 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
                 </div>
 
                 {loading ? (
-                    <div className="agent-cards-scroller" aria-busy="true" aria-label="Loading active agents">
+                    <div className="agent-cards-scroller" aria-busy="true" aria-label="Loading active sessions">
                         <div className="agent-cards-row">
                             {[0, 1, 2].map(i => (
                                 <article key={i} className="session-card session-card--skeleton" aria-hidden="true">
@@ -298,12 +359,16 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
                     </div>
                 ) : activeJobs.length === 0 ? (
                     <div className="sessions-empty">
-                        <Body1>No active agents. Submit a task to get started.</Body1>
+                        <Body1>No active sessions. Submit a task to get started.</Body1>
+                    </div>
+                ) : visibleActiveJobs.length === 0 ? (
+                    <div className="sessions-empty">
+                        <Body1>No active sessions match “{searchQuery}”.</Body1>
                     </div>
                 ) : (
                     <div className="agent-cards-scroller">
                         <div className="agent-cards-row">
-                            {activeJobs.map((job, idx) => {
+                            {visibleActiveJobs.map((job, idx) => {
                                 const agent = job.agents?.[0];
                                 const agentName = agent?.role || agent?.agent_id || "Orchestrator";
                                 const agentSubtitle = agent?.specialty || agent?.role_description || "Workload";
@@ -336,8 +401,8 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
                                                 <button
                                                     type="button"
                                                     className="session-card-dismiss"
-                                                    aria-label={job.status === "running" ? "Cancel session" : "Delete session"}
-                                                    title={job.status === "running" ? "Cancel session" : "Delete session"}
+                                                    aria-label="Cancel session"
+                                                    title="Cancel session"
                                                     onClick={(e) => { e.stopPropagation(); dismissSession(job); }}
                                                 >
                                                     <Dismiss16Regular />
@@ -400,33 +465,71 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
                         <table className="recent-jobs-table">
                             <thead>
                                 <tr>
-                                    <th>Agent Name</th>
-                                    <th>Completed Task</th>
+                                    <th>Task</th>
+                                    <th>Created</th>
                                     <th>Duration</th>
                                     <th>Status</th>
                                     <th aria-label="actions" />
                                 </tr>
                             </thead>
                             <tbody>
-                                {completedJobs.slice(0, 10).map((job) => {
+                                {(showAllHistory ? visibleCompletedJobs : visibleCompletedJobs.slice(0, 10)).map((job) => {
                                     const dur = job.started_at && job.completed_at
                                         ? formatDuration(job.started_at, job.completed_at)
                                         : "—";
                                     const isOk = job.status === "completed";
-                                    const agentName = job.agents?.[0]?.role || job.agents?.[0]?.agent_id || "Agent";
+                                    const isCancelled = job.status === "cancelled";
+                                    const isFailed = job.status === "failed";
+                                    // Distinct visual per outcome — cancelled is user-initiated
+                                    // and neutral, NOT an error (which was the old behavior).
+                                    const statusKind: "ok" | "cancelled" | "err" = isOk
+                                        ? "ok"
+                                        : isCancelled
+                                            ? "cancelled"
+                                            : "err";
+                                    const StatusIcon = isOk
+                                        ? CheckmarkCircle16Filled
+                                        : isCancelled
+                                            ? DismissCircle16Filled
+                                            : ErrorCircle16Filled;
+                                    const statusLabelText = isOk
+                                        ? "100% SUCCESS"
+                                        : isCancelled
+                                            ? "CANCELLED"
+                                            : (job.status || "").toUpperCase();
+                                    const cancelledWho = job.cancelled_by_upn || job.cancelled_by_user_id;
+                                    const cancelledAtIso = job.cancelled_at || (isCancelled ? job.completed_at : undefined);
+                                    const createdFull = job.created_at
+                                        ? new Date(job.created_at).toLocaleString()
+                                        : undefined;
+                                    const createdShort = job.created_at ? shortAgo(job.created_at) : "—";
+                                    const cancelTooltip = isCancelled && cancelledAtIso
+                                        ? `Cancelled ${new Date(cancelledAtIso).toLocaleString()}${cancelledWho ? ` by ${cancelledWho}` : ""}`
+                                        : undefined;
+                                    const createdTooltip = createdFull ? `Created ${createdFull}` : undefined;
+                                    const rowTooltip = [createdTooltip, cancelTooltip].filter(Boolean).join(" · ");
                                     return (
-                                        <tr key={job.id} className="recent-jobs-row" onClick={() => gotoSession(job.id)}>
-                                            <td>
-                                                <span className="recent-jobs-agent">
-                                                    <CheckmarkCircle16Filled className={isOk ? "recent-jobs-check" : "recent-jobs-check--err"} />
-                                                    {agentName}
-                                                </span>
+                                        <tr key={job.id} className="recent-jobs-row" title={rowTooltip || undefined} onClick={() => gotoSession(job.id)}>
+                                            <td className="recent-jobs-task">
+                                                <div className="recent-jobs-task-main">
+                                                    <StatusIcon className={`recent-jobs-check recent-jobs-check--${statusKind}`} />
+                                                    <span>{job.task_description?.slice(0, 80) || "—"}</span>
+                                                </div>
+                                                {isCancelled && (cancelledWho || cancelledAtIso) && (
+                                                    <div className="recent-jobs-audit">
+                                                        Cancelled
+                                                        {cancelledWho ? <> by <b>{cancelledWho}</b></> : null}
+                                                        {cancelledAtIso ? <> · {shortAgo(cancelledAtIso)}</> : null}
+                                                    </div>
+                                                )}
                                             </td>
-                                            <td className="recent-jobs-task">{job.task_description?.slice(0, 80) || "—"}</td>
+                                            <td className="recent-jobs-created" title={createdTooltip || undefined}>
+                                                {createdShort}
+                                            </td>
                                             <td className="recent-jobs-dur">{dur}</td>
                                             <td>
-                                                <span className={`recent-jobs-status ${isOk ? "" : "recent-jobs-status--err"}`}>
-                                                    {isOk ? "100% SUCCESS" : (job.status || "").toUpperCase()}
+                                                <span className={`recent-jobs-status recent-jobs-status--${statusKind}`}>
+                                                    {statusLabelText}
                                                 </span>
                                             </td>
                                             <td className="recent-jobs-more">
@@ -440,11 +543,83 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
                             </tbody>
                         </table>
                         <div className="recent-jobs-foot">
-                            <button className="recent-jobs-viewall">View All History</button>
+                            {visibleCompletedJobs.length > 10 ? (
+                                <button
+                                    className="recent-jobs-viewall"
+                                    onClick={() => setShowAllHistory((v) => !v)}
+                                >
+                                    {showAllHistory
+                                        ? `Show Less (showing all ${visibleCompletedJobs.length})`
+                                        : `View All History (${visibleCompletedJobs.length})`}
+                                </button>
+                            ) : (
+                                <span className="recent-jobs-viewall-note">
+                                    Showing all {visibleCompletedJobs.length}{" "}
+                                    {visibleCompletedJobs.length === 1 ? "session" : "sessions"}
+                                </span>
+                            )}
                         </div>
                     </div>
                 )}
             </section>
+            )}
+
+            {/* Cancel-session confirm dialog. Rendered inline because
+                window.confirm() is blocked inside the Fabric iframe. */}
+            {pendingCancel && (
+                <div
+                    className="cancel-dialog-backdrop"
+                    role="presentation"
+                    onClick={() => { if (!cancelBusy) setPendingCancel(null); }}
+                >
+                    <div
+                        className="cancel-dialog"
+                        role="dialog"
+                        aria-modal="true"
+                        aria-labelledby="cancel-dialog-title"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="cancel-dialog-icon" aria-hidden="true">
+                            <Warning20Regular />
+                        </div>
+                        <div className="cancel-dialog-body">
+                            <h2 id="cancel-dialog-title" className="cancel-dialog-title">
+                                Cancel this session?
+                            </h2>
+                            <p className="cancel-dialog-text">
+                                {pendingCancel.status === "running"
+                                    ? "Running agents will be stopped immediately."
+                                    : "The session has not started yet."}
+                                {" "}
+                                It will be kept in Recent Sessions as <strong>cancelled</strong>
+                                {" "}with an audit of who cancelled it and when.
+                            </p>
+                            {pendingCancel.task_description && (
+                                <p className="cancel-dialog-task" title={pendingCancel.task_description}>
+                                    “{pendingCancel.task_description.slice(0, 140)}
+                                    {pendingCancel.task_description.length > 140 ? "…" : ""}”
+                                </p>
+                            )}
+                        </div>
+                        <div className="cancel-dialog-actions">
+                            <Button
+                                appearance="secondary"
+                                disabled={cancelBusy}
+                                onClick={() => setPendingCancel(null)}
+                            >
+                                Keep session
+                            </Button>
+                            <Button
+                                appearance="primary"
+                                disabled={cancelBusy}
+                                icon={cancelBusy ? <Spinner size="tiny" /> : <Dismiss16Regular />}
+                                onClick={() => performCancel(pendingCancel)}
+                            >
+                                {cancelBusy ? "Cancelling…" : "Cancel session"}
+                            </Button>
+                        </div>
+                    </div>
+                </div>
             )}
         </div>
     );

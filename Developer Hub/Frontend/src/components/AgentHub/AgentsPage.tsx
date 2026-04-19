@@ -31,6 +31,8 @@ import {
 import { WorkloadClientAPI } from "@ms-fabric/workload-client";
 import * as api from "../../controller/AgentHubApi";
 import { readPreloaded, setPreloaded } from "./pagePreloadCache";
+import { useSearch } from "./SearchContext";
+import { fuzzyFilter } from "./fuzzySearch";
 
 interface AgentsPageProps {
     workloadClient: WorkloadClientAPI;
@@ -85,7 +87,10 @@ export function AgentsPage({ workloadClient: _workloadClient }: AgentsPageProps)
     const [loading, setLoading] = useState(preloaded === undefined);
     const [slowLoading, setSlowLoading] = useState(false);
     const [activeTab, setActiveTab] = useState<"my-agents" | "skill-library" | "marketplace">("my-agents");
-    const [search, setSearch] = useState("");
+    // The search term is driven by the global topbar via SearchContext so
+    // typing in either the topbar input or the local agents search bar keeps
+    // them in sync.
+    const { query: search, setQuery: setSearch } = useSearch();
     const [selectedId, setSelectedId] = useState<string | null>(
         () => preloaded?.templates?.[0]?.id ?? null,
     );
@@ -136,7 +141,7 @@ export function AgentsPage({ workloadClient: _workloadClient }: AgentsPageProps)
     const myTemplateIds = useMemo(() => new Set(myConfigs.map((c: any) => c.agent_template_id)), [myConfigs]);
 
     const visibleAgents = useMemo(() => {
-        const term = search.trim().toLowerCase();
+        const term = search.trim();
         let list: any[];
         if (activeTab === "my-agents") {
             list = templates.filter(t => myTemplateIds.has(t.id));
@@ -146,12 +151,13 @@ export function AgentsPage({ workloadClient: _workloadClient }: AgentsPageProps)
             list = templates;
         }
         if (!term) return list;
-        return list.filter(t =>
-            (t.name || "").toLowerCase().includes(term) ||
-            (t.display_name || "").toLowerCase().includes(term) ||
-            (t.description || "").toLowerCase().includes(term) ||
-            (t.tags || []).some((tag: string) => tag.toLowerCase().includes(term))
-        );
+        // Fuzzy match: tolerant to typos + subsequence, ranked best-first.
+        return fuzzyFilter(term, list, (t: any) => [
+            t.name,
+            t.display_name,
+            t.description,
+            ...(Array.isArray(t.tags) ? t.tags : []),
+        ]);
     }, [templates, myTemplateIds, activeTab, search]);
 
     const skillsCount = useMemo(() => {
@@ -296,11 +302,14 @@ export function AgentsPage({ workloadClient: _workloadClient }: AgentsPageProps)
                         <div className="agents-search-wrap">
                             <Search20Regular className="agents-search-icon" />
                             <input
+                                id="agents-search"
+                                name="agentsSearch"
                                 type="text"
                                 placeholder="Search agents, skills, or capabilities…"
                                 value={search}
                                 onChange={(e) => setSearch(e.target.value)}
                                 className="agents-search-input"
+                                aria-label="Search agents"
                                 disabled={loading}
                             />
                         </div>

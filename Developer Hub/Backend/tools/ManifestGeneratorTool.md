@@ -25,10 +25,10 @@ The manifest package tells Microsoft Fabric how to register and communicate with
 ManifestPackage.1.0.0.nupkg
 ├── BE/                           # Backend configuration
 │   ├── WorkloadManifest.xml     # Your workload settings
-│   └── Item1.xml                # Item type definitions
+│   └── AgentHubItem.xml         # Item type definitions
 └── FE/                          # Frontend assets
     ├── Product.json             # UI configuration
-    ├── Item1.json              # Item-specific UI
+    ├── AgentHubItem.json        # Item-specific UI
     └── assets/                 # Images & translations
 ```
 
@@ -102,7 +102,7 @@ python/
 ```
 
 ### Optional Files
-- `manifest/manifest/Item1.xml` - Item definitions (auto-generated if missing)
+- `manifest/manifest/AgentHubItem.xml` - Item definitions (auto-generated if missing)
 - `Frontend/Package/` - Frontend assets (works without them)
 
 ## 🛠️ Command Line Options

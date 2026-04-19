@@ -124,7 +124,7 @@ Each component can have different schema versions:
 </WorkloadManifestConfiguration>
 ```
 
-**Item1.xml (Item Manifest):**
+**AgentHubItem.xml (Item Manifest):**
 ```xml
 <?xml version="1.0" encoding="utf-8" ?>
 <ItemManifestConfiguration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" SchemaVersion="1.102.0">

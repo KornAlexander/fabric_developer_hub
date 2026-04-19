@@ -158,8 +158,8 @@ class TestManifestPackageGenerator:
         assert "BE/WorkloadManifest.xml" in names, (
             f"missing BE/WorkloadManifest.xml; got {sorted(names)}"
         )
-        assert "BE/Item1.xml" in names, (
-            f"missing BE/Item1.xml; got {sorted(names)}"
+        assert "BE/AgentHubItem.xml" in names, (
+            f"missing BE/AgentHubItem.xml; got {sorted(names)}"
         )
         # No stray .nuspec — that would make DevGateway reject the package.
         assert not any(n.endswith(".nuspec") for n in names), (

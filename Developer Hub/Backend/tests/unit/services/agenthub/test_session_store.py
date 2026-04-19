@@ -13,12 +13,11 @@ import pytest
 from domain.models.agent_models import (
     AgentAssignment,
     AgentStatus,
-    ExecutionPlan,
     Job,
     JobStatus,
-    PlannedAgent,
     UserAgentConfig,
 )
+from domain.models.plan import PlanStep, PlanTarget, Plan
 from services.agenthub import _db, session_store
 import json as _json
 
@@ -51,10 +50,23 @@ def _make_job(job_id: str = "j-1", user_id: str = "u-1",
 
 def test_create_and_get_job_roundtrip() -> None:
     job = _make_job()
-    job.plan = ExecutionPlan(
+    job.plan = Plan(
         job_id=job.id,
-        agents=[PlannedAgent(agent_template_id="t1", role="r", goal="g")],
         summary="plan summary",
+        steps=[
+            PlanStep(
+                id="s1",
+                order=1,
+                title="Create Bronze lakehouse",
+                action="create",
+                target=PlanTarget(
+                    item_type="Lakehouse",
+                    display_name="lh_bronze",
+                    workspace_id=job.workspace_id,
+                ),
+                rationale="Bronze layer is missing in destination workspace.",
+            )
+        ],
     )
     session_store.create_session(job)
 
@@ -66,7 +78,8 @@ def test_create_and_get_job_roundtrip() -> None:
     assert fetched.status == JobStatus.PLANNED
     assert fetched.plan is not None
     assert fetched.plan.summary == "plan summary"
-    assert len(fetched.plan.agents) == 1
+    assert len(fetched.plan.steps) == 1
+    assert fetched.plan.steps[0].target.display_name == "lh_bronze"
 
 
 def test_get_job_returns_none_for_missing_id() -> None:

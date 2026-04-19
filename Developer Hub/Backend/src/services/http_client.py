@@ -22,7 +22,7 @@ class HttpClientService:
                 max_connections=100,
                 keepalive_expiry=30.0
             ),
-            follow_redirects=True,
+            follow_redirects=False,
             event_hooks={
                 "request": [self._log_request],
                 "response": [self._log_response]

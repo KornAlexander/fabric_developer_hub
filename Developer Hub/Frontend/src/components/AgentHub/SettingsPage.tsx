@@ -18,7 +18,7 @@ import { WorkloadClientAPI } from "@ms-fabric/workload-client";
 import { useItemContext } from "./ItemContext";
 
 declare const process: { env: Record<string, string | undefined> };
-const BE = process.env.WORKLOAD_BE_URL || 'http://localhost:5000';
+const BE = process.env.WORKLOAD_BE_URL || 'http://127.0.0.1:5000';
 
 interface ModelInfo {
     id: string;

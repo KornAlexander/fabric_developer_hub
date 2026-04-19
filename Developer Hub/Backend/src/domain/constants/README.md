@@ -19,6 +19,6 @@ instead of re-declaring magic strings.
 ## Feedback
 
 - ✅ Clean separation; this is the right pattern (Python equivalent of a `Constants.cs` namespace).
-- ⚠️ `workload_scopes.py` still uses `AGENTHUB_*` names that map to a literal `"Item1.ReadWrite.All"` string. Either rename the literal in the Entra app registration (cleaner), or rename the Python symbol to `ITEM1_READ_WRITE_ALL` so the contract is obvious.
+- ✅ `workload_scopes.py` scope literals `AgentHub.ReadWrite.All` / `AgentHub.Read.All` are aligned with the Python symbol names; they must match the Entra app registration exposed scopes.
 - ⚠️ `error_codes.py` uses nested classes purely as a namespace. Idiomatic Python would use either nested `Enum`s or flat `ERROR_CODE_*` constants. Keep as-is unless you intend to iterate them.
 - 💡 Consider a `__all__` in each module to make wildcard imports explicit (currently none).

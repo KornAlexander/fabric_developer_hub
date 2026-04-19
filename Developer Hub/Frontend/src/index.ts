@@ -1,3 +1,9 @@
+// IMPORTANT: `./logging` must be the very first import — its module
+// body installs a console silencer, and ES-module imports are
+// evaluated in declaration order. Anything imported above it gets to
+// print to the console before we've silenced it (that's how the
+// i18next banner was still slipping through).
+import './logging';
 import { bootstrap } from '@ms-fabric/workload-client';
 import './i18n';
 
@@ -13,7 +19,9 @@ function printFormattedAADErrorMessage(hashMessage: string): void {
     });
 
     // Print formatted message
-    document.documentElement.innerHTML = "There was a problem with the consent, open browser debug console for more details";
+    // Use textContent (not innerHTML) — the AAD-returned error hash is
+    // untrusted user input and must never be rendered as HTML.
+    document.documentElement.textContent = "There was a problem with the consent, open browser debug console for more details";
     for (const key in formattedMessage) {
         if (Object.prototype.hasOwnProperty.call(formattedMessage, key)) {
             console.log(`${key}: ${formattedMessage[key]}`);
@@ -45,11 +53,6 @@ if (url.pathname?.startsWith(redirectUriPath)) {
         window.close();
     }
 }
-
-console.log('****Runtime: Environment Variables****');
-console.log('process.env.WORKLOAD_NAME: ' + process.env.WORKLOAD_NAME);
-console.log('process.env.WORKLOAD_BE_URL: ' + process.env.WORKLOAD_BE_URL);
-console.log('**************************************');
 
 bootstrap({
     initializeWorker: (params) =>

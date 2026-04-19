@@ -1,0 +1,94 @@
+# Production nginx config for the frontend container.
+#
+# Mirrors the `/manifests_new*` routes that webpack-dev-server provides in
+# dev mode (see Frontend/tools/webpack.config.js::setupMiddlewares). The
+# Fabric web host iframes our workload URL and fetches:
+#
+#   GET  /manifests_new           → the backend-generated .nupkg
+#   GET  /manifests_new/metadata  → JSON with AAD app config
+#   OPTIONS /manifests_new*       → CORS preflight
+#
+# Without these routes the stock nginx:alpine config returns 405 on OPTIONS
+# and 404 on /manifests_new (directory + autoindex off). The nupkg lives at
+# /usr/share/nginx/html/manifests_new/ManifestPackage.1.0.0.nupkg, mounted
+# from the shared `manifest-pkg` volume by docker-compose.
+#
+# Env vars are substituted at container start by the nginx:alpine
+# docker-entrypoint (envsubst on everything in /etc/nginx/templates/).
+
+server {
+    listen       60006;
+    listen  [::]:60006;
+    server_name  localhost;
+
+    # ── Workload manifest package ────────────────────────────────────
+    # Single file, exact match. `alias` points directly at the versioned
+    # nupkg so the URL path (no extension) maps cleanly to the artifact.
+    location = /manifests_new {
+        if ($request_method = OPTIONS) {
+            add_header Access-Control-Allow-Origin  *                always;
+            add_header Access-Control-Allow-Methods "GET, OPTIONS"   always;
+            add_header Access-Control-Allow-Headers "Content-Type, Authorization" always;
+            add_header Access-Control-Max-Age       1728000          always;
+            add_header Content-Length               0                always;
+            return 204;
+        }
+        alias /usr/share/nginx/html/manifests_new/ManifestPackage.1.0.0.nupkg;
+        default_type application/octet-stream;
+        add_header Content-Disposition 'attachment; filename="ManifestPackage.1.0.0.nupkg"' always;
+        add_header Access-Control-Allow-Origin *                               always;
+        add_header Access-Control-Allow-Methods "GET, OPTIONS"                 always;
+        add_header Access-Control-Allow-Headers "Content-Type, Authorization"  always;
+    }
+
+    # Legacy path used by some Fabric hosts. Serves the same artifact so
+    # we don't care which one the caller picks.
+    location = /manifests {
+        if ($request_method = OPTIONS) {
+            add_header Access-Control-Allow-Origin  *                always;
+            add_header Access-Control-Allow-Methods "GET, OPTIONS"   always;
+            add_header Access-Control-Allow-Headers "Content-Type, Authorization" always;
+            add_header Access-Control-Max-Age       1728000          always;
+            add_header Content-Length               0                always;
+            return 204;
+        }
+        alias /usr/share/nginx/html/manifests_new/ManifestPackage.1.0.0.nupkg;
+        default_type application/octet-stream;
+        add_header Content-Disposition 'attachment; filename="ManifestPackage.1.0.0.nupkg"' always;
+        add_header Access-Control-Allow-Origin *                               always;
+        add_header Access-Control-Allow-Methods "GET, OPTIONS"                 always;
+        add_header Access-Control-Allow-Headers "Content-Type, Authorization"  always;
+    }
+
+    # ── Workload metadata JSON (AAD app config) ──────────────────────
+    # Constructed inline from env vars. Matches the shape webpack-dev-server
+    # returns: `{ "extension": { name, url, devAADAppConfig: {...} } }`.
+    location = /manifests_new/metadata {
+        if ($request_method = OPTIONS) {
+            add_header Access-Control-Allow-Origin  *                always;
+            add_header Access-Control-Allow-Methods "GET, OPTIONS"   always;
+            add_header Access-Control-Allow-Headers "Content-Type, Authorization" always;
+            add_header Access-Control-Max-Age       1728000          always;
+            add_header Content-Length               0                always;
+            return 204;
+        }
+        default_type application/json;
+        add_header Access-Control-Allow-Origin *                               always;
+        add_header Access-Control-Allow-Methods "GET, OPTIONS"                 always;
+        add_header Access-Control-Allow-Headers "Content-Type, Authorization"  always;
+        return 200 '{"extension":{"name":"${WORKLOAD_NAME}","url":"http://127.0.0.1:60006","devAADAppConfig":{"audience":"${FRONTEND_AAD_AUDIENCE}","appId":"${FRONTEND_AAD_APPID}","redirectUri":"${FRONTEND_AAD_REDIRECT_URI}"}}}';
+    }
+
+    # ── SPA ─────────────────────────────────────────────────────────
+    location / {
+        root   /usr/share/nginx/html;
+        index  index.html;
+        try_files $uri $uri/ /index.html;
+    }
+
+    # Standard nginx error page.
+    error_page   500 502 503 504  /50x.html;
+    location = /50x.html {
+        root   /usr/share/nginx/html;
+    }
+}

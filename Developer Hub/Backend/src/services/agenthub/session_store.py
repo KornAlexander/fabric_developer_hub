@@ -14,17 +14,24 @@ from typing import Any
 
 from domain.models.agent_models import (
     AgentAssignment,
-    ExecutionPlan,
     Job,
     JobStatus,
     UserAgentConfig,
 )
+from domain.models.plan import Plan
 from services.agenthub import _db, workspaces_cache
 from services.agenthub._db import connect as _connect, db_path as _db_path
 
 logger = logging.getLogger(__name__)
 
 _SCHEMA_VERSION = 1
+
+# Sessions whose persisted ``plan`` column can't be parsed as the current
+# ``Plan`` model. We log a single DEBUG per session id (not per read) so
+# the log stream isn't spammed every time the user opens the dashboard
+# or clicks a Recent prompt. These rows stay visible in the history list
+# with ``plan=None`` — the user just can't re-approve/execute them.
+_legacy_plan_warned: set[str] = set()
 
 
 def init_db() -> None:
@@ -36,6 +43,7 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS sessions (
                 id          TEXT PRIMARY KEY,
                 user_id     TEXT NOT NULL,
+                user_upn    TEXT,
                 workspace_id TEXT NOT NULL,
                 task_description TEXT NOT NULL,
                 context     TEXT,
@@ -44,6 +52,9 @@ def init_db() -> None:
                 created_at  TEXT NOT NULL,
                 started_at  TEXT,
                 completed_at TEXT,
+                cancelled_at TEXT,
+                cancelled_by_user_id TEXT,
+                cancelled_by_upn TEXT,
                 agents      TEXT NOT NULL DEFAULT '[]'
             );
 
@@ -53,6 +64,7 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS user_agent_configs (
                 id                  TEXT PRIMARY KEY,
                 user_id             TEXT NOT NULL,
+                user_upn            TEXT,
                 agent_template_id   TEXT NOT NULL,
                 access_levels       TEXT NOT NULL DEFAULT '{}',
                 tool_integrations   TEXT NOT NULL DEFAULT '{}',
@@ -71,13 +83,17 @@ def init_db() -> None:
                 tool_args   TEXT,
                 result_summary TEXT,
                 timestamp   TEXT NOT NULL,
-                user_id     TEXT
+                user_id     TEXT,
+                user_upn    TEXT,
+                success     INTEGER
             );
 
             CREATE INDEX IF NOT EXISTS idx_audit_session ON audit_log(session_id);
             """
         )
         _migrate_legacy_jobs_table(conn)
+        _migrate_add_user_upn(conn)
+        _migrate_add_cancellation_columns(conn)
         # Workspace cache lives in the same DB so all SQLite state is
         # under one bind-mounted file.
         workspaces_cache.init_schema(conn)
@@ -85,6 +101,39 @@ def init_db() -> None:
         logger.info("AgentHub database initialized at %s", _db_path())
     finally:
         conn.close()
+
+
+def _migrate_add_user_upn(conn: sqlite3.Connection) -> None:
+    """Idempotent migration: add ``user_upn`` column to pre-existing tables.
+
+    The column exists in CREATE TABLE above for fresh DBs, but installs from
+    before this change need an ALTER TABLE. SQLite ``ADD COLUMN`` only fails
+    if the column already exists, so we guard by PRAGMA inspection.
+    """
+    for table in ("sessions", "user_agent_configs", "audit_log"):
+        cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if "user_upn" not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN user_upn TEXT")
+            logger.info("Added user_upn column to %s", table)
+    # audit_log gained a success flag as part of the security hardening; add
+    # it in place on pre-existing DBs.
+    audit_cols = {row[1] for row in conn.execute("PRAGMA table_info(audit_log)").fetchall()}
+    if "success" not in audit_cols:
+        conn.execute("ALTER TABLE audit_log ADD COLUMN success INTEGER")
+        logger.info("Added success column to audit_log")
+
+
+def _migrate_add_cancellation_columns(conn: sqlite3.Connection) -> None:
+    """Idempotent migration: add cancellation audit columns to ``sessions``.
+
+    Populated when a user cancels a running or waiting session from the UI
+    so the Recent-Sessions list can show who stopped the session and when.
+    """
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+    for col in ("cancelled_at", "cancelled_by_user_id", "cancelled_by_upn"):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE sessions ADD COLUMN {col} TEXT")
+            logger.info("Added %s column to sessions", col)
 
 
 def _migrate_legacy_jobs_table(conn: sqlite3.Connection) -> None:
@@ -120,10 +169,11 @@ def create_session(job: Job) -> Job:
     conn = _connect()
     try:
         conn.execute(
-            "INSERT INTO sessions (id, user_id, workspace_id, task_description, context, status, plan, created_at, started_at, completed_at, agents) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO sessions (id, user_id, user_upn, workspace_id, task_description, context, status, plan, created_at, started_at, completed_at, cancelled_at, cancelled_by_user_id, cancelled_by_upn, agents) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 job.id,
                 job.user_id,
+                job.user_upn,
                 job.workspace_id,
                 job.task_description,
                 json.dumps(job.context) if job.context else None,
@@ -132,6 +182,9 @@ def create_session(job: Job) -> Job:
                 job.created_at.isoformat(),
                 job.started_at.isoformat() if job.started_at else None,
                 job.completed_at.isoformat() if job.completed_at else None,
+                job.cancelled_at.isoformat() if job.cancelled_at else None,
+                job.cancelled_by_user_id,
+                job.cancelled_by_upn,
                 json.dumps([a.model_dump() for a in job.agents], default=str),
             ),
         )
@@ -152,18 +205,32 @@ def get_session(session_id: str) -> Job | None:
         conn.close()
 
 
-def list_sessions(user_id: str, status: str | None = None, limit: int = 50) -> list[Job]:
+def list_sessions(
+    user_id: str,
+    status: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[Job]:
+    """Return the caller's sessions, newest first.
+
+    ``offset`` enables keyset-less pagination for the Recent-prompts UI,
+    which lazy-loads older sessions as the user scrolls. Negative values are
+    clamped to 0 to match SQLite semantics on other backends.
+    """
+    offset = max(0, int(offset))
     conn = _connect()
     try:
         if status:
             rows = conn.execute(
-                "SELECT * FROM sessions WHERE user_id = ? AND status = ? ORDER BY created_at DESC LIMIT ?",
-                (user_id, status, limit),
+                "SELECT * FROM sessions WHERE user_id = ? AND status = ? "
+                "ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                (user_id, status, limit, offset),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT * FROM sessions WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
-                (user_id, limit),
+                "SELECT * FROM sessions WHERE user_id = ? "
+                "ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                (user_id, limit, offset),
             ).fetchall()
         return [_row_to_session(r) for r in rows]
     finally:
@@ -174,12 +241,15 @@ def update_session(job: Job) -> Job:
     conn = _connect()
     try:
         conn.execute(
-            "UPDATE sessions SET status=?, plan=?, started_at=?, completed_at=?, agents=? WHERE id=?",
+            "UPDATE sessions SET status=?, plan=?, started_at=?, completed_at=?, cancelled_at=?, cancelled_by_user_id=?, cancelled_by_upn=?, agents=? WHERE id=?",
             (
                 job.status.value,
                 job.plan.model_dump_json() if job.plan else None,
                 job.started_at.isoformat() if job.started_at else None,
                 job.completed_at.isoformat() if job.completed_at else None,
+                job.cancelled_at.isoformat() if job.cancelled_at else None,
+                job.cancelled_by_user_id,
+                job.cancelled_by_upn,
                 json.dumps([a.model_dump() for a in job.agents], default=str),
                 job.id,
             ),
@@ -207,13 +277,30 @@ def _row_to_session(row: sqlite3.Row) -> Job:
         # Ensure datetime fields are strings
         agents.append(AgentAssignment(**a))
 
-    plan = None
+    plan: Plan | None = None
     if row["plan"]:
-        plan = ExecutionPlan.model_validate_json(row["plan"])
+        # Try to parse as Plan; legacy rows written by an
+        # older build will not validate — we drop the plan rather than
+        # raising so old sessions remain visible in the history list. They
+        # can still be deleted but not re-approved.
+        try:
+            plan = Plan.model_validate_json(row["plan"])
+        except Exception:
+            session_id = row["id"]
+            if session_id not in _legacy_plan_warned:
+                _legacy_plan_warned.add(session_id)
+                logger.debug(
+                    "Session %s has a legacy plan shape that cannot be parsed as Plan; dropping",
+                    session_id,
+                )
+            plan = None
 
+    row_keys = set(row.keys())
+    cancelled_at_raw = row["cancelled_at"] if "cancelled_at" in row_keys else None
     return Job(
         id=row["id"],
         user_id=row["user_id"],
+        user_upn=row["user_upn"] if "user_upn" in row_keys else None,
         workspace_id=row["workspace_id"],
         task_description=row["task_description"],
         context=json.loads(row["context"]) if row["context"] else None,
@@ -222,6 +309,9 @@ def _row_to_session(row: sqlite3.Row) -> Job:
         created_at=datetime.fromisoformat(row["created_at"]),
         started_at=datetime.fromisoformat(row["started_at"]) if row["started_at"] else None,
         completed_at=datetime.fromisoformat(row["completed_at"]) if row["completed_at"] else None,
+        cancelled_at=datetime.fromisoformat(cancelled_at_raw) if cancelled_at_raw else None,
+        cancelled_by_user_id=row["cancelled_by_user_id"] if "cancelled_by_user_id" in row_keys else None,
+        cancelled_by_upn=row["cancelled_by_upn"] if "cancelled_by_upn" in row_keys else None,
         agents=agents,
     )
 
@@ -232,10 +322,11 @@ def save_agent_config(config: UserAgentConfig) -> UserAgentConfig:
     conn = _connect()
     try:
         conn.execute(
-            "INSERT OR REPLACE INTO user_agent_configs (id, user_id, agent_template_id, access_levels, tool_integrations, runtime_schedule, custom_prompt_additions, created_at) VALUES (?,?,?,?,?,?,?,?)",
+            "INSERT OR REPLACE INTO user_agent_configs (id, user_id, user_upn, agent_template_id, access_levels, tool_integrations, runtime_schedule, custom_prompt_additions, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
             (
                 config.id,
                 config.user_id,
+                config.user_upn,
                 config.agent_template_id,
                 json.dumps(config.access_levels),
                 json.dumps(config.tool_integrations),
@@ -271,10 +362,22 @@ def delete_agent_config(config_id: str) -> bool:
         conn.close()
 
 
+def get_agent_config(config_id: str) -> UserAgentConfig | None:
+    conn = _connect()
+    try:
+        row = conn.execute(
+            "SELECT * FROM user_agent_configs WHERE id = ?", (config_id,)
+        ).fetchone()
+        return _row_to_config(row) if row else None
+    finally:
+        conn.close()
+
+
 def _row_to_config(row: sqlite3.Row) -> UserAgentConfig:
     return UserAgentConfig(
         id=row["id"],
         user_id=row["user_id"],
+        user_upn=row["user_upn"] if "user_upn" in row.keys() else None,
         agent_template_id=row["agent_template_id"],
         access_levels=json.loads(row["access_levels"]),
         tool_integrations=json.loads(row["tool_integrations"]),
@@ -293,11 +396,21 @@ def log_audit(
     tool_args: dict[str, Any] | None,
     result_summary: str,
     user_id: str | None = None,
+    user_upn: str | None = None,
+    *,
+    success: bool | None = None,
 ) -> None:
+    """Record an audited event.
+
+    ``success`` is optional so existing callers (which only report on the
+    happy path) stay source-compatible; the orchestrator explicitly passes
+    ``True`` / ``False`` around each tool dispatch so post-mortem queries
+    like ``SELECT … WHERE success=0`` become trivial.
+    """
     conn = _connect()
     try:
         conn.execute(
-            "INSERT INTO audit_log (session_id, agent_id, tool_name, tool_args, result_summary, timestamp, user_id) VALUES (?,?,?,?,?,?,?)",
+            "INSERT INTO audit_log (session_id, agent_id, tool_name, tool_args, result_summary, timestamp, user_id, user_upn, success) VALUES (?,?,?,?,?,?,?,?,?)",
             (
                 session_id,
                 agent_id,
@@ -306,6 +419,8 @@ def log_audit(
                 result_summary,
                 datetime.now(UTC).isoformat(),
                 user_id,
+                user_upn,
+                None if success is None else (1 if success else 0),
             ),
         )
         conn.commit()

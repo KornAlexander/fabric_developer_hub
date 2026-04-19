@@ -62,9 +62,9 @@ class ManifestPackageGenerator:
             self.nuspec_file
         ]
         
-        # Item1.xml is optional - will create template if missing
+        # AgentHubItem.xml is optional - will create template if missing
         optional_files = [
-            self.manifest_dir / "Item1.xml"
+            self.manifest_dir / "AgentHubItem.xml"
         ]
         
         missing_files = []
@@ -103,13 +103,13 @@ class ManifestPackageGenerator:
     
     def validate_xml_files(self) -> bool:
         """Validate XML files for well-formedness and content."""
-        xml_files = ["WorkloadManifest.xml", "Item1.xml"]
+        xml_files = ["WorkloadManifest.xml", "AgentHubItem.xml"]
         
         for xml_file in xml_files:
             xml_path = self.manifest_dir / xml_file
             
             if not xml_path.exists():
-                if xml_file == "Item1.xml":
+                if xml_file == "AgentHubItem.xml":
                     print(f"⚠️  {xml_file} not found, will create template")
                     continue
                 else:
@@ -228,8 +228,8 @@ class ManifestPackageGenerator:
             print("⚠️  Using string replacement for version update")
             return nuspec_content.replace('<version>1.0.0</version>', f'<version>{self.version}</version>')
     
-    def create_item1_template(self, output_path: Path) -> None:
-        """Create Item1.xml with correct workload name."""
+    def create_agenthub_item_template(self, output_path: Path) -> None:
+        """Create AgentHubItem.xml with correct workload name."""
         workload_name = self.get_workload_name()
         item_type = f"{workload_name}.AgentHubItem"
         
@@ -242,9 +242,6 @@ class ManifestPackageGenerator:
       <ScheduledJobDeduplicateOptions>PerItem</ScheduledJobDeduplicateOptions>
       <ItemJobTypes>
         <ItemJobType Name="{item_type}.ScheduledJob" />
-        <ItemJobType Name="{item_type}.CalculateAsText" />
-        <ItemJobType Name="{item_type}.CalculateAsParquet" />
-        <ItemJobType Name="{item_type}.LongRunningCalculateAsText" />
         <ItemJobType Name="{item_type}.InstantJob" />
       </ItemJobTypes>
     </JobScheduler>
@@ -252,7 +249,7 @@ class ManifestPackageGenerator:
 </ItemManifestConfiguration>'''
         
         output_path.write_text(template_content, encoding='utf-8')
-        print(f"✅ Created Item1.xml template with WorkloadName: {workload_name}")
+        print(f"✅ Created AgentHubItem.xml template with WorkloadName: {workload_name}")
     
     def process_frontend_pattern(self, zipf: zipfile.ZipFile, src_pattern: str, target: str) -> None:
         """Process frontend file patterns from nuspec."""
@@ -335,7 +332,7 @@ class ManifestPackageGenerator:
             print(f"⚠️  Frontend package directory not found: {self.frontend_package_dir}")
             return
         
-        basic_files = ["Product.json", "Item1.json"]
+        basic_files = ["Product.json", "AgentHubItem.json"]
         for filename in basic_files:
             file_path = self.frontend_package_dir / filename
             if file_path.exists():
@@ -373,17 +370,17 @@ class ManifestPackageGenerator:
             print("📄 Copying backend manifest files...")
             shutil.copy2(self.manifest_dir / "WorkloadManifest.xml", temp_path)
             
-            item1_path = self.manifest_dir / "Item1.xml"
-            if item1_path.exists():
-                shutil.copy2(item1_path, temp_path)
+            agenthub_item_path = self.manifest_dir / "AgentHubItem.xml"
+            if agenthub_item_path.exists():
+                shutil.copy2(agenthub_item_path, temp_path)
             else:
-                self.create_item1_template(temp_path / "Item1.xml")
+                self.create_agenthub_item_template(temp_path / "AgentHubItem.xml")
 
             # Step 1b: Substitute ${VAR} placeholders in the copied XMLs
             # from environment variables (loaded from Developer Hub/.env by
             # docker-compose env_file, or from the shell for local runs).
             self.substitute_env_placeholders(temp_path / "WorkloadManifest.xml")
-            self.substitute_env_placeholders(temp_path / "Item1.xml")
+            self.substitute_env_placeholders(temp_path / "AgentHubItem.xml")
             
             # Step 2: Load and process nuspec template
             print("📋 Processing nuspec template...")
@@ -399,8 +396,8 @@ class ManifestPackageGenerator:
                 
                 # Add BE files
                 zipf.write(temp_path / "WorkloadManifest.xml", "BE/WorkloadManifest.xml")
-                if (temp_path / "Item1.xml").exists():
-                    zipf.write(temp_path / "Item1.xml", "BE/Item1.xml")
+                if (temp_path / "AgentHubItem.xml").exists():
+                    zipf.write(temp_path / "AgentHubItem.xml", "BE/AgentHubItem.xml")
                 
                 # Add FE files
                 self.add_frontend_files_from_nuspec(zipf, nuspec_content)

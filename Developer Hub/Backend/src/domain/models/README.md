@@ -14,7 +14,7 @@ contains the (generated) Fabric contract models.
 | `item_reference.py`        | Minimal `{id, workspaceId}` reference. |
 | `fabric_item.py`           | `FabricItem(ItemReference)` — adds type, display name, description, workspace name. Used by lakehouse/Fabric REST responses. |
 | `agenthub_metadata.py`     | `AgentHubMetadata` (default model, max rounds, verbose flag) and `ConfiguredAgent`. Stored in the Developer Hub item payload. |
-| `agent_models.py`          | Larger Developer Hub orchestration domain: `Job`, `JobStatus`, `ExecutionPlan`, `AgentTemplate`, `PlannedAgent`, `AgentAssignment`, `AgentAction`, `AgentDecision`, `ReasoningPhase`, `UserAgentConfig`, plus enums (`AgentStatus`, `PhaseStatus`, `AgentCategory`). |
+| `agent_models.py`          | Larger Developer Hub orchestration domain: `Job`, `JobStatus`, `AgentTemplate`, `AgentAssignment`, `AgentAction`, `AgentDecision`, `ReasoningPhase`, `UserAgentConfig`, plus enums (`AgentStatus`, `PhaseStatus`, `AgentCategory`). |
 | `job_metadata.py`          | `JobMetadata` for Fabric job-instance persistence (job type, instance ID, error details, cancel time). |
 | `lakehouse_file.py` / `lakehouse_table.py` / `onelake_folder.py` | Pydantic shapes for Fabric REST payloads consumed by `LakehouseClientService` / `OneLakeClientService`. |
 | `write_to_lakehouse_file_request.py` | Request body for the `lakehouse_controller` write endpoint. |

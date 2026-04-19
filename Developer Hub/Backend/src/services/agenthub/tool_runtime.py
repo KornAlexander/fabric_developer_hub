@@ -1,0 +1,478 @@
+"""Tool Runtime — single authZ chokepoint for every LLM-driven tool call.
+
+Architectural role
+------------------
+The LLM orchestrator (planner + agent loops) MUST route every tool
+invocation through :func:`execute`. The orchestrator never calls
+``mcp_manager.call_tool`` directly. This gives us one boundary where:
+
+* :class:`CallerContext` is constructed from the **verified Fabric JWT**,
+  not from LLM output. ``tenant_id``, ``workspace_id``, ``user_id``,
+  ``user_upn`` come only from there.
+* LLM-supplied ``tenant_id`` / ``user_id`` / ``upn`` arguments are
+  **dropped** (not overridden) before dispatch. An injected prompt cannot
+  forge a caller identity.
+* Each tool has a declared :class:`ToolPolicy` (sensitivity + auto-allowed
+  flag). Tools without a policy are **denied by default**.
+* Kill-switches (global, per-tool, per-tenant) are evaluated on every call.
+  Flipping an env var disables dispatch in ≤ one process lifetime.
+* A per-session loop detector halts when the same ``(tool_name, arg_hash)``
+  repeats ``CIRCUIT_BREAKER_THRESHOLD`` times.
+* Tool output is wrapped in untrusted-content fences before being returned
+  to the caller, so the orchestrator can paste it straight into the LLM
+  conversation without laundering instructions.
+
+See ``docs/TOOL_RUNTIME_SECURITY.md`` for the full threat model and the
+incident runbook.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import os
+from collections import defaultdict
+from dataclasses import dataclass, field
+from enum import StrEnum
+from typing import Any
+
+logger = logging.getLogger(__name__)
+
+
+# ── Kill-switch / loop-breaker constants ─────────────────────────────
+
+_GLOBAL_KILL_ENV = "FEATURE_TOOLS_GLOBAL_ENABLED"
+_PER_TOOL_KILL_ENV_TPL = "FEATURE_TOOL_{name}_ENABLED"
+_PER_TENANT_KILL_ENV_TPL = "FEATURE_TENANT_{tid}_ENABLED"
+
+# If the same (tool_name, arg_hash) appears this many times in a row inside
+# one session, the runtime halts the session with CircuitBreakerTripped. The
+# threshold is tuned so legitimate retries (≤2) pass while a poisoned loop
+# is cut quickly.
+CIRCUIT_BREAKER_THRESHOLD = 3
+
+# Tool output wrapping. These fence markers MUST match what the orchestrator
+# system prompt teaches the model to treat as untrusted. Do not change them
+# without updating ``planner_prompts.py`` and ``orchestrator_engine.py`` in
+# the same commit.
+_UNTRUSTED_OPEN = "<<<UNTRUSTED_TOOL_OUTPUT_BEGIN>>>"
+_UNTRUSTED_CLOSE = "<<<UNTRUSTED_TOOL_OUTPUT_END>>>"
+
+# Tool output hand-back cap. Keeps one rogue tool response from blowing the
+# LLM context window and from giving an attacker an exfiltration channel
+# the length of the whole DB. Configurable via env for ops tuning.
+MAX_TOOL_OUTPUT_CHARS = int(os.environ.get("TOOL_RUNTIME_MAX_OUTPUT_CHARS", "40000"))
+
+# Argument keys a caller-forging injection might set. These are stripped
+# from arguments at the boundary — not corrected — so the LLM cannot
+# smuggle them back via near-synonyms it controls.
+_CALLER_IDENTITY_ARG_KEYS: frozenset[str] = frozenset({
+    "tenant_id", "tenantId", "tid",
+    "user_id", "userId", "uid",
+    "upn", "userPrincipalName", "user_upn",
+    "object_id", "objectId", "oid",
+})
+
+
+# ── Public types ────────────────────────────────────────────────────
+
+class ToolSensitivity(StrEnum):
+    """Classification used to gate write/destructive tools in later phases.
+
+    v1 runtime dispatches only ``READ_SAFE`` and ``READ_SENSITIVE``. Write
+    and destructive classes are defined now so the registry contract is
+    stable; dispatching them requires an explicit confirmation token which
+    is not implemented in v1 (enforced by :func:`execute`).
+    """
+
+    READ_SAFE = "read_safe"            # listing, discovery, metadata
+    READ_SENSITIVE = "read_sensitive"  # row-level data, table contents
+    WRITE = "write"                    # create / update / post
+    DESTRUCTIVE = "destructive"        # delete / drop / overwrite
+
+
+@dataclass(frozen=True)
+class ToolPolicy:
+    """Declared policy for a single tool.
+
+    ``auto_allowed`` gates whether the runtime may execute the tool without
+    an explicit per-call confirmation token. Only ``READ_SAFE`` and
+    ``READ_SENSITIVE`` tools may set ``auto_allowed=True`` (enforced in
+    :func:`register_tool`).
+    """
+
+    tool_name: str
+    sensitivity: ToolSensitivity
+    auto_allowed: bool = False
+    description: str = ""
+
+
+@dataclass(frozen=True)
+class CallerContext:
+    """Verified caller identity — constructed ONLY from a validated JWT.
+
+    The orchestrator MUST build this from the authenticated request and
+    NEVER from LLM output or from arguments provided by the model.
+    """
+
+    tenant_id: str
+    user_id: str
+    user_upn: str | None
+    workspace_id: str | None
+    session_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.tenant_id or not self.user_id:
+            raise ValueError(
+                "CallerContext requires tenant_id and user_id from the "
+                "verified JWT — refusing to construct without them."
+            )
+
+
+@dataclass(frozen=True)
+class ToolResult:
+    """Outcome of a runtime dispatch. Always returned — never raised for
+    policy failures — so the orchestrator can hand the result back to the
+    LLM and let the model adjust. (Raising is reserved for bugs.)
+    """
+
+    ok: bool
+    output: str                # already wrapped with untrusted fences
+    policy_decision: str       # "allowed" | "denied:<reason>" | "confirm_required" | "circuit_broken"
+    tool_name: str
+    arg_hash: str
+    latency_ms: int | None = None
+
+
+class ToolRuntimeError(RuntimeError):
+    """Raised only for internal runtime bugs — never for policy denials
+    (those return a :class:`ToolResult` with ``ok=False``)."""
+
+
+# ── Registry ────────────────────────────────────────────────────────
+
+_POLICY_REGISTRY: dict[str, ToolPolicy] = {}
+
+
+def register_tool(policy: ToolPolicy) -> None:
+    """Register a tool policy. Call at startup, once per tool.
+
+    Rejects ``auto_allowed=True`` on WRITE / DESTRUCTIVE so a future
+    contributor cannot accidentally let a write ship without a
+    confirmation UX.
+    """
+    if policy.auto_allowed and policy.sensitivity in (
+        ToolSensitivity.WRITE, ToolSensitivity.DESTRUCTIVE,
+    ):
+        raise ToolRuntimeError(
+            f"Tool {policy.tool_name!r}: auto_allowed=True is not permitted "
+            f"for sensitivity={policy.sensitivity}. Writes require explicit "
+            f"per-call confirmation (not implemented in v1)."
+        )
+    _POLICY_REGISTRY[policy.tool_name] = policy
+
+
+def get_policy(tool_name: str) -> ToolPolicy | None:
+    return _POLICY_REGISTRY.get(tool_name)
+
+
+def clear_registry_for_tests() -> None:
+    """Test-only hook. Do not call from product code."""
+    _POLICY_REGISTRY.clear()
+
+
+# ── Kill-switch ─────────────────────────────────────────────────────
+
+def _is_enabled(env_var: str) -> bool:
+    """Returns True unless the env var is explicitly set to a falsy value.
+
+    Default-enabled semantics — absence means "no kill-switch set, allow".
+    Setting the var to "0" / "false" / "off" (case-insensitive) disables.
+    """
+    v = os.environ.get(env_var)
+    if v is None:
+        return True
+    return v.strip().lower() not in {"0", "false", "no", "off", ""}
+
+
+def _check_kill_switches(tool_name: str, tenant_id: str) -> str | None:
+    """Returns a reason string if dispatch should be denied, else None."""
+    if not _is_enabled(_GLOBAL_KILL_ENV):
+        return f"global kill-switch active ({_GLOBAL_KILL_ENV}=0)"
+    per_tool = _PER_TOOL_KILL_ENV_TPL.format(name=tool_name.upper())
+    if not _is_enabled(per_tool):
+        return f"per-tool kill-switch active ({per_tool}=0)"
+    per_tenant = _PER_TENANT_KILL_ENV_TPL.format(tid=tenant_id.replace("-", "").upper())
+    if not _is_enabled(per_tenant):
+        return f"per-tenant kill-switch active ({per_tenant}=0)"
+    return None
+
+
+# ── Circuit breaker (per-session identical-call loop detector) ──────
+
+# Session-scoped ring of the most recent (tool_name, arg_hash) entries. The
+# state is in-process — acceptable given we already rely on a single
+# backend replica (see rate_limit.py rationale). When we scale out, swap
+# for a Redis-backed counter.
+_SESSION_RECENT_CALLS: dict[str, list[tuple[str, str]]] = defaultdict(list)
+
+
+def _circuit_broken(session_id: str, tool_name: str, arg_hash: str) -> bool:
+    """Return True if this exact (tool, args) has repeated THRESHOLD
+    times in a row within this session. Pushes the new entry regardless
+    so the detector keeps advancing even when we deny.
+    """
+    history = _SESSION_RECENT_CALLS[session_id]
+    history.append((tool_name, arg_hash))
+    # Keep only the last N so the dict doesn't grow unbounded for long
+    # sessions.
+    if len(history) > CIRCUIT_BREAKER_THRESHOLD * 4:
+        del history[: len(history) - CIRCUIT_BREAKER_THRESHOLD * 4]
+    if len(history) < CIRCUIT_BREAKER_THRESHOLD:
+        return False
+    tail = history[-CIRCUIT_BREAKER_THRESHOLD:]
+    return all(entry == tail[0] for entry in tail)
+
+
+def reset_circuit_breaker(session_id: str) -> None:
+    """Clear a session's recent-calls history. Called when a session ends
+    or on explicit operator unjam (via an admin endpoint, not exposed to
+    users)."""
+    _SESSION_RECENT_CALLS.pop(session_id, None)
+
+
+# ── Argument scrubbing ──────────────────────────────────────────────
+
+def _strip_caller_identity_args(
+    tool_name: str, arguments: dict[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    """Remove any LLM-supplied caller-identity keys. Returns (cleaned
+    args, dropped key names). Dropped keys are logged as anomalies even
+    when the tool has no use for them."""
+    dropped: list[str] = []
+    cleaned = {}
+    for k, v in arguments.items():
+        if k in _CALLER_IDENTITY_ARG_KEYS:
+            dropped.append(k)
+            continue
+        cleaned[k] = v
+    if dropped:
+        logger.warning(
+            "[TOOL_RUNTIME] %s: dropped LLM-supplied caller-identity args: %s",
+            tool_name, dropped,
+        )
+    return cleaned, dropped
+
+
+def _arg_hash(arguments: dict[str, Any]) -> str:
+    """Stable hash of arguments for audit + circuit breaker. Full args are
+    NOT stored — this hash is what audit records. Reviewers who need the
+    full args correlate via session_id + timestamp against the orchestrator
+    log at the source."""
+    try:
+        canonical = json.dumps(arguments, sort_keys=True, default=str)
+    except Exception:
+        canonical = repr(arguments)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
+# ── Output wrapping ─────────────────────────────────────────────────
+
+def wrap_as_untrusted(tool_name: str, raw: str) -> str:
+    """Wrap tool output in untrusted-content fences and truncate.
+
+    The orchestrator's system prompt teaches the LLM that anything between
+    the fences is DATA, never instructions. We also neutralize any
+    occurrence of our fence markers inside the payload so a crafted tool
+    response can't close the fence early."""
+    if raw is None:
+        raw = ""
+    body = str(raw)
+    if _UNTRUSTED_OPEN in body:
+        body = body.replace(_UNTRUSTED_OPEN, "<<<_>>>")
+    if _UNTRUSTED_CLOSE in body:
+        body = body.replace(_UNTRUSTED_CLOSE, "<<<_>>>")
+    if len(body) > MAX_TOOL_OUTPUT_CHARS:
+        body = body[:MAX_TOOL_OUTPUT_CHARS] + f"\n… (truncated at {MAX_TOOL_OUTPUT_CHARS} chars)"
+    return (
+        f"\n{_UNTRUSTED_OPEN} tool={tool_name}\n"
+        f"{body}\n{_UNTRUSTED_CLOSE}"
+    )
+
+
+# ── Dispatch ────────────────────────────────────────────────────────
+
+async def execute(
+    *,
+    tool_name: str,
+    arguments: dict[str, Any] | None,
+    ctx: CallerContext,
+    mcp_manager: Any,
+    mcp_tokens: dict[str, str] | None,
+    allowed_tools: set[str] | frozenset[str] | None = None,
+    confirmation_token: str | None = None,
+) -> ToolResult:
+    """Single entry point for every LLM-driven tool call.
+
+    The orchestrator hands raw ``arguments`` from the LLM's tool-call
+    decision; the runtime scrubs caller-identity keys, runs kill-switch +
+    policy + circuit-breaker checks, pins workspace from ``ctx``, and only
+    then asks ``mcp_manager`` to dispatch. The result is wrapped as
+    untrusted before returning.
+    """
+    import time
+    started = time.monotonic()
+
+    args = dict(arguments or {})
+
+    # (1) Registry — deny by default.
+    policy = _POLICY_REGISTRY.get(tool_name)
+    if policy is None:
+        logger.warning(
+            "[TOOL_RUNTIME] deny unregistered tool %r (session=%s user=%s)",
+            tool_name, ctx.session_id, ctx.user_upn,
+        )
+        return ToolResult(
+            ok=False,
+            output=wrap_as_untrusted(
+                tool_name,
+                f"POLICY_DENIED: tool {tool_name!r} is not registered with "
+                f"the runtime. Pick a registered tool.",
+            ),
+            policy_decision="denied:unregistered",
+            tool_name=tool_name,
+            arg_hash=_arg_hash(args),
+        )
+
+    # (2) Kill-switches (global / per-tool / per-tenant).
+    kill_reason = _check_kill_switches(tool_name, ctx.tenant_id)
+    if kill_reason:
+        logger.warning(
+            "[TOOL_RUNTIME] deny %s: %s (tenant=%s session=%s)",
+            tool_name, kill_reason, ctx.tenant_id, ctx.session_id,
+        )
+        return ToolResult(
+            ok=False,
+            output=wrap_as_untrusted(
+                tool_name,
+                f"POLICY_DENIED: {kill_reason}. Retry later or contact "
+                f"your tenant admin.",
+            ),
+            policy_decision=f"denied:kill_switch:{kill_reason}",
+            tool_name=tool_name,
+            arg_hash=_arg_hash(args),
+        )
+
+    # (3) Sensitivity gate — writes require confirmation which v1 does not
+    #     issue. The policy registry itself rejects auto_allowed=True on
+    #     WRITE/DESTRUCTIVE, so this is a second line of defense.
+    if policy.sensitivity in (ToolSensitivity.WRITE, ToolSensitivity.DESTRUCTIVE):
+        if not confirmation_token:
+            logger.warning(
+                "[TOOL_RUNTIME] deny %s: write tool requires confirmation "
+                "(not implemented in v1) session=%s",
+                tool_name, ctx.session_id,
+            )
+            return ToolResult(
+                ok=False,
+                output=wrap_as_untrusted(
+                    tool_name,
+                    f"POLICY_DENIED: {tool_name!r} is a "
+                    f"{policy.sensitivity} tool and requires explicit user "
+                    f"confirmation. v1 does not dispatch writes. Pick a "
+                    f"read-only tool or report this to the user.",
+                ),
+                policy_decision="denied:confirmation_required",
+                tool_name=tool_name,
+                arg_hash=_arg_hash(args),
+            )
+
+    # (4) Strip LLM-supplied caller-identity fields before hashing or
+    #     dispatching. Dropped keys are logged (in helper).
+    args, dropped_keys = _strip_caller_identity_args(tool_name, args)
+
+    # (4a) Workspace pinning. If the verified ctx pins a workspace, OVERRIDE
+    #      whatever the LLM passed in its arguments. Many MCP tools take
+    #      ``workspace_id`` in their args schema (they need it to operate),
+    #      so we cannot simply strip it — we replace it so the tool body
+    #      always runs against the workspace the caller is authorised for.
+    if ctx.workspace_id:
+        for k in ("workspace_id", "workspaceId", "workspaceID"):
+            if k in args and args[k] != ctx.workspace_id:
+                logger.warning(
+                    "[TOOL_RUNTIME] %s: overriding LLM-supplied %s=%r with "
+                    "ctx.workspace_id=%r",
+                    tool_name, k, args[k], ctx.workspace_id,
+                )
+                args[k] = ctx.workspace_id
+
+    arg_hash = _arg_hash(args)
+
+    # (5) Circuit breaker (per-session identical-call loop).
+    if ctx.session_id and _circuit_broken(ctx.session_id, tool_name, arg_hash):
+        logger.warning(
+            "[TOOL_RUNTIME] circuit break %s: %d identical calls in session %s",
+            tool_name, CIRCUIT_BREAKER_THRESHOLD, ctx.session_id,
+        )
+        return ToolResult(
+            ok=False,
+            output=wrap_as_untrusted(
+                tool_name,
+                f"POLICY_DENIED: circuit breaker — {tool_name!r} was called "
+                f"with identical arguments {CIRCUIT_BREAKER_THRESHOLD} times "
+                f"in a row. Change the approach or report back to the user.",
+            ),
+            policy_decision="circuit_broken",
+            tool_name=tool_name,
+            arg_hash=arg_hash,
+        )
+
+    # (6) Dispatch through the existing mcp_client_manager gate, pinning
+    #     workspace_id from the VERIFIED caller context (not from args).
+    try:
+        raw_output = await mcp_manager.call_tool(
+            tool_name,
+            args,
+            mcp_tokens,
+            allowed_tools=allowed_tools,
+            workspace_id=ctx.workspace_id,
+        )
+        latency_ms = int((time.monotonic() - started) * 1000)
+        return ToolResult(
+            ok=True,
+            output=wrap_as_untrusted(tool_name, str(raw_output)),
+            policy_decision="allowed",
+            tool_name=tool_name,
+            arg_hash=arg_hash,
+            latency_ms=latency_ms,
+        )
+    except Exception as exc:
+        # mcp_client_manager raises ToolPolicyViolation for its own policy
+        # checks (path traversal, workspace mismatch, unknown tool). We
+        # surface those as a denial, not an exception, so the LLM can
+        # reason about it.
+        from services.mcp.mcp_client_manager import ToolPolicyViolation
+        latency_ms = int((time.monotonic() - started) * 1000)
+        if isinstance(exc, ToolPolicyViolation):
+            return ToolResult(
+                ok=False,
+                output=wrap_as_untrusted(
+                    tool_name, f"POLICY_DENIED: {exc}",
+                ),
+                policy_decision=f"denied:mcp_policy",
+                tool_name=tool_name,
+                arg_hash=arg_hash,
+                latency_ms=latency_ms,
+            )
+        logger.exception(
+            "[TOOL_RUNTIME] tool %s dispatch failed (session=%s)",
+            tool_name, ctx.session_id,
+        )
+        return ToolResult(
+            ok=False,
+            output=wrap_as_untrusted(tool_name, f"TOOL_ERROR: {exc}"),
+            policy_decision="error",
+            tool_name=tool_name,
+            arg_hash=arg_hash,
+            latency_ms=latency_ms,
+        )

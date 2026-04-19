@@ -198,7 +198,7 @@ python/
 - **[`FabricExtensionController`](src/impl/fabric_extension_controller.py)**: Custom workload APIs
 
 #### Models
-- **[`Item1`](src/items/item1.py)**: Calculator workload item implementation
+- **[`AgentHubItem`](src/items/agenthub_item.py)**: AgentHub workload item (orchestration target)
 - **[`BaseItem`](src/items/base_item.py)**: Abstract base for all items
 - **API Models**: Generated from OpenAPI specification
 

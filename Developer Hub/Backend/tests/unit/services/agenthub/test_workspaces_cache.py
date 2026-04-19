@@ -38,7 +38,7 @@ def test_reconcile_inserts_then_returns_cached():
     assert result.deleted == 0
 
     items, newest = workspaces_cache.get_cached("user-A")
-    assert {(w.id, w.name) for w in items} == {("ws-1", "Workspace One"), ("ws-2", "Workspace Two")}
+    assert {(w.workspace_id, w.workspace_name) for w in items} == {("ws-1", "Workspace One"), ("ws-2", "Workspace Two")}
     assert newest is not None
     assert workspaces_cache.is_fresh(newest) is True
 
@@ -61,7 +61,7 @@ def test_reconcile_detects_inserts_updates_and_deletes():
     assert result.deleted == 1
 
     items, _ = workspaces_cache.get_cached("user-A")
-    by_id = {w.id: w.name for w in items}
+    by_id = {w.workspace_id: w.workspace_name for w in items}
     assert by_id == {
         "ws-1": "Workspace One",
         "ws-2": "Workspace Two (renamed)",
@@ -75,8 +75,8 @@ def test_reconcile_is_per_user():
 
     a, _ = workspaces_cache.get_cached("user-A")
     b, _ = workspaces_cache.get_cached("user-B")
-    assert [w.name for w in a] == ["A1"]
-    assert sorted(w.name for w in b) == ["B1", "B2"]
+    assert [w.workspace_name for w in a] == ["A1"]
+    assert sorted(w.workspace_name for w in b) == ["B1", "B2"]
 
 
 def test_reconcile_skips_entries_without_id():
@@ -87,7 +87,7 @@ def test_reconcile_skips_entries_without_id():
     ])
     assert result.inserted == 1
     items, _ = workspaces_cache.get_cached("user-A")
-    assert [w.id for w in items] == ["ws-1"]
+    assert [w.workspace_id for w in items] == ["ws-1"]
 
 
 def test_is_fresh_ttl_boundary():
@@ -96,3 +96,44 @@ def test_is_fresh_ttl_boundary():
     assert workspaces_cache.is_fresh(now - workspaces_cache.CACHE_TTL + timedelta(seconds=1)) is True
     assert workspaces_cache.is_fresh(now - workspaces_cache.CACHE_TTL - timedelta(seconds=1)) is False
     assert workspaces_cache.is_fresh(None) is False
+
+
+def test_legacy_id_name_columns_are_migrated(tmp_path, monkeypatch):
+    """Pre-rename DBs must be upgraded in place with no data loss."""
+    import sqlite3
+    db = tmp_path / "legacy.db"
+    monkeypatch.setenv("AGENTHUB_DB_PATH", str(db))
+    monkeypatch.setattr(_db, "_DB_PATH", None)
+
+    # Simulate a pre-rename DB with the old column names.
+    conn = sqlite3.connect(db)
+    conn.executescript(
+        """
+        CREATE TABLE workspace_cache (
+            user_id   TEXT NOT NULL,
+            user_upn  TEXT,
+            id        TEXT NOT NULL,
+            name      TEXT NOT NULL,
+            cached_at TEXT NOT NULL,
+            PRIMARY KEY (user_id, id)
+        );
+        INSERT INTO workspace_cache VALUES
+            ('user-A', 'a@x', 'ws-legacy-1', 'Legacy One', '2024-01-01T00:00:00+00:00');
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    # init_db must migrate cleanly and preserve the row.
+    session_store.init_db()
+    items, _ = workspaces_cache.get_cached("user-A")
+    assert len(items) == 1
+    assert items[0].workspace_id == "ws-legacy-1"
+    assert items[0].workspace_name == "Legacy One"
+
+    # Further reconciles must work against the renamed schema.
+    workspaces_cache.reconcile("user-A", [{"id": "ws-legacy-1", "name": "Legacy One v2"}])
+    items, _ = workspaces_cache.get_cached("user-A")
+    assert items[0].workspace_name == "Legacy One v2"
+
+    monkeypatch.setattr(_db, "_DB_PATH", None)

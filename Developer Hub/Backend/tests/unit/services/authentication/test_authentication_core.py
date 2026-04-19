@@ -123,7 +123,7 @@ class TestDataPlaneAuthentication:
     async def test_authenticate_data_plane_success(self, auth_fixtures):
         """Test successful data plane authentication with Bearer token."""
         service = auth_fixtures.get_authentication_service()
-        bearer_token = auth_fixtures.create_mock_jwt_token(scopes="Item1.ReadWrite.All")
+        bearer_token = auth_fixtures.create_mock_jwt_token(scopes="AgentHub.ReadWrite.All")
         auth_header = f"Bearer {bearer_token}"
 
         with patch.object(service, '_authenticate_bearer') as mock_auth_bearer:
@@ -134,11 +134,11 @@ class TestDataPlaneAuthentication:
 
             result = await service.authenticate_data_plane_call(
                 auth_header=auth_header,
-                allowed_scopes=["Item1.ReadWrite.All"]
+                allowed_scopes=["AgentHub.ReadWrite.All"]
             )
 
             assert isinstance(result, AuthorizationContext)
-            mock_auth_bearer.assert_called_once_with(bearer_token, ["Item1.ReadWrite.All"])
+            mock_auth_bearer.assert_called_once_with(bearer_token, ["AgentHub.ReadWrite.All"])
 
     @pytest.mark.asyncio
     async def test_authenticate_data_plane_invalid_bearer(self, auth_fixtures):
@@ -148,7 +148,7 @@ class TestDataPlaneAuthentication:
         with pytest.raises(AuthenticationException, match="Missing or invalid Authorization header"):
             await service.authenticate_data_plane_call(
                 auth_header="Basic invalid-auth",  # Not Bearer
-                allowed_scopes=["Item1.ReadWrite.All"]
+                allowed_scopes=["AgentHub.ReadWrite.All"]
             )
 
 

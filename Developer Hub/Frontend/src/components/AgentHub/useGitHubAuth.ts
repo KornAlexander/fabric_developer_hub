@@ -5,7 +5,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 
 declare const process: { env: Record<string, string | undefined> };
-const BE = process.env.WORKLOAD_BE_URL || 'http://localhost:5000';
+const BE = process.env.WORKLOAD_BE_URL || 'http://127.0.0.1:5000';
 
 export interface GitHubAuth {
     githubToken: string | null;

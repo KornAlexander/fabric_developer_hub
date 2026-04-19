@@ -1,7 +1,7 @@
 {
     "name": "AgentHubItem",
-    "displayName": "Item_1_DisplayName",
-    "displayNamePlural": "Item_1_DisplayName_Plural",
+    "displayName": "AgentHubItem_DisplayName",
+    "displayNamePlural": "AgentHubItem_DisplayName_Plural",
     "version": "1.100",
     "editor": {
       "path": "/agent-hub/orchestrator"
@@ -21,27 +21,27 @@
       },
       {
         "name": "AgentHubItemAction",
-        "displayName": "Context_Menu_1_Display_Name",
+        "displayName": "AgentHubItem_ContextMenu_Run_DisplayName",
         "icon": {
           "name": "assets/images/execute.png"
         },
         "handler": {
-          "action": "run.calculate.job"
+          "action": "run.agenthub.job"
         },
-        "tooltip": "Context_Menu_1_Tooltip"
+        "tooltip": "AgentHubItem_ContextMenu_Run_Tooltip"
       }
     ],
     "quickActionItems": [
       {
         "name": "AgentHubItemAction",
-        "displayName": "Quick_Action_1_Display_Name",
+        "displayName": "AgentHubItem_QuickAction_Run_DisplayName",
         "icon": {
           "name": "assets/images/execute.png"
         },
         "handler": {
-          "action": "run.instant.job"
+          "action": "run.agenthub.quickAction"
         },
-        "tooltip": "Quick_Action_1_Tooltip"
+        "tooltip": "AgentHubItem_QuickAction_Run_Tooltip"
       }
     ],
     "supportedInMonitoringHub": true,
@@ -71,7 +71,6 @@
         "useRecentRunsComponent": true
       }
     },
-    "itemJobTypes": ["getData", "storeData"],
     "editorTab": {
       "maxInstanceCount": "10",
       "onInit": "agenthub.tab.onInit",

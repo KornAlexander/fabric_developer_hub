@@ -108,7 +108,7 @@ class TestAuthenticationServiceIntegration:
         service = auth_fixtures.get_authentication_service()
 
         # Start with data plane authentication
-        bearer_token = auth_fixtures.create_mock_jwt_token(scopes="Item1.ReadWrite.All")
+        bearer_token = auth_fixtures.create_mock_jwt_token(scopes="AgentHub.ReadWrite.All")
         data_plane_header = f"Bearer {bearer_token}"
 
         with patch.object(service, '_authenticate_bearer') as mock_auth_bearer:
@@ -121,7 +121,7 @@ class TestAuthenticationServiceIntegration:
             # Authenticate data plane call
             data_result = await service.authenticate_data_plane_call(
                 auth_header=data_plane_header,
-                allowed_scopes=["Item1.ReadWrite.All"]
+                allowed_scopes=["AgentHub.ReadWrite.All"]
             )
 
             # Use result to build composite token (similar to control plane)

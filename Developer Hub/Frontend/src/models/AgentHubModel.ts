@@ -31,34 +31,20 @@ export interface WorkloadItem<T> extends GenericItem {
     extendedMetdata?: T;
 }
 
-// Represents the core metadata for Item1 stored within the system's storage.
-export interface Item1Metadata {
-    operand1?: number;
-    operand2?: number;
-    operator?: string;
-    lakehouse: ItemReference;
-    useOneLake: boolean;
-}
-
-// Represents extended metadata for item1, including additional information
-// about the associated lakehouse, tailored for client-side usage.
-export interface Item1ClientMetadata extends Item1Metadata {
-    lakehouse: GenericItem;
-}
-
-// Represents the item-specific payload passed with the  CreateItem request
+// Represents the item-specific payload passed with the CreateItem request.
+// AgentHub items currently have no custom metadata; reserved for future use.
 export interface CreateItemPayload {
-    item1Metadata?: Item1Metadata;
+    // Intentionally empty — AgentHub item has no custom create-time payload.
 }
 
-// Represents the item-specific payload passed with the  UpdateItem request
+// Represents the item-specific payload passed with the UpdateItem request.
 export interface UpdateItemPayload {
-    item1Metadata?: Item1Metadata;
+    // Intentionally empty — AgentHub item has no custom update-time payload.
 }
 
-// Represents the item-specific payload returned by the GetItemPayload  request
+// Represents the item-specific payload returned by the GetItemPayload request.
 export interface ItemPayload {
-    item1Metadata?: Item1ClientMetadata;
+    // Intentionally empty — AgentHub item has no custom server-side payload.
 }
 
 export interface TabContentProps {

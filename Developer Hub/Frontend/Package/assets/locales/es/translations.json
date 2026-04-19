@@ -14,11 +14,11 @@
   "CreateHub_Card_AgentHub_Description": "Abrir el panel de orquestación multi-agente de Developer Hub",
   "Workload_Hub_Workload_Slogan": "Agentes de IA de nivel empresarial para tu ecosistema Fabric.",
   "Workload_Hub_Workload_Description": "Developer Hub permite a las organizaciones desplegar, monitorear y orquestar agentes de IA que automatizan tareas de ingeniería de datos, análisis y administración en espacios de trabajo de Microsoft Fabric.",
-  "Item_1_DisplayName": "Elemento Developer Hub",
-  "Item_1_DisplayName_Plural": "Elementos Developer Hub",
-  "Context_Menu_1_Display_Name": "Ejecutar trabajo de agente",
-  "Context_Menu_1_Tooltip": "Ejecutar un trabajo de agente para este elemento",
-  "Quick_Action_1_Display_Name": "Acción rápida de agente",
-  "Quick_Action_1_Tooltip": "Ejecutar una acción rápida de agente"
+  "AgentHubItem_DisplayName": "Elemento Developer Hub",
+  "AgentHubItem_DisplayName_Plural": "Elementos Developer Hub",
+  "AgentHubItem_ContextMenu_Run_DisplayName": "Ejecutar trabajo de agente",
+  "AgentHubItem_ContextMenu_Run_Tooltip": "Ejecutar un trabajo de agente para este elemento",
+  "AgentHubItem_QuickAction_Run_DisplayName": "Acción rápida de agente",
+  "AgentHubItem_QuickAction_Run_Tooltip": "Ejecutar una acción rápida de agente"
 }
   

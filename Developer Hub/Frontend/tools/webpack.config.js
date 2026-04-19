@@ -5,15 +5,65 @@ const Webpack = require("webpack");
 const path = require("path");
 const fs = require("fs").promises;
 
-console.log('******************** Build: Environment Variables *******************');
-console.log('process.env.WORKLOAD_NAME: ' + process.env.WORKLOAD_NAME);
-console.log('process.env.WORKLOAD_BE_URL: ' + process.env.WORKLOAD_BE_URL);
-console.log('*********************************************************************');
-
 // True when running `webpack serve` (dev middleware). We tune the config
 // aggressively for fast rebuilds in that case.
 const isDevServer = process.env.WEBPACK_SERVE === 'true'
     || process.argv.some(a => a === 'serve');
+
+// Custom console used by webpack's infrastructureLogging so the frontend
+// dev-server lines match the backend's format:
+//   YYYY-MM-DD HH:MM:SS - <service> - LEVEL - message
+// Instead of the default "<i> [webpack-dev-server] 404s…" glyphs which
+// are inconsistent with every other log stream in the stack.
+function makeFormatter(level, color) {
+    const reset = '\x1b[0m';
+    const useColor = process.env.NO_COLOR == null
+        && (process.stdout.isTTY || process.env.FORCE_COLOR);
+    const lvl = useColor ? `${color}${level}${reset}` : level;
+    return function (...args) {
+        const now = new Date();
+        const pad = (n, w = 2) => String(n).padStart(w, '0');
+        const ts = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} `
+            + `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+        const msg = args
+            .map(a => typeof a === 'string' ? a : require('util').inspect(a, { depth: 2 }))
+            .join(' ');
+        process.stdout.write(`${ts} - webpack - ${lvl} - ${msg}\n`);
+    };
+}
+
+const webpackConsole = {
+    info: makeFormatter('INFO', '\x1b[38;5;39m'),
+    log: makeFormatter('INFO', '\x1b[38;5;39m'),
+    debug: makeFormatter('DEBUG', '\x1b[38;5;244m'),
+    warn: makeFormatter('WARNING', '\x1b[38;5;214m'),
+    error: makeFormatter('ERROR', '\x1b[1;31m'),
+    trace: makeFormatter('DEBUG', '\x1b[38;5;244m'),
+    group: () => {},
+    groupCollapsed: () => {},
+    groupEnd: () => {},
+    profile: () => {},
+    profileEnd: () => {},
+    clear: () => {},
+    status: makeFormatter('INFO', '\x1b[38;5;39m'),
+    Console: console.Console,
+    assert: console.assert.bind(console),
+    count: () => {},
+    countReset: () => {},
+    dir: makeFormatter('INFO', '\x1b[38;5;39m'),
+    dirxml: makeFormatter('INFO', '\x1b[38;5;39m'),
+    table: makeFormatter('INFO', '\x1b[38;5;39m'),
+    time: () => {},
+    timeEnd: () => {},
+    timeLog: () => {},
+};
+
+// Route the raw banner lines below through the same formatter so every
+// line emitted by the frontend container follows the standard shape.
+webpackConsole.info('Build: Environment Variables');
+webpackConsole.info(`WORKLOAD_NAME=${process.env.WORKLOAD_NAME}`);
+webpackConsole.info(`WORKLOAD_BE_URL=${process.env.WORKLOAD_BE_URL}`);
+
 
 module.exports = {
     mode: "development",
@@ -44,6 +94,13 @@ module.exports = {
         buildDependencies: {
             config: [__filename],
         },
+        // Cap how many rebuild generations webpack keeps in memory before
+        // evicting to disk. Default is Infinity, which is the root cause of
+        // the slow OOM in webpack-dev-server: every HMR rebuild keeps the
+        // previous module graph live. 1 means "only the current build
+        // lives in memory" — cold-cache cost is identical, warm rebuilds
+        // cost a single disk hit per module, and the heap stays flat.
+        maxMemoryGenerations: isDevServer ? 1 : Infinity,
     },
     // Tell webpack not to hash the contents of node_modules on every build —
     // mtime is enough and dramatically cheaper on large trees.
@@ -73,6 +130,14 @@ module.exports = {
                 {
                     from: './tools/web.config',
                     to: './web.config',
+                },
+                // Ship PDF.js worker as a static asset so PdfPreview can
+                // point `GlobalWorkerOptions.workerSrc` at a plain same-
+                // origin URL. Avoids the `import.meta.url` resolution
+                // footgun under our ES2017 tsconfig target.
+                {
+                    from: path.resolve(__dirname, '../node_modules/pdfjs-dist/build/pdf.worker.min.mjs'),
+                    to: 'pdf.worker.min.js',
                 },
             ]
         }),
@@ -117,11 +182,21 @@ module.exports = {
         aggregateTimeout: 200,
     },
     stats: isDevServer ? 'minimal' : 'normal',
+    infrastructureLogging: isDevServer
+        ? { level: 'info', console: webpackConsole }
+        : { level: 'info' },
     devServer: {
         port: 60006,
         open: false,
         historyApiFallback: true,
         client: {
+            // Silence the `[webpack-dev-server] Server started…` and
+            // `[HMR] Waiting for update signal from WDS…` banners that
+            // the dev-server client prints to the *browser* console —
+            // they're injected before our entry bundle runs so our own
+            // silencer (installConsoleSilencer) cannot catch them.
+            // 'warn' keeps genuine build errors visible.
+            logging: 'warn',
             overlay: {
                 runtimeErrors: (error) => {
                     if (error?.message?.includes('ResizeObserver')) return false;
@@ -136,10 +211,8 @@ module.exports = {
         },
         setupMiddlewares
             : function (middlewares, devServer) {
-                console.log('*********************************************************************');
-                console.log('****               Server is listening on port 60006             ****');
-                console.log('****   You can now override the Fabric manifest with your own.   ****');
-                console.log('*********************************************************************');
+                webpackConsole.info('Server is listening on port 60006');
+                webpackConsole.info('You can now override the Fabric manifest with your own.');
 
                 devServer.app.get('/manifests_new/metadata', function (req, res) {
                     res.writeHead(200, {
@@ -183,7 +256,7 @@ module.exports = {
                         
                         res.sendFile(filePath);
                     } catch (err) {
-                        console.error(`❌ ManifestPackage not found at ${filePath}. Run: cd Backend && python tools/manifest_package_generator.py --version 1.0.0 --project-root .`);
+                        webpackConsole.error(`ManifestPackage not found at ${filePath}. Run: cd Backend && python tools/manifest_package_generator.py --version 1.0.0 --project-root .`);
                         res.status(404).json({ error: "ManifestPackage not found. Run the manifest_package_generator in Backend/ first." });
                     }
                 });

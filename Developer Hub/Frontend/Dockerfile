@@ -47,10 +47,12 @@ RUN npx env-cmd -f ../.env webpack --config ./tools/webpack.config.js --mode pro
 # Stage 3: production — nginx serving the static bundle
 # ─────────────────────────────────────────────────────────────────────
 FROM nginx:alpine AS production
-# Default nginx config serves /usr/share/nginx/html on :80 — repoint to :60006
-# to stay compatible with the published port in docker-compose.yaml.
-RUN sed -i 's/listen       80;/listen       60006;/' /etc/nginx/conf.d/default.conf \
-    && sed -i 's/listen  \[::\]:80;/listen  [::]:60006;/' /etc/nginx/conf.d/default.conf || true
+# Remove the stock default.conf — we ship our own template which is
+# envsubst'd at container start by nginx:alpine's docker-entrypoint. Our
+# template handles port, SPA fallback, /manifests_new* CORS, and the
+# workload metadata JSON served from env vars.
+RUN rm -f /etc/nginx/conf.d/default.conf
+COPY Frontend/tools/default.conf.template /etc/nginx/templates/default.conf.template
 COPY --from=builder /app/tools/dist /usr/share/nginx/html
 EXPOSE 60006
 CMD ["nginx", "-g", "daemon off;"]

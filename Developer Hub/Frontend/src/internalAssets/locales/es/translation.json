@@ -12,6 +12,53 @@
     "Item_Name": "Nombre del artículo",
     "Item_ID": "ID del artículo",
     "Workspace_Name": "Nombre del espacio de trabajo",
-    "Workspace_ID": "ID del espacio de trabajo"
+    "Workspace_ID": "ID del espacio de trabajo",
+
+    "Plan_Section_Label": "Plan de ejecución",
+    "Plan_Title": "Plan de ejecución propuesto",
+    "Plan_Workspace_Label": "Espacio de trabajo",
+    "Plan_Summary_Heading": "Resumen",
+    "Plan_Meta_Steps": "{{count}} paso",
+    "Plan_Meta_Steps_other": "{{count}} pasos",
+    "Plan_Meta_Conflicts": "{{count}} conflicto",
+    "Plan_Meta_Conflicts_other": "{{count}} conflictos",
+    "Plan_Meta_Clarifications": "{{count}} aclaración",
+    "Plan_Meta_Clarifications_other": "{{count}} aclaraciones",
+    "Plan_Meta_NoAction": "{{count}} elemento sin acción",
+    "Plan_Meta_NoAction_other": "{{count}} elementos sin acción",
+
+    "Plan_Conflicts_Title": "Los conflictos impiden la aprobación",
+    "Plan_Clarifications_Title": "Se necesitan aclaraciones antes de aprobar",
+    "Plan_Clarifications_Blocks": "bloquea: {{ids}}",
+
+    "Plan_Assumptions_Title": "Suposiciones",
+    "Plan_Prereqs_Title": "Requisitos previos",
+    "Plan_Prereqs_Evidence": "Evidencia",
+    "Plan_Prereqs_Status_satisfied": "Cumplido",
+    "Plan_Prereqs_Status_missing": "Faltante",
+    "Plan_Prereqs_Status_unknown": "Desconocido",
+
+    "Plan_Steps_Title": "Pasos",
+    "Plan_Step_Action_create": "Crear",
+    "Plan_Step_Action_update": "Actualizar",
+    "Plan_Step_Action_delete": "Eliminar",
+    "Plan_Step_Action_configure": "Configurar",
+    "Plan_Step_Action_validate": "Validar",
+    "Plan_Step_Action_clarify": "Aclarar",
+    "Plan_Step_Risk_low": "Riesgo bajo",
+    "Plan_Step_Risk_medium": "Riesgo medio",
+    "Plan_Step_Risk_high": "Riesgo alto",
+    "Plan_Step_Irreversible": "No reversible",
+    "Plan_Step_DependsOn": "Depende de",
+    "Plan_Step_Inputs": "Entradas",
+    "Plan_Step_Duration": "≈ {{seconds}}s",
+
+    "Plan_NoAction_Title": "Ya realizado",
+    "Plan_NoSteps_Message": "No se produjeron pasos. Revise los conflictos o aclaraciones anteriores.",
+
+    "Plan_Action_Approve": "Aprobar e iniciar",
+    "Plan_Action_Approving": "Aprobando…",
+    "Plan_Action_Reject": "Rechazar",
+    "Plan_Action_BlockedNote": "Resuelva los conflictos y aclaraciones anteriores para aprobar."
 }
   

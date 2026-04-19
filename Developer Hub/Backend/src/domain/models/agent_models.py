@@ -3,10 +3,34 @@
 from __future__ import annotations
 
 import enum
+import re
 from datetime import UTC, datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from domain.models.plan import Plan
+
+# Size caps for user-submitted request payloads. These are defense-in-depth
+# limits that guard against CPU/memory exhaustion on the LLM and embedding
+# pipelines; they are not intended as primary authorization checks.
+_MAX_TASK_DESCRIPTION_LEN = 16_000
+_MAX_MESSAGE_LEN = 8_000
+_MAX_PROMPT_ADDITIONS_LEN = 4_000
+_MAX_ATTACHMENTS = 10
+# Per-attachment string cap on the raw wire payload. For binary kinds
+# (image, pdf) this is a base64 data URI, which inflates by 4/3 plus a
+# small header + padding. We size this to fit a file up to
+# ``services.agenthub.attachments.MAX_BYTES_PER_FILE`` (10 MB) after
+# base64 expansion, with slack. The authoritative byte-level caps live in
+# ``attachments.py`` (per-file + total-across-attachments) and are applied
+# *after* decoding.
+_MAX_ATTACHMENT_CONTENT_LEN = 14 * 1024 * 1024  # ~14 MB — fits 10 MB raw, base64-encoded
+_MAX_CONTEXT_DEPTH = 5
+_WORKSPACE_ID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+_AGENT_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_\-]{0,63}$")
 
 # ── Enums ────────────────────────────────────────────────────────────
 
@@ -65,6 +89,11 @@ class AgentTemplate(BaseModel):
 class UserAgentConfig(BaseModel):
     id: str
     user_id: str
+    # Human-readable UPN (e.g. "alice@contoso.com"). Stored alongside
+    # ``user_id`` (the oid-based machine key) purely so a human browsing
+    # the DB or logs can tell who owns a row at a glance. Internal lookups
+    # must always use ``user_id``.
+    user_upn: str | None = None
     agent_template_id: str
     access_levels: dict[str, bool] = Field(default_factory=dict)
     tool_integrations: dict[str, bool] = Field(default_factory=dict)
@@ -117,37 +146,29 @@ class AgentAssignment(BaseModel):
     actions: list[AgentAction] = Field(default_factory=list)
 
 
-# ── Execution Plan ──────────────────────────────────────────────────
-
-class PlannedAgent(BaseModel):
-    agent_template_id: str
-    role: str
-    goal: str
-    depends_on: list[str] = Field(default_factory=list)
-    tool_groups: list[str] = Field(default_factory=list)
-
-
-class ExecutionPlan(BaseModel):
-    job_id: str
-    agents: list[PlannedAgent] = Field(default_factory=list)
-    communication_graph: dict[str, list[str]] = Field(default_factory=dict)
-    estimated_duration: str | None = None
-    summary: str = ""
-
-
 # ── Jobs ─────────────────────────────────────────────────────────────
 
 class Job(BaseModel):
     id: str
     user_id: str
+    # Human-readable UPN stored alongside ``user_id`` for easy inspection
+    # in the DB / logs. Not used for any authorization decision.
+    user_upn: str | None = None
     workspace_id: str
     task_description: str
     context: dict[str, Any] | None = None
     status: JobStatus = JobStatus.PLANNED
-    plan: ExecutionPlan | None = None
+    # ``plan`` carries the grounded Plan shape exposed to the UI.
+    plan: Plan | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     started_at: datetime | None = None
     completed_at: datetime | None = None
+    # Populated when a user cancels the session via the UI. Preserved on
+    # the row so the Recent-Sessions view can surface "who stopped this
+    # and when" instead of silently deleting the record.
+    cancelled_at: datetime | None = None
+    cancelled_by_user_id: str | None = None
+    cancelled_by_upn: str | None = None
     agents: list[AgentAssignment] = Field(default_factory=list)
 
 
@@ -171,38 +192,68 @@ class PromptAttachment(BaseModel):
       the backend extracts text via ``pypdf``.
     """
 
-    name: str
-    kind: str  # "text" | "image" | "pdf"
-    mime: str | None = None
-    content: str
+    name: str = Field(max_length=255)
+    kind: str = Field(pattern=r"^(text|image|pdf)$")
+    mime: str | None = Field(default=None, max_length=127)
+    content: str = Field(max_length=_MAX_ATTACHMENT_CONTENT_LEN)
 
 
 class CreateJobRequest(BaseModel):
-    task_description: str
-    workspace_id: str
+    task_description: str = Field(min_length=1, max_length=_MAX_TASK_DESCRIPTION_LEN)
+    workspace_id: str = Field(min_length=1, max_length=128)
     context: dict[str, Any] | None = None
-    attachments: list[PromptAttachment] | None = None
+    attachments: list[PromptAttachment] | None = Field(default=None, max_length=_MAX_ATTACHMENTS)
+
+    @field_validator("workspace_id")
+    @classmethod
+    def _validate_workspace_id(cls, v: str) -> str:
+        if not _WORKSPACE_ID_RE.match(v):
+            raise ValueError("workspace_id must be a UUID")
+        return v.lower()
 
 
 class GeneratePlanRequest(BaseModel):
-    task_description: str
-    workspace_id: str
+    task_description: str = Field(min_length=1, max_length=_MAX_TASK_DESCRIPTION_LEN)
+    workspace_id: str = Field(min_length=1, max_length=128)
     context: dict[str, Any] | None = None
-    attachments: list[PromptAttachment] | None = None
+    attachments: list[PromptAttachment] | None = Field(default=None, max_length=_MAX_ATTACHMENTS)
+
+    @field_validator("workspace_id")
+    @classmethod
+    def _validate_workspace_id(cls, v: str) -> str:
+        if not _WORKSPACE_ID_RE.match(v):
+            raise ValueError("workspace_id must be a UUID")
+        return v.lower()
 
 
 class ApprovePlanRequest(BaseModel):
-    session_id: str
+    session_id: str = Field(min_length=1, max_length=128)
 
 
 class SendMessageRequest(BaseModel):
-    message: str
-    target_agent_id: str | None = None
+    message: str = Field(min_length=1, max_length=_MAX_MESSAGE_LEN)
+    target_agent_id: str | None = Field(default=None, max_length=64)
+
+    @field_validator("target_agent_id")
+    @classmethod
+    def _validate_agent_id(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        if not _AGENT_ID_RE.match(v):
+            raise ValueError("target_agent_id has an invalid format")
+        return v
 
 
 class AgentConfigRequest(BaseModel):
-    agent_template_id: str
+    agent_template_id: str = Field(min_length=1, max_length=64)
     access_levels: dict[str, bool] = Field(default_factory=dict)
     tool_integrations: dict[str, bool] = Field(default_factory=dict)
-    runtime_schedule: str | None = None
-    custom_prompt_additions: str | None = None
+    runtime_schedule: str | None = Field(default=None, max_length=256)
+    custom_prompt_additions: str | None = Field(default=None, max_length=_MAX_PROMPT_ADDITIONS_LEN)
+
+    @field_validator("agent_template_id")
+    @classmethod
+    def _validate_template_id(cls, v: str) -> str:
+        if not _AGENT_ID_RE.match(v):
+            raise ValueError("agent_template_id has an invalid format")
+        return v

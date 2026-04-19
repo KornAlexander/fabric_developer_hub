@@ -22,6 +22,141 @@ logger = logging.getLogger(__name__)
 # Timeout for individual tool calls (seconds)
 TOOL_CALL_TIMEOUT = 30
 
+# Env-var allowlist for spawned MCP subprocesses. The backend's full
+# ``os.environ`` carries secrets (ClientSecret, DB paths, anything an
+# operator configured) that the MCP server has no reason to see. We copy
+# only the entries every Python/OS-level child process actually needs, plus
+# anything the MCP config itself declared in ``env``, plus the per-request
+# auth tokens. Everything else (secrets, unrelated config) is dropped.
+_BASE_ENV_ALLOWLIST: frozenset[str] = frozenset({
+    # OS / interpreter baseline
+    "PATH", "HOME", "TMP", "TEMP", "TMPDIR", "USER", "LOGNAME",
+    "LANG", "LC_ALL", "LC_CTYPE",
+    "PYTHONPATH", "PYTHONUNBUFFERED", "PYTHONIOENCODING",
+    # TLS / CA certs (httpx / requests in the MCP servers need these)
+    "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+    # Proxy config for outbound HTTP — MCP servers make real API calls
+    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+    "http_proxy", "https_proxy", "no_proxy",
+    # Our own knobs that MCP code reads
+    "MCP_REPO_DIR",
+})
+
+# Tool-argument safety limits. These are defense-in-depth; individual MCP
+# servers should still validate, but the manager is the last gate before we
+# send a crafted argument to an external server.
+_MAX_ARG_STRING_LEN = 64_000
+_MAX_ARG_DEPTH = 8
+
+# Arg keys that are interpreted as filesystem / OneLake paths by our MCP
+# servers. Any value under these keys is checked for traversal attempts.
+_PATH_ARG_KEYS: frozenset[str] = frozenset({
+    "file_path", "directory_path", "path", "source_path", "target_path",
+    "destination_path", "src_path", "dst_path",
+})
+
+# Arg keys that must match the Job's declared workspace_id when it is
+# provided. Prevents a prompt-injected tool call from pivoting the agent to
+# a DIFFERENT workspace the user happens to also have rights to.
+_WORKSPACE_ARG_KEYS: frozenset[str] = frozenset({
+    "workspace_id", "workspaceId",
+})
+
+
+class ToolPolicyViolation(RuntimeError):
+    """Raised when a tool call fails a pre-dispatch policy check.
+
+    Distinct from ``ValueError`` so callers (orchestrator) can surface it as
+    a security event instead of a generic failure.
+    """
+
+
+def _validate_tool_arguments(
+    tool_name: str,
+    arguments: dict,
+    *,
+    workspace_id: str | None,
+) -> None:
+    """Run policy checks on a pending tool call. Raises on violation.
+
+    Checks (in order):
+
+    1. Argument structure is not pathologically deep / large — bounded
+       recursion and string length caps so a crafted dict can't OOM us.
+    2. If the Job carries a ``workspace_id`` and the tool's arguments also
+       do, they must match. This prevents lateral movement to another
+       workspace the user has rights to.
+    3. Path-like arg keys may not contain ``..``, null bytes, backslashes on
+       POSIX layouts, or start with a leading ``/`` (absolute paths) —
+       OneLake is *not* a filesystem, absolute paths would escape the
+       lakehouse root and backslashes are only legitimate on Windows.
+    """
+
+    # (1) structural bounds
+    def _walk(value, depth: int) -> None:
+        if depth > _MAX_ARG_DEPTH:
+            raise ToolPolicyViolation(
+                f"Tool {tool_name}: argument nesting exceeds {_MAX_ARG_DEPTH}"
+            )
+        if isinstance(value, str):
+            if len(value) > _MAX_ARG_STRING_LEN:
+                raise ToolPolicyViolation(
+                    f"Tool {tool_name}: argument value exceeds "
+                    f"{_MAX_ARG_STRING_LEN} chars"
+                )
+            return
+        if isinstance(value, dict):
+            for v in value.values():
+                _walk(v, depth + 1)
+            return
+        if isinstance(value, list):
+            for v in value:
+                _walk(v, depth + 1)
+
+    _walk(arguments, 0)
+
+    # (2) workspace binding
+    if workspace_id:
+        for key in _WORKSPACE_ARG_KEYS:
+            if key in arguments:
+                got = str(arguments[key] or "").strip().lower()
+                want = workspace_id.strip().lower()
+                if got and got != want:
+                    raise ToolPolicyViolation(
+                        f"Tool {tool_name}: {key}={got!r} does not match the "
+                        f"session's workspace {want!r}. Cross-workspace tool "
+                        f"calls are blocked as a prompt-injection defense."
+                    )
+
+    # (3) path traversal
+    for key in _PATH_ARG_KEYS:
+        if key not in arguments:
+            continue
+        val = arguments[key]
+        if not isinstance(val, str):
+            continue
+        if "\x00" in val:
+            raise ToolPolicyViolation(
+                f"Tool {tool_name}: {key} contains a null byte"
+            )
+        if ".." in val.split("/") or ".." in val.split("\\"):
+            raise ToolPolicyViolation(
+                f"Tool {tool_name}: {key}={val!r} contains a parent-directory "
+                f"traversal segment ('..')"
+            )
+        if val.startswith("/") or (len(val) >= 2 and val[1] == ":"):
+            raise ToolPolicyViolation(
+                f"Tool {tool_name}: {key}={val!r} is an absolute path; only "
+                f"lakehouse-relative paths are accepted"
+            )
+        if "\\" in val:
+            # OneLake / Fabric APIs use POSIX separators; a backslash
+            # usually indicates a hand-crafted Windows-style injection.
+            raise ToolPolicyViolation(
+                f"Tool {tool_name}: {key}={val!r} contains a backslash; use "
+                f"forward slashes for lakehouse paths"
+            )
+
 
 class MCPClientManager:
     """Manages MCP server processes and client connections."""
@@ -147,6 +282,9 @@ class MCPClientManager:
         tool_name: str,
         arguments: dict,
         tokens: dict[str, str] | None = None,
+        *,
+        allowed_tools: set[str] | frozenset[str] | None = None,
+        workspace_id: str | None = None,
     ) -> str:
         """Execute a tool call via a per-request MCP server instance.
 
@@ -157,9 +295,34 @@ class MCPClientManager:
             arguments: Tool arguments dict.
             tokens: Env-var-name → token-value mapping injected into the process.
                     E.g. {"FABRIC_API_TOKEN": "eyJ...", "ONELAKE_TOKEN": "eyJ..."}
+            allowed_tools: If provided, the tool call is rejected unless
+                ``tool_name`` is in this set. Enforced here (not just when
+                building the schema the LLM sees) so a prompt-injected or
+                hallucinated tool call cannot bypass the per-agent policy.
+            workspace_id: Optional Job-level workspace id the tool call is
+                bound to. Any ``workspace_id``/``workspaceId`` argument that
+                disagrees with this value is rejected as a cross-workspace
+                pivot attempt.
+
+        Raises:
+            ToolPolicyViolation: policy check failed before dispatch.
+            ValueError: ``tool_name`` is not a known tool.
+            TimeoutError: the call exceeded ``TOOL_CALL_TIMEOUT``.
         """
         if tool_name not in self.tool_server_map:
             raise ValueError(f"Unknown tool: {tool_name}")
+
+        if allowed_tools is not None and tool_name not in allowed_tools:
+            # This is the authoritative gate — the schema filter given to
+            # the LLM is advisory. Treat a hit here as a security event.
+            raise ToolPolicyViolation(
+                f"Tool {tool_name!r} is not permitted for this agent. "
+                f"Allow-list: {sorted(allowed_tools)}"
+            )
+
+        _validate_tool_arguments(
+            tool_name, arguments or {}, workspace_id=workspace_id,
+        )
 
         server_name = self.tool_server_map[tool_name]
         server_config = self.config["servers"][server_name]
@@ -240,9 +403,21 @@ class MCPClientManager:
         """Start an MCP server process and return (session, stack).
 
         Caller is responsible for calling `await stack.aclose()` to shut down the process.
+
+        Security: the child process receives an **allow-listed** slice of
+        the backend's environment (PATH / locale / TLS-cert / proxy vars
+        only) plus whatever the MCP server config and per-request
+        ``env_override`` explicitly declare. The backend's full ``os.environ``
+        — which includes ClientSecret, DB paths, and other operator config —
+        is never passed to the child. This shrinks the blast radius of any
+        future compromise of an MCP server (first-party or third-party).
         """
-        # Merge base OS env with server-specific env and overrides
-        merged_env = dict(os.environ)
+        # Start from a sanitized base copy of our own env
+        merged_env = {
+            k: v for k, v in os.environ.items() if k in _BASE_ENV_ALLOWLIST
+        }
+        # Layer in the MCP server's own declared env (from mcp_servers.json),
+        # then the per-request overrides (auth tokens). Later writers win.
         merged_env.update(server_config.get("env", {}))
         merged_env.update(env_override)
 

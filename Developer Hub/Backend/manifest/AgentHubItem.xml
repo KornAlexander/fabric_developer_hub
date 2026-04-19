@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!-- Template: ${WORKLOAD_NAME} is substituted from Developer Hub/.env at build time. -->
+<ItemManifestConfiguration xmlns:xsi= "http://www.w3.org/2001/XMLSchema-instance" SchemaVersion="1.101.0">
+  <Item TypeName="${WORKLOAD_NAME}.AgentHubItem" Category="Data" CreateOneLakeFoldersOnArtifactCreation="true">
+    <Workload WorkloadName="${WORKLOAD_NAME}" />
+    <!--
+      JobScheduler declares WHICH scheduled / on-demand jobs this item type
+      supports. Fully-qualified job type names must be 4 dotted segments:
+        {Publisher}.{WorkloadName}.{ItemName}.{JobTypeName}
+      (the XSD "JobTypeName" pattern in ItemDefinition.xsd).
+
+      IMPORTANT: The frontend Package/AgentHubItem.json MUST NOT put these
+      scheduled-job short names in its top-level "itemJobTypes" array — that
+      field is for data-access operation tags (e.g. "getData", "storeData"),
+      NOT for workload jobs. Putting scheduled-job names there causes
+        dev-gateway BadRequest:
+        "Invalid job type detected or too many ArtifactJobTypes"
+        Target: ArtifactJobTypes
+      during Dev instance registration. See
+      tests/unit/manifest/test_manifest_consistency.py for the regression
+      test that enforces this.
+    -->
+    <JobScheduler>
+      <OnDemandJobDeduplicateOptions>PerItem</OnDemandJobDeduplicateOptions>
+      <ScheduledJobDeduplicateOptions>PerItem</ScheduledJobDeduplicateOptions>
+      <ItemJobTypes>
+        <ItemJobType Name="${WORKLOAD_NAME}.AgentHubItem.ScheduledJob" />
+        <ItemJobType Name="${WORKLOAD_NAME}.AgentHubItem.InstantJob" />
+      </ItemJobTypes>
+    </JobScheduler>
+  </Item>
+</ItemManifestConfiguration>

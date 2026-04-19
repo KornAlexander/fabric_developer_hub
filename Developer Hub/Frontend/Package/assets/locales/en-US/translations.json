@@ -14,10 +14,10 @@
     "CreateHub_Card_AgentHub_Description": "Open the Developer Hub multi-agent orchestration dashboard",
     "Workload_Hub_Workload_Slogan": "Enterprise-grade AI agents for your Fabric ecosystem.",
     "Workload_Hub_Workload_Description": "Developer Hub enables organizations to deploy, monitor, and orchestrate AI agents that automate data engineering, analytics, and administration tasks across Microsoft Fabric workspaces.",
-    "Item_1_DisplayName": "Developer Hub Item",
-    "Item_1_DisplayName_Plural": "Developer Hub Items",
-    "Context_Menu_1_Display_Name": "Run agent job",
-    "Context_Menu_1_Tooltip": "Execute an agent job for this item",
-    "Quick_Action_1_Display_Name": "Quick agent action",
-    "Quick_Action_1_Tooltip": "Run a quick agent action"
+    "AgentHubItem_DisplayName": "Developer Hub Item",
+    "AgentHubItem_DisplayName_Plural": "Developer Hub Items",
+    "AgentHubItem_ContextMenu_Run_DisplayName": "Run agent job",
+    "AgentHubItem_ContextMenu_Run_Tooltip": "Execute an agent job for this item",
+    "AgentHubItem_QuickAction_Run_DisplayName": "Quick agent action",
+    "AgentHubItem_QuickAction_Run_Tooltip": "Run a quick agent action"
 }

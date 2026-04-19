@@ -53,9 +53,17 @@ export async function createSession(
     return res.json();
 }
 
-export async function listSessions(opts: FetchOpts, status?: string) {
-    const qs = status ? `?status=${status}` : '';
-    const res = await fetch(`${BE}/api/sessions${qs}`, { headers: headers(opts) });
+export async function listSessions(
+    opts: FetchOpts,
+    status?: string,
+    page?: { limit?: number; offset?: number },
+) {
+    const qs = new URLSearchParams();
+    if (status) qs.set("status", status);
+    if (page?.limit != null) qs.set("limit", String(page.limit));
+    if (page?.offset != null) qs.set("offset", String(page.offset));
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    const res = await fetch(`${BE}/api/sessions${suffix}`, { headers: headers(opts) });
     if (!res.ok) throw new Error(await res.text());
     return res.json();
 }
@@ -156,8 +164,18 @@ export async function deleteMyAgent(configId: string, opts: FetchOpts) {
 
 // ── Workspaces (cached, with manual refresh) ────────────────────────
 
+export interface Workspace {
+    id: string;
+    name: string;
+    /** null = not yet probed; true = git-connected; false = probed, not connected. */
+    git_connected: boolean | null;
+    git_provider: string | null;
+    git_branch: string | null;
+    git_repo_name: string | null;
+}
+
 export interface WorkspacesResponse {
-    workspaces: { id: string; name: string }[];
+    workspaces: Workspace[];
     cached_at: string | null;
     /** "cache" | "refreshed" | "stale-cache" */
     source: string;
@@ -182,3 +200,56 @@ export async function preloadWorkspaces(opts: FetchOpts): Promise<void> {
         /* best effort */
     }
 }
+
+export interface CreateWorkspaceInput {
+    display_name: string;
+    description?: string;
+    capacity_id?: string;
+}
+
+export async function createWorkspace(
+    input: CreateWorkspaceInput,
+    opts: FetchOpts,
+): Promise<Workspace> {
+    const res = await fetch(`${BE}/api/workspaces`, {
+        method: 'POST',
+        headers: { ...headers(opts), 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+    });
+    if (!res.ok) {
+        const err: Error & { status?: number } = new Error(await res.text());
+        err.status = res.status;
+        throw err;
+    }
+    return res.json();
+}
+
+// ── Attachments ─────────────────────────────────────────────────────
+
+/** Mint a single-use download URL for attachment bytes.
+ *
+ * See the backend's ``agenthub_controller.mint_attachment_download_token``
+ * for the "why": the Fabric workload iframe blocks every in-frame save
+ * path, so we hand the bytes to the backend and open the resulting
+ * http URL via ``workloadClient.navigation.openBrowserTab``.
+ *
+ * Returns an absolute URL (joined to ``WORKLOAD_BE_URL``) that the
+ * caller can pass straight to ``openBrowserTab``.
+ */
+export async function mintAttachmentDownloadUrl(
+    name: string, mime: string, content: string,
+    opts: FetchOpts,
+): Promise<string> {
+    const res = await fetch(`${BE}/api/attachments/download-token`, {
+        method: 'POST',
+        headers: headers(opts),
+        body: JSON.stringify({ name, mime, content }),
+    });
+    if (!res.ok) throw new Error(`Download-token mint failed: ${res.status} ${await res.text()}`);
+    const data = await res.json() as { token: string; url: string };
+    // ``data.url`` is relative (``/api/attachments/download/<token>``); we
+    // must give ``openBrowserTab`` an absolute URL, so join against the
+    // backend origin.
+    return `${BE}${data.url}`;
+}
+

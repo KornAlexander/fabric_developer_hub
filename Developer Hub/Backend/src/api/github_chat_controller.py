@@ -9,6 +9,7 @@ Handles:
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import time
@@ -53,7 +54,10 @@ async def _get_copilot_token(github_token: str) -> str:
     Copilot tokens expire after ~30 minutes. We cache them to avoid
     re-exchanging on every request.
     """
-    cache_key = str(hash(github_token))
+    # SHA-256 prevents cache collisions (Python's built-in ``hash()`` is
+    # only 64-bit and randomized per interpreter, which makes it unsuitable
+    # as a cache key for security-sensitive material like access tokens).
+    cache_key = hashlib.sha256(github_token.encode("utf-8")).hexdigest()
 
     # Check cache
     if cache_key in _copilot_token_cache:
@@ -299,15 +303,35 @@ async def chat_completions(chat_req: ChatRequest, request: Request):
 
     # Exchange the workload token for properly-scoped tokens via OBO
     mcp_tokens = None
+    caller_ctx = None
     if use_tools and fabric_token:
         mcp_tokens = await _acquire_mcp_tokens(fabric_token)
         logger.info("[CHAT] OBO tokens acquired: %s",
                     list(mcp_tokens.keys()) if mcp_tokens else "None")
+        # Build a CallerContext from the VERIFIED fabric JWT claims. The
+        # tool runtime uses this to strip any LLM-supplied tenant/user/oid
+        # arguments and to key kill-switches. workspace_id is left None in
+        # the plain-chat path because the user may be asking about any
+        # workspace they have access to; the OBO token itself bounds data
+        # access to the caller's permissions.
+        try:
+            from services.agenthub.tool_runtime import CallerContext
+            unverified = jwt.get_unverified_claims(fabric_token)
+            tid = unverified.get("tid") or ""
+            oid = unverified.get("oid") or ""
+            upn = unverified.get("upn") or unverified.get("preferred_username")
+            if tid and oid:
+                caller_ctx = CallerContext(
+                    tenant_id=tid, user_id=oid, user_upn=upn,
+                    workspace_id=None, session_id=f"chat-{oid[:8]}",
+                )
+        except Exception:
+            logger.warning("[CHAT] Could not build CallerContext from fabric token", exc_info=True)
 
     if use_tools:
         # Agentic mode: tool-call loop then stream final response
         return StreamingResponse(
-            _stream_agentic_chat(copilot_token, chat_req, mcp_tokens),
+            _stream_agentic_chat(copilot_token, chat_req, mcp_tokens, caller_ctx),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
@@ -498,7 +522,7 @@ async def _call_copilot_api(copilot_token: str, body: dict) -> dict:
     return data
 
 
-async def _stream_agentic_chat(copilot_token: str, chat_req: ChatRequest, mcp_tokens: dict | None):
+async def _stream_agentic_chat(copilot_token: str, chat_req: ChatRequest, mcp_tokens: dict | None, caller_ctx=None):
     """Agentic loop: tool-call rounds (non-streaming) then stream final response.
 
     Emits SSE events:
@@ -620,14 +644,31 @@ async def _stream_agentic_chat(copilot_token: str, chat_req: ChatRequest, mcp_to
             except json.JSONDecodeError:
                 tool_args = {}
 
-            try:
-                result = await _mcp_manager.call_tool(tool_name, tool_args, mcp_tokens)
-                tool_result = str(result)
-                logger.info("[AGENT] Tool %s succeeded, result length: %d chars, preview: '%s'",
-                            tool_name, len(tool_result), tool_result[:200])
-            except Exception as e:
-                tool_result = f"Error executing {tool_name}: {str(e)}"
-                logger.error("[AGENT] Tool %s failed: %s", tool_name, e, exc_info=True)
+            if caller_ctx is None:
+                # Should not happen when use_tools+fabric_token are true,
+                # but guard against misconfiguration — deny the call rather
+                # than dispatch without a verified caller identity.
+                tool_result = (
+                    f"POLICY_DENIED: cannot execute {tool_name!r} without a "
+                    f"verified caller context. Ensure the fabric token is "
+                    f"present."
+                )
+                logger.warning("[AGENT] No caller_ctx — refusing dispatch of %s", tool_name)
+            else:
+                from services.agenthub import tool_runtime
+                rt_result = await tool_runtime.execute(
+                    tool_name=tool_name,
+                    arguments=tool_args,
+                    ctx=caller_ctx,
+                    mcp_manager=_mcp_manager,
+                    mcp_tokens=mcp_tokens,
+                )
+                tool_result = rt_result.output
+                logger.info(
+                    "[AGENT] Tool %s decision=%s ok=%s (%d chars)",
+                    tool_name, rt_result.policy_decision, rt_result.ok,
+                    len(tool_result),
+                )
 
             yield f'data: {json.dumps({"type": "status", "content": f"Tool {tool_name} completed. Thinking..."})}\n\n'
 

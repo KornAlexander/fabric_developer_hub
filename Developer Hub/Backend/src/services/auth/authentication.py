@@ -425,11 +425,14 @@ class AuthenticationService:
             expected_audience = self._get_excpected_audience(token_version)
             self.logger.debug("Expected audience: %s", expected_audience)
 
-            # Validate token fully
+            # Validate token fully. Pin the signing algorithm to RS256
+            # (Entra ID's Fabric tokens) rather than trusting the unverified
+            # header's ``alg`` claim, which would permit algorithm confusion
+            # attacks (e.g. ``alg: none`` or HS256 with the public key).
             decoded_payload = jwt.decode(
                 token,
                 key=signing_key,
-                algorithms=[unverified_header.get("alg", "RS256")],
+                algorithms=["RS256"],
                 audience=expected_audience,
                 issuer=expected_issuer,
                 options={

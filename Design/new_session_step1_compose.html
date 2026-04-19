@@ -252,51 +252,41 @@
                             </div>
                             <!-- Workspace & Branch config (shown when Branch out is ON) -->
                             <div class="bg-surface-container-low/60 rounded-xl p-3 space-y-2.5">
-                                <div class="flex items-center gap-2">
-                                    <div class="flex-1">
-                                        <label class="block text-[10px] font-bold text-on-surface-variant uppercase tracking-wider mb-1">Source workspace</label>
-                                        <div class="relative">
-                                            <span class="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-on-surface-variant text-[14px]">workspaces</span>
-                                            <select class="w-full bg-surface-container-lowest border border-outline-variant/15 rounded-lg py-1.5 pl-8 pr-8 text-xs font-medium text-on-surface appearance-none cursor-pointer focus:ring-1 focus:ring-primary/20">
-                                                <option selected>Marketing Analytics</option>
-                                                <option>Finance Reporting</option>
-                                                <option>Sales Operations</option>
-                                                <option>Data Engineering — Prod</option>
-                                                <option>HR People Analytics</option>
-                                            </select>
-                                            <span class="material-symbols-outlined absolute right-2 top-1/2 -translate-y-1/2 text-on-surface-variant text-[14px] pointer-events-none">expand_more</span>
-                                        </div>
+                                <!-- Source workspace picker -->
+                                <div>
+                                    <label class="block text-[10px] font-bold text-on-surface-variant uppercase tracking-wider mb-1">Source workspace</label>
+                                    <div class="relative">
+                                        <span class="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-on-surface-variant text-[14px]">workspaces</span>
+                                        <select class="w-full bg-surface-container-lowest border border-outline-variant/15 rounded-lg py-1.5 pl-8 pr-8 text-xs font-medium text-on-surface appearance-none cursor-pointer focus:ring-1 focus:ring-primary/20">
+                                            <option selected>Marketing Analytics — main</option>
+                                            <option>Finance Reporting — main</option>
+                                            <option>Sales Operations — main</option>
+                                            <option>Data Engineering — Prod</option>
+                                            <option>HR People Analytics — main</option>
+                                        </select>
+                                        <span class="material-symbols-outlined absolute right-2 top-1/2 -translate-y-1/2 text-on-surface-variant text-[14px] pointer-events-none">expand_more</span>
                                     </div>
-                                    <div class="flex-1">
-                                        <label class="block text-[10px] font-bold text-on-surface-variant uppercase tracking-wider mb-1">Branch name</label>
-                                        <div class="relative">
-                                            <span class="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-on-surface-variant text-[14px]">fork_right</span>
-                                            <input class="w-full bg-surface-container-lowest border border-outline-variant/15 rounded-lg py-1.5 pl-8 pr-3 text-xs font-medium text-on-surface focus:ring-1 focus:ring-primary/20" value="agent/sales-ingestion-pipeline" />
+                                </div>
+                                <!-- Explorer-style tree: source → child workspace -->
+                                <div class="bg-surface-container-lowest border border-outline-variant/15 rounded-lg px-3 py-2">
+                                    <div class="flex items-center gap-1.5 text-[13px] font-semibold text-on-surface">
+                                        <span class="material-symbols-outlined text-[16px] text-on-surface-variant">expand_more</span>
+                                        <span class="material-symbols-outlined text-[16px] text-on-surface-variant">workspaces</span>
+                                        <span>Marketing Analytics</span>
+                                    </div>
+                                    <div class="relative pl-[14px] mt-0.5">
+                                        <span class="absolute left-[7px] top-0 bottom-1/2 w-px bg-outline-variant/30"></span>
+                                        <div class="relative flex items-center gap-2 py-1">
+                                            <span class="absolute left-0 top-1/2 w-[14px] h-px bg-outline-variant/30"></span>
+                                            <span class="material-symbols-outlined text-[16px] text-amber-600 ml-1">fork_right</span>
+                                            <input class="flex-1 min-w-0 bg-transparent border border-transparent hover:border-outline-variant/30 focus:border-primary focus:bg-white focus:ring-1 focus:ring-primary/20 rounded-md px-2 py-1 text-xs font-mono text-on-surface outline-none" value="feature-alpha" spellcheck="false" />
                                         </div>
                                     </div>
                                 </div>
                                 <p class="text-[10px] text-on-surface-variant/70 flex items-center gap-1">
                                     <span class="material-symbols-outlined text-[12px]">info</span>
-                                    Changes will be applied in a new branch. Merge to source workspace when ready.
+                                    A new child workspace will be created from the source. Merge back when ready.
                                 </p>
-                            </div>
-                            <!-- Destination workspace (always shown) -->
-                            <div class="flex items-center gap-3">
-                                <div class="flex-1">
-                                    <label class="block text-[10px] font-bold text-on-surface-variant uppercase tracking-wider mb-1">Destination workspace</label>
-                                    <div class="relative">
-                                        <span class="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-on-surface-variant text-[14px]">target</span>
-                                        <select class="w-full bg-surface-container-lowest border border-outline-variant/15 rounded-lg py-1.5 pl-8 pr-8 text-xs font-medium text-on-surface appearance-none cursor-pointer focus:ring-1 focus:ring-primary/20">
-                                            <option selected>Marketing Analytics — Dev</option>
-                                            <option>Marketing Analytics</option>
-                                            <option>Finance Reporting</option>
-                                            <option>Sales Operations</option>
-                                            <option>Data Engineering — Prod</option>
-                                            <option>HR People Analytics</option>
-                                        </select>
-                                        <span class="material-symbols-outlined absolute right-2 top-1/2 -translate-y-1/2 text-on-surface-variant text-[14px] pointer-events-none">expand_more</span>
-                                    </div>
-                                </div>
                             </div>
                             <!-- Actions row -->
                             <div class="flex items-center justify-between">
@@ -317,16 +307,6 @@
                             </div>
                         </div>
                     </div>
-                </div>
-
-                <!-- ── PROMPT STARTERS (Cowork pattern) ── -->
-                <div class="mt-5 flex flex-wrap justify-center items-center gap-2">
-                    <span class="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest mr-1">Try:</span>
-                    <button class="prompt-chip px-3 py-1.5 bg-surface-container-low rounded-full text-xs font-medium text-on-surface-variant border border-outline-variant/10">Ingest marketing logs weekly</button>
-                    <button class="prompt-chip px-3 py-1.5 bg-surface-container-low rounded-full text-xs font-medium text-on-surface-variant border border-outline-variant/10">Audit all agent connections</button>
-                    <button class="prompt-chip px-3 py-1.5 bg-surface-container-low rounded-full text-xs font-medium text-on-surface-variant border border-outline-variant/10">Rotate API keys</button>
-                    <button class="prompt-chip px-3 py-1.5 bg-surface-container-low rounded-full text-xs font-medium text-on-surface-variant border border-outline-variant/10">Clean staging data</button>
-                    <button class="prompt-chip px-3 py-1.5 bg-surface-container-low rounded-full text-xs font-medium text-on-surface-variant border border-outline-variant/10">Sync CRM to Lakehouse</button>
                 </div>
             </section>
 

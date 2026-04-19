@@ -1,4 +1,19 @@
 services:
+  # ── 0. Bind-mount ownership fixer ──────────────────────────
+  # Docker creates bind-mount dirs as root when they don't exist on the
+  # host. The backend container runs as appuser (uid 1000) and would fall
+  # back to a container-internal DB path when /app/data is root-owned,
+  # hiding the agenthub.db from the host. This one-shot sidecar fixes
+  # the ownership before the backend starts. Running as uid 0 is the only
+  # way to chown a path we don't own; it exits immediately after.
+  data-dir-init:
+    image: alpine:3
+    user: "0"
+    volumes:
+      - ./Backend/.data:/data
+    entrypoint: ["sh", "-c", "chown -R 1000:1000 /data && echo 'data-dir-init: /data owned by 1000:1000'"]
+    restart: "no"
+
   # ── 1. Generate the manifest package (.nupkg) ──────────────
   # Runs once at startup, writes the package to a shared volume.
   manifest-generator:
@@ -12,7 +27,7 @@ services:
     volumes:
       - manifest-pkg:/app/bin/Debug
       - ./Backend/tools:/app/tools:ro
-      # Mount the manifest templates (WorkloadManifest.xml, Item1.xml, *.nuspec)
+      # Mount the manifest templates (WorkloadManifest.xml, AgentHubItem.xml, *.nuspec)
       # so edits on the host are picked up on the next `docker compose up`
       # without needing an image rebuild.
       - ./Backend/manifest:/app/manifest:ro
@@ -38,6 +53,11 @@ services:
       # so it lives here (not in .env) — the host-side ./Backend/.data bind
       # mount below makes the DB file visible from your editor.
       AGENTHUB_DB_PATH: /app/data/agenthub.db
+      # Force ANSI colours in log output even though the container has no
+      # TTY. ``docker compose logs`` and most terminals render the ANSI
+      # escape codes, which makes ERROR lines pop red in the log stream.
+      FORCE_COLOR: "1"
+      PYTHONUNBUFFERED: "1"
     volumes:
       # Mount source for hot reload (uvicorn --reload watches these)
       - ./Backend/src:/app/src
@@ -56,6 +76,9 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+    depends_on:
+      data-dir-init:
+        condition: service_completed_successfully
 
   # ── 3. Frontend ───────────────────────────────────────────
   #
@@ -82,9 +105,23 @@ services:
       target: production
     ports:
       - "60006:60006"
+    env_file:
+      - .env
+    environment:
+      # Nginx substitutes these into default.conf.template at startup to
+      # serve /manifests_new/metadata (the Fabric-host-facing JSON). Defaults
+      # keep the container functional even when the .env values are absent.
+      # The ${FOO:-$BAR} fallbacks match webpack-dev-server's precedence so
+      # prod and dev return identical metadata for the same .env.
+      WORKLOAD_NAME: "${WORKLOAD_NAME:-}"
+      FRONTEND_AAD_AUDIENCE: "${DEV_AAD_CONFIG_AUDIENCE:-${AUDIENCE:-}}"
+      FRONTEND_AAD_APPID: "${DEV_AAD_CONFIG_APPID:-${CLIENT_ID:-}}"
+      FRONTEND_AAD_REDIRECT_URI: "${DEV_AAD_CONFIG_REDIRECT_URI:-http://localhost:60006/close}"
     volumes:
-      # nginx doesn't need the manifest package, but the dev-gateway probes
-      # /manifests_new → so we proxy it through a volume here too.
+      # Fabric host fetches /manifests_new (the workload package) and
+      # /manifests_new/metadata (AAD app config). Nginx serves the nupkg
+      # directly from this mounted volume; the metadata JSON is rendered
+      # inline from env vars (see Frontend/tools/default.conf.template).
       - manifest-pkg:/usr/share/nginx/html/manifests_new:ro
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:60006/"]
@@ -109,7 +146,16 @@ services:
     env_file:
       - .env
     environment:
-      NODE_OPTIONS: "--max-old-space-size=4096"
+      # Raise Node's old-space cap. webpack-dev-server with HMR keeps a
+      # snapshot of the module graph per rebuild in memory; over a long
+      # editing session (many hot-reloads) the 4 GB default was being hit.
+      # 8 GB gives comfortable headroom and the host easily has it.
+      NODE_OPTIONS: "--max-old-space-size=8192"
+      # Force ANSI color in our custom webpack infrastructure logger
+      # (webpack.config.js) even though stdout isn't a TTY under
+      # docker-compose. Keeps the log stream visually consistent with the
+      # backend's ColorFormatter.
+      FORCE_COLOR: "1"
     volumes:
       - ./Frontend/src:/app/src
       - ./Frontend/tools:/app/tools
@@ -191,12 +237,21 @@ services:
           exit 1
         fi
 
-        exec dotnet DevGateway/Microsoft.Fabric.Workload.DevGateway.dll \
+        # Pipe DevGateway stdout/stderr through sed so its log format
+        # matches the backend / frontend pattern. We cannot use ``exec``
+        # with a pipe — the pipeline needs a shell — so dotnet runs as a
+        # child process and we forward its exit status manually.
+        dotnet DevGateway/Microsoft.Fabric.Workload.DevGateway.dll \
           -LogLevel "$$LOG_LEVEL" \
           -DevMode:UserAuthorizationToken "$$token" \
           -DevMode:ManifestPackageFilePath /app/ManifestPackage.nupkg \
           -DevMode:WorkspaceGuid "$$WORKSPACE_GUID" \
-          -DevMode:WorkloadEndpointUrl "http://host.docker.internal:$${LOCAL_BACKEND_PORT}/workload"
+          -DevMode:WorkloadEndpointUrl "http://host.docker.internal:$${LOCAL_BACKEND_PORT}/workload" \
+          2>&1 | sed -u -E \
+            -e "s/^\[([0-9]{2})\/([0-9]{2}) ([0-9:]{8})\.[0-9]+\] info: /$$(date +%Y)-\2-\1 \3 - dev-gateway - INFO - /" \
+            -e "s/^\[([0-9]{2})\/([0-9]{2}) ([0-9:]{8})\.[0-9]+\] warn: /$$(date +%Y)-\2-\1 \3 - dev-gateway - WARNING - /" \
+            -e "s/^\[([0-9]{2})\/([0-9]{2}) ([0-9:]{8})\.[0-9]+\] (err|error|fail): /$$(date +%Y)-\2-\1 \3 - dev-gateway - ERROR - /" \
+            -e "s/^\[([0-9]{2})\/([0-9]{2}) ([0-9:]{8})\.[0-9]+\] (dbug|debug|trce|trace): /$$(date +%Y)-\2-\1 \3 - dev-gateway - DEBUG - /"
     tty: true
     stdin_open: true
     depends_on:

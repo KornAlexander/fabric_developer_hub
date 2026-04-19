@@ -13,6 +13,53 @@
     "Item_Name": "שם פריט",
     "Item_ID": "מזהה פריט",
     "Workspace_Name": "שם חלל עבודה",
-    "Workspace_ID": "מזהה חלל עבודה"
+    "Workspace_ID": "מזהה חלל עבודה",
+
+    "Plan_Section_Label": "תוכנית הביצוע",
+    "Plan_Title": "תוכנית הביצוע המוצעת",
+    "Plan_Workspace_Label": "חלל עבודה",
+    "Plan_Summary_Heading": "סיכום",
+    "Plan_Meta_Steps": "שלב {{count}}",
+    "Plan_Meta_Steps_other": "{{count}} שלבים",
+    "Plan_Meta_Conflicts": "{{count}} התנגשות",
+    "Plan_Meta_Conflicts_other": "{{count}} התנגשויות",
+    "Plan_Meta_Clarifications": "{{count}} הבהרה",
+    "Plan_Meta_Clarifications_other": "{{count}} הבהרות",
+    "Plan_Meta_NoAction": "{{count}} פריט ללא פעולה",
+    "Plan_Meta_NoAction_other": "{{count}} פריטים ללא פעולה",
+
+    "Plan_Conflicts_Title": "התנגשויות חוסמות את האישור",
+    "Plan_Clarifications_Title": "דרושות הבהרות לפני אישור",
+    "Plan_Clarifications_Blocks": "חוסם: {{ids}}",
+
+    "Plan_Assumptions_Title": "הנחות",
+    "Plan_Prereqs_Title": "דרישות מקדימות",
+    "Plan_Prereqs_Evidence": "ראיה",
+    "Plan_Prereqs_Status_satisfied": "מסופק",
+    "Plan_Prereqs_Status_missing": "חסר",
+    "Plan_Prereqs_Status_unknown": "לא ידוע",
+
+    "Plan_Steps_Title": "שלבים",
+    "Plan_Step_Action_create": "יצירה",
+    "Plan_Step_Action_update": "עדכון",
+    "Plan_Step_Action_delete": "מחיקה",
+    "Plan_Step_Action_configure": "הגדרה",
+    "Plan_Step_Action_validate": "אימות",
+    "Plan_Step_Action_clarify": "הבהרה",
+    "Plan_Step_Risk_low": "סיכון נמוך",
+    "Plan_Step_Risk_medium": "סיכון בינוני",
+    "Plan_Step_Risk_high": "סיכון גבוה",
+    "Plan_Step_Irreversible": "לא הפיך",
+    "Plan_Step_DependsOn": "תלוי ב",
+    "Plan_Step_Inputs": "קלטים",
+    "Plan_Step_Duration": "≈ {{seconds}} שניות",
+
+    "Plan_NoAction_Title": "כבר בוצע",
+    "Plan_NoSteps_Message": "לא הופקו שלבים. בדקו את ההתנגשויות וההבהרות לעיל.",
+
+    "Plan_Action_Approve": "אשר והפעל",
+    "Plan_Action_Approving": "מאשר…",
+    "Plan_Action_Reject": "דחה",
+    "Plan_Action_BlockedNote": "פתרו את ההתנגשויות וההבהרות לעיל כדי לאשר."
 }
   

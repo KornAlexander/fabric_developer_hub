@@ -29,7 +29,7 @@ cd "Developer Hub"
 
 ## Manifest templating
 
-`Backend/manifest/WorkloadManifest.xml` and `Item1.xml` are
+`Backend/manifest/WorkloadManifest.xml` and `AgentHubItem.xml` are
 templates — `${WORKLOAD_NAME}`, `${CLIENT_ID}`, and `${AUDIENCE}` are substituted
 from `Developer Hub/.env` at build time by `tools/manifest_package_generator.py`. Each
 developer gets a personalized manifest from their own `.env` without diverging the

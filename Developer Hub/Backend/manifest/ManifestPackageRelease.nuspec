@@ -12,10 +12,10 @@
   <files>
     <!-- Include the XML and BE files -->
     <file src="WorkloadManifest.xml" target="BE\WorkloadManifest.xml" />
-    <file src="Item1.xml" target="BE\Item1.xml" />
+    <file src="AgentHubItem.xml" target="BE\AgentHubItem.xml" />
     
     <!-- Include FE files explicitly to avoid wildcard issues -->
-    <file src="..\..\..\..\Frontend\Package\Item1.json" target="FE\Item1.json" />
+    <file src="..\..\..\..\Frontend\Package\AgentHubItem.json" target="FE\AgentHubItem.json" />
     <file src="..\..\..\..\Frontend\Package\Product.json" target="FE\Product.json" />
     
     <!-- Include assets directory with proper wildcard pattern -->

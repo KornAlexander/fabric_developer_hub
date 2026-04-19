@@ -19,10 +19,14 @@ import {
     Dismiss24Regular,
     Wrench24Regular,
     AddCircle24Regular,
+    Sparkle24Regular,
     ChatMultiple24Regular,
     MoreHorizontal24Regular,
     PanelLeftContract24Regular,
     PanelLeftExpand24Regular,
+    Search20Regular,
+    Filter20Regular,
+    Dismiss16Regular,
 } from "@fluentui/react-icons";
 import { WorkloadClientAPI } from "@ms-fabric/workload-client";
 // OrchestratorPage stays eager — it's the default landing route, so lazy
@@ -55,6 +59,7 @@ const PbiFixerPage = lazyWithPreload(
 );
 import { useGitHubAuth } from "./useGitHubAuth";
 import { ItemProvider } from "./ItemContext";
+import { SearchProvider, useSearch, searchPlaceholderFor, isFilterScope, type SearchScope } from "./SearchContext";
 import { callAuthAcquireAccessToken } from "../../controller/AgentHubController";
 import * as api from "../../controller/AgentHubApi";
 import {
@@ -93,6 +98,7 @@ interface AgentHubLayoutProps {
 function topbarBreadcrumbLabel(activePage: string): string {
     switch (activePage) {
         case "sessions": return "Sessions";
+        case "sessiondetail": return "Session";
         case "newsession": return "New Session";
         case "agents": return "Agents and Skills";
         case "pbifixer": return "Power BI Fixer";
@@ -104,12 +110,86 @@ function topbarBreadcrumbLabel(activePage: string): string {
 function TopbarBreadcrumbIcon({ activePage }: { activePage: string }) {
     const cls = "topbar-breadcrumb-icon";
     switch (activePage) {
-        case "sessions":   return <ChatMultiple24Regular className={cls} />;
-        case "newsession": return <AddCircle24Regular className={cls} />;
+        case "sessions":
+        case "sessiondetail": return <ChatMultiple24Regular className={cls} />;
+        case "newsession": return <Sparkle24Regular className={cls} />;
         case "agents":     return <Bot24Regular className={cls} />;
         case "pbifixer":   return <Wrench24Regular className={cls} />;
         default:           return <BrainCircuit24Regular className={cls} />;
     }
+}
+
+/**
+ * Controlled topbar search input. Sits inside `SearchProvider` so it can call
+ * `useSearch()`. Factored out of the main layout so the provider value can be
+ * consumed without a second component layer.
+ *
+ * Two visual modes:
+ *   - **search** (New Session): plain search with a magnifier icon. Opens
+ *     a cross-entity results dropdown.
+ *   - **filter** (Sessions / Agents): the input *filters the page in
+ *     place*. Renders with a filter icon, a lightly tinted background and
+ *     a "Filter" pill so users immediately see it behaves differently.
+ */
+function TopbarSearchInput() {
+    const { query, setQuery, scope } = useSearch();
+    const inputRef = React.useRef<HTMLInputElement | null>(null);
+    // Auto-focus the filter bar when the user lands on a page where the
+    // topbar acts as an in-page filter. Skipped on the New Session page so
+    // we don't steal focus from the composer textarea.
+    useEffect(() => {
+        if (scope === "sessions" || scope === "agents") {
+            // Defer one frame so the page's mount-time focus (if any) wins
+            // for explicit inputs, and we only claim focus if nothing else
+            // currently has it.
+            const id = window.requestAnimationFrame(() => {
+                const active = document.activeElement;
+                const bodyIsActive = !active || active === document.body;
+                if (bodyIsActive && inputRef.current) inputRef.current.focus();
+            });
+            return () => window.cancelAnimationFrame(id);
+        }
+        return undefined;
+    }, [scope]);
+    // Session detail is a focused single-item view (like GitHub/Linear
+    // ticket pages) — no search/filter makes sense here, so we render
+    // nothing and let the topbar collapse around it.
+    if (scope === "sessiondetail") return null;
+    const filterMode = isFilterScope(scope);
+    const placeholder = searchPlaceholderFor(scope);
+    return (
+        <div className={`topbar-search-wrap${filterMode ? " topbar-search-wrap--filter" : ""}`}>
+            {filterMode
+                ? <Filter20Regular className="topbar-search-icon" aria-hidden="true" />
+                : <Search20Regular className="topbar-search-icon" aria-hidden="true" />
+            }
+            {filterMode && (
+                <span className="topbar-search-badge" aria-hidden="true">Filter</span>
+            )}
+            <input
+                ref={inputRef}
+                id="agenthub-topbar-search"
+                name="topbarSearch"
+                type="text"
+                placeholder={placeholder}
+                aria-label={placeholder}
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                autoComplete="off"
+            />
+            {query && (
+                <button
+                    type="button"
+                    className="topbar-search-clear"
+                    onClick={() => setQuery("")}
+                    aria-label="Clear"
+                    title="Clear"
+                >
+                    <Dismiss16Regular />
+                </button>
+            )}
+        </div>
+    );
 }
 
 export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId }: AgentHubLayoutProps) {
@@ -126,10 +206,10 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
     const currentPath = history.location.pathname;
     let activePage = "newsession";
     if (currentPath.includes("/orchestrator")) activePage = "newsession";
+    else if (currentPath.includes("/session/")) activePage = "sessiondetail";
     else if (currentPath.includes("/sessions") || currentPath.includes("/home")) activePage = "sessions";
     else if (currentPath.includes("/agents")) activePage = "agents";
     else if (currentPath.includes("/pbifixer")) activePage = "pbifixer";
-    else if (currentPath.includes("/session/")) activePage = "sessions";
 
     function nav(page: string) {
         history.push(`${match.url}/${page}`);
@@ -243,7 +323,13 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
     // from the current page to the fully-populated target with no skeleton
     // in between. Slow loads still flip over after the cap and show the
     // skeleton + "still loading" hint.
-    const [navPending, setNavPending] = useState(false);
+    //
+    // The state flag itself is kept (the setter is used to gate the
+    // transition) even though the visual progress indicator has been
+    // removed per UX preference. The leading underscore tells the linter
+    // the binding is intentionally unread.
+    const [_navPending, setNavPending] = useState(false);
+    void _navPending;
 
     const startPreload = useCallback(
         (key: PreloadKey): Promise<unknown> => {
@@ -306,6 +392,7 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
             workspaceObjectId={workspaceObjectId}
             routeItemObjectId={routeItemObjectId || null}
         >
+        <SearchProvider scope={activePage as SearchScope}>
         <div className="agenthub-root">
             {/* Top bar — matches design: brand text + breadcrumb, search, utility icons */}
             <div className="agenthub-topbar">
@@ -321,11 +408,7 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
                     </div>
                 </div>
                 <div className="agenthub-topbar-search">
-                    <input
-                        type="text"
-                        placeholder="Search Developer Hub…"
-                        aria-label="Search"
-                    />
+                    <TopbarSearchInput />
                 </div>
                 <div className="agenthub-topbar-right">
                     <Alert24Regular className="topbar-icon" />
@@ -386,7 +469,10 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
 
                 {/* Main content */}
                 <main className="agenthub-main">
-                    {navPending && <div className="nav-progress" aria-hidden="true" />}
+                    {/* The prefetch delay (``navPending``) is still enforced
+                        so the target page has its data ready on mount; the
+                        top progress strip that used to visualise it has been
+                        removed per UX preference. */}
                     <Suspense fallback={<div className="page-suspense-fallback"><Spinner size="small" /></div>}>
                         <Switch>
                             <Route path={`${match.path}/home`}><DashboardPage workloadClient={workloadClient} /></Route>
@@ -401,6 +487,7 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
                 </main>
             </div>
         </div>
+        </SearchProvider>
         </ItemProvider>
     );
 }

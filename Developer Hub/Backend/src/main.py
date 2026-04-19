@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.core.service_initializer import get_service_initializer
 from app.core.service_registry import get_service_registry
@@ -42,6 +43,45 @@ from services.agenthub import session_store as agenthub_store
 from services.agenthub.orchestrator_engine import get_orchestrator_engine
 from services.configuration_service import get_configuration_service
 from services.mcp.mcp_client_manager import MCPClientManager
+
+
+class ColorFormatter(logging.Formatter):
+    """Console formatter that colorises ``%(levelname)s`` with ANSI codes.
+
+    Enabled by default on TTY-capable stdout (Docker Compose attaches one).
+    The ``NO_COLOR`` environment variable (https://no-color.org) disables
+    colour. File handlers keep the plain formatter so log files stay
+    grep-friendly.
+    """
+
+    _COLORS = {
+        "DEBUG": "\033[38;5;244m",   # grey
+        "INFO": "\033[38;5;39m",      # cyan/blue
+        "WARNING": "\033[38;5;214m",  # orange
+        "ERROR": "\033[1;31m",        # bold red
+        "CRITICAL": "\033[1;97;41m",  # white on red
+    }
+    _RESET = "\033[0m"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._enabled = (
+            os.environ.get("NO_COLOR") is None
+            and (sys.stdout.isatty() or os.environ.get("FORCE_COLOR"))
+        )
+
+    def format(self, record: logging.LogRecord) -> str:
+        if not self._enabled:
+            return super().format(record)
+        colour = self._COLORS.get(record.levelname)
+        if colour:
+            original = record.levelname
+            record.levelname = f"{colour}{original}{self._RESET}"
+            try:
+                return super().format(record)
+            finally:
+                record.levelname = original
+        return super().format(record)
 
 
 def setup_logging(config_service=None) -> logging.Logger:
@@ -91,6 +131,11 @@ def setup_logging(config_service=None) -> logging.Logger:
                 "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
                 "datefmt": "%Y-%m-%d %H:%M:%S"
             },
+            "color": {
+                "()": "main.ColorFormatter",
+                "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+                "datefmt": "%Y-%m-%d %H:%M:%S"
+            },
             "detailed": {
                 "format": "%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(funcName)s() - %(message)s",
                 "datefmt": "%Y-%m-%d %H:%M:%S"
@@ -99,7 +144,7 @@ def setup_logging(config_service=None) -> logging.Logger:
         "handlers": {
             "console": {
                 "class": "logging.StreamHandler",
-                "formatter": "default",
+                "formatter": "color",
                 "level": log_level,
                 "stream": "ext://sys.stdout"
             },
@@ -216,6 +261,12 @@ async def lifespan(app: FastAPI):
                 "\u2713 MCP client initialized: %d tools from %d servers",
                 tool_count, len(mcp_manager.config.get('servers', {})),
             )
+            # Register tool-runtime policies and warn about any MCP tool
+            # that was discovered but has no policy entry — the runtime
+            # denies unregistered tools by default.
+            from services.agenthub import tool_policies
+            tool_policies.register_all()
+            tool_policies.warn_about_unregistered(list(mcp_manager.tools.keys()))
         except Exception:
             logger.warning("\u26a0 MCP tool discovery failed (chat will work without tools)", exc_info=True)
             mcp_manager = None
@@ -285,6 +336,79 @@ async def lifespan(app: FastAPI):
     logger.info("=" * 60)
 
 # Create FastAPI app
+# ─── Security headers ─────────────────────────────────────────────────
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Adds baseline security response headers.
+
+    Fabric-embedded workloads are loaded inside the Fabric portal iframe, so
+    ``frame-ancestors`` is explicitly set to the Fabric hosts rather than
+    ``'none'``. HSTS is only set when the request arrives over HTTPS (or when
+    a trusted proxy has annotated ``X-Forwarded-Proto: https``) to avoid
+    poisoning local-dev HTTP origins.
+    """
+
+    _FABRIC_FRAME_ANCESTORS = (
+        "https://app.fabric.microsoft.com "
+        "https://msit.fabric.microsoft.com "
+        "https://dxt.fabric.microsoft.com "
+        "https://df.fabric.microsoft.com"
+    )
+
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        headers = response.headers
+
+        # Content Security Policy: the backend serves JSON/SSE only — no
+        # inline scripts should ever execute from backend responses. Frame
+        # ancestors are restricted to the Fabric portal origins.
+        headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'none'; "
+            "frame-ancestors " + self._FABRIC_FRAME_ANCESTORS + "; "
+            "base-uri 'none'; form-action 'none'",
+        )
+        headers.setdefault("X-Content-Type-Options", "nosniff")
+        headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        headers.setdefault(
+            "Permissions-Policy",
+            "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+        )
+        headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+        headers.setdefault("Cross-Origin-Resource-Policy", "cross-origin")
+
+        # HSTS only when the edge is HTTPS.
+        forwarded_proto = request.headers.get("x-forwarded-proto", "").lower()
+        is_https = request.url.scheme == "https" or forwarded_proto == "https"
+        if is_https:
+            headers.setdefault(
+                "Strict-Transport-Security",
+                "max-age=31536000; includeSubDomains",
+            )
+
+        return response
+
+
+class PrivateNetworkAccessMiddleware(BaseHTTPMiddleware):
+    """Acknowledge Chrome's Private Network Access preflight.
+
+    When a page on a public origin (e.g. https://app.powerbi.com) fetches
+    a resource from a private IP / loopback address, Chrome sends a
+    preflight carrying ``Access-Control-Request-Private-Network: true``.
+    Unless the server answers with ``Access-Control-Allow-Private-Network:
+    true`` the request is blocked (warnings today, hard-blocks on recent
+    Chrome).
+
+    The header is only added when the request actually asks for PNA, so
+    production traffic (which never sends that header) is unaffected.
+    """
+
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        if request.headers.get("access-control-request-private-network", "").lower() == "true":
+            response.headers["Access-Control-Allow-Private-Network"] = "true"
+        return response
+
+
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
     config_service = get_configuration_service()
@@ -302,6 +426,9 @@ def create_app() -> FastAPI:
 
     # Configure middleware
 
+    # Security headers — applied to every response, always on.
+    app.add_middleware(SecurityHeadersMiddleware)
+
     # Security middleware (only in production)
     if config_service.is_production():
         app.add_middleware(
@@ -312,15 +439,42 @@ def create_app() -> FastAPI:
     # Compression
     app.add_middleware(GZipMiddleware, minimum_size=1000)
 
-    # CORS
-    app.add_middleware(
-        CORSMiddleware,
+    # CORS — explicit methods/headers (never wildcards with credentials).
+    # In production we use an explicit origin allowlist from config. In
+    # development we additionally enable an origin regex so the Fabric /
+    # PowerBI portal (and their many subdomains) plus any localhost port
+    # are accepted without fiddling with appsettings on every dev machine.
+    cors_kwargs = dict(
         allow_origins=config_service.get_cors_origins(),
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-        expose_headers=["X-Request-ID", "X-Process-Time"]
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=[
+            "Authorization",
+            "Content-Type",
+            "Accept",
+            "X-Fabric-Token",
+            "X-Request-ID",
+        ],
+        expose_headers=["X-Request-ID", "X-Process-Time"],
+        max_age=600,
     )
+    if config_service.is_debug():
+        # Dev only: accept any localhost port, any *.fabric.microsoft.com,
+        # *.powerbi.com and *.analysis.windows.net subdomain. Never enabled
+        # in production (``is_debug()`` is false there).
+        cors_kwargs["allow_origin_regex"] = (
+            r"^(https?://localhost(:\d+)?"
+            r"|https?://127\.0\.0\.1(:\d+)?"
+            r"|https://([a-z0-9-]+\.)*fabric\.microsoft\.com"
+            r"|https://([a-z0-9-]+\.)*powerbi\.com"
+            r"|https://([a-z0-9-]+\.)*analysis\.windows\.net)$"
+        )
+    app.add_middleware(CORSMiddleware, **cors_kwargs)
+
+    # Private Network Access — must be registered AFTER CORSMiddleware so
+    # it wraps the outside of the CORS middleware's preflight response and
+    # adds ``Access-Control-Allow-Private-Network: true`` when Chrome asks.
+    app.add_middleware(PrivateNetworkAccessMiddleware)
 
     # Register exception handlers
     register_exception_handlers(app)

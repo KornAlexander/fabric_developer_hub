@@ -35,6 +35,7 @@ import {
 } from "@fluentui/react-icons";
 import { WorkloadClientAPI } from "@ms-fabric/workload-client";
 import * as api from "../../controller/AgentHubApi";
+import { callAuthAcquireAccessToken } from "../../controller/AgentHubController";
 
 interface SessionDetailPageProps {
     workloadClient: WorkloadClientAPI;
@@ -74,18 +75,38 @@ export function SessionDetailPage({ workloadClient }: SessionDetailPageProps) {
     const [error, setError] = useState<string | null>(null);
 
     const githubToken = sessionStorage.getItem("github_token") || "";
+    // Fabric OBO token is required by the backend to authenticate the
+    // caller (`require_user` in agenthub_controller). Without it the
+    // backend identifies the user as the anonymous dev user, so
+    // `_ensure_owner` mismatches the real session owner (`oid:...`) and
+    // returns 404 "Session not found" even though the list page shows it.
+    const [fabricToken, setFabricToken] = useState<string | undefined>(undefined);
     const logEndRef = useRef<HTMLDivElement>(null);
     const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-    // Load job
+    // Acquire the Fabric access token once. Best-effort — if the user is
+    // not signed into Fabric we fall through to GitHub-only auth.
+    useEffect(() => {
+        let cancelled = false;
+        (async () => {
+            try {
+                const t = await callAuthAcquireAccessToken(workloadClient);
+                if (!cancelled) setFabricToken(t?.token);
+            } catch { /* best-effort — leave undefined */ }
+        })();
+        return () => { cancelled = true; };
+    }, [workloadClient]);
+
+    // Load job — re-runs once the Fabric token becomes available so we
+    // retry with the correct identity.
     useEffect(() => {
         loadJob();
-    }, [sessionId]);
+    }, [sessionId, fabricToken]);
 
     async function loadJob() {
         setLoading(true);
         try {
-            const data = await api.getSession(sessionId, { githubToken });
+            const data = await api.getSession(sessionId, { githubToken, fabricToken });
             setJob(data);
 
             // Populate from stored data
@@ -231,7 +252,7 @@ export function SessionDetailPage({ workloadClient }: SessionDetailPageProps) {
     async function handleSendMessage() {
         if (!chatInput.trim()) return;
         try {
-            await api.sendMessage(sessionId, chatInput, null, { githubToken });
+            await api.sendMessage(sessionId, chatInput, null, { githubToken, fabricToken });
             setChatInput("");
         } catch (e) {
             console.error("Failed to send message:", e);
@@ -240,7 +261,7 @@ export function SessionDetailPage({ workloadClient }: SessionDetailPageProps) {
 
     async function handleTerminate() {
         try {
-            await api.cancelSession(sessionId, { githubToken });
+            await api.cancelSession(sessionId, { githubToken, fabricToken });
             if (timerRef.current) clearInterval(timerRef.current);
             loadJob();
         } catch (e) {
@@ -291,6 +312,21 @@ export function SessionDetailPage({ workloadClient }: SessionDetailPageProps) {
 
     const primaryAgent = Object.values(agentStatuses)[0] as any || job.agents?.[0];
     const isRunning = job.status === "running";
+    const isCancelled = job.status === "cancelled";
+    // Planned / approved / waiting sessions aren't actively running but
+    // the user may still want to cancel them (e.g. a planned session they
+    // no longer want to approve). Terminal states are completed/failed/
+    // cancelled — no cancel affordance there.
+    const isCancellable = !["completed", "failed", "cancelled"].includes(job.status);
+    // Fluent Badge's "danger" red is misleading for user-initiated cancels.
+    // Map cancelled to a neutral gray/brand-subtle color.
+    const badgeColor: "success" | "informative" | "danger" | "subtle" =
+        job.status === "running" ? "success"
+            : job.status === "completed" ? "informative"
+            : job.status === "cancelled" ? "subtle"
+            : "danger";
+    const cancelledAt = job.cancelled_at || (isCancelled ? job.completed_at : undefined);
+    const cancelledWho = job.cancelled_by_upn || job.cancelled_by_user_id;
 
     return (
         <div className="job-detail-page">
@@ -307,36 +343,50 @@ export function SessionDetailPage({ workloadClient }: SessionDetailPageProps) {
                         <Text weight="bold" size={600}>
                             {primaryAgent?.name || primaryAgent?.role || "Agent"}
                         </Text>
-                        <Badge
-                            appearance="filled"
-                            color={job.status === "running" ? "success" : job.status === "completed" ? "informative" : "danger"}
-                        >
+                        <Badge appearance="filled" color={badgeColor}>
                             {job.status.toUpperCase()}
                         </Badge>
+                        {job.created_at && (
+                            <Caption1 className="job-header-created" title={new Date(job.created_at).toLocaleString()}>
+                                Created {new Date(job.created_at).toLocaleString()}
+                            </Caption1>
+                        )}
                     </div>
                     <Body1 className="job-goal-text">{job.task_description}</Body1>
                 </div>
                 <div className="job-header-actions">
                     {isRunning && (
-                        <>
-                            <div className="execution-time">
-                                <Caption1>EXECUTION TIME</Caption1>
-                                <Text weight="bold" size={500} className="time-display">
-                                    {formatElapsed(elapsedSeconds)}
-                                </Text>
-                            </div>
-                            <Button
-                                appearance="primary"
-                                icon={<Stop24Regular />}
-                                onClick={handleTerminate}
-                                style={{ backgroundColor: "#d13438" }}
-                            >
-                                Terminate Task
-                            </Button>
-                        </>
+                        <div className="execution-time">
+                            <Caption1>EXECUTION TIME</Caption1>
+                            <Text weight="bold" size={500} className="time-display">
+                                {formatElapsed(elapsedSeconds)}
+                            </Text>
+                        </div>
+                    )}
+                    {isCancellable && (
+                        <Button
+                            appearance={isRunning ? "primary" : "secondary"}
+                            icon={<Stop24Regular />}
+                            onClick={handleTerminate}
+                            style={isRunning ? { backgroundColor: "#d13438" } : undefined}
+                        >
+                            {isRunning ? "Cancel Task" : "Cancel Session"}
+                        </Button>
                     )}
                 </div>
             </div>
+
+            {/* Cancellation audit banner — shows who cancelled and when. */}
+            {isCancelled && (
+                <MessageBar intent="warning" className="job-cancel-banner">
+                    <MessageBarBody>
+                        <b>Session cancelled</b>
+                        {cancelledWho ? <> by <b>{cancelledWho}</b></> : null}
+                        {cancelledAt ? <> on {new Date(cancelledAt).toLocaleString()}</> : null}
+                        {job.created_at ? <> · originally created {new Date(job.created_at).toLocaleString()}</> : null}
+                    </MessageBarBody>
+                </MessageBar>
+            )}
 
             {/* Collaborating agents */}
             {Object.keys(agentStatuses).length > 1 && (

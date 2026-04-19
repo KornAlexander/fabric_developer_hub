@@ -468,8 +468,6 @@ export async function callItemCreate<T>(
     description: string,
     workloadPayload: T,
     workloadClient: WorkloadClientAPI): Promise<GenericItem> {
-    console.log(`passing payloadString: ${workloadPayload}`);
-
     const params: CreateItemParams = {
         workspaceObjectId,
         payload: {
@@ -483,7 +481,6 @@ export async function callItemCreate<T>(
 
     try {
         const result: CreateItemResult = await workloadClient.itemCrud.createItem(params);
-        console.log(`Created item id: ${result.objectId} with name: ${displayName} and payload: ${workloadPayload}`);
         return {
             id: result.objectId,
             workspaceId: workspaceObjectId,
@@ -514,8 +511,6 @@ export async function callItemCreate<T>(
 export async function callItemGet(objectId: string, workloadClient: WorkloadClientAPI, isRetry?: boolean): Promise<GetItemResult> {
     try {
         const item: GetItemResult = await workloadClient.itemCrud.getItem({ objectId });
-        console.log(`Successfully fetched item ${objectId}: ${item}`)
-
         return item;
     } catch (exception) {
         console.error('Failed locating item with ObjectID %s', objectId, exception);
@@ -541,9 +536,6 @@ export async function callItemUpdate<T>(
     let payloadString: string;
     if (payloadData) {
         payloadString = JSON.stringify(payloadData);
-        console.log(`Updating item ${objectId} with payload: ${payloadString}`)
-    } else {
-        console.log(`Sending an update for item ${objectId} without updating the payload`);
     }
  
     try {
@@ -571,7 +563,6 @@ export async function callItemDelete(
     isRetry?: boolean): Promise<boolean> {
     try {
         const result = await workloadClient.itemCrud.deleteItem({ objectId });
-        console.log(`Delete result for item ${objectId}: ${result.success}`);
         return result.success;
     } catch (exception) {
         console.error('Failed deleting Item %s', objectId, exception);
@@ -606,11 +597,8 @@ export async function callRunItemJob(
         payload: { jobPayloadJson: jobPayload }
     };
 
-    console.log(`Call Run Item Job. request: ${params}`);
-
     try {
         const result: ItemJobInstance = await workloadClient.itemSchedule.runItemJob(params);
-        console.log(`Executed job id: ${result.itemJobInstanceId}`);
         if (showNotification) {
             callNotificationOpen(
                 `${result.itemJobType} execution has begun.`,
@@ -622,8 +610,7 @@ export async function callRunItemJob(
 
         return result;
     } catch (exception) {
-        console.error(`Failed running item job ${jobType} for item ${objectId}`);
-        console.log(exception);
+        console.error(`Failed running item job ${jobType} for item ${objectId}`, exception);
         return await handleException(exception, workloadClient, isRetry, false /* isDirectWorkloadCall */, callRunItemJob, objectId, jobType, jobPayload, showNotification);
     }
 }
@@ -650,11 +637,8 @@ export async function callCancelItemJob(
         jobInstanceId: jobInstanceObjectId,
     };
 
-    console.log(`Call cancel Item Job. request: ${params}`);
-
     try {
         const result: CancelItemJobResult = await workloadClient.itemSchedule.cancelItemJob(params);
-        console.log(`CancelItemJobResult: ${result}`);
         if (showNotification) {
             const success = result.success;
             const notificationMessage = success
@@ -672,8 +656,7 @@ export async function callCancelItemJob(
         return result;
     }
     catch (exception) {
-        console.error(`Failed to cancel job instance ID: ${jobInstanceObjectId} for item: ${objectId}`);
-        console.log(exception);
+        console.error(`Failed to cancel job instance ID: ${jobInstanceObjectId} for item: ${objectId}`, exception);
         return await handleException(exception, workloadClient, isRetry, false /* isDirectWorkloadCall */, callCancelItemJob, objectId, jobInstanceObjectId, showNotification);
     }
 }
@@ -693,93 +676,20 @@ export async function callOpenRecentRuns(
         item: item
     };
 
-    console.log(`Call OpenRecentRuns. request: ${item}`);
-
     try {
         const result: OpenUIResult = await workloadClient.itemRecentRuns.open(config);
-        console.log(`OpenRecentRuns: ${result}`);
         return result;
     }
     catch (exception) {
-        console.error(`Failed to open recent run for item: ${item}`);
-        console.log(exception);
+        console.error(`Failed to open recent run for item:`, item, exception);
     }
 
     return null;
 }
 
 // --- Workload data plane API
-
-/**
- * Calls workload API GetItem1SupportedOperators
- * 
- * @param {WorkloadClientAPI} workloadClient - An instance of the WorkloadClientAPI.
- */
-export async function callGetItem1SupportedOperators(workloadBEUrl: string, workloadClient: WorkloadClientAPI, isRetry?: boolean): Promise<string[]> {
-    const accessToken: AccessToken = await callAuthAcquireAccessToken(workloadClient);
-    const response: Response = await fetch(`${workloadBEUrl}/item1SupportedOperators`, { method: `GET`, headers: { 'Authorization': 'Bearer ' + accessToken.token } });
-    const responseBody: string = await response.text();
-    if (!response.ok) {
-        // Handle non-successful responses here
-        console.error(`Error get item1 supported operators API: ${responseBody}`);
-        return await handleException(
-            responseBody,
-            workloadClient,
-            isRetry,
-            /* isDirectWorkloadCall */ true,
-            callGetItem1SupportedOperators,
-            workloadBEUrl);
-    }
-    const operators: string[] = JSON.parse(responseBody);
-    console.log(`*** Successfully fetched operators supported for Item1: ${operators}`);
-    return operators;
-}
-
-/**
- * Calls the Item1DoubleResult endpoint of the workload API to double the result.
- * 
- * @param {WorkloadClientAPI} workloadClient - An instance of the WorkloadClientAPI.
- * @param {string} workspaceObjectId - The workspace object ID.
- * @param {string} itemObjectId - The item object ID.
- * @param {boolean} isRetry - Indicates that the call is a retry
- * @returns {Promise<{ Operand1: number, Operand2: number }>} A Promise that resolves to an object containing the updated operands.
- */
-export async function callItem1DoubleResult(workloadBEUrl: string, workloadClient: WorkloadClientAPI, workspaceObjectId: string, itemObjectId: string, isRetry?: boolean): Promise<{ Operand1: number, Operand2: number }> {
-    try{
-        const accessToken: AccessToken = await callAuthAcquireAccessToken(workloadClient);
-        const response: Response = await fetch(`${workloadBEUrl}/${workspaceObjectId}/${itemObjectId}/item1DoubleResult`, {
-            method: `POST`,
-            headers: {
-                'Authorization': 'Bearer ' + accessToken.token,
-                'Content-Type': 'application/json',
-            },
-        });
-
-        if (!response.ok) {
-            // Handle non-successful responses here
-            const errorMessage: string = await response.text();
-            console.error(`Error calling Double API: ${errorMessage}`);
-            return await handleException(
-                errorMessage,
-                workloadClient,
-                isRetry,
-                /* isDirectWorkloadCall */ true,
-                callItem1DoubleResult,
-                workloadBEUrl,
-                workloadClient,
-                workspaceObjectId,
-                itemObjectId);
-        }
-
-        const result: { Operand1: number, Operand2: number } = await response.json();
-
-        console.log('*** Successfully called Double API');
-        return result;
-    } catch (error) {
-        console.error('Error in callItem1DoubleResult:', error);
-        return null;
-    }
-}
+// (Sample calculator endpoints from the original Fabric workload sample
+// were removed during the sample-workload cleanup pass.)
 
 // --- Theme API
 
@@ -813,10 +723,8 @@ export async function callThemeOnChange(workloadClient: WorkloadClientAPI) {
     // Define a callback function to be invoked when the theme changes
     const callback: (theme: ThemeConfiguration) => void =
         (_: ThemeConfiguration): void => {
-            {
-                // Since this callback is invoked multiple times, log a message to the console
-                console.log("Theme On Change invoked");
-            };
+            // No-op: the Fabric host fires this callback frequently;
+            // we don't need to log it.
         };
     await workloadClient.theme.onChange(callback);
 }
@@ -853,9 +761,6 @@ export async function callSettingsOnChange(workloadClient: WorkloadClientAPI, ch
     const callback: (settings: WorkloadSettings) => void =
         (ws: WorkloadSettings): void => {
             {
-                // Since this callback is invoked multiple times, log a message to the console
-                console.log("Settings On Change invoked");
-                console.log("CurrentLanguage", ws.currentLanguageLocale);
                 changeLang(ws.currentLanguageLocale);
             };
         };
@@ -880,16 +785,12 @@ export async function callOpenSettings(
         selectedSettingId
     };
 
-    console.log(`Call open item settings. request: ${config}`);
-
     try {
         const result: OpenUIResult = await workloadClient.itemSettings.open(config)
-        console.log(`OpenItemSettings: ${result}`);
         return result;
     }
     catch (exception) {
-        console.error(`Failed to open settings for item: ${item}`);
-        console.log(exception);
+        console.error(`Failed to open settings for item:`, item, exception);
     }
 
     return null;
@@ -919,7 +820,6 @@ export async function getLastResult(workloadBEUrl: string, workloadClient: Workl
             getLastResult,
             workloadBEUrl);
     }
-    console.log(`*** Successfully got getLastResult: ${responseBody}`);
     return responseBody;
 }
 
@@ -937,7 +837,7 @@ export async function isOneLakeSupported(workloadBEUrl: string, workloadClient: 
     const responseBody: string = await response.text();
     if (!response.ok) {
         // Handle non-successful responses here
-        console.error(`Error get item1 isOneLakeSupported API: ${responseBody}`);
+        console.error(`Error get isOneLakeSupported API: ${responseBody}`);
         return await handleException(
             responseBody,
             workloadClient,
@@ -946,7 +846,6 @@ export async function isOneLakeSupported(workloadBEUrl: string, workloadClient: 
             isOneLakeSupported,
             workloadBEUrl);
     }
-    console.log(`*** Successfully got isOneLakeSupported: ${responseBody}`);
     return responseBody == 'true';
 }
 
