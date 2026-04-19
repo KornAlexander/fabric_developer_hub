@@ -83,8 +83,14 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 def register_exception_handlers(app: FastAPI) -> None:
     """Wire exception handlers in specificity order (most specific first)."""
-    app.add_exception_handler(AuthenticationUIRequiredException, authentication_ui_required_exception_handler)
-    app.add_exception_handler(TooManyRequestsException, too_many_requests_exception_handler)
-    app.add_exception_handler(WorkloadExceptionBase, workload_exception_handler)
-    app.add_exception_handler(ValueError, value_error_handler)
+    # NOTE: Starlette's ``add_exception_handler`` types the handler as
+    # ``Callable[[Request, Exception], ...]``, but at runtime FastAPI
+    # dispatches by the registered class so our narrower handler
+    # signatures (e.g. ``TooManyRequestsException``) are both safe and
+    # more informative. The ``type: ignore[arg-type]`` suppresses the
+    # false-positive type mismatch.
+    app.add_exception_handler(AuthenticationUIRequiredException, authentication_ui_required_exception_handler)  # type: ignore[arg-type]
+    app.add_exception_handler(TooManyRequestsException, too_many_requests_exception_handler)  # type: ignore[arg-type]
+    app.add_exception_handler(WorkloadExceptionBase, workload_exception_handler)  # type: ignore[arg-type]
+    app.add_exception_handler(ValueError, value_error_handler)  # type: ignore[arg-type]
     app.add_exception_handler(Exception, global_exception_handler)

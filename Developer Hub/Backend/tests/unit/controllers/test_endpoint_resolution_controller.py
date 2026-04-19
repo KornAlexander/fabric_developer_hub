@@ -14,11 +14,11 @@ from domain.exceptions.exceptions import AuthenticationException
 from fabric_api.impl.endpoint_resolution_controller import (
     EndpointResolutionController,
 )
-from fabric_api.models.endpoint_resolution_request import (
-    EndpointResolutionRequest,
-)
 from fabric_api.models.endpoint_resolution_context_property import (
     EndpointResolutionContextProperty,
+)
+from fabric_api.models.endpoint_resolution_request import (
+    EndpointResolutionRequest,
 )
 
 

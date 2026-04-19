@@ -9,10 +9,13 @@ from uuid import uuid4
 
 import pytest
 
+from app.core.service_registry import ServiceRegistry
 from domain.models.common_item_metadata import CommonItemMetadata
 from domain.models.job_metadata import JobMetadata
-from services.fabric.item_metadata_store import ItemMetadataStore, get_item_metadata_store
-from app.core.service_registry import ServiceRegistry
+from services.fabric.item_metadata_store import (
+    ItemMetadataStore,
+    get_item_metadata_store,
+)
 
 
 @pytest.fixture

@@ -3,12 +3,8 @@ import { useHistory, useRouteMatch } from "react-router-dom";
 import {
     Badge,
     Button,
-    Card,
     Text,
     Spinner,
-    Subtitle1,
-    Body1,
-    Caption1,
     Divider,
     Menu,
     MenuTrigger,
@@ -693,7 +689,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
 
     // Close on outside click / Escape.
     useEffect(() => {
-        if (!recentOpen) return;
+        if (!recentOpen) return undefined;
         function onDown(e: MouseEvent) {
             const t = e.target as Node;
             if (recentBtnRef.current?.contains(t)) return;
@@ -724,7 +720,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
     // Close attachment preview overlay on Escape. Backdrop click is
     // handled inline on the backdrop element itself.
     useEffect(() => {
-        if (!previewAttachment) return;
+        if (!previewAttachment) return undefined;
         function onKey(e: KeyboardEvent) {
             if (e.key === "Escape") setPreviewAttachment(null);
         }
@@ -804,7 +800,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
     // clipped by the composer card's `overflow: hidden`; this listener just
     // keeps the popover visually stuck to the button.
     useEffect(() => {
-        if (!recentOpen) return;
+        if (!recentOpen) return undefined;
         const onReflow = () => {
             const next = computeRecentPopoverPos();
             if (next) setRecentPos(next);
@@ -826,10 +822,10 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
 
     // Lazy-load more rows when the sentinel enters the popover viewport.
     useEffect(() => {
-        if (!recentOpen) return;
+        if (!recentOpen) return undefined;
         const root = recentScrollRef.current;
         const sentinel = recentSentinelRef.current;
-        if (!root || !sentinel) return;
+        if (!root || !sentinel) return undefined;
         const io = new IntersectionObserver(
             (entries) => {
                 for (const ent of entries) {
@@ -946,7 +942,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
     // second frame is cheap insurance against layout jank from late-loading
     // agent avatars / badges. Respects the user's reduced-motion preference.
     useEffect(() => {
-        if (!plan || !planSectionRef.current) return;
+        if (!plan || !planSectionRef.current) return undefined;
         const prefersReduced =
             typeof window !== "undefined" &&
             window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
@@ -1130,8 +1126,8 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
     const { query: globalSearch, setQuery: setGlobalSearchQuery } = useSearch();
     const [agentsForSearch, setAgentsForSearch] = useState<any[] | null>(null);
     useEffect(() => {
-        if (globalSearch.trim().length < 2) return;
-        if (agentsForSearch !== null) return;
+        if (globalSearch.trim().length < 2) return undefined;
+        if (agentsForSearch !== null) return undefined;
         let cancelled = false;
         (async () => {
             try {
@@ -1183,7 +1179,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
     // put and results float beneath it instead of pushing page content down.
     const [searchPos, setSearchPos] = useState<{ top: number; left: number; width: number } | null>(null);
     useEffect(() => {
-        if (!quickResults) { setSearchPos(null); return; }
+        if (!quickResults) { setSearchPos(null); return undefined; }
         function update() {
             const input = document.getElementById("agenthub-topbar-search");
             if (!input) return;
@@ -1202,7 +1198,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
     // Clear the search query when the dropdown item is picked or when the
     // user clicks outside / presses Escape — matches standard search UX.
     useEffect(() => {
-        if (!quickResults) return;
+        if (!quickResults) return undefined;
         function onKey(e: KeyboardEvent) {
             if (e.key === "Escape") setGlobalSearchQuery("");
         }

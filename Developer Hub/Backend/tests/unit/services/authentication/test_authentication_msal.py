@@ -2,6 +2,7 @@
 Parameterized MSAL error handling tests for AuthenticationService.
 """
 
+import asyncio
 from unittest.mock import Mock, patch
 
 import pytest
@@ -13,7 +14,6 @@ from domain.exceptions.exceptions import (
 )
 from domain.models.authentication_models import AuthorizationContext
 from services.auth.authentication import AuthenticationService
-import asyncio
 
 
 @pytest.mark.unit
@@ -145,7 +145,7 @@ class TestMSALErrorHandlingParameterized:
                 mock_exception = Mock(spec=AuthenticationUIRequiredException)
                 mock_ui_ex.return_value = mock_exception
 
-                with pytest.raises(Exception):  # Will raise the mock exception
+                with pytest.raises(Exception):  # noqa: B017  # Mock-injected exception; concrete type is irrelevant here.
                     await service.get_access_token_on_behalf_of(auth_context, ["test-scope"])
 
                 # Verify the exception was created

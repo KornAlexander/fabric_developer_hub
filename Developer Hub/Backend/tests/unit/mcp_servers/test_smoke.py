@@ -6,11 +6,12 @@ syntax errors, missing imports) — exactly the failure mode that shipped
 ``semantic_link`` as DOA before the Phase-5 refactor.
 """
 from __future__ import annotations
-from mcp_servers import fabric
-from mcp_servers import semantic_link
+
 import subprocess
 import sys
 from pathlib import Path
+
+from mcp_servers import fabric, semantic_link
 
 
 def test_fabric_module_imports() -> None:
@@ -27,10 +28,11 @@ def test_fabric_tool_count() -> None:
     """Lock the public tool surface so accidental removals are caught."""
 
     tool_names = sorted(n for n in dir(fabric) if n.startswith("fabric_"))
-    assert len(tool_names) == 9, f"expected 9 fabric_* tools, got {tool_names}"
+    assert len(tool_names) == 10, f"expected 10 fabric_* tools, got {tool_names}"
     assert "fabric_list_workspaces" in tool_names
     assert "fabric_list_files" in tool_names
     assert "fabric_read_file" in tool_names
+    assert "fabric_create_directory" in tool_names
 
 
 def test_semantic_link_tool_count() -> None:

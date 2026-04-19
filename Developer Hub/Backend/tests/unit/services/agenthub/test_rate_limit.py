@@ -7,8 +7,8 @@ import pytest
 
 from services.agenthub.rate_limit import (
     DEFAULT_LIMITS,
-    RateLimitExceeded,
     RateLimiter,
+    RateLimitExceeded,
 )
 
 

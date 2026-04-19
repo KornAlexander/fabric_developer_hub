@@ -16,7 +16,8 @@ Adds coverage for ~16 additional tools at ~3 LOC per tool.
 from __future__ import annotations
 
 import json
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import pytest
 
@@ -26,7 +27,6 @@ from tests.unit.mcp_servers.conftest import (
     install_fake_client,
     make_response,
 )
-
 
 # (tool, args, response_body, expected_value, url_must_contain)
 SIMPLE_LIST_TOOLS: list[tuple[Callable[..., Any], tuple[Any, ...], dict, list, str]] = [

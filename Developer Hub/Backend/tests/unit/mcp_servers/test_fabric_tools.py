@@ -18,7 +18,6 @@ from tests.unit.mcp_servers.conftest import (
     make_response,
 )
 
-
 # ── Token guards ────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
@@ -324,7 +323,7 @@ async def test_fabric_write_file_three_step_succeeds(
     )
     parsed = json.loads(result)
     assert parsed["status"] == "ok"
-    assert parsed["bytes_written"] == len("hello world".encode())
+    assert parsed["bytes_written"] == len(b"hello world")
 
     # Three calls: PUT then 2x PATCH
     methods = [c[0] for c in fake.calls]

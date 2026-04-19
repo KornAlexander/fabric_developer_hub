@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -80,17 +80,21 @@ class FakeAsyncClient:
 
 
 def install_fake_client(monkeypatch: pytest.MonkeyPatch, module: Any, fake: FakeAsyncClient) -> None:
-    """Patch ``module.httpx.AsyncClient`` so tools receive ``fake`` inside their
-    ``async with httpx.AsyncClient(...) as client:`` blocks.
+    """Patch ``module.shared_client`` so tools receive ``fake`` inside their
+    ``async with shared_client(...) as client:`` blocks.
+
+    The MCP-server modules (``fabric``, ``semantic_link``) call the shared
+    ``shared_client(timeout)`` helper from ``mcp_servers._common`` to obtain
+    a pooled ``httpx.AsyncClient``. Tests swap that symbol with an async
+    context manager that yields this fake so request behaviour can be
+    asserted without real HTTP traffic.
     """
 
     @asynccontextmanager
     async def _factory(*args: Any, **kwargs: Any):
         yield fake
 
-    fake_httpx = MagicMock()
-    fake_httpx.AsyncClient = _factory
-    monkeypatch.setattr(module, "httpx", fake_httpx)
+    monkeypatch.setattr(module, "shared_client", _factory)
 
 
 @pytest.fixture

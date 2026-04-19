@@ -32,7 +32,7 @@ import json
 import logging
 import os
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
@@ -459,7 +459,7 @@ async def execute(
                 output=wrap_as_untrusted(
                     tool_name, f"POLICY_DENIED: {exc}",
                 ),
-                policy_decision=f"denied:mcp_policy",
+                policy_decision="denied:mcp_policy",
                 tool_name=tool_name,
                 arg_hash=arg_hash,
                 latency_ms=latency_ms,

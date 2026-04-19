@@ -16,7 +16,6 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic.alias_generators import to_camel
 
-
 _CAMEL_CONFIG = ConfigDict(
     alias_generator=to_camel,
     populate_by_name=True,

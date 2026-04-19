@@ -6,7 +6,6 @@ import pytest
 
 from services.agenthub import _db, session_store, workspaces_cache
 
-
 pytestmark = [pytest.mark.unit, pytest.mark.services]
 
 

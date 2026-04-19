@@ -35,11 +35,10 @@ _SRC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
 
-import httpx
 from jose import jwt
 from mcp.server.fastmcp import FastMCP
 
-from mcp_servers._common import format_http_error
+from mcp_servers._common import format_http_error, shared_client
 
 # API endpoints
 FABRIC_API_BASE = "https://api.fabric.microsoft.com/v1"
@@ -131,7 +130,7 @@ async def fabric_list_workspaces() -> str:
     Returns a JSON list of workspaces with their IDs, display names, and types.
     Use this to discover available workspaces before operating on items.
     """
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with shared_client(30.0) as client:
         resp = await client.get(
             f"{FABRIC_API_BASE}/workspaces",
             headers=_fabric_headers(),
@@ -172,7 +171,7 @@ async def fabric_create_workspace(
         body["description"] = description
     if capacity_id:
         body["capacityId"] = capacity_id
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with shared_client(30.0) as client:
         resp = await client.post(
             f"{FABRIC_API_BASE}/workspaces",
             json=body,
@@ -200,7 +199,7 @@ async def fabric_list_items(workspace_id: str, item_type: str | None = None) -> 
     url = f"{FABRIC_API_BASE}/workspaces/{workspace_id}/items"
     if item_type:
         url += f"?type={item_type}"
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with shared_client(30.0) as client:
         resp = await client.get(url, headers=_fabric_headers())
     if resp.status_code != 200:
         return format_http_error(resp, 'listing items')
@@ -237,7 +236,7 @@ async def fabric_create_item(
     body: dict = {"displayName": display_name, "type": item_type}
     if description:
         body["description"] = description
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with shared_client(30.0) as client:
         resp = await client.post(
             f"{FABRIC_API_BASE}/workspaces/{workspace_id}/items",
             json=body,
@@ -263,7 +262,7 @@ async def fabric_delete_item(
         workspace_id: The workspace UUID (e.g. '8bdca8af-1db1-4fd8-9564-0c98b4dbdffc').
         item_id: The item UUID to delete.
     """
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with shared_client(30.0) as client:
         resp = await client.delete(
             f"{FABRIC_API_BASE}/workspaces/{workspace_id}/items/{item_id}",
             headers=_fabric_headers(),
@@ -305,7 +304,7 @@ async def fabric_list_files(
         url += f"/{_validate_path(path)}"
     url += f"?resource=filesystem&recursive={str(recursive).lower()}"
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with shared_client(30.0) as client:
         resp = await client.get(url, headers=_onelake_headers())
 
         if resp.status_code == 404:
@@ -368,7 +367,7 @@ async def fabric_read_file(
     if max_bytes:
         headers["Range"] = f"bytes=0-{max_bytes - 1}"
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    async with shared_client(60.0) as client:
         resp = await client.get(url, headers=headers)
     if resp.status_code not in (200, 206):
         return format_http_error(resp, 'reading file')
@@ -404,7 +403,7 @@ async def fabric_write_file(
 
     content_bytes = content.encode("utf-8")
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    async with shared_client(60.0) as client:
         # Step 1: Create the file resource
         create_headers = {**headers, "Content-Length": "0"}
         if not overwrite:
@@ -446,7 +445,7 @@ async def fabric_delete_file(workspace_id: str, item_id: str, file_path: str) ->
     """
     clean_path = _validate_path(file_path)
     url = f"{ONELAKE_DFS_BASE}/{workspace_id}/{item_id}/{clean_path}"
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with shared_client(30.0) as client:
         resp = await client.delete(url, headers=_onelake_headers())
     if resp.status_code not in (200, 202, 204):
         return format_http_error(resp, 'deleting file')
@@ -466,7 +465,7 @@ async def fabric_create_directory(
     """
     clean_path = _validate_path(directory_path)
     url = f"{ONELAKE_DFS_BASE}/{workspace_id}/{item_id}/{clean_path}?resource=directory"
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with shared_client(30.0) as client:
         resp = await client.put(url, headers=_onelake_headers())
     if resp.status_code not in (200, 201):
         return format_http_error(resp, 'creating directory')

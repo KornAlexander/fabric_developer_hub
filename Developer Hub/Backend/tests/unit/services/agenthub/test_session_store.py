@@ -6,6 +6,7 @@ Strategy: monkeypatch ``AGENTHUB_DB_PATH`` to a tmp file before importing
 """
 from __future__ import annotations
 
+import json as _json
 from datetime import UTC, datetime
 
 import pytest
@@ -17,9 +18,8 @@ from domain.models.agent_models import (
     JobStatus,
     UserAgentConfig,
 )
-from domain.models.plan import PlanStep, PlanTarget, Plan
+from domain.models.plan import Plan, PlanStep, PlanTarget
 from services.agenthub import _db, session_store
-import json as _json
 
 
 @pytest.fixture(autouse=True)

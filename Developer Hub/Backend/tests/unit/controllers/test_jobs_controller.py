@@ -12,7 +12,12 @@ from domain.exceptions.exceptions import (
     ItemMetadataNotFoundException,
     UnauthorizedException,
 )
-from fabric_api.impl.jobs_controller import JobsController, _background_tasks
+from domain.items.agenthub_item import AgentHubItem
+from fabric_api.impl.jobs_controller import (
+    JobsController,
+    _background_tasks,
+    cleanup_background_tasks,
+)
 from fabric_api.models.create_item_job_instance_request import (
     CreateItemJobInstanceRequest,
 )
@@ -23,8 +28,6 @@ from fabric_api.models.job_instance_status import JobInstanceStatus
 from fabric_api.models.job_invoke_type import JobInvokeType
 from tests.test_fixtures import TestFixtures
 from tests.test_helpers import TestHelpers
-from domain.items.agenthub_item import AgentHubItem
-from fabric_api.impl.jobs_controller import cleanup_background_tasks
 
 
 @pytest.mark.unit

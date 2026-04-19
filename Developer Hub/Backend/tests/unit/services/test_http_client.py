@@ -13,10 +13,12 @@ from services.http_client import HttpClientService
 
 
 @pytest.fixture
-async def svc():
+def svc():
     s = HttpClientService()
     yield s
-    await s.close()
+    # close() is async; run it to release the underlying httpx AsyncClient.
+    import asyncio
+    asyncio.run(s.close())
 
 
 def test_get_headers_bearer_for_jwt(svc: HttpClientService) -> None:
@@ -147,3 +149,95 @@ async def test_put_empty_string_sends_empty_body() -> None:
 async def _no_op() -> None:
     """Awaitable used to monkeypatch asyncio.sleep to a no-op."""
     return None
+
+
+# ---------------------------------------------------------------------------
+# Request-ID propagation (Batch 13 — outbound correlation)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_outbound_request_id_header_set_from_contextvar() -> None:
+    """When a request-ID is bound via ``request_id_scope``, the shared
+    client must stamp it onto every outbound call so downstream services
+    (Fabric, Copilot, MCP) can correlate their logs back to the inbound
+    user request."""
+    from services.correlation import request_id_scope
+
+    captured: dict[str, str | None] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["req_id"] = request.headers.get("X-Request-ID")
+        return httpx.Response(200, json={})
+
+    svc = HttpClientService()
+    # Swap in a MockTransport but keep the real event_hooks so the hook runs.
+    await svc._client.aclose()
+    svc._client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        event_hooks={"request": [svc._inject_request_id]},
+    )
+    try:
+        with request_id_scope("req-outbound-abc"):
+            await svc._client.get("https://api.test/ping")
+        assert captured["req_id"] == "req-outbound-abc"
+    finally:
+        await svc._client.aclose()
+        svc._closed = True
+
+
+@pytest.mark.asyncio
+async def test_outbound_request_id_absent_when_no_scope() -> None:
+    """Outside any request scope, the hook must NOT stamp the placeholder
+    ``"-"`` onto the header — keep the header absent entirely so downstream
+    services can't confuse "no request context" with a real ID."""
+    captured: dict[str, str | None] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["req_id"] = request.headers.get("X-Request-ID")
+        return httpx.Response(200, json={})
+
+    svc = HttpClientService()
+    await svc._client.aclose()
+    svc._client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        event_hooks={"request": [svc._inject_request_id]},
+    )
+    try:
+        # No request_id_scope — the ContextVar is the default "-".
+        await svc._client.get("https://api.test/ping")
+        assert captured["req_id"] is None
+    finally:
+        await svc._client.aclose()
+        svc._closed = True
+
+
+@pytest.mark.asyncio
+async def test_outbound_request_id_respects_explicit_caller_header() -> None:
+    """If a caller has already set ``X-Request-ID`` on the request (e.g.
+    explicitly forwarding an ID from a non-HTTP source), the hook must not
+    overwrite it."""
+    from services.correlation import request_id_scope
+
+    captured: dict[str, str | None] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["req_id"] = request.headers.get("X-Request-ID")
+        return httpx.Response(200, json={})
+
+    svc = HttpClientService()
+    await svc._client.aclose()
+    svc._client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        event_hooks={"request": [svc._inject_request_id]},
+    )
+    try:
+        with request_id_scope("req-from-ctx"):
+            await svc._client.get(
+                "https://api.test/ping",
+                headers={"X-Request-ID": "req-explicit-override"},
+            )
+        assert captured["req_id"] == "req-explicit-override"
+    finally:
+        await svc._client.aclose()
+        svc._closed = True

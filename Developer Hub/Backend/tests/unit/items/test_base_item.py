@@ -14,14 +14,14 @@ from domain.exceptions.exceptions import (
     UnexpectedItemTypeException,
 )
 from domain.items.base_item import ItemBase
+from domain.models.common_item_metadata import CommonItemMetadata
+from fabric_api.models.create_item_request import CreateItemRequest
+from fabric_api.models.update_item_request import UpdateItemRequest
 from services.auth.authentication import AuthenticationService
 from services.fabric.item_metadata_store import ItemMetadataStore
 from services.fabric.onelake_client_service import OneLakeClientService
 from tests.test_fixtures import TestFixtures
 from tests.test_helpers import TestHelpers
-from domain.models.common_item_metadata import CommonItemMetadata
-from fabric_api.models.create_item_request import CreateItemRequest
-from fabric_api.models.update_item_request import UpdateItemRequest
 
 
 # Create a concrete implementation of ItemBase for testing

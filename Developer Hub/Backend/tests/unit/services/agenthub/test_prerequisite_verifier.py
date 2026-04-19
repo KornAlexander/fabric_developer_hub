@@ -15,10 +15,10 @@ from typing import Any
 import pytest
 
 from domain.models.plan import (
-    PlanFooter,
     Plan,
-    PrereqVerification,
+    PlanFooter,
     Prerequisite,
+    PrereqVerification,
 )
 from services.agenthub.prerequisite_verifier import PrerequisiteVerifier
 

@@ -6,7 +6,10 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from domain.constants.onelake_constants import OneLakeConstants
 from domain.constants.workload_scopes import WorkloadScopes
 from domain.models.write_to_lakehouse_file_request import WriteToLakehouseFileRequest
-from services.auth.authentication import AuthenticationService, get_authentication_service
+from services.auth.authentication import (
+    AuthenticationService,
+    get_authentication_service,
+)
 from services.fabric.lakehouse_client_service import (
     LakehouseClientService,
     get_lakehouse_client_service,

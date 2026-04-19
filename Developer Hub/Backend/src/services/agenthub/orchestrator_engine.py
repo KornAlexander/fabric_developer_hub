@@ -27,7 +27,6 @@ from domain.models.plan import (
     VALID_ARTIFACT_TYPES,
     Plan,
     PlanValidationError,
-    WorkspaceSnapshot,
 )
 from services.agenthub.agent_registry import AGENT_TEMPLATES, get_template
 from services.agenthub.attachments import ATTACHMENT_SHIELD_PROMPT, process_attachments
@@ -137,7 +136,7 @@ class OrchestratorEngine:
         workspace_id: str,
         copilot_token: str,
         context: dict | None = None,
-        attachments: list[dict] | None = None,
+        attachments: list[Any] | None = None,
         mcp_tokens: dict | None = None,
     ) -> Plan:
         """Produce a grounded Plan.
@@ -197,7 +196,10 @@ class OrchestratorEngine:
                         allowed_tools={"fabric_list_workspaces"},
                     )
                 raw = json.loads(str(ws_payload))
-                accessible = [w.get("id") for w in raw if isinstance(w, dict) and w.get("id")]
+                accessible: list[str] = [
+                    str(w["id"]) for w in raw
+                    if isinstance(w, dict) and w.get("id")
+                ]
                 authorize_destination(workspace_id, accessible)
             except PermissionError:
                 logger.warning(
@@ -712,7 +714,7 @@ class OrchestratorEngine:
             # Capture LLM reasoning text into the current phase
             current_phase = assignment.phases[-1] if assignment.phases else None
             if current_phase and content.strip():
-                lines = [l.strip() for l in content.strip().split("\n") if l.strip()]
+                lines = [ln.strip() for ln in content.strip().split("\n") if ln.strip()]
                 if current_phase.title.startswith("Round") or current_phase.title == "Initializing":
                     first_line = lines[0][:80] if lines else "Processing"
                     for prefix in ("PHASE_START:", "PHASE_END:", "ACTION:", "DECISION:", "#", "*", "-"):

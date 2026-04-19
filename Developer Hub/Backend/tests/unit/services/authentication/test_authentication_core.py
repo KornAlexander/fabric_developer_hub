@@ -12,7 +12,11 @@ from domain.exceptions.exceptions import (
     AuthenticationException,
     AuthenticationUIRequiredException,
 )
-from domain.models.authentication_models import AuthorizationContext, Claim, SubjectAndAppToken
+from domain.models.authentication_models import (
+    AuthorizationContext,
+    Claim,
+    SubjectAndAppToken,
+)
 from services.auth.authentication import AuthenticationService
 from services.auth.open_id_connect_configuration import OpenIdConnectConfiguration
 
@@ -298,7 +302,7 @@ class TestOBOFlow:
                 mock_exception = Mock(spec=AuthenticationUIRequiredException)
                 mock_ui_ex.return_value = mock_exception
 
-                with pytest.raises(Exception):  # Will raise the mock exception
+                with pytest.raises(Exception):  # noqa: B017  # Mock-injected exception; concrete type is irrelevant here.
                     await service.get_access_token_on_behalf_of(
                         auth_context=auth_context,
                         scopes=["test-scope"]

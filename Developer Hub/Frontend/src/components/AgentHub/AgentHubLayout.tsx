@@ -42,11 +42,13 @@ function lazyWithPreload<T extends Record<string, any>>(
     factory: () => Promise<T>,
     exportName: keyof T,
 ) {
-    const Component: any = lazy(() =>
+    const Component = lazy(() =>
         factory().then(m => ({ default: m[exportName] })),
-    );
+    ) as React.LazyExoticComponent<React.ComponentType<any>> & {
+        preload: () => Promise<T>;
+    };
     Component.preload = factory;
-    return Component as React.LazyExoticComponent<any> & { preload: () => Promise<any> };
+    return Component;
 }
 
 const DashboardPage = lazyWithPreload(() => import("./DashboardPage"), "DashboardPage");
@@ -220,7 +222,7 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
     // warm the per-user workspace cache so the workspace selector is instant
     // on first navigation. Safe to call without a Fabric token (no-op).
     useEffect(() => {
-        if (!auth.githubToken) return;
+        if (!auth.githubToken) return undefined;
         let cancelled = false;
         (async () => {
             let fabricToken: string | undefined;
@@ -360,7 +362,7 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
                 })();
             }
             setPending(key, fetchPromise);
-            return fetchPromise.catch(() => undefined);
+            return fetchPromise.catch((): undefined => undefined);
         },
         [auth.githubToken, workloadClient],
     );
@@ -421,7 +423,15 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
 
             <div className="agenthub-body">
                 {/* Sidebar overlay backdrop (mobile only) */}
-                {sidebarOpen && <div className="sidebar-backdrop" onClick={closeSidebar} />}
+                {sidebarOpen && (
+                    <div
+                        className="sidebar-backdrop"
+                        role="button"
+                        tabIndex={-1}
+                        aria-label="Close sidebar"
+                        onClick={closeSidebar}
+                    />
+                )}
 
                 {/* Sidebar */}
                 <aside className={`agenthub-sidebar ${sidebarOpen ? "sidebar--open" : ""} ${sidebarCollapsed ? "agenthub-sidebar--collapsed" : ""}`}>
@@ -455,9 +465,14 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
                     </nav>
 
                     <div className="agenthub-sidebar-footer">
-                        <div className="sidenav-footer-item" onClick={() => { auth.signOut(); closeSidebar(); }} title={`Sign out (${auth.githubUser})`}>
+                        <button
+                            type="button"
+                            className="sidenav-footer-item"
+                            onClick={() => { auth.signOut(); closeSidebar(); }}
+                            title={`Sign out (${auth.githubUser})`}
+                        >
                             <SignOut24Regular /> <Text size={200}>Sign out ({auth.githubUser})</Text>
-                        </div>
+                        </button>
                         <div className="sidenav-footer-item" title="Support">
                             <QuestionCircle24Regular /> <Text size={200}>Support</Text>
                         </div>

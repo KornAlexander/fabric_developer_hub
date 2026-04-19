@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from unittest.mock import Mock
-from uuid import uuid4
 
 import pytest
 from fastapi import FastAPI, Request
@@ -10,16 +9,13 @@ from fastapi.testclient import TestClient
 
 from app.exception_handlers import (
     authentication_ui_required_exception_handler,
-    global_exception_handler,
     register_exception_handlers,
     too_many_requests_exception_handler,
-    value_error_handler,
     workload_exception_handler,
 )
 from domain.constants.workload_constants import WorkloadConstants
 from domain.exceptions.exceptions import (
     AuthenticationUIRequiredException,
-    InternalErrorException,
     TooManyRequestsException,
     UnauthorizedException,
     UnexpectedItemTypeException,

@@ -11,7 +11,6 @@ from services.auth.open_id_connect_configuration import (
     get_openid_manager_service,
 )
 
-
 pytestmark = [pytest.mark.unit, pytest.mark.services]
 
 
@@ -54,6 +53,7 @@ def test_configuration_handles_missing_keys():
     assert cfg.signing_keys == []
 
 
+@pytest.mark.asyncio
 async def test_get_configuration_fetches_and_caches():
     mgr = OpenIdConnectConfigurationManager("https://meta.example/.well-known", cache_duration_seconds=3600)
     config_resp = _mk_response({"issuer": "https://i", "jwks_uri": "https://j"})
@@ -75,6 +75,7 @@ async def test_get_configuration_fetches_and_caches():
     fake.get.assert_not_called()
 
 
+@pytest.mark.asyncio
 async def test_get_configuration_raises_when_jwks_uri_missing_and_no_cache():
     mgr = OpenIdConnectConfigurationManager("https://meta.example/.well-known")
     config_resp = _mk_response({"issuer": "https://i"})  # no jwks_uri
@@ -85,6 +86,7 @@ async def test_get_configuration_raises_when_jwks_uri_missing_and_no_cache():
             await mgr.get_configuration_async()
 
 
+@pytest.mark.asyncio
 async def test_get_configuration_returns_stale_cache_on_fetch_error():
     mgr = OpenIdConnectConfigurationManager("https://meta.example/.well-known", cache_duration_seconds=0)
     # Pre-seed a cached configuration.
@@ -100,6 +102,7 @@ async def test_get_configuration_returns_stale_cache_on_fetch_error():
     assert result is cached  # falls back to stale cache
 
 
+@pytest.mark.asyncio
 async def test_get_openid_manager_service_is_singleton():
     OpenIdConnectConfigurationManager._instance = None
     try:

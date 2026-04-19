@@ -6,6 +6,24 @@ Handles:
 - Listing available models from the Copilot API (Claude, GPT, Gemini, etc.)
 - Proxying chat completions to the Copilot API
 - Agentic tool-call loop with OBO-authenticated Fabric/OneLake tokens
+
+Authorization-header contract (TWO-TOKEN MODEL — important):
+- ``POST /api/github/device-code`` and ``POST /api/github/poll-token``
+  are UNAUTHENTICATED (Device Flow bootstrap).
+- Every other ``/api/github/*`` endpoint expects the GitHub OAuth access
+  token in the standard ``Authorization: Bearer <github_token>`` header.
+  That token is NOT an Entra ID token and MUST NOT be used to call Fabric
+  REST, OneLake, or anything that trusts AAD issuer/audience.
+- When Copilot tool calls need Fabric/OneLake access (OBO), the Fabric
+  workload token is passed alongside in the ``X-Fabric-Token`` header.
+  It is validated by ``AuthenticationService`` and used only for OBO
+  exchange; user claims from this token are the authoritative tenant/oid.
+  LLM-supplied ``tenantId``/``workspaceId``/``userId`` arguments NEVER
+  authorize; tool_runtime strips and overrides them from the verified
+  ``CallerContext`` built from this token's claims.
+- GitHub tokens MUST NOT reach Copilot/MCP tool arguments, prompts, or
+  logs. Copilot tokens are short-lived and cached in-process keyed by
+  SHA-256(github_token).
 """
 
 import asyncio
@@ -23,6 +41,7 @@ from pydantic import BaseModel
 
 from domain.models.authentication_models import AuthorizationContext
 from services.auth.authentication import get_authentication_service
+from services.http_client import get_http_client_service
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +67,19 @@ COPILOT_API_BASE = "https://api.githubcopilot.com"
 _copilot_token_cache: TTLCache = TTLCache(maxsize=1000, ttl=1500)
 
 
+def _shared_client() -> httpx.AsyncClient:
+    """Return the process-wide pooled ``httpx.AsyncClient``.
+
+    We used to spin up a new ``async with httpx.AsyncClient(...)`` for every
+    GitHub/Copilot call. That bypasses connection pooling, triggers a full
+    TLS handshake per request, and leaks TCP sockets under load. The
+    ``HttpClientService`` singleton is owned by ``ServiceRegistry`` and
+    lives for the app's lifetime; per-call timeouts are passed explicitly
+    at each call site to preserve the prior per-endpoint behavior.
+    """
+    return get_http_client_service().raw_client
+
+
 async def _get_copilot_token(github_token: str) -> str:
     """Exchange a GitHub access token for a short-lived Copilot API token.
 
@@ -65,16 +97,16 @@ async def _get_copilot_token(github_token: str) -> str:
         if time.time() < expires_at - 60:  # refresh 60s before expiry
             return token
 
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        resp = await client.get(
-            COPILOT_TOKEN_URL,
-            headers={
-                "Authorization": f"Bearer {github_token}",
-                "Accept": "application/json",
-                "Editor-Version": "vscode/1.100.0",
-                "Editor-Plugin-Version": "copilot-chat/0.25.0",
-            },
-        )
+    resp = await _shared_client().get(
+        COPILOT_TOKEN_URL,
+        headers={
+            "Authorization": f"Bearer {github_token}",
+            "Accept": "application/json",
+            "Editor-Version": "vscode/1.100.0",
+            "Editor-Plugin-Version": "copilot-chat/0.25.0",
+        },
+        timeout=15.0,
+    )
 
     if resp.status_code == 401:
         _copilot_token_cache.pop(cache_key, None)
@@ -152,10 +184,12 @@ class ChatRequest(BaseModel):
 
 # --- MCP Manager (set during app startup) ---
 
-_mcp_manager = None
+from services.mcp.mcp_client_manager import MCPClientManager
+
+_mcp_manager: MCPClientManager | None = None
 
 
-def set_mcp_manager(manager) -> None:
+def set_mcp_manager(manager: MCPClientManager) -> None:
     """Called from main.py at startup to inject the MCPClientManager."""
     global _mcp_manager
     _mcp_manager = manager
@@ -167,12 +201,11 @@ def set_mcp_manager(manager) -> None:
 async def start_device_flow():
     """Start GitHub Device Flow — returns a user code for github.com/login/device."""
 
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            GITHUB_DEVICE_CODE_URL,
-            data={"client_id": COPILOT_GITHUB_APP_CLIENT_ID, "scope": ""},
-            headers={"Accept": "application/json"},
-        )
+    resp = await _shared_client().post(
+        GITHUB_DEVICE_CODE_URL,
+        data={"client_id": COPILOT_GITHUB_APP_CLIENT_ID, "scope": ""},
+        headers={"Accept": "application/json"},
+    )
 
     if resp.status_code != 200:
         logger.error("GitHub device code request failed: %s", resp.text)
@@ -192,16 +225,16 @@ async def start_device_flow():
 async def poll_token(req: PollTokenRequest):
     """Poll GitHub for the access token after user enters the device code."""
 
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            GITHUB_TOKEN_URL,
-            data={
-                "client_id": COPILOT_GITHUB_APP_CLIENT_ID,
-                "device_code": req.device_code,
-                "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
-            },
-            headers={"Accept": "application/json"},
-        )
+    client = _shared_client()
+    resp = await client.post(
+        GITHUB_TOKEN_URL,
+        data={
+            "client_id": COPILOT_GITHUB_APP_CLIENT_ID,
+            "device_code": req.device_code,
+            "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+        },
+        headers={"Accept": "application/json"},
+    )
 
     if resp.status_code != 200:
         return PollTokenResponse(status="error", error="GitHub token endpoint returned non-200")
@@ -225,13 +258,12 @@ async def poll_token(req: PollTokenRequest):
 
     # Fetch GitHub username
     github_user = None
-    async with httpx.AsyncClient() as client:
-        user_resp = await client.get(
-            GITHUB_USER_URL,
-            headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"},
-        )
-        if user_resp.status_code == 200:
-            github_user = user_resp.json().get("login")
+    user_resp = await client.get(
+        GITHUB_USER_URL,
+        headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"},
+    )
+    if user_resp.status_code == 200:
+        github_user = user_resp.json().get("login")
 
     return PollTokenResponse(status="complete", access_token=access_token, github_user=github_user)
 
@@ -245,17 +277,17 @@ async def list_models(request: Request):
     github_token = _extract_github_token(request)
     copilot_token = await _get_copilot_token(github_token)
 
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        resp = await client.get(
-            f"{COPILOT_API_BASE}/models",
-            headers={
-                "Authorization": f"Bearer {copilot_token}",
-                "Accept": "application/json",
-                "Copilot-Integration-Id": "vscode-chat",
-                "Editor-Version": "vscode/1.100.0",
-                "Editor-Plugin-Version": "copilot-chat/0.25.0",
-            },
-        )
+    resp = await _shared_client().get(
+        f"{COPILOT_API_BASE}/models",
+        headers={
+            "Authorization": f"Bearer {copilot_token}",
+            "Accept": "application/json",
+            "Copilot-Integration-Id": "vscode-chat",
+            "Editor-Version": "vscode/1.100.0",
+            "Editor-Plugin-Version": "copilot-chat/0.25.0",
+        },
+        timeout=15.0,
+    )
 
     if resp.status_code != 200:
         logger.error("Copilot models request failed (%d): %s", resp.status_code, resp.text[:300])
@@ -296,7 +328,7 @@ async def chat_completions(chat_req: ChatRequest, request: Request):
     logger.info("[CHAT] Fabric token present: %s", bool(fabric_token))
 
     has_manager = _mcp_manager is not None
-    has_tools = _mcp_manager.has_tools() if has_manager else False
+    has_tools = _mcp_manager.has_tools() if _mcp_manager is not None else False
     use_tools = chat_req.tools_enabled and has_manager and has_tools
     logger.info("[CHAT] MCP manager: %s, has_tools: %s, tools_enabled: %s → use_tools: %s",
                 has_manager, has_tools, chat_req.tools_enabled, use_tools)
@@ -353,12 +385,12 @@ async def chat_completions(chat_req: ChatRequest, request: Request):
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
         else:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                resp = await client.post(
-                    f"{COPILOT_API_BASE}/chat/completions",
-                    json=body,
-                    headers=copilot_headers,
-                )
+            resp = await _shared_client().post(
+                f"{COPILOT_API_BASE}/chat/completions",
+                json=body,
+                headers=copilot_headers,
+                timeout=60.0,
+            )
             if resp.status_code != 200:
                 raise HTTPException(status_code=resp.status_code, detail=resp.text[:500])
             return resp.json()
@@ -490,12 +522,12 @@ async def _call_copilot_api(copilot_token: str, body: dict) -> dict:
                 body.get("model"), len(body.get("messages", [])),
                 tool_names, body.get("tool_choice", "none"))
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        resp = await client.post(
-            f"{COPILOT_API_BASE}/chat/completions",
-            json=body,
-            headers=_copilot_headers(copilot_token),
-        )
+    resp = await _shared_client().post(
+        f"{COPILOT_API_BASE}/chat/completions",
+        json=body,
+        headers=_copilot_headers(copilot_token),
+        timeout=60.0,
+    )
     if resp.status_code != 200:
         logger.error("[COPILOT-RESP] HTTP %d: %s", resp.status_code, resp.text[:500])
         raise HTTPException(status_code=resp.status_code, detail=f"Copilot API error: {resp.text[:300]}")
@@ -530,6 +562,7 @@ async def _stream_agentic_chat(copilot_token: str, chat_req: ChatRequest, mcp_to
       data: ... (standard OpenAI SSE chunks) — streamed final response
     """
     messages = [{"role": m.role, "content": m.content} for m in chat_req.messages]
+    assert _mcp_manager is not None, "_stream_agentic_chat invoked without an MCP manager (should be gated by use_tools)"
     tools = _mcp_manager.get_openai_tools_schema()
 
     logger.info("[AGENT] Starting agentic chat with %d tools, %d input messages, tokens=%s",
@@ -541,11 +574,27 @@ async def _stream_agentic_chat(copilot_token: str, chat_req: ChatRequest, mcp_to
                     fn.get("name"), json.dumps(fn.get("parameters", {}))[:200])
 
     # Merge agent instructions into the system prompt.
-    # The frontend may send a system message with context (workspace ID, item name).
-    # We prepend our tool-usage instructions to that, or add a new system message if none exists.
+    #
+    # SECURITY — the frontend may POST a ``{"role": "system", ...}`` message
+    # carrying workspace/item context. That content is CLIENT-SUPPLIED and
+    # therefore UNTRUSTED: a tampered frontend could place jailbreak text
+    # in there. We keep our trusted ``SYSTEM_PROMPT`` at the top and append
+    # the frontend's content as **fenced** client context so the model
+    # treats it as data, not a continuation of our authoritative
+    # instructions. Tool-call arguments and OBO scopes continue to come
+    # from the Fabric token (verified), never from the model's output.
+    from services.agenthub.attachments import (
+        CLIENT_CONTEXT_SHIELD_PROMPT,
+        fence_client_context,
+    )
+
     existing_system = next((m for m in messages if m.get("role") == "system"), None)
     if existing_system:
-        existing_system["content"] = SYSTEM_PROMPT + "\n\n" + existing_system["content"]
+        existing_system["content"] = (
+            f"{SYSTEM_PROMPT}\n\n"
+            f"{CLIENT_CONTEXT_SHIELD_PROMPT}\n\n"
+            f"{fence_client_context(existing_system.get('content', ''))}"
+        )
     else:
         messages.insert(0, {"role": "system", "content": SYSTEM_PROMPT})
 
@@ -688,17 +737,17 @@ async def _stream_agentic_chat(copilot_token: str, chat_req: ChatRequest, mcp_to
 
 async def _stream_chat(headers: dict, body: dict):
     """Stream SSE chunks from the Copilot API (passthrough, no tools)."""
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        async with client.stream(
-            "POST",
-            f"{COPILOT_API_BASE}/chat/completions",
-            json=body,
-            headers=headers,
-        ) as resp:
-            if resp.status_code != 200:
-                error_body = await resp.aread()
-                yield f'data: {{"error": "{error_body.decode()[:200]}"}}\n\n'
-                return
-            async for line in resp.aiter_lines():
-                if line:
-                    yield f"{line}\n\n"
+    async with _shared_client().stream(
+        "POST",
+        f"{COPILOT_API_BASE}/chat/completions",
+        json=body,
+        headers=headers,
+        timeout=120.0,
+    ) as resp:
+        if resp.status_code != 200:
+            error_body = await resp.aread()
+            yield f'data: {{"error": "{error_body.decode()[:200]}"}}\n\n'
+            return
+        async for line in resp.aiter_lines():
+            if line:
+                yield f"{line}\n\n"

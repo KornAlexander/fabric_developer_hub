@@ -1,5 +1,3 @@
-import app.bootstrap as _bootstrap  # noqa: F401  # MUST be first import: loads .env before anything reads os.environ
-
 import asyncio
 import logging
 import logging.config
@@ -10,6 +8,7 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import uvicorn
 from fastapi import FastAPI, Request, status
@@ -19,16 +18,7 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from app.core.service_initializer import get_service_initializer
-from app.core.service_registry import get_service_registry
-
-# Import controllers
-from fabric_api.apis.endpoint_resolution_api import (
-    router as EndpointResolutionApiRouter,
-)
-from fabric_api.apis.item_lifecycle_api import router as ItemLifecycleApiRouter
-from fabric_api.apis.jobs_api import router as JobsApiRouter
-from fabric_api.impl.jobs_controller import cleanup_background_tasks
+import app.bootstrap as _bootstrap  # noqa: F401  # MUST be first import: loads .env before anything reads os.environ
 from api.agenthub_controller import router as agenthub_router
 from api.github_chat_controller import (
     _acquire_mcp_tokens,
@@ -38,7 +28,17 @@ from api.github_chat_controller import (
 from api.github_chat_controller import router as github_chat_router
 from api.lakehouse_controller import router as lakehouse_controller
 from api.onelake_controller import router as onelake_controller
+from app.core.service_initializer import get_service_initializer
+from app.core.service_registry import get_service_registry
 from app.exception_handlers import register_exception_handlers
+
+# Import controllers
+from fabric_api.apis.endpoint_resolution_api import (
+    router as EndpointResolutionApiRouter,
+)
+from fabric_api.apis.item_lifecycle_api import router as ItemLifecycleApiRouter
+from fabric_api.apis.jobs_api import router as JobsApiRouter
+from fabric_api.impl.jobs_controller import cleanup_background_tasks
 from services.agenthub import session_store as agenthub_store
 from services.agenthub.orchestrator_engine import get_orchestrator_engine
 from services.configuration_service import get_configuration_service
@@ -126,18 +126,23 @@ def setup_logging(config_service=None) -> logging.Logger:
     logging_config = {
         "version": 1,
         "disable_existing_loggers": False,
+        "filters": {
+            "request_id": {
+                "()": "services.correlation.RequestIdLogFilter",
+            },
+        },
         "formatters": {
             "default": {
-                "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+                "format": "%(asctime)s - %(name)s - %(levelname)s - [req %(request_id)s] - %(message)s",
                 "datefmt": "%Y-%m-%d %H:%M:%S"
             },
             "color": {
                 "()": "main.ColorFormatter",
-                "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+                "format": "%(asctime)s - %(name)s - %(levelname)s - [req %(request_id)s] - %(message)s",
                 "datefmt": "%Y-%m-%d %H:%M:%S"
             },
             "detailed": {
-                "format": "%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(funcName)s() - %(message)s",
+                "format": "%(asctime)s - %(name)s - %(levelname)s - [req %(request_id)s] - [%(filename)s:%(lineno)d] - %(funcName)s() - %(message)s",
                 "datefmt": "%Y-%m-%d %H:%M:%S"
             }
         },
@@ -145,12 +150,14 @@ def setup_logging(config_service=None) -> logging.Logger:
             "console": {
                 "class": "logging.StreamHandler",
                 "formatter": "color",
+                "filters": ["request_id"],
                 "level": log_level,
                 "stream": "ext://sys.stdout"
             },
             "file": {
                 "class": "logging.handlers.RotatingFileHandler",
                 "formatter": "detailed",
+                "filters": ["request_id"],
                 "filename": str(log_file),
                 "maxBytes": 10485760,  # 10MB
                 "backupCount": 5,
@@ -248,11 +255,15 @@ async def lifespan(app: FastAPI):
         # are still tolerated inside ``discover_tools``.
         try:
             mcp_config_path = os.path.join(os.path.dirname(__file__), "mcp_servers.json")
-            mcp_manager = MCPClientManager(mcp_config_path)
+            mcp_manager: MCPClientManager | None = MCPClientManager(mcp_config_path)
         except Exception:
             logger.exception("\u2717 MCP manager construction failed (config bug)")
             raise
 
+        # Narrow for the type checker: construction succeeded above, so
+        # ``mcp_manager`` is definitely non-None entering the discovery block.
+        # (It may be set back to None in the except clause below on failure.)
+        assert mcp_manager is not None
         try:
             await mcp_manager.discover_tools()
             set_mcp_manager(mcp_manager)
@@ -444,7 +455,7 @@ def create_app() -> FastAPI:
     # development we additionally enable an origin regex so the Fabric /
     # PowerBI portal (and their many subdomains) plus any localhost port
     # are accepted without fiddling with appsettings on every dev machine.
-    cors_kwargs = dict(
+    cors_kwargs: dict[str, Any] = dict(
         allow_origins=config_service.get_cors_origins(),
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -548,6 +559,12 @@ async def add_process_time_header(request: Request, call_next):
     request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
     request.state.request_id = request_id
 
+    # Bind to the contextvar so every logger.* call inside this request
+    # (including inside libraries that just grab ``logging.getLogger(__name__)``)
+    # emits ``[req <id>]`` without threading the ID through call sites.
+    from services.correlation import reset_request_id, set_request_id
+    _cid_token = set_request_id(request_id)
+
     # Track active request
     async with app_state.request_lock:
         app_state.active_requests.add(request_id)
@@ -584,6 +601,11 @@ async def add_process_time_header(request: Request, call_next):
         # Remove from active requests
         async with app_state.request_lock:
             app_state.active_requests.discard(request_id)
+        # Unbind correlation id (no-op if the token has already been reset)
+        try:
+            reset_request_id(_cid_token)
+        except ValueError:
+            pass
 
 def main():
     """Main entry point for the application."""

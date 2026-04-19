@@ -14,21 +14,22 @@ if str(src_path) not in sys.path:
     sys.path.insert(0, str(src_path))
 
 import app.bootstrap as _bootstrap  # noqa: F401, E402  # MUST precede project imports: loads .env
-
 from app.core.service_registry import ServiceRegistry  # noqa: E402
-from main import app as application  # noqa: E402
 from domain.models.authentication_models import AuthorizationContext
+from main import app as application  # noqa: E402
 from services.auth.authentication import AuthenticationService
 from services.auth.authorization import AuthorizationHandler
+from services.auth.open_id_connect_configuration import (
+    OpenIdConnectConfigurationManager,
+)
 
 # Import the services that need to be mocked
 from services.configuration_service import ConfigurationService
-from services.http_client import HttpClientService
 from services.fabric.item_factory import ItemFactory
 from services.fabric.item_metadata_store import ItemMetadataStore
 from services.fabric.lakehouse_client_service import LakehouseClientService
 from services.fabric.onelake_client_service import OneLakeClientService
-from services.auth.open_id_connect_configuration import OpenIdConnectConfigurationManager
+from services.http_client import HttpClientService
 from tests.test_helpers import TestHelpers
 
 

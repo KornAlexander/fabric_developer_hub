@@ -16,7 +16,6 @@ from typing import Any
 
 from domain.models.plan import DiffEntryAction, WorkspaceSnapshot
 
-
 PLANNER_SYSTEM_PROMPT = """\
 You are the planning engine for a Microsoft Fabric Workload. You produce \
 an ordered, executable plan that takes the destination workspace from its \

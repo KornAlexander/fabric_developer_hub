@@ -27,7 +27,8 @@ import asyncio
 import json
 import logging
 import re
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 from domain.models.plan import WorkspaceSnapshot
 

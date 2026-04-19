@@ -3,19 +3,19 @@ Integration tests for AuthenticationService flows.
 Tests moved from unit test suite that are more integration-style.
 """
 
+import asyncio
+import threading
+import time
 from unittest.mock import Mock, patch
 
 import pytest
 
+from app.core.service_registry import ServiceRegistry
 from domain.constants.environment_constants import EnvironmentConstants
 from domain.exceptions.exceptions import AuthenticationException
 from domain.models.authentication_models import AuthorizationContext, SubjectAndAppToken
 from services.auth.authentication import AuthenticationService
 from services.auth.open_id_connect_configuration import OpenIdConnectConfiguration
-from app.core.service_registry import ServiceRegistry
-import asyncio
-import threading
-import time
 
 
 @pytest.mark.integration

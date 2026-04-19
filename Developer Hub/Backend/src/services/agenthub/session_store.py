@@ -19,8 +19,9 @@ from domain.models.agent_models import (
     UserAgentConfig,
 )
 from domain.models.plan import Plan
-from services.agenthub import _db, workspaces_cache
-from services.agenthub._db import connect as _connect, db_path as _db_path
+from services.agenthub import workspaces_cache
+from services.agenthub._db import connect as _connect
+from services.agenthub._db import db_path as _db_path
 
 logger = logging.getLogger(__name__)
 

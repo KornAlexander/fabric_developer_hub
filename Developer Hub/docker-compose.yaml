@@ -149,8 +149,8 @@ services:
       # Raise Node's old-space cap. webpack-dev-server with HMR keeps a
       # snapshot of the module graph per rebuild in memory; over a long
       # editing session (many hot-reloads) the 4 GB default was being hit.
-      # 8 GB gives comfortable headroom and the host easily has it.
-      NODE_OPTIONS: "--max-old-space-size=8192"
+      # 6 GB gives comfortable headroom and the host easily has it.
+      NODE_OPTIONS: "--max-old-space-size=6144"
       # Force ANSI color in our custom webpack infrastructure logger
       # (webpack.config.js) even though stdout isn't a TTY under
       # docker-compose. Keeps the log stream visually consistent with the

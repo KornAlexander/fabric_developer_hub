@@ -3,12 +3,12 @@
 import pytest
 from fastapi import status
 
+from domain.exceptions.exceptions import AuthenticationException
 from fabric_api.models.item_job_instance_state import ItemJobInstanceState
 from fabric_api.models.job_instance_status import JobInstanceStatus
 from tests.constants import ExpectedResponses
 from tests.test_fixtures import TestFixtures
 from tests.test_helpers import TestHelpers
-from domain.exceptions.exceptions import AuthenticationException
 
 
 @pytest.mark.unit

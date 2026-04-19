@@ -32,7 +32,8 @@ from services.agenthub import session_store, workspaces_cache
 from services.agenthub.agent_registry import get_template, list_templates
 from services.agenthub.download_tokens import consume_token, issue_token
 from services.agenthub.orchestrator_engine import get_orchestrator_engine
-from services.agenthub.rate_limit import RateLimitExceeded, acquire as rate_limit_acquire
+from services.agenthub.rate_limit import RateLimitExceeded
+from services.agenthub.rate_limit import acquire as rate_limit_acquire
 from services.auth.authentication import get_authentication_service
 from services.configuration_service import get_configuration_service
 
@@ -218,7 +219,12 @@ async def _probe_git_status_one(
     stored as ``git_connected=False``.
     """
     try:
-        raw = await github_chat_controller._mcp_manager.call_tool(
+        mgr = github_chat_controller._mcp_manager
+        if mgr is None:
+            # MCP not initialised — treat as not-git-connected (same outcome as a 404).
+            workspaces_cache.update_git_status(user_id, workspace_id, connected=False)
+            return
+        raw = await mgr.call_tool(
             "sl_get_git_connection",
             {"workspace_id": workspace_id},
             mcp_tokens,
@@ -291,7 +297,10 @@ async def _background_refresh_workspaces(user_id: str, fabric_token: str, user_u
         mcp_tokens = await github_chat_controller._acquire_mcp_tokens(fabric_token)
         if not mcp_tokens:
             return
-        fresh = await _fetch_and_reconcile_workspaces(user_id, mcp_tokens, user_upn=user_upn)
+        # Reconcile the workspace cache — side-effect only; the returned
+        # list is not needed here because we re-read the cache below to
+        # pick up git-status columns that the reconcile helper also updates.
+        await _fetch_and_reconcile_workspaces(user_id, mcp_tokens, user_upn=user_upn)
         # Probe git status for every workspace whose cached entry is stale
         # or missing. We re-read the cache so the probe list reflects the
         # state AFTER reconcile (e.g. new rows).
@@ -391,7 +400,7 @@ async def list_workspaces(
         await _fetch_and_reconcile_workspaces(user_id, mcp_tokens, user_upn=user_upn)
     except HTTPException:
         raise
-    except Exception:
+    except Exception as e:
         logger.exception("Failed to list workspaces")
         if cached:
             return {
@@ -399,7 +408,7 @@ async def list_workspaces(
                 "cached_at": newest.isoformat() if newest else None,
                 "source": "stale-cache",
             }
-        raise HTTPException(500, "Failed to list workspaces")
+        raise HTTPException(500, "Failed to list workspaces") from e
 
     # Re-read from cache so the response picks up any pre-existing git
     # fields for workspaces that survived reconcile. Fire a background
@@ -502,12 +511,12 @@ async def create_workspace(
     body = str(raw)
     try:
         data = json.loads(body)
-    except Exception:
+    except Exception as e:
         # MCP surfaces non-2xx as plaintext; propagate as a 400/502.
         logger.warning("fabric_create_workspace returned non-JSON: %s", body[:200])
         if "HTTP 40" in body:
-            raise HTTPException(400, body)
-        raise HTTPException(502, body or "Workspace creation failed")
+            raise HTTPException(400, body) from e
+        raise HTTPException(502, body or "Workspace creation failed") from e
 
     workspace_id = data.get("id")
     display_name = data.get("displayName") or req.display_name

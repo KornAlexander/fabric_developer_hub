@@ -8,18 +8,18 @@ exercise both the success branches and the documented error contracts:
 """
 from __future__ import annotations
 
+import json as _json
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID
 
 import httpx
 import pytest
 
+from app.core.service_registry import ServiceRegistry
 from services.fabric.onelake_client_service import (
     OneLakeClientService,
     get_onelake_client_service,
 )
-import json as _json
-from app.core.service_registry import ServiceRegistry
 
 
 def _resp(status: int, text: str = "", json_body: dict | None = None) -> MagicMock:

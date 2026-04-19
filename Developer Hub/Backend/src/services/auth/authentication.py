@@ -20,8 +20,11 @@ from domain.models.authentication_models import (
     SubjectAndAppToken,
     TokenVersion,
 )
+from services.auth.open_id_connect_configuration import (
+    OpenIdConnectConfiguration,
+    OpenIdConnectConfigurationManager,
+)
 from services.configuration_service import get_configuration_service
-from services.auth.open_id_connect_configuration import OpenIdConnectConfigurationManager
 
 logger = logging.getLogger(__name__)
 
@@ -344,7 +347,7 @@ class AuthenticationService:
 
         return auth_context
 
-    def get_expected_issuer(self, oidc_config:OpenIdConnectConfigurationManager ,token_version: TokenVersion, tenant_id: str) -> str:
+    def get_expected_issuer(self, oidc_config: OpenIdConnectConfiguration, token_version: TokenVersion, tenant_id: str) -> str:
         """Get the expected issuer for the token version and tenant ID."""
         expected_issuer = None
         if token_version == TokenVersion.V1:
@@ -363,7 +366,7 @@ class AuthenticationService:
             raise AuthenticationException(f"Unsupported token version: {token_version}")
         return expected_issuer
 
-    def _get_token_version(self, claims: list[Claim]) -> str:
+    def _get_token_version(self, claims: list[Claim]) -> TokenVersion:
         """Gets the token version from claims."""
         version = self._validate_claim_exists(claims, "ver", "access tokens should have version claim")
         if version == "1.0":
@@ -377,10 +380,10 @@ class AuthenticationService:
         """Get the expected audience based on token version."""
         return self.audience if token_version == TokenVersion.V1 else self.client_id
 
-    async def _validate_aad_token_common(self, token: str, is_app_only: bool, expected_tenant_id_for_issuer: str | None) -> dict[str, Any]:
+    async def _validate_aad_token_common(self, token: str, is_app_only: bool, expected_tenant_id_for_issuer: str | None) -> list[Claim]:
         """
         Validate common properties of an AAD token (signature, lifetime, audience, issuer).
-        Returns the decoded claims as a dictionary.
+        Returns the decoded claims as a list of ``Claim`` objects (one per JWT payload field).
         """
         self.logger.debug(
             "Validating AAD token. is_app_only: %s, expected_tenant_id_for_issuer: %s",
@@ -489,7 +492,7 @@ class AuthenticationService:
             self.logger.exception("Token validation failed")
             raise AuthenticationException(f"Token validation failed: {e!s}") from e
 
-    async def _validate_app_token(self, token: str) -> dict[str, Any]:
+    async def _validate_app_token(self, token: str) -> list[Claim]:
         """
         Validate an app token (app-only) with publisher tenant validation.
         """
@@ -499,7 +502,7 @@ class AuthenticationService:
             expected_tenant_id_for_issuer=self.publisher_tenant_id
         )
 
-    async def _validate_subject_token(self, token: str, tenant_id: str) -> dict[str, Any]:
+    async def _validate_subject_token(self, token: str, tenant_id: str | None) -> list[Claim]:
         """
         Validate a subject token (delegated) with the user's tenant.
         """
@@ -509,8 +512,8 @@ class AuthenticationService:
             expected_tenant_id_for_issuer=tenant_id
         )
 
-    def _validate_claim_value(self, claims: list[Claim], claim_name: str, expected_value: str = None,
-                            error_message: str = None) -> str:
+    def _validate_claim_value(self, claims: list[Claim], claim_name: str, expected_value: str | None = None,
+                            error_message: str | None = None) -> str:
         """Validate a claim exists and optionally matches expected value."""
         claim_value = self._validate_claim_exists(claims, claim_name, f"Missing required claim: {claim_name}")
 

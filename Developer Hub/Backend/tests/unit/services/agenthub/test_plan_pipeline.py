@@ -12,16 +12,13 @@ from typing import Any
 import pytest
 
 from domain.models.plan import (
-    DiffEntryAction,
     Plan,
     PlanValidationError,
     WorkspaceSnapshot,
 )
-from services.agenthub import orchestrator_engine as oe
 from services.agenthub.orchestrator_engine import OrchestratorEngine
 from services.agenthub.plan_diff import compute_diff
 from services.agenthub.workspace_state import infer_mentioned_types
-
 
 # ── helpers ──────────────────────────────────────────────────────────
 

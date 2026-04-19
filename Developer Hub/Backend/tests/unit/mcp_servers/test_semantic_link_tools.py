@@ -18,7 +18,6 @@ from tests.unit.mcp_servers.conftest import (
     make_response,
 )
 
-
 # ── Header guard ────────────────────────────────────────────────────
 
 def test_headers_raises_without_token(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -42,6 +42,7 @@ if [ "${1:-}" = "dev" ]; then
   fi
   echo "🔧 Launching in DEV mode (webpack-dev-server + HMR)"
 else
+  export COMPOSE_PROFILES=prod
   echo "🚀 Launching in PROD mode (nginx, static bundle, no host Node required)"
   echo "   (use './start.sh dev' for HMR during active development)"
 fi

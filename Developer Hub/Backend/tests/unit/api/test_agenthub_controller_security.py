@@ -5,16 +5,14 @@ Locks the Phase-4 fix in ``list_workspaces`` where the 500 path used to leak
 """
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
-from api import agenthub_controller
+from api import agenthub_controller, github_chat_controller
 from services.agenthub import _db, session_store
-from api import github_chat_controller
-from fastapi import HTTPException
 
 
 @pytest.fixture(autouse=True)
@@ -47,6 +45,36 @@ def isolated_client(isolated_app: FastAPI) -> TestClient:
 def _reset_mcp_manager(monkeypatch: pytest.MonkeyPatch) -> None:
     """Ensure each test starts with a fresh _mcp_manager state."""
     monkeypatch.setattr(github_chat_controller, "_mcp_manager", None, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _clear_auth_service_from_registry() -> None:
+    """Force the dev-mode "no auth service available" path for these tests.
+
+    These tests use the bogus token string ``"Bearer test"`` to exercise the
+    logic AFTER the token guard -- they are NOT auth-contract tests. The
+    controller's dev-mode fallback treats "auth service unavailable" as
+    ``ctx = None`` (anonymous dev user), which is what these tests expect.
+
+    Previously this path worked by accident: if no earlier test had
+    registered an ``AuthenticationService`` in the global ``ServiceRegistry``,
+    ``get_authentication_service()`` raised and the controller fell through.
+    Once a neighbouring test suite registered a real auth service, these
+    tests started failing with 401 because the bogus token now reached a
+    live validator. Removing the service from the registry for the duration
+    of each test restores the intended isolation.
+    """
+    from app.core.service_registry import get_service_registry
+    from services.auth.authentication import AuthenticationService
+
+    registry = get_service_registry()
+    services = getattr(registry, "_services", None)
+    existing = services.pop(AuthenticationService, None) if services is not None else None
+    try:
+        yield
+    finally:
+        if existing is not None and services is not None:
+            services[AuthenticationService] = existing
 
 
 def test_list_workspaces_no_fabric_token_returns_400(isolated_client: TestClient) -> None:
@@ -149,9 +177,18 @@ def test_list_workspaces_ok_returns_simplified_shape(
     )
     assert resp.status_code == 200
     body = resp.json()
-    assert body["workspaces"] == [
-        {"id": "ws-1", "name": "WS One"},
-        {"id": "ws-2", "name": "WS Two"},
+    # Each workspace row exposes the core identity fields plus the git
+    # provenance columns the dashboard reads. Compare by (id, name) so we
+    # stay insensitive to additional columns added later.
+    workspaces = body["workspaces"]
+    assert [(w["id"], w["name"]) for w in workspaces] == [
+        ("ws-1", "WS One"),
+        ("ws-2", "WS Two"),
     ]
+    # And: the git_* provenance fields are present (may be None for
+    # workspaces not connected to a git provider).
+    for w in workspaces:
+        for key in ("git_connected", "git_provider", "git_branch", "git_repo_name"):
+            assert key in w, f"missing {key} in {w}"
     assert body["source"] == "refreshed"
     assert body["cached_at"] is not None

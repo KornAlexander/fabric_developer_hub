@@ -6,17 +6,25 @@
  * of the signed-in user.
  */
 
+import { currentRequestId } from '../utils/correlation';
+
 const BE = process.env.WORKLOAD_BE_URL || '';
 
 interface FetchOpts {
     githubToken?: string;
     fabricToken?: string;
+    /** Optional explicit request ID; when omitted, falls back to the
+     *  current `withRequestId(...)` scope. Stamped onto `X-Request-ID`
+     *  so backend log lines correlate to the originating user action. */
+    requestId?: string;
 }
 
 function headers(opts: FetchOpts): Record<string, string> {
     const h: Record<string, string> = { 'Content-Type': 'application/json' };
     if (opts.githubToken) h['Authorization'] = `Bearer ${opts.githubToken}`;
     if (opts.fabricToken) h['X-Fabric-Token'] = `Bearer ${opts.fabricToken}`;
+    const rid = opts.requestId ?? currentRequestId();
+    if (rid) h['X-Request-ID'] = rid;
     return h;
 }
 

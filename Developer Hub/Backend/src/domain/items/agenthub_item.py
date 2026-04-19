@@ -3,12 +3,12 @@ from typing import Any
 from uuid import UUID
 
 from domain.constants.workload_constants import WorkloadConstants
-from fabric_api.models.item_job_instance_state import ItemJobInstanceState
-from fabric_api.models.job_instance_status import JobInstanceStatus
-from fabric_api.models.job_invoke_type import JobInvokeType
 from domain.items.base_item import ItemBase
 from domain.models.agenthub_metadata import AgentHubMetadata
 from domain.models.authentication_models import AuthorizationContext
+from fabric_api.models.item_job_instance_state import ItemJobInstanceState
+from fabric_api.models.job_instance_status import JobInstanceStatus
+from fabric_api.models.job_invoke_type import JobInvokeType
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,12 @@ class AgentHubItem(ItemBase[dict[str, Any], dict[str, Any]]):
     def item_type(self) -> str:
         return WorkloadConstants.ItemTypes.AGENTHUB_ITEM
 
-    def get_metadata_class(self) -> type[AgentHubMetadata]:
+    # NOTE: Base class is generically specialised with TItemMetadata=dict[str, Any]
+    # (matching the runtime contract exposed by ``get_type_specific_metadata`` —
+    # see tests). Internally we still use ``AgentHubMetadata`` for validation,
+    # so this classmethod returns the model class. The ``[override]`` ignore
+    # documents the intentional variance.
+    def get_metadata_class(self) -> type[AgentHubMetadata]:  # type: ignore[override]
         return AgentHubMetadata
 
     # ── Lifecycle hooks ───────────────────────────────────────────

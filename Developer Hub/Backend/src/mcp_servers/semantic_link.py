@@ -27,10 +27,9 @@ _SRC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
 
-import httpx
 from mcp.server.fastmcp import FastMCP
 
-from mcp_servers._common import format_http_error
+from mcp_servers._common import format_http_error, shared_client
 
 # ── Constants ────────────────────────────────────────────────────────
 
@@ -76,7 +75,7 @@ async def sl_evaluate_dax(
     """
     body = {"queries": [{"query": dax_query}], "serializerSettings": {"includeNulls": True}}
     url = f"{PBI_API}/groups/{workspace_id}/datasets/{dataset_id}/executeQueries"
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    async with shared_client(60.0) as client:
         resp = await client.post(url, json=body, headers=_pbi_headers())
     if resp.status_code != 200:
         return format_http_error(resp)
@@ -104,7 +103,7 @@ async def sl_get_semantic_model_definition(
     """
     url = f"{FABRIC_API}/workspaces/{workspace_id}/semanticModels/{dataset_id}/getDefinition"
     hdrs = _headers()
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    async with shared_client(60.0) as client:
         resp = await client.post(url, headers=hdrs)
         if resp.status_code == 200:
             return json.dumps(resp.json().get("definition", {}).get("parts", []), indent=2)
@@ -131,7 +130,7 @@ async def sl_list_semantic_models(
         workspace_id: Workspace UUID.
     """
     url = f"{PBI_API}/groups/{workspace_id}/datasets"
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with shared_client(30.0) as client:
         resp = await client.get(url, headers=_pbi_headers())
     if resp.status_code != 200:
         return format_http_error(resp)
@@ -191,7 +190,7 @@ async def sl_refresh_semantic_model(
     """
     body = {"type": refresh_type}
     url = f"{PBI_API}/groups/{workspace_id}/datasets/{dataset_id}/refreshes"
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with shared_client(30.0) as client:
         resp = await client.post(url, json=body, headers=_pbi_headers())
     if resp.status_code == 202:
         return json.dumps({"status": "refresh_triggered", "dataset_id": dataset_id})
@@ -212,7 +211,7 @@ async def sl_get_refresh_history(
         top: Number of recent refreshes to return (default 10).
     """
     url = f"{PBI_API}/groups/{workspace_id}/datasets/{dataset_id}/refreshes?$top={top}"
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with shared_client(30.0) as client:
         resp = await client.get(url, headers=_pbi_headers())
     if resp.status_code != 200:
         return format_http_error(resp)
@@ -233,7 +232,7 @@ async def sl_cancel_refresh(
         refresh_id: The refresh request ID to cancel.
     """
     url = f"{PBI_API}/groups/{workspace_id}/datasets/{dataset_id}/refreshes/{refresh_id}"
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with shared_client(30.0) as client:
         resp = await client.delete(url, headers=_pbi_headers())
     if resp.status_code in (200, 204):
         return json.dumps({"status": "cancelled", "refresh_id": refresh_id})
@@ -254,7 +253,7 @@ async def sl_list_reports(
         workspace_id: Workspace UUID.
     """
     url = f"{PBI_API}/groups/{workspace_id}/reports"
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with shared_client(30.0) as client:
         resp = await client.get(url, headers=_pbi_headers())
     if resp.status_code != 200:
         return format_http_error(resp)
@@ -284,7 +283,7 @@ async def sl_get_report_definition(
     """
     url = f"{FABRIC_API}/workspaces/{workspace_id}/reports/{report_id}/getDefinition"
     hdrs = _headers()
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    async with shared_client(60.0) as client:
         resp = await client.post(url, headers=hdrs)
         if resp.status_code == 200:
             return json.dumps(resp.json().get("definition", {}).get("parts", []), indent=2)
@@ -324,7 +323,7 @@ async def sl_clone_report(
     if target_dataset_id:
         body["targetModelId"] = target_dataset_id
     url = f"{PBI_API}/groups/{workspace_id}/reports/{report_id}/Clone"
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with shared_client(30.0) as client:
         resp = await client.post(url, json=body, headers=_pbi_headers())
     if resp.status_code in (200, 201):
         return json.dumps(resp.json(), indent=2)
@@ -346,7 +345,7 @@ async def sl_rebind_report(
     """
     body = {"datasetId": target_dataset_id}
     url = f"{PBI_API}/groups/{workspace_id}/reports/{report_id}/Rebind"
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with shared_client(30.0) as client:
         resp = await client.post(url, json=body, headers=_pbi_headers())
     if resp.status_code in (200, 204):
         return json.dumps({"status": "rebound", "report_id": report_id, "dataset_id": target_dataset_id})
@@ -370,7 +369,7 @@ async def sl_export_report(
     """
     body = {"format": export_format}
     url = f"{PBI_API}/groups/{workspace_id}/reports/{report_id}/ExportTo"
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with shared_client(30.0) as client:
         resp = await client.post(url, json=body, headers=_pbi_headers())
     if resp.status_code == 202:
         return json.dumps(resp.json(), indent=2)
@@ -391,7 +390,7 @@ async def sl_list_lakehouses(
         workspace_id: Workspace UUID.
     """
     url = f"{FABRIC_API}/workspaces/{workspace_id}/lakehouses"
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with shared_client(30.0) as client:
         resp = await client.get(url, headers=_headers())
     if resp.status_code != 200:
         return format_http_error(resp)
@@ -410,7 +409,7 @@ async def sl_get_lakehouse_tables(
         lakehouse_id: Lakehouse UUID.
     """
     url = f"{FABRIC_API}/workspaces/{workspace_id}/lakehouses/{lakehouse_id}/tables"
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with shared_client(30.0) as client:
         resp = await client.get(url, headers=_headers())
     if resp.status_code != 200:
         return format_http_error(resp)
@@ -446,7 +445,7 @@ async def sl_run_table_maintenance(
     }
     config = {k: v for k, v in config.items() if v is not None}
     body = {"executionData": {"configuration": config}}
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with shared_client(30.0) as client:
         resp = await client.post(url, json=body, headers=_headers())
     if resp.status_code in (200, 202):
         return json.dumps({"status": "maintenance_triggered", "table": table_name})
@@ -473,7 +472,7 @@ async def sl_list_shortcuts(
     url = f"{FABRIC_API}/workspaces/{workspace_id}/items/{item_id}/shortcuts"
     if parent_path:
         url += f"?parentPath={parent_path}"
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with shared_client(30.0) as client:
         resp = await client.get(url, headers=_headers())
     if resp.status_code != 200:
         return format_http_error(resp)
@@ -513,7 +512,7 @@ async def sl_create_shortcut(
         },
     }
     url = f"{FABRIC_API}/workspaces/{workspace_id}/items/{item_id}/shortcuts"
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with shared_client(30.0) as client:
         resp = await client.post(url, json=body, headers=_headers())
     if resp.status_code in (200, 201):
         return json.dumps(resp.json(), indent=2)
@@ -534,7 +533,7 @@ async def sl_list_workspace_users(
         workspace_id: Workspace UUID.
     """
     url = f"{FABRIC_API}/workspaces/{workspace_id}/roleAssignments"
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with shared_client(30.0) as client:
         resp = await client.get(url, headers=_headers())
     if resp.status_code != 200:
         return format_http_error(resp)
@@ -561,7 +560,7 @@ async def sl_add_workspace_user(
         "role": role,
     }
     url = f"{FABRIC_API}/workspaces/{workspace_id}/roleAssignments"
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with shared_client(30.0) as client:
         resp = await client.post(url, json=body, headers=_headers())
     if resp.status_code in (200, 201):
         return json.dumps({"status": "added", "principal_id": principal_id, "role": role})
@@ -581,7 +580,7 @@ async def sl_assign_workspace_to_capacity(
     """
     body = {"capacityId": capacity_id}
     url = f"{FABRIC_API}/workspaces/{workspace_id}/assignToCapacity"
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with shared_client(30.0) as client:
         resp = await client.post(url, json=body, headers=_headers())
     if resp.status_code in (200, 202):
         return json.dumps({"status": "assigned", "workspace_id": workspace_id, "capacity_id": capacity_id})
@@ -602,7 +601,7 @@ async def sl_get_git_connection(
         workspace_id: Workspace UUID.
     """
     url = f"{FABRIC_API}/workspaces/{workspace_id}/git/connection"
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with shared_client(30.0) as client:
         resp = await client.get(url, headers=_headers())
     if resp.status_code != 200:
         return format_http_error(resp)
@@ -619,7 +618,7 @@ async def sl_get_git_status(
         workspace_id: Workspace UUID.
     """
     url = f"{FABRIC_API}/workspaces/{workspace_id}/git/status"
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with shared_client(30.0) as client:
         resp = await client.post(url, headers=_headers())
         if resp.status_code == 200:
             return json.dumps(resp.json(), indent=2)
@@ -647,7 +646,7 @@ async def sl_commit_to_git(
     """
     body = {"mode": "All", "comment": comment}
     url = f"{FABRIC_API}/workspaces/{workspace_id}/git/commitToGit"
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    async with shared_client(60.0) as client:
         resp = await client.post(url, json=body, headers=_headers())
     if resp.status_code in (200, 202):
         return json.dumps({"status": "committed", "comment": comment})
@@ -665,7 +664,7 @@ async def sl_update_from_git(
     """
     body = {"conflictResolution": {"conflictResolutionType": "Workspace"}}
     url = f"{FABRIC_API}/workspaces/{workspace_id}/git/updateFromGit"
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    async with shared_client(60.0) as client:
         resp = await client.post(url, json=body, headers=_headers())
     if resp.status_code in (200, 202):
         return json.dumps({"status": "update_triggered"})
@@ -694,7 +693,7 @@ async def sl_deploy_semantic_model(
         target_dataset_name: Display name in the target workspace.
     """
     hdrs = _headers()
-    async with httpx.AsyncClient(timeout=120.0) as client:
+    async with shared_client(120.0) as client:
         # 1. Get source definition
         resp = await client.post(
             f"{FABRIC_API}/workspaces/{source_workspace_id}/semanticModels/{source_dataset_id}/getDefinition",
@@ -745,7 +744,7 @@ async def sl_admin_list_workspaces(
     url = f"{PBI_API}/admin/groups?$top={top}"
     if state:
         url += f"&$filter=state eq '{state}'"
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with shared_client(30.0) as client:
         resp = await client.get(url, headers=_pbi_headers())
     if resp.status_code != 200:
         return format_http_error(resp)
@@ -774,7 +773,7 @@ async def sl_admin_list_datasets(
         top: Number of datasets to return.
     """
     url = f"{PBI_API}/admin/datasets?$top={top}"
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with shared_client(30.0) as client:
         resp = await client.get(url, headers=_pbi_headers())
     if resp.status_code != 200:
         return format_http_error(resp)
@@ -799,7 +798,7 @@ async def sl_admin_get_activity_events(
     url = f"{PBI_API}/admin/activityevents?startDateTime='{start_date}'&endDateTime='{end_date}'"
     if activity_type:
         url += f"&$filter=Activity eq '{activity_type}'"
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    async with shared_client(60.0) as client:
         resp = await client.get(url, headers=_pbi_headers())
     if resp.status_code != 200:
         return format_http_error(resp)
@@ -816,7 +815,7 @@ async def sl_admin_list_workspace_users(
         workspace_id: Workspace UUID.
     """
     url = f"{PBI_API}/admin/groups/{workspace_id}/users"
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with shared_client(30.0) as client:
         resp = await client.get(url, headers=_pbi_headers())
     if resp.status_code != 200:
         return format_http_error(resp)
@@ -833,7 +832,7 @@ async def sl_admin_list_dataset_users(
         dataset_id: Semantic model UUID.
     """
     url = f"{PBI_API}/admin/datasets/{dataset_id}/users"
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with shared_client(30.0) as client:
         resp = await client.get(url, headers=_pbi_headers())
     if resp.status_code != 200:
         return format_http_error(resp)
@@ -848,7 +847,7 @@ async def sl_admin_list_dataset_users(
 async def sl_list_connections() -> str:
     """List all connections the user has access to."""
     url = f"{FABRIC_API}/connections"
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with shared_client(30.0) as client:
         resp = await client.get(url, headers=_headers())
     if resp.status_code != 200:
         return format_http_error(resp)
@@ -859,7 +858,7 @@ async def sl_list_connections() -> str:
 async def sl_list_gateways() -> str:
     """List all on-premises data gateways the user has access to."""
     url = f"{PBI_API}/gateways"
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with shared_client(30.0) as client:
         resp = await client.get(url, headers=_pbi_headers())
     if resp.status_code != 200:
         return format_http_error(resp)
@@ -883,7 +882,7 @@ async def sl_get_notebook_definition(
     """
     url = f"{FABRIC_API}/workspaces/{workspace_id}/notebooks/{notebook_id}/getDefinition"
     hdrs = _headers()
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    async with shared_client(60.0) as client:
         resp = await client.post(url, headers=hdrs)
         if resp.status_code == 200:
             return json.dumps(resp.json().get("definition", {}).get("parts", []), indent=2)
@@ -914,7 +913,7 @@ async def sl_list_data_pipelines(
         workspace_id: Workspace UUID.
     """
     url = f"{FABRIC_API}/workspaces/{workspace_id}/dataPipelines"
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with shared_client(30.0) as client:
         resp = await client.get(url, headers=_headers())
     if resp.status_code != 200:
         return format_http_error(resp)
@@ -933,7 +932,7 @@ async def sl_run_data_pipeline(
         pipeline_id: Data pipeline UUID.
     """
     url = f"{FABRIC_API}/workspaces/{workspace_id}/items/{pipeline_id}/jobs/instances?jobType=Pipeline"
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with shared_client(30.0) as client:
         resp = await client.post(url, headers=_headers())
     if resp.status_code in (200, 202):
         return json.dumps({"status": "pipeline_triggered", "pipeline_id": pipeline_id})
@@ -954,7 +953,7 @@ async def sl_list_warehouses(
         workspace_id: Workspace UUID.
     """
     url = f"{FABRIC_API}/workspaces/{workspace_id}/warehouses"
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with shared_client(30.0) as client:
         resp = await client.get(url, headers=_headers())
     if resp.status_code != 200:
         return format_http_error(resp)
@@ -975,7 +974,7 @@ async def sl_list_sql_endpoints(
         workspace_id: Workspace UUID.
     """
     url = f"{FABRIC_API}/workspaces/{workspace_id}/sqlEndpoints"
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with shared_client(30.0) as client:
         resp = await client.get(url, headers=_headers())
     if resp.status_code != 200:
         return format_http_error(resp)
@@ -990,7 +989,7 @@ async def sl_list_sql_endpoints(
 async def sl_list_capacities() -> str:
     """List all Fabric/Power BI capacities the user has access to."""
     url = f"{PBI_API}/capacities"
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with shared_client(30.0) as client:
         resp = await client.get(url, headers=_pbi_headers())
     if resp.status_code != 200:
         return format_http_error(resp)
@@ -1011,7 +1010,7 @@ async def sl_list_mirrored_databases(
         workspace_id: Workspace UUID.
     """
     url = f"{FABRIC_API}/workspaces/{workspace_id}/mirroredDatabases"
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with shared_client(30.0) as client:
         resp = await client.get(url, headers=_headers())
     if resp.status_code != 200:
         return format_http_error(resp)
@@ -1030,7 +1029,7 @@ async def sl_get_mirroring_status(
         mirrored_db_id: Mirrored database UUID.
     """
     url = f"{FABRIC_API}/workspaces/{workspace_id}/mirroredDatabases/{mirrored_db_id}/getMirroringStatus"
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with shared_client(30.0) as client:
         resp = await client.post(url, headers=_headers())
     if resp.status_code != 200:
         return format_http_error(resp)
@@ -1055,7 +1054,7 @@ async def sl_list_item_schedules(
         job_type: Job type (default 'DefaultJob').
     """
     url = f"{FABRIC_API}/workspaces/{workspace_id}/items/{item_id}/jobs/{job_type}/schedules"
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with shared_client(30.0) as client:
         resp = await client.get(url, headers=_headers())
     if resp.status_code != 200:
         return format_http_error(resp)
@@ -1076,7 +1075,7 @@ async def sl_run_item_job(
         job_type: Job type — 'DefaultJob', 'Pipeline', 'RunNotebook', etc.
     """
     url = f"{FABRIC_API}/workspaces/{workspace_id}/items/{item_id}/jobs/instances?jobType={job_type}"
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with shared_client(30.0) as client:
         resp = await client.post(url, headers=_headers())
     if resp.status_code in (200, 202):
         return json.dumps({"status": "job_triggered", "item_id": item_id, "job_type": job_type})
@@ -1101,7 +1100,7 @@ async def sl_set_endorsement(
         endorsement: 'Promoted', 'Certified', or 'None'.
     """
     body = {"endorsementDetails": {"endorsement": endorsement}}
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with shared_client(30.0) as client:
         # Try the endorsement API
         resp = await client.patch(
             f"{FABRIC_API}/workspaces/{workspace_id}/items/{item_id}",

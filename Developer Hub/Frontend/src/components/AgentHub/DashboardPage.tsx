@@ -479,7 +479,8 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
                                         : "—";
                                     const isOk = job.status === "completed";
                                     const isCancelled = job.status === "cancelled";
-                                    const isFailed = job.status === "failed";
+                                    // "failed" is the residual branch \u2014 derived implicitly as
+                                    // ``!isOk && !isCancelled`` below to colour the status chip.
                                     // Distinct visual per outcome — cancelled is user-initiated
                                     // and neutral, NOT an error (which was the old behavior).
                                     const statusKind: "ok" | "cancelled" | "err" = isOk

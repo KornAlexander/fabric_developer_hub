@@ -40,11 +40,15 @@ class ItemBase[TItemMetadata, TItemClientMetadata](ABC):
         self.authentication_service = get_authentication_service()
         self.onelake_client_service = get_onelake_client_service()
 
-        self.tenant_object_id = None
-        self.workspace_object_id = None
-        self.item_object_id = None
-        self.display_name = None
-        self.description = None
+        # These are populated during ``load()`` or ``create()`` — before
+        # either call, the item is in an "unloaded" state and accessing
+        # them is a programming error. Typed as ``str | None`` so mypy
+        # catches the occasional reader that forgets to check.
+        self.tenant_object_id: str | None = None
+        self.workspace_object_id: str | None = None
+        self.item_object_id: str | None = None
+        self.display_name: str | None = None
+        self.description: str | None = None
 
     def _ensure_not_null(self, obj: Any, name: str) -> Any:
         if obj is None:
@@ -54,6 +58,34 @@ class ItemBase[TItemMetadata, TItemClientMetadata](ABC):
     def _ensure_condition(self, condition: bool, description: str) -> None:
         if not condition:
             raise InvariantViolationException(f"Condition violation detected: {description}")
+
+    def _require_tenant_id(self) -> str:
+        """Return ``self.tenant_object_id`` narrowed to ``str``.
+
+        Any call path that touches the metadata store or needs to write
+        tenant-scoped data goes through here. If the auth context never
+        populated a tenant claim (e.g. an app-only token on an endpoint
+        that didn't require the tenant header), that's a programming
+        error — raise an ``InvariantViolationException`` so the failure
+        mode is a clean 500 rather than a downstream ``TypeError``.
+        """
+        if self.tenant_object_id is None:
+            raise InvariantViolationException(
+                "tenant_object_id is not populated — item is not loaded or "
+                "auth context lacks a tenant claim"
+            )
+        return self.tenant_object_id
+
+    def _require_item_id(self) -> str:
+        """Return ``self.item_object_id`` narrowed to ``str``.
+
+        Counterpart to :meth:`_require_tenant_id` — see its docstring.
+        """
+        if self.item_object_id is None:
+            raise InvariantViolationException(
+                "item_object_id is not populated — item is not loaded"
+            )
+        return self.item_object_id
 
     @property
     @abstractmethod
@@ -70,12 +102,20 @@ class ItemBase[TItemMetadata, TItemClientMetadata](ABC):
         """Load an existing item or create a default one if not found."""
         self.logger.info("Loading item %s", item_id)
         self.item_object_id = str(item_id)
-        tenant_object_id = self.auth_context.tenant_object_id
+        # ``load()`` always requires a populated auth context — callers that
+        # haven't authenticated can't ask for an item by ID. Narrow here so
+        # the rest of the method is ``str`` (and the metadata-store's
+        # stricter ``str`` signatures line up).
+        if self.auth_context.tenant_object_id is None:
+            raise InvariantViolationException(
+                "auth_context.tenant_object_id must be populated before load()"
+            )
+        tenant_object_id: str = self.auth_context.tenant_object_id
 
         # Check if the item exists in storage
         if not await self.item_metadata_store.exists(tenant_object_id, str(item_id)):
             self.logger.error("Item %s not found", item_id)
-            raise ItemMetadataNotFoundException(f"Item not found: {item_id}")
+            raise ItemMetadataNotFoundException(item_id)
 
         metadata_class = self.get_metadata_class()
 
@@ -141,7 +181,13 @@ class ItemBase[TItemMetadata, TItemClientMetadata](ABC):
         )
         self.logger.debug("Creation payload: %s", create_request.creation_payload)
 
-        self.set_definition(create_request.creation_payload)
+        if create_request.creation_payload is None:
+            # Create with empty default metadata rather than crashing — the
+            # OpenAPI layer may optionally send a payload; items define
+            # their own defaults in ``set_definition``.
+            self.set_definition({})
+        else:
+            self.set_definition(create_request.creation_payload)
         self.logger.debug("Creating item with tenant ID: %s", self.tenant_object_id)
         await self.save_changes()
         self.logger.info("Successfully created item %s", item_id)
@@ -154,18 +200,20 @@ class ItemBase[TItemMetadata, TItemClientMetadata](ABC):
                 self.item_type,
                 self.item_object_id,
             )
-            raise InvalidItemPayloadException(self.item_type, self.item_object_id)
+            raise InvalidItemPayloadException(self.item_type, self._require_item_id())
 
         self.display_name = update_request.display_name
         self.description = update_request.description
 
+        if update_request.update_payload is None:
+            raise InvalidItemPayloadException(self.item_type, self._require_item_id())
         self.update_definition(update_request.update_payload)
         await self.save_changes()
         self.logger.info("Successfully updated item %s", self.item_object_id)
 
     async def delete(self) -> None:
         """Delete an existing item."""
-        await self.item_metadata_store.delete(self.tenant_object_id, self.item_object_id)
+        await self.item_metadata_store.delete(self._require_tenant_id(), self._require_item_id())
         self.logger.info("Successfully deleted item %s", self.item_object_id)
 
     @abstractmethod
@@ -206,14 +254,16 @@ class ItemBase[TItemMetadata, TItemClientMetadata](ABC):
         """Cancel a job instance."""
         # Check if job metadata exists
         job_metadata = None
+        tenant_id = self._require_tenant_id()
+        item_id = self._require_item_id()
 
-        if not await self.item_metadata_store.exists_job(self.tenant_object_id, self.item_object_id, str(job_instance_id)):
+        if not await self.item_metadata_store.exists_job(tenant_id, item_id, str(job_instance_id)):
             # Recreate missing job metadata
             self.logger.warning(
                 "Recreating missing job %s metadata in tenant %s item %s",
                 job_instance_id,
-                self.tenant_object_id,
-                self.item_object_id,
+                tenant_id,
+                item_id,
             )
             # Create new JobMetadata instance
             job_metadata = JobMetadata(
@@ -222,7 +272,7 @@ class ItemBase[TItemMetadata, TItemClientMetadata](ABC):
             )
         else:
             # Load existing job metadata
-            job_metadata = await self.item_metadata_store.load_job(self.tenant_object_id, self.item_object_id, str(job_instance_id))
+            job_metadata = await self.item_metadata_store.load_job(tenant_id, item_id, str(job_instance_id))
 
         # If already canceled, nothing to do
         if job_metadata.is_canceled:
@@ -233,8 +283,8 @@ class ItemBase[TItemMetadata, TItemClientMetadata](ABC):
 
         # Update job metadata
         await self.item_metadata_store.upsert_job(
-            self.tenant_object_id,
-            self.item_object_id,
+            tenant_id,
+            item_id,
             str(job_instance_id),
             job_metadata
         )
@@ -254,11 +304,13 @@ class ItemBase[TItemMetadata, TItemClientMetadata](ABC):
     async def store(self) -> None:
         """Store the item metadata."""
         self.logger.info("Storing item %s", self.item_object_id)
+        tenant_id = self._require_tenant_id()
+        item_id = self._require_item_id()
         common_metadata = CommonItemMetadata(
             type=self.item_type,
-            tenant_object_id=self.tenant_object_id,
+            tenant_object_id=tenant_id,
             workspace_object_id=self.workspace_object_id,
-            item_object_id=self.item_object_id,
+            item_object_id=item_id,
             display_name=self.display_name,
             description=self.description
         )
@@ -266,8 +318,8 @@ class ItemBase[TItemMetadata, TItemClientMetadata](ABC):
         type_specific_metadata = self.get_type_specific_metadata()
 
         await self.item_metadata_store.upsert(
-            self.tenant_object_id,
-            self.item_object_id,
+            tenant_id,
+            item_id,
             common_metadata,
             type_specific_metadata
         )

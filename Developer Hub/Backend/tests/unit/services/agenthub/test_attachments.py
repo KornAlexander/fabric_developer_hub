@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 import base64
-import io
-import struct
 import zlib
 
 import pytest
@@ -14,8 +12,6 @@ from services.agenthub.attachments import (
     ATTACHMENT_SHIELD_PROMPT,
     MAX_BYTES_PER_FILE,
     MAX_PDF_PAGES,
-    MAX_PDF_TEXT_CHARS,
-    MAX_TOTAL_BYTES,
     _decode_data_uri,
     _extract_pdf_text,
     process_attachments,

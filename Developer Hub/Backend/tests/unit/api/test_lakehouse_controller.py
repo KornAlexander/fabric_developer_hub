@@ -7,7 +7,6 @@ app with the auth + onelake/lakehouse services mocked.
 from __future__ import annotations
 
 from unittest.mock import AsyncMock
-from uuid import UUID
 
 import pytest
 from fastapi import FastAPI

@@ -102,8 +102,8 @@ class AuthenticationUIRequiredException(WorkloadExceptionBase):
             is_permanent=False
         )
         # Initialize private attributes to store claims and scopes
-        self._claims_for_conditional_access = None
-        self._additional_scopes_to_consent = None
+        self._claims_for_conditional_access: str | None = None
+        self._additional_scopes_to_consent: list[str] | None = None
 
     @property
     def claims_for_conditional_access_policy(self) -> str | None:
@@ -210,7 +210,7 @@ class DoubledOperandsOverflowException(WorkloadExceptionBase):
 class ItemMetadataNotFoundException(WorkloadExceptionBase):
     """Exception raised when an item's metadata cannot be found."""
 
-    def __init__(self, item_object_id: UUID):
+    def __init__(self, item_object_id: UUID | str):
         super().__init__(
             http_status_code=status.HTTP_404_NOT_FOUND,
             error_code=ErrorCodes.Item.ITEM_METADATA_NOT_FOUND,
@@ -249,7 +249,7 @@ class KustoDataException(WorkloadExceptionBase):
 class MissingLakehouseReferenceException(WorkloadExceptionBase):
     """Exception raised when a lakehouse reference is required but missing."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(
             http_status_code=status.HTTP_400_BAD_REQUEST,
             error_code=ErrorCodes.INVALID_REQUEST,

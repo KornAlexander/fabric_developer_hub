@@ -32,12 +32,11 @@ import re
 import subprocess
 import sys
 import zipfile
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator
 from xml.etree import ElementTree as ET
 
 import pytest
-
 
 # ───────────────────────── Paths / constants ──────────────────────────
 
@@ -304,9 +303,16 @@ class TestFrontendManifestPathContract:
         backend_dir = DEV_HUB_ROOT / "Backend"
         python_subdir = backend_dir / "python"
 
-        # Look for the error string emitted on 404.
+        # Look for the error string emitted on 404. The emitter is
+        # ``webpackConsole.error(...)`` — a small wrapper defined in
+        # ``webpack.config.js`` that prefixes lines with a distinct glyph
+        # so operators can tell workload-server errors from the
+        # ``webpack-dev-server`` chrome. Accept both the wrapper and the
+        # plain ``console.error`` so the test does not lock us into one
+        # specific helper name.
         console_err_match = re.search(
-            r"console\.error\(\s*`([^`]*ManifestPackage[^`]*)`", webpack_config_text
+            r"(?:webpackC|c)onsole\.error\(\s*`([^`]*ManifestPackage[^`]*)`",
+            webpack_config_text,
         )
         assert console_err_match, (
             "webpack 404 handler no longer logs a ManifestPackage message — "

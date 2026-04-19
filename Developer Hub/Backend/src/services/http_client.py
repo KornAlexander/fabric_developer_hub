@@ -5,6 +5,7 @@ from typing import Any
 import httpx
 
 from app.core.service_registry import get_service_registry
+from services.correlation import get_request_id
 
 
 class HttpClientService:
@@ -24,10 +25,22 @@ class HttpClientService:
             ),
             follow_redirects=False,
             event_hooks={
-                "request": [self._log_request],
+                "request": [self._inject_request_id, self._log_request],
                 "response": [self._log_response]
             }
         )
+
+    async def _inject_request_id(self, request: httpx.Request) -> None:
+        """Propagate the current inbound request's ID to every outbound call.
+
+        Lets log lines on downstream services (Fabric REST, Copilot, MCP) be
+        correlated back to the originating user action. Only set when the
+        caller hasn't already supplied an ``X-Request-ID`` header.
+        """
+        if "X-Request-ID" not in request.headers:
+            rid = get_request_id()
+            if rid and rid != "-":
+                request.headers["X-Request-ID"] = rid
 
     async def _log_request(self, request: httpx.Request) -> None:
         self.logger.debug("Request: %s %s", request.method, request.url)
@@ -80,6 +93,20 @@ class HttpClientService:
         """Dispose method for ServiceRegistry cleanup."""
         await self.close()
 
+    @property
+    def raw_client(self) -> httpx.AsyncClient:
+        """Underlying pooled ``httpx.AsyncClient`` for callers that cannot use the
+        token-wrapping helpers.
+
+        Callers that need to hit non-Fabric endpoints with non-Bearer auth
+        (e.g. GitHub Device Flow, the Copilot ``api.githubcopilot.com`` API
+        which expects its own token format, health probes) should use this
+        instead of spinning up a new ``httpx.AsyncClient`` per request. The
+        client is process-wide and owned by ``ServiceRegistry`` — do NOT
+        close it.
+        """
+        return self._client
+
     def _get_headers(self, token: str) -> dict[str, str]:
         """Create headers with proper authorization."""
         headers = {}
@@ -96,6 +123,7 @@ class HttpClientService:
         headers.update(kwargs.pop('headers', {}))
 
         max_retries = 3
+        last_exc: Exception | None = None
         for attempt in range(max_retries):
             try:
                 response = await getattr(self._client, method)(
@@ -104,6 +132,7 @@ class HttpClientService:
                 response.raise_for_status()
                 return response
             except httpx.HTTPStatusError as e:
+                last_exc = e
                 if e.response.status_code >= 500 and attempt < max_retries - 1:
                     wait_time = 2 ** attempt
                     self.logger.warning(
@@ -114,6 +143,7 @@ class HttpClientService:
                     continue
                 raise
             except httpx.RequestError as e:
+                last_exc = e
                 if attempt < max_retries - 1:
                     wait_time = 2 ** attempt
                     self.logger.warning(
@@ -123,6 +153,11 @@ class HttpClientService:
                     await asyncio.sleep(wait_time)
                     continue
                 raise
+        # Unreachable — every code path in the loop either returns or raises —
+        # but mypy needs an explicit terminator to type ``_make_request`` as
+        # "always returns ``httpx.Response``".
+        assert last_exc is not None  # pragma: no cover
+        raise last_exc  # pragma: no cover
 
     async def get(self, url: str, token: str) -> httpx.Response:
         """Performs a GET request to the specified URL."""
@@ -130,7 +165,7 @@ class HttpClientService:
 
     async def put(self, url: str, content: Any, token: str) -> httpx.Response:
         """Performs a PUT request to the specified URL."""
-        kwargs = {}
+        kwargs: dict[str, Any] = {}
         if content == "":
             kwargs['content'] = b""
         elif content is None:
@@ -148,7 +183,7 @@ class HttpClientService:
 
     async def post(self, url: str, content: Any, token: str) -> httpx.Response:
         """Performs a POST request to the specified URL."""
-        kwargs = {}
+        kwargs: dict[str, Any] = {}
         if isinstance(content, (str, bytes)):
             if isinstance(content, str):
                 content = content.encode('utf-8')
@@ -162,8 +197,8 @@ class HttpClientService:
     async def patch(self, url: str, content: Any | None, token: str,
                    content_type: str | None = None) -> httpx.Response:
         """Performs a PATCH request to the specified URL."""
-        kwargs = {}
-        headers = {}
+        kwargs: dict[str, Any] = {}
+        headers: dict[str, str] = {}
 
         if content is None:
             pass  # No content

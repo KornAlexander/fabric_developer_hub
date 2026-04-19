@@ -19,11 +19,11 @@ from uuid import UUID
 import httpx
 import pytest
 
+from app.core.service_registry import ServiceRegistry
 from services.fabric.lakehouse_client_service import (
     LakehouseClientService,
     get_lakehouse_client_service,
 )
-from app.core.service_registry import ServiceRegistry
 
 
 def _resp(status: int, json_body: dict | None = None, raise_for_status: bool = False) -> MagicMock:

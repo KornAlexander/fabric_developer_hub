@@ -7,6 +7,7 @@ determining the appropriate service endpoint URL based on the provided context.
 
 import json
 import logging
+from typing import Any
 
 from fastapi import HTTPException
 from starlette.requests import Request
@@ -140,7 +141,7 @@ class EndpointResolutionController(BaseEndpointResolutionApi):
             The resolved endpoint URL
         """
         # Extract context properties for potential routing logic
-        context_dict = {prop.name: prop.value for prop in request.context}
+        context_dict: dict[str, Any] = {prop.name: prop.value for prop in request.context}
 
         self.logger.debug("Endpoint resolution context: %s", context_dict)
 

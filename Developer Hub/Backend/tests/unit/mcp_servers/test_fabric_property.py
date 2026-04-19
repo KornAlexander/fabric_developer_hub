@@ -13,14 +13,14 @@ Complements ``test_fabric_tools.py`` with:
 from __future__ import annotations
 
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
-from hypothesis import HealthCheck, given, settings, strategies as st
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 from jose import jwt
 
 from mcp_servers import fabric
-
 
 # ── Hypothesis: route segmentation ──────────────────────────────────
 
@@ -61,7 +61,7 @@ def _make_jwt(claims: dict) -> str:
     """Build an unverified-readable JWT — signature isn't verified by
     ``jwt.get_unverified_claims``, so we sign with HS256 + a throwaway key."""
     payload = {
-        "exp": datetime.now(timezone.utc) + timedelta(hours=1),
+        "exp": datetime.now(UTC) + timedelta(hours=1),
         **claims,
     }
     return jwt.encode(payload, "test-secret", algorithm="HS256")

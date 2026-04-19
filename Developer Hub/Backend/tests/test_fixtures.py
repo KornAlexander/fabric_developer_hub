@@ -10,11 +10,11 @@ from uuid import UUID
 from domain.constants.environment_constants import EnvironmentConstants
 from domain.models.authentication_models import AuthorizationContext, Claim
 from services.auth.authentication import AuthenticationService
-from services.configuration_service import ConfigurationService
 from services.auth.open_id_connect_configuration import (
     OpenIdConnectConfiguration,
     OpenIdConnectConfigurationManager,
 )
+from services.configuration_service import ConfigurationService
 
 
 class TestFixtures:

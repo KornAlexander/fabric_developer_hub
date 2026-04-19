@@ -5,7 +5,10 @@ from fastapi import APIRouter, Depends, Request
 
 from domain.constants.onelake_constants import OneLakeConstants
 from domain.constants.workload_scopes import WorkloadScopes
-from services.auth.authentication import AuthenticationService, get_authentication_service
+from services.auth.authentication import (
+    AuthenticationService,
+    get_authentication_service,
+)
 from services.fabric.onelake_client_service import (
     OneLakeClientService,
     get_onelake_client_service,
