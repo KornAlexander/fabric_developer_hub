@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 # Cache TTL: refetch from Fabric if the newest row in the cache is older
 # than this. The frontend can override with ?refresh=true.
-CACHE_TTL = timedelta(hours=1)
+CACHE_TTL = timedelta(hours=6)
 
 
 @dataclass(frozen=True)

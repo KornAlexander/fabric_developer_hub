@@ -338,10 +338,20 @@ export async function callDatahubOpen(
     const selectedItem = result.selectedDatahubItem[0];
     const { itemObjectId, workspaceObjectId } = selectedItem;
     const { displayName, description } = selectedItem.datahubItemUI;
+    // The runtime sometimes puts a numeric enum into ``itemType`` — the
+    // official string-typed field is ``fabricItemType``. Prefer that,
+    // then fall back to a legacy ``itemType``, and finally drop anything
+    // that isn't a proper non-empty identifier string so downstream code
+    // doesn't surface "12" in tooltips.
+    const uiAny = selectedItem.datahubItemUI as unknown as Record<string, unknown>;
+    const rawType = uiAny.fabricItemType ?? uiAny.itemType;
+    const safeType = typeof rawType === "string" && /^[A-Za-z][A-Za-z0-9]*$/.test(rawType)
+        ? rawType
+        : undefined;
     return {
         id: itemObjectId,
         workspaceId: workspaceObjectId,
-        type: selectedItem.datahubItemUI.itemType,
+        type: safeType,
         displayName,
         description
     };

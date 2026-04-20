@@ -751,3 +751,111 @@ async def _stream_chat(headers: dict, body: dict):
         async for line in resp.aiter_lines():
             if line:
                 yield f"{line}\n\n"
+
+
+# --- Branch-out name suggestions ---------------------------------------
+
+class BranchSuggestRequest(BaseModel):
+    task_text: str
+    source_workspace_name: str | None = None
+    context_names: list[str] = []
+    file_names: list[str] = []
+
+
+class BranchSuggestResponse(BaseModel):
+    branch_name: str
+    workspace_name: str
+
+
+@router.post("/suggest-branch-names", response_model=BranchSuggestResponse)
+async def suggest_branch_names(req: BranchSuggestRequest, request: Request):
+    """Generate a concise git branch name + child workspace name from a
+    task description + attached context.
+
+    Uses a tiny Copilot prompt with ``gpt-4o-mini`` (fastest model in
+    Copilot's catalog) and a small ``max_tokens`` budget so latency is
+    typically 300–800 ms. The endpoint returns deterministic JSON; on
+    ANY failure (timeout, malformed model response, missing token) we
+    return the client-side fallback it already computed.
+    """
+    github_token = _extract_github_token(request)
+    copilot_token = await _get_copilot_token(github_token)
+
+    task = (req.task_text or "").strip()[:800]
+    ctx = ", ".join(n for n in (req.context_names or []) if n)[:300]
+    files = ", ".join(n for n in (req.file_names or []) if n)[:200]
+    src = (req.source_workspace_name or "").strip()[:80]
+
+    system = (
+        "You generate concise names for a Fabric branch-out from a task. "
+        "Return ONLY compact JSON matching this shape: "
+        '{"branch_name": "feature/<kebab-3-5-words>", "workspace_name": "<Title Case 2-5 words>"} . '
+        "Rules: branch_name lowercase kebab-case, prefix with 'feature/', no punctuation except '/' and '-'. "
+        "workspace_name Title Case, short phrase summarising the goal. "
+        "Base both names on the task intent + any listed items/files. Do NOT include the source workspace name."
+    )
+    user = (
+        f"Task: {task}\n"
+        f"Source workspace: {src or '(unknown)'}\n"
+        f"Attached items: {ctx or '(none)'}\n"
+        f"Attached files: {files or '(none)'}\n"
+        "Respond with JSON only."
+    )
+
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        "temperature": 0.2,
+        "max_tokens": 80,
+        "stream": False,
+    }
+    headers = {
+        "Authorization": f"Bearer {copilot_token}",
+        "Content-Type": "application/json",
+        "Copilot-Integration-Id": "vscode-chat",
+        "Editor-Version": "vscode/1.100.0",
+    }
+
+    try:
+        resp = await _shared_client().post(
+            f"{COPILOT_API_BASE}/chat/completions",
+            json=body,
+            headers=headers,
+            timeout=6.0,
+        )
+        if resp.status_code != 200:
+            raise RuntimeError(f"copilot {resp.status_code}")
+        data = resp.json()
+        content = (
+            data.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+            .strip()
+        )
+        # Strip potential markdown fences.
+        if content.startswith("```"):
+            content = content.strip("`")
+            # Drop a leading "json\n" language marker if present.
+            if content.lower().startswith("json"):
+                content = content[4:].lstrip()
+        parsed = json.loads(content)
+        branch = str(parsed.get("branch_name") or "").strip()
+        ws = str(parsed.get("workspace_name") or "").strip()
+        if not branch or not ws:
+            raise ValueError("missing fields")
+        # Light sanitisation: enforce basic shape so a misbehaving model
+        # can't inject whitespace-only or absurdly long strings.
+        if len(branch) > 64:
+            branch = branch[:64].rstrip("-/")
+        if len(ws) > 80:
+            ws = ws[:80].rstrip()
+        return BranchSuggestResponse(branch_name=branch, workspace_name=ws)
+    except Exception as exc:
+        logger.info("suggest-branch-names fallback (%s)", exc)
+        # Return a 200 with empty strings so the frontend keeps its
+        # local heuristic suggestion — no user-facing error needed.
+        return BranchSuggestResponse(branch_name="", workspace_name="")
+

@@ -46,7 +46,14 @@ _ENV_LOOKS_CONFIGURED: bool = any(os.environ.get(v) for v in _MARKER_VARS)
 
 # Stderr-print at import time so the operator sees env-loading status even
 # before logging is configured. Skipped under pytest to avoid noisy output.
-if "pytest" not in sys.modules and "PYTEST_CURRENT_TEST" not in os.environ:
+# Also skipped in uvicorn reload-child processes (parent already printed);
+# the marker env var inherits from parent -> child on fork/spawn.
+_BOOTSTRAP_MARKER = "_AGENTHUB_BOOTSTRAP_PRINTED"
+if (
+    "pytest" not in sys.modules
+    and "PYTEST_CURRENT_TEST" not in os.environ
+    and os.environ.get(_BOOTSTRAP_MARKER) != "1"
+):
     if DOTENV_LOADED:
         print(f"[bootstrap] loaded .env from {DOTENV_PATH}", file=sys.stderr)
     elif _ENV_LOOKS_CONFIGURED:
@@ -61,3 +68,4 @@ if "pytest" not in sys.modules and "PYTEST_CURRENT_TEST" not in os.environ:
             f"({', '.join(_MARKER_VARS)}) are not set — startup will likely fail",
             file=sys.stderr,
         )
+    os.environ[_BOOTSTRAP_MARKER] = "1"

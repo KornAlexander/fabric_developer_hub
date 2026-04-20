@@ -232,6 +232,62 @@ export async function createWorkspace(
     return res.json();
 }
 
+export interface WorkspaceItem {
+    id: string;
+    name: string;
+    type: string;
+    /** Present on non-folder items that live inside a subfolder. */
+    folderId?: string | null;
+    /** Present on folder rows when nested inside another folder. */
+    parentFolderId?: string | null;
+    /** Fabric portal deep link — clickable "View details in a new browser tab". */
+    webUrl?: string | null;
+    /** Owner / last-modifier display name when surfaced by Fabric's API. */
+    owner?: string | null;
+}
+
+export interface WorkspaceItemsResponse {
+    items: WorkspaceItem[];
+    /** ISO-8601 wall-clock timestamp of when the backend fetched the
+     *  underlying Fabric data (may be up to ~60s old due to server cache). */
+    capturedAt: string;
+}
+
+/** List items in a Fabric workspace — powers the workspace preview modal.
+ *
+ *  Pass ``refresh: true`` to bypass the backend's short-lived cache
+ *  (used by the modal's Refresh button so the user always sees the
+ *  latest state after adding new items in Fabric).
+ */
+export async function listWorkspaceItems(
+    workspaceId: string,
+    opts: FetchOpts & { refresh?: boolean },
+): Promise<WorkspaceItemsResponse> {
+    const qs = opts.refresh ? "?refresh=1" : "";
+    const res = await fetch(
+        `${BE}/api/workspaces/${encodeURIComponent(workspaceId)}/items${qs}`,
+        { headers: headers(opts) },
+    );
+    if (!res.ok) {
+        const err: Error & { status?: number } = new Error(await res.text());
+        err.status = res.status;
+        throw err;
+    }
+    const data = await res.json() as { items: WorkspaceItem[]; captured_at?: string };
+    return {
+        items: data.items || [],
+        capturedAt: data.captured_at || new Date().toISOString(),
+    };
+}
+
+/** Fire-and-forget preload so the backend's per-(user, workspace) cache
+ *  is warm by the time the user clicks the chip. Errors are swallowed —
+ *  a real click will surface any real problem.
+ */
+export function warmWorkspaceItems(workspaceId: string, opts: FetchOpts): void {
+    void listWorkspaceItems(workspaceId, opts).catch(() => {});
+}
+
 // ── Attachments ─────────────────────────────────────────────────────
 
 /** Mint a single-use download URL for attachment bytes.

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 import uuid
 from datetime import UTC, datetime
 from uuid import UUID
@@ -40,6 +41,17 @@ from services.configuration_service import get_configuration_service
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["AgentHub"])
+
+
+# Per-(user, workspace_id) cache of the workspace-preview payload.
+# The cost is one Fabric /items + one /folders round-trip; we keep the
+# result hot for a short window so repeated chip-clicks feel instant.
+# Entries expire on read after TTL, and a LRU-ish sweep prevents
+# unbounded growth on a long-lived process. The cached value now also
+# carries the wall-clock ``captured_at`` ISO string so the UI and any
+# historical consumer (session snapshot) can show "as-of HH:MM:SS".
+_WORKSPACE_ITEMS_TTL_SEC = 60
+_workspace_items_cache: dict[tuple[str, str], tuple[float, str, list[dict]]] = {}
 
 
 # ── Auth helpers ─────────────────────────────────────────────────────
@@ -544,6 +556,168 @@ async def create_workspace(
     }
 
 
+@router.get("/workspaces/{workspace_id}/items")
+async def list_workspace_items(
+    workspace_id: str,
+    request: Request,
+    refresh: bool = Query(False, description="Bypass the per-user cache"),
+    ctx: AuthorizationContext | None = Depends(require_user),
+):
+    """List items + folders in a Fabric workspace for the preview modal.
+
+    Fetches ``fabric_list_items`` and ``fabric_list_folders`` in parallel
+    and returns a unified, Fabric-UI-ordered list with folders first
+    (alphabetical), then items (alphabetical). Result is cached per
+    (user, workspace) for a short TTL so subsequent clicks on the same
+    chip are instant. Pass ``?refresh=1`` to force a fresh fetch (used
+    by the modal's manual Refresh button so stale caches don't hide
+    items the user just created).
+    """
+    user_id = _user_key_from_context(ctx)
+    _rate_limit(user_id, "list_workspace_items")
+
+    mcp_tokens = await _mcp_tokens(request)
+    if not mcp_tokens:
+        raise HTTPException(400, "Fabric token required")
+
+    items, captured_at = await _fetch_workspace_snapshot(
+        user_id, workspace_id, mcp_tokens, use_cache=not refresh,
+    )
+    return {"items": items, "captured_at": captured_at}
+
+
+async def _fetch_workspace_snapshot(
+    user_id: str,
+    workspace_id: str,
+    mcp_tokens: dict,
+    *,
+    use_cache: bool = True,
+) -> tuple[list[dict], str]:
+    """Return ``(items, captured_at_iso)`` for the workspace preview.
+
+    Shared by the live endpoint and session creation (which snapshots
+    the workspace state so the Session detail view can later replay
+    "how the workspace looked back then"). A click-through in the UI
+    should feel instant even though the Fabric API calls take ~1s, so
+    we keep a short per-(user, workspace) TTL cache. Pass
+    ``use_cache=False`` to force a fresh fetch.
+    """
+    cache_key = (user_id, workspace_id)
+    now = time.time()
+    if use_cache:
+        cached = _workspace_items_cache.get(cache_key)
+        if cached and (now - cached[0]) < _WORKSPACE_ITEMS_TTL_SEC:
+            return cached[2], cached[1]
+
+    if not github_chat_controller._mcp_manager:
+        raise HTTPException(503, "MCP manager not available")
+
+    mgr = github_chat_controller._mcp_manager
+
+    async def _call_items() -> list[dict]:
+        raw = await mgr.call_tool(
+            "fabric_list_items",
+            {"workspace_id": workspace_id},
+            mcp_tokens,
+            allowed_tools={"fabric_list_items"},
+            workspace_id=workspace_id,
+        )
+        body = str(raw)
+        try:
+            data = json.loads(body)
+        except Exception:
+            if "HTTP 40" in body:
+                raise HTTPException(400, body) from None
+            raise HTTPException(502, body or "Failed to list items") from None
+        return data if isinstance(data, list) else []
+
+    async def _call_folders() -> list[dict]:
+        try:
+            raw = await mgr.call_tool(
+                "fabric_list_folders",
+                {"workspace_id": workspace_id},
+                mcp_tokens,
+                allowed_tools={"fabric_list_folders"},
+                workspace_id=workspace_id,
+            )
+        except Exception:
+            # Folders API may not be enabled on older capacities; degrade gracefully.
+            return []
+        body = str(raw)
+        try:
+            data = json.loads(body)
+        except Exception:
+            return []
+        return data if isinstance(data, list) else []
+
+    try:
+        items_raw, folders_raw = await asyncio.gather(_call_items(), _call_folders())
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("fabric workspace-preview failed workspace=%s", workspace_id)
+        raise HTTPException(502, f"Failed to list workspace items: {exc}") from exc
+
+    # Folders are rendered first and are clickable to drill in.
+    # ``parentFolderId`` is surfaced so the UI can render nested folders
+    # only inside their parent. Items carry ``folderId`` for the same
+    # filter on the item side. ``webUrl`` lets the UI render a "View
+    # details" link that escapes the iframe sandbox via
+    # ``workloadClient.navigation.openBrowserTab``.
+    def _owner_of(row: dict) -> str | None:
+        # Fabric's /items endpoint doesn't guarantee an owner field; we
+        # surface whichever hint is present so the UI can fall back to
+        # blank when it's missing. ``createdBy`` is the most common
+        # shape (a dict with ``displayName`` / ``userPrincipalName``);
+        # some item types return a raw string.
+        for key in ("createdBy", "lastModifiedBy", "ownerName"):
+            val = row.get(key)
+            if isinstance(val, dict):
+                name = val.get("displayName") or val.get("userPrincipalName")
+                if name:
+                    return str(name)
+            elif isinstance(val, str) and val:
+                return val
+        return None
+
+    folders = [
+        {
+            "id": f.get("id"),
+            "name": f.get("displayName") or f.get("id"),
+            "type": "Folder",
+            "parentFolderId": f.get("parentFolderId"),
+            "owner": _owner_of(f),
+        }
+        for f in folders_raw if f.get("id")
+    ]
+    items = [
+        {
+            "id": it.get("id"),
+            "name": it.get("displayName") or it.get("id"),
+            "type": it.get("type") or "Unknown",
+            "folderId": it.get("folderId"),
+            "webUrl": it.get("webUrl"),
+            "owner": _owner_of(it),
+        }
+        for it in items_raw if it.get("id")
+    ]
+    folders.sort(key=lambda x: str(x["name"]).lower())
+    items.sort(key=lambda x: (str(x["type"]).lower(), str(x["name"]).lower()))
+    merged = folders + items
+    captured_at = datetime.now(UTC).isoformat()
+
+    _workspace_items_cache[cache_key] = (now, captured_at, merged)
+    # Opportunistic TTL sweep — drop entries older than 10×TTL so the
+    # cache doesn't grow unbounded on long-lived processes.
+    if len(_workspace_items_cache) > 256:
+        cutoff = now - (_WORKSPACE_ITEMS_TTL_SEC * 10)
+        stale = [k for k, (t, _, _) in _workspace_items_cache.items() if t < cutoff]
+        for k in stale:
+            _workspace_items_cache.pop(k, None)
+
+    return merged, captured_at
+
+
 # ── Session endpoints ────────────────────────────────────────────────
 
 def _persist_context_with_attachments(
@@ -630,6 +804,28 @@ async def create_session(
         ) from e
 
     persisted_context = _persist_context_with_attachments(req.context, req.attachments)
+
+    # Best-effort workspace snapshot — captures how the workspace looked
+    # at plan creation time so the Session detail view can later show
+    # "as-of HH:MM:SS" even if items have since been added/renamed.
+    # Never fails session creation: any error just leaves the snapshot
+    # out of the persisted context.
+    if req.workspace_id and mcp_tokens:
+        try:
+            snapshot_items, snapshot_captured_at = await _fetch_workspace_snapshot(
+                user_id, req.workspace_id, mcp_tokens,
+            )
+            persisted_context = dict(persisted_context) if persisted_context else {}
+            persisted_context["workspace_snapshot"] = {
+                "workspace_id": req.workspace_id,
+                "captured_at": snapshot_captured_at,
+                "items": snapshot_items,
+            }
+        except Exception as exc:  # pragma: no cover — defensive
+            logger.warning(
+                "workspace snapshot capture failed session=%s ws=%s: %s",
+                plan.job_id, req.workspace_id, exc,
+            )
 
     job = Job(
         id=plan.job_id,

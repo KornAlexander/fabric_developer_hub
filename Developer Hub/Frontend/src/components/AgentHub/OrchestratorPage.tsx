@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { useHistory, useRouteMatch } from "react-router-dom";
 import {
-    Badge,
     Button,
     Text,
     Spinner,
@@ -49,6 +48,9 @@ import type { Plan } from "./plan";
 import { PdfPreview } from "./PdfPreview";
 import { useSearch } from "./SearchContext";
 import { fuzzyFilter } from "./fuzzySearch";
+import { WorkspacePreviewModal } from "./WorkspacePreviewModal";
+
+const BE = process.env.WORKLOAD_BE_URL || "http://127.0.0.1:5000";
 
 // Common Fabric data item types surfaced in the Datahub item picker.
 // The picker itself will show workspace navigation so any item the user can
@@ -156,6 +158,62 @@ function formatCacheAge(iso: string | null): string {
  * single "in progress" bucket so the pill stays legible.
  */
 type RecentStatusVariant = "running" | "completed" | "failed" | "cancelled" | "waiting";
+
+// Human-friendly label for a raw Fabric item type string. The REST API
+// returns PascalCase (e.g. ``DataPipeline``, ``KustoDatabase``,
+// ``SemanticModel``) which reads awkwardly in tooltips. Known types get
+// curated names; unknown ones fall back to a PascalCase → spaced split.
+function humanizeItemType(raw: unknown): string {
+    // Defensive: the Fabric Datahub picker occasionally returns a numeric
+    // enum in ``itemType`` instead of the PascalCase string (e.g. ``12``
+    // for DataPipeline). Anything that isn't a proper identifier string
+    // is surfaced as a generic "Item" so tooltips never show "Pipeline_1 12".
+    if (typeof raw !== "string" || !/^[A-Za-z][A-Za-z0-9]*$/.test(raw)) return "Item";
+    const t = raw.toLowerCase();
+    const map: Record<string, string> = {
+        workspace: "Workspace",
+        lakehouse: "Lakehouse",
+        warehouse: "Warehouse",
+        notebook: "Notebook",
+        datapipeline: "Data Pipeline",
+        pipeline: "Pipeline",
+        semanticmodel: "Semantic Model",
+        dataset: "Semantic Model",
+        report: "Report",
+        dashboard: "Dashboard",
+        dataflow: "Dataflow",
+        dataflowgen2: "Dataflow Gen2",
+        sparkjobdefinition: "Spark Job Definition",
+        kustodatabase: "KQL Database",
+        kqldatabase: "KQL Database",
+        kustoeventhouse: "Eventhouse",
+        eventhouse: "Eventhouse",
+        eventstream: "Eventstream",
+        kqlqueryset: "KQL Queryset",
+        mirroreddatabase: "Mirrored Database",
+        dataversemirroredDatabase: "Dataverse Mirror",
+        sqlendpoint: "SQL Endpoint",
+        sqlanalyticsendpoint: "SQL Endpoint",
+        sqldb: "SQL Database",
+        mlmodel: "ML Model",
+        mlexperiment: "ML Experiment",
+        environment: "Environment",
+        graphqlapi: "GraphQL API",
+        apiformlmodel: "ML Model API",
+        reflex: "Data Activator",
+        datamart: "Datamart",
+        paginatedreport: "Paginated Report",
+        variablelibrary: "Variable Library",
+        copyjob: "Copy Job",
+        exploration: "Exploration",
+        map: "Map",
+    };
+    if (map[t]) return map[t];
+    // Fallback: split PascalCase / camelCase into spaced words.
+    return raw.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/([A-Z])([A-Z][a-z])/g, "$1 $2");
+}
+
+
 function recentStatusInfo(status?: string): { variant: RecentStatusVariant; label: string } | null {
     if (!status) return null;
     const s = status.toLowerCase();
@@ -222,6 +280,22 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
     // click. Images render inline, PDFs in an iframe, and text files in a
     // pre block (content is already held in memory as data URI / utf-8).
     const [previewAttachment, setPreviewAttachment] = useState<UiAttachment | null>(null);
+    // Workspace preview modal — opened by clicking a workspace ctx-pill.
+    // Shows the items inside the workspace in a Fabric-like table. The
+    // backend caches results per (user, workspace) for ~60s; we track
+    // ``previewWsCapturedAt`` alongside items so the modal can render
+    // "Loaded HH:MM:SS" and offer a Refresh button that force-busts
+    // the cache (``refresh: true``).
+    const [previewWorkspace, setPreviewWorkspace] = useState<{ id: string; name: string } | null>(null);
+    // When the user clicks a Fabric item pill we open the parent
+    // workspace's preview and ask the modal to highlight+scroll to
+    // the specific row so the "click to preview" interaction points
+    // at exactly what was clicked.
+    const [previewHighlightItemId, setPreviewHighlightItemId] = useState<string | null>(null);
+    const [previewWsItems, setPreviewWsItems] = useState<api.WorkspaceItem[] | null>(null);
+    const [previewWsLoading, setPreviewWsLoading] = useState(false);
+    const [previewWsError, setPreviewWsError] = useState<string | null>(null);
+    const [previewWsCapturedAt, setPreviewWsCapturedAt] = useState<string | null>(null);
     // Fallback dialog for when Fabric's `openBrowserTab` rejects a
     // download URL (e.g. in dev when the backend runs on localhost, not
     // on a host Fabric's allowlist trusts). Holds the minted URL so the
@@ -240,6 +314,11 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
     const recentBtnRef = useRef<HTMLButtonElement | null>(null);
     const recentScrollRef = useRef<HTMLDivElement | null>(null);
     const recentSentinelRef = useRef<HTMLDivElement | null>(null);
+    // True when ``recentIndex`` just changed because of keyboard navigation
+    // (Arrow keys). Only in that case do we auto-scroll the active item into
+    // view — hovering an already-visible item with the mouse must NOT cause
+    // the list to jump.
+    const recentIndexFromKeyboardRef = useRef(false);
     interface RecentSessionLite {
         id: string;
         prompt: string;
@@ -343,7 +422,17 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
     // Composer toggles
     const [requireApprovals, setRequireApprovals] = useState(false);
     const [branchOut, setBranchOut] = useState(false);
-    const [branchName, setBranchName] = useState("feature-alpha");
+    const [branchName, setBranchName] = useState("");
+    // Destination child workspace name shown in the branch-out tree.
+    // Both this and ``branchName`` are populated by an LLM call (see
+    // the debounced effect below) — there is no client-side heuristic.
+    // While the LLM call is in flight, the UI shows a "generating
+    // name…" skeleton in place of the input. Once the user hand-edits
+    // either field, the matching ``*Touched`` flag freezes it so
+    // subsequent AI suggestions don't overwrite their edit.
+    const [childWsName, setChildWsName] = useState("");
+    const [branchNameTouched, setBranchNameTouched] = useState(false);
+    const [childWsNameTouched, setChildWsNameTouched] = useState(false);
     // When enabled, non-git-connected workspaces appear (disabled) in the
     // source dropdown so users can see the full list and understand why
     // those workspaces can't be used. Fabric's branch-out operation
@@ -380,6 +469,115 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
     }
 
     useEffect(() => { loadWorkspaces(false); }, []);
+
+    // --- LLM-generated suggestions (debounced) ----------------------
+    // Both ``branchName`` and ``childWsName`` start empty. 700 ms after
+    // the user stops typing in the task description we ask Copilot
+    // (gpt-4o-mini) for sensible names and fill the fields. While the
+    // request is in flight, the inputs are replaced by a "generating
+    // name…" skeleton (see render code). If the user has hand-edited
+    // either field (``*Touched`` set) we respect that and do not
+    // overwrite. Any LLM failure (timeout, malformed JSON, no token)
+    // silently leaves the field empty so the user can type their own.
+    const [suggestLoading, setSuggestLoading] = useState(false);
+    // We cache the raw AI suggestions so the user can restore them
+    // after manual edits without triggering another LLM call. The
+    // workspace suffix is also used when the user switches source
+    // workspaces (we re-prefix it instead of re-prompting the LLM).
+    const [childWsSuffix, setChildWsSuffix] = useState("");
+    const [aiBranchName, setAiBranchName] = useState("");
+
+    // Run the actual LLM request. Extracted so both the debounced
+    // effect (on task-text change) AND the "Regenerate with AI" button
+    // can call it. ``targets`` picks which field(s) to overwrite; the
+    // button uses "branch" / "workspace" to regenerate just one even
+    // if the other is touched.
+    async function fetchBranchSuggestions(
+        targets: { branch: boolean; workspace: boolean },
+        signal?: AbortSignal,
+    ): Promise<void> {
+        const task = taskText.trim();
+        if (task.length < 10) return;
+        const githubToken = sessionStorage.getItem("github_token") || "";
+        if (!githubToken) return;
+        setSuggestLoading(true);
+        try {
+            const src = workspaces.find(w => w.id === selectedWorkspace);
+            const resp = await fetch(`${BE}/api/github/suggest-branch-names`, {
+                method: "POST",
+                signal,
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${githubToken}`,
+                },
+                body: JSON.stringify({
+                    task_text: task,
+                    source_workspace_name: src?.name || null,
+                    context_names: contextItems.map(c => c.name),
+                    file_names: attachedFiles.map(f => f.name),
+                }),
+            });
+            if (!resp.ok) return;
+            const data = await resp.json();
+            const aiBranch = String(data.branch_name || "").trim();
+            const aiWs = String(data.workspace_name || "").trim();
+            if (aiBranch) setAiBranchName(aiBranch);
+            if (aiWs) setChildWsSuffix(aiWs);
+            if (aiBranch && targets.branch) {
+                setBranchName(aiBranch);
+                setBranchNameTouched(false);
+            }
+            if (aiWs && targets.workspace) {
+                const srcName = src?.name || "Workspace";
+                setChildWsName(`${srcName} — ${aiWs}`.slice(0, 200));
+                setChildWsNameTouched(false);
+            }
+        } catch { /* network / abort — silently leave fields empty */ }
+        finally { setSuggestLoading(false); }
+    }
+
+    useEffect(() => {
+        if (!branchOut) return undefined;
+        if (branchNameTouched && childWsNameTouched) return undefined; // both frozen
+        if (taskText.trim().length < 10) return undefined; // too short for a good suggestion
+        // Flip the loading flag synchronously so the skeleton appears
+        // the instant the user toggles branch-out on (or edits the
+        // task text) — otherwise the empty input flashes for the 700 ms
+        // debounce window before we show "Generating name…".
+        setSuggestLoading(true);
+        const ctrl = new AbortController();
+        const handle = window.setTimeout(() => {
+            fetchBranchSuggestions(
+                { branch: !branchNameTouched, workspace: !childWsNameTouched },
+                ctrl.signal,
+            );
+        }, 700);
+        return () => {
+            window.clearTimeout(handle);
+            ctrl.abort();
+            // If the effect is torn down before the request fires
+            // (e.g. user keeps typing), we leave ``suggestLoading``
+            // ``true`` — the next effect run will re-assert it and
+            // the skeleton stays visible without flicker.
+        };
+        // NOTE: ``selectedWorkspace`` is intentionally omitted from
+        // deps — changing the source workspace re-prefixes the
+        // destination name via the effect below, without a fresh LLM
+        // round-trip.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [branchOut, taskText, contextItems, attachedFiles]);
+
+    // Re-prefix the destination workspace name when the source
+    // changes. Uses the cached AI suffix so we don't hit the LLM again.
+    useEffect(() => {
+        if (!branchOut) return;
+        if (childWsNameTouched) return;
+        if (!childWsSuffix) return;
+        const src = workspaces.find(w => w.id === selectedWorkspace);
+        const srcName = src?.name || "Workspace";
+        setChildWsName(`${srcName} — ${childWsSuffix}`.slice(0, 200));
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [selectedWorkspace, workspaces, childWsSuffix, branchOut]);
 
     // Branch-out now creates a *child* workspace from the source (no
     // separate destination picker), so the destination always mirrors
@@ -701,8 +899,8 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
             if (e.key === "Escape") { setRecentOpen(false); return; }
             const n = recentSessions?.length ?? 0;
             if (!n) return;
-            if (e.key === "ArrowDown") { e.preventDefault(); setRecentIndex(i => (i + 1) % n); }
-            else if (e.key === "ArrowUp") { e.preventDefault(); setRecentIndex(i => (i - 1 + n) % n); }
+            if (e.key === "ArrowDown") { e.preventDefault(); recentIndexFromKeyboardRef.current = true; setRecentIndex(i => (i + 1) % n); }
+            else if (e.key === "ArrowUp") { e.preventDefault(); recentIndexFromKeyboardRef.current = true; setRecentIndex(i => (i - 1 + n) % n); }
             else if (e.key === "Enter") {
                 e.preventDefault();
                 const s = recentSessions?.[recentIndex];
@@ -727,6 +925,72 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
         document.addEventListener("keydown", onKey);
         return () => document.removeEventListener("keydown", onKey);
     }, [previewAttachment]);
+
+    // Workspace preview modal: close on Escape, fetch items on open.
+    useEffect(() => {
+        if (!previewWorkspace) return undefined;
+        function onKey(e: KeyboardEvent) {
+            if (e.key === "Escape") setPreviewWorkspace(null);
+        }
+        document.addEventListener("keydown", onKey);
+        return () => document.removeEventListener("keydown", onKey);
+    }, [previewWorkspace]);
+
+    // Fetch (or re-fetch) workspace items. Passed to WorkspacePreviewModal
+    // as ``onRefresh`` so the header button forces a cache-busting re-fetch.
+    async function loadPreviewItems(workspaceId: string, opts: { refresh?: boolean } = {}) {
+        setPreviewWsLoading(true);
+        setPreviewWsError(null);
+        try {
+            const githubToken = sessionStorage.getItem("github_token") || "";
+            const fabricToken = await getFabricToken();
+            const resp = await api.listWorkspaceItems(
+                workspaceId,
+                { githubToken, fabricToken, refresh: opts.refresh },
+            );
+            setPreviewWsItems(resp.items);
+            setPreviewWsCapturedAt(resp.capturedAt);
+        } catch (e: any) {
+            setPreviewWsError(e?.message || "Failed to load workspace items.");
+        } finally {
+            setPreviewWsLoading(false);
+        }
+    }
+
+    useEffect(() => {
+        if (!previewWorkspace) {
+            setPreviewWsItems(null);
+            setPreviewWsError(null);
+            setPreviewWsLoading(false);
+            setPreviewWsCapturedAt(null);
+            return undefined;
+        }
+        let cancelled = false;
+        (async () => {
+            setPreviewWsLoading(true);
+            setPreviewWsError(null);
+            setPreviewWsItems(null);
+            setPreviewWsCapturedAt(null);
+            try {
+                const githubToken = sessionStorage.getItem("github_token") || "";
+                const fabricToken = await getFabricToken();
+                const resp = await api.listWorkspaceItems(
+                    previewWorkspace.id,
+                    { githubToken, fabricToken },
+                );
+                if (cancelled) return;
+                setPreviewWsItems(resp.items);
+                setPreviewWsCapturedAt(resp.capturedAt);
+            } catch (e: any) {
+                if (cancelled) return;
+                setPreviewWsError(e?.message || "Failed to load workspace items.");
+            } finally {
+                if (!cancelled) setPreviewWsLoading(false);
+            }
+        })();
+        return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [previewWorkspace]);
 
     /**
      * Trigger a browser download of the currently previewed attachment.
@@ -814,8 +1078,13 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
     }, [recentOpen]);
 
     // Keep the active item visible as the user arrow-navigates a long list.
+    // Gated on ``recentIndexFromKeyboardRef`` so that hovering an item with
+    // the mouse does NOT scroll the popover — the hovered item is already
+    // under the cursor by definition.
     useEffect(() => {
         if (!recentOpen) return;
+        if (!recentIndexFromKeyboardRef.current) return;
+        recentIndexFromKeyboardRef.current = false;
         const el = document.getElementById(`recent-prompt-item-${recentIndex}`);
         el?.scrollIntoView({ block: "nearest" });
     }, [recentIndex, recentOpen]);
@@ -988,6 +1257,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                     destination_workspace: destinationWorkspace,
                     branch_out: branchOut,
                     branch_name: branchOut ? branchName : undefined,
+                    destination_workspace_name: branchOut ? childWsName : undefined,
                     require_approvals: requireApprovals,
                     context_items: contextItems,
                 },
@@ -1077,6 +1347,16 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
             if (prev.some(c => c.type === "workspace" && c.id === ws.id)) return prev;
             return [...prev, { name: ws.name, type: "workspace", id: ws.id }];
         });
+        // Warm the backend's per-(user, workspace) cache in the background
+        // so the first chip-click feels instant. Best-effort — any failure
+        // is surfaced only when the user actually opens the preview.
+        (async () => {
+            try {
+                const githubToken = sessionStorage.getItem("github_token") || "";
+                const fabricToken = await getFabricToken();
+                api.warmWorkspaceItems(ws.id, { githubToken, fabricToken });
+            } catch { /* ignore — best effort */ }
+        })();
     }
 
     const wsName = workspaces.find(w => w.id === selectedWorkspace)?.name || selectedWorkspace;
@@ -1383,11 +1663,59 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                                             : isWarehouse
                                                 ? "warehouse"
                                                 : "item";
+                                    // Every pill is clickable. Workspace
+                                    // pills open the workspace preview
+                                    // modal. Fabric-item pills open the
+                                    // same modal for their parent
+                                    // workspace and auto-scroll to / flash
+                                    // the specific row — giving items the
+                                    // same "click to preview" experience
+                                    // without ever leaving the sandbox.
+                                    const canOpen = isWorkspace
+                                        ? !!item.id
+                                        : !!item.workspaceId;
+                                    const openPreview = () => {
+                                        if (isWorkspace && item.id) {
+                                            setPreviewHighlightItemId(null);
+                                            setPreviewWorkspace({ id: item.id, name: item.name });
+                                            return;
+                                        }
+                                        if (item.workspaceId) {
+                                            // Find the friendliest workspace
+                                            // name we know about.
+                                            const wsCtx = contextItems.find(c => c.type === "workspace" && c.id === item.workspaceId);
+                                            const wsMeta = workspaces.find(w => w.id === item.workspaceId);
+                                            setPreviewHighlightItemId(item.id || null);
+                                            setPreviewWorkspace({
+                                                id: item.workspaceId,
+                                                name: wsCtx?.name || wsMeta?.name || "Workspace",
+                                            });
+                                        }
+                                    };
+                                    const humanType = isWorkspace ? "Workspace" : humanizeItemType(item.type);
+                                    const tooltip = isWorkspace && item.id
+                                        ? `${item.name} · Workspace · click to preview items`
+                                        : canOpen
+                                            ? `${item.name} · ${humanType} · click to preview`
+                                            : `${item.name} · ${humanType}`;
                                     return (
                                         <span
                                             key={`${item.type}:${item.id || item.name}`}
-                                            className={`ctx-pill ctx-pill--${pillVariant}`}
-                                            title={item.type !== pillVariant ? `${item.name} · ${item.type}` : item.name}
+                                            className={`ctx-pill ctx-pill--${pillVariant}${canOpen ? " ctx-pill--clickable" : ""}`}
+                                            title={tooltip}
+                                            role={canOpen ? "button" : undefined}
+                                            tabIndex={canOpen ? 0 : undefined}
+                                            onClick={canOpen ? openPreview : undefined}
+                                            onKeyDown={
+                                                canOpen
+                                                    ? (e) => {
+                                                        if (e.key === "Enter" || e.key === " ") {
+                                                            e.preventDefault();
+                                                            openPreview();
+                                                        }
+                                                    }
+                                                    : undefined
+                                            }
                                         >
                                             {isWorkspace
                                                 ? <PeopleTeam20Regular />
@@ -1398,7 +1726,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                                             <button
                                                 type="button"
                                                 className="ctx-pill-close"
-                                                onClick={() => removeContext(item.name)}
+                                                onClick={(e) => { e.stopPropagation(); removeContext(item.name); }}
                                                 aria-label={`Remove ${item.name}`}
                                             >
                                                 <Dismiss24Regular />
@@ -1454,9 +1782,12 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                                         </span>
                                     );
                                 })}
-                                {(contextItems.length > 0 || attachedFiles.length > 0) && (
-                                    <span className="ctx-divider" aria-hidden="true" />
-                                )}
+                            </div>
+
+                            {/* Add-buttons row — always rendered below the
+                                pills so it stays put (doesn't get pushed
+                                around) as the user adds more context. */}
+                            <div className="composer-add-actions">
                                 <button
                                     type="button"
                                     className="ctx-pill-add"
@@ -1787,19 +2118,126 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                                         <div className="branchtree-children" role="group">
                                             <div className="branchtree-child" role="treeitem">
                                                 <span className="branchtree-connector" aria-hidden="true" />
+                                                <PeopleTeam20Regular className="branchtree-icon branchtree-icon--child" />
+                                                <div className="branchtree-field">
+                                                    <div className="branchtree-field-labelrow">
+                                                        <span className="branchtree-field-label">Destination workspace</span>
+                                                        {childWsNameTouched && (
+                                                            <div className="branchtree-field-meta">
+                                                                <span
+                                                                    className="branchtree-ai-hint branchtree-ai-hint--manual"
+                                                                    title="You edited this name. AI suggestions won't overwrite it."
+                                                                >
+                                                                    manually edited
+                                                                </span>
+                                                                {childWsSuffix && (
+                                                                    <button
+                                                                        type="button"
+                                                                        className="branchtree-reset-btn"
+                                                                        onClick={() => {
+                                                                            // Always re-ask the LLM using the
+                                                                            // current prompt + context so the
+                                                                            // regenerated name reflects any
+                                                                            // changes the user has made since
+                                                                            // the last suggestion.
+                                                                            void fetchBranchSuggestions({ branch: false, workspace: true });
+                                                                        }}
+                                                                        disabled={suggestLoading}
+                                                                        title="Regenerate this name with AI using the latest prompt"
+                                                                        aria-label="Regenerate destination workspace name with AI"
+                                                                    >
+                                                                        <ArrowClockwise16Regular /> Regenerate with AI
+                                                                    </button>
+                                                                )}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                    {suggestLoading && !childWsNameTouched ? (
+                                                        <div
+                                                            className="branchtree-child-name branchtree-child-name--loading"
+                                                            role="status"
+                                                            aria-live="polite"
+                                                        >
+                                                            <Sparkle24Regular className="branchtree-loading-icon" />
+                                                            <span className="branchtree-loading-text">Generating name…</span>
+                                                        </div>
+                                                    ) : (
+                                                        <input
+                                                            id="composer-branch-child-workspace"
+                                                            name="branchChildWorkspace"
+                                                            type="text"
+                                                            className="branchtree-child-name branchtree-child-name--editable"
+                                                            value={childWsName}
+                                                            onChange={(e) => {
+                                                                setChildWsName(e.target.value);
+                                                                setChildWsNameTouched(true);
+                                                            }}
+                                                            placeholder="child-workspace-name"
+                                                            aria-label="Destination workspace name"
+                                                            spellCheck={false}
+                                                            disabled={srcNotGit}
+                                                        />
+                                                    )}
+                                                </div>
+                                            </div>
+                                            <div className="branchtree-child" role="treeitem">
+                                                <span className="branchtree-connector" aria-hidden="true" />
                                                 <BranchFork20Regular className="branchtree-icon branchtree-icon--child" />
-                                                <input
-                                                    id="composer-branch-child-name"
-                                                    name="branchChildName"
-                                                    type="text"
-                                                    className="branchtree-child-name"
-                                                    value={branchName}
-                                                    onChange={(e) => setBranchName(e.target.value)}
-                                                    placeholder="child-workspace-name"
-                                                    aria-label="Child workspace name"
-                                                    spellCheck={false}
-                                                    disabled={srcNotGit}
-                                                />
+                                                <div className="branchtree-field">
+                                                    <div className="branchtree-field-labelrow">
+                                                        <span className="branchtree-field-label">Git branch</span>
+                                                        {branchNameTouched && (
+                                                            <div className="branchtree-field-meta">
+                                                                <span
+                                                                    className="branchtree-ai-hint branchtree-ai-hint--manual"
+                                                                    title="You edited this name. AI suggestions won't overwrite it."
+                                                                >
+                                                                    manually edited
+                                                                </span>
+                                                                {aiBranchName && (
+                                                                    <button
+                                                                        type="button"
+                                                                        className="branchtree-reset-btn"
+                                                                        onClick={() => {
+                                                                            void fetchBranchSuggestions({ branch: true, workspace: false });
+                                                                        }}
+                                                                        disabled={suggestLoading}
+                                                                        title="Regenerate this name with AI using the latest prompt"
+                                                                        aria-label="Regenerate git branch name with AI"
+                                                                    >
+                                                                        <ArrowClockwise16Regular /> Regenerate with AI
+                                                                    </button>
+                                                                )}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                    {suggestLoading && !branchNameTouched ? (
+                                                        <div
+                                                            className="branchtree-child-name branchtree-child-name--loading"
+                                                            role="status"
+                                                            aria-live="polite"
+                                                        >
+                                                            <Sparkle24Regular className="branchtree-loading-icon" />
+                                                            <span className="branchtree-loading-text">Generating name…</span>
+                                                        </div>
+                                                    ) : (
+                                                        <input
+                                                            id="composer-branch-child-name"
+                                                            name="branchChildName"
+                                                            type="text"
+                                                            className="branchtree-child-name branchtree-child-name--editable"
+                                                            value={branchName}
+                                                            onChange={(e) => {
+                                                                setBranchName(e.target.value);
+                                                                setBranchNameTouched(true);
+                                                            }}
+                                                            placeholder="feature/short-description"
+                                                            aria-label="Git branch name"
+                                                            spellCheck={false}
+                                                            disabled={srcNotGit}
+                                                        />
+                                                    )}
+                                                </div>
                                             </div>
                                         </div>
                                         {srcNotGit ? (
@@ -1925,27 +2363,43 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                                                                             </div>
                                                                             {(draftEntry.contextItems.length > 0 || draftEntry.attachments.length > 0) && (
                                                                                 <div className="recent-prompts-chips">
-                                                                                    {draftEntry.contextItems.slice(0, 6).map((c, ci) => (
-                                                                                        <Badge
-                                                                                            key={`dci-${ci}`}
-                                                                                            appearance="outline"
-                                                                                            color={c.type === "workspace" ? "brand" : "informative"}
-                                                                                            size="small"
-                                                                                            className="recent-prompts-chip"
-                                                                                        >
-                                                                                            {c.type === "workspace" ? "Workspace" : c.type}: {c.name}
-                                                                                        </Badge>
-                                                                                    ))}
-                                                                                    {draftEntry.attachments.slice(0, 4).map((a, ai) => (
-                                                                                        <Badge
-                                                                                            key={`dat-${ai}`}
-                                                                                            appearance="outline"
-                                                                                            size="small"
-                                                                                            className="recent-prompts-chip"
-                                                                                        >
-                                                                                            {a.name}
-                                                                                        </Badge>
-                                                                                    ))}
+                                                                                    {draftEntry.contextItems.slice(0, 6).map((c, ci) => {
+                                                                                        const t = (c.type || "").toLowerCase();
+                                                                                        const variant = t === "workspace" ? "workspace"
+                                                                                            : t === "lakehouse" ? "lakehouse"
+                                                                                            : t === "warehouse" ? "warehouse"
+                                                                                            : "item";
+                                                                                        const Icon = variant === "workspace" ? PeopleTeam20Regular
+                                                                                            : variant === "warehouse" ? BuildingFactory20Regular
+                                                                                            : Database20Regular;
+                                                                                        return (
+                                                                                            <span
+                                                                                                key={`dci-${ci}`}
+                                                                                                className={`ctx-pill ctx-pill--${variant} recent-prompts-chip`}
+                                                                                                title={variant === "workspace" ? `Workspace · ${c.name}` : `${c.name} · ${c.type}`}
+                                                                                            >
+                                                                                                <Icon />
+                                                                                                <span>{c.name}</span>
+                                                                                            </span>
+                                                                                        );
+                                                                                    })}
+                                                                                    {draftEntry.attachments.slice(0, 4).map((a, ai) => {
+                                                                                        const variant = a.kind === "image" ? "image"
+                                                                                            : a.kind === "pdf" ? "pdf"
+                                                                                            : "attachment";
+                                                                                        return (
+                                                                                            <span
+                                                                                                key={`dat-${ai}`}
+                                                                                                className={`ctx-pill ctx-pill--${variant} recent-prompts-chip`}
+                                                                                                title={a.name}
+                                                                                            >
+                                                                                                {a.kind === "image" ? <Image20Regular /> :
+                                                                                                 a.kind === "pdf" ? <DocumentPdf20Regular /> :
+                                                                                                 <Document20Regular />}
+                                                                                                <span>{a.name}</span>
+                                                                                            </span>
+                                                                                        );
+                                                                                    })}
                                                                                 </div>
                                                                             )}
                                                                         </li>
@@ -2020,40 +2474,52 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                                                                             </div>
                                                                             {(s.contextItems.length > 0 || s.attachments.length > 0) && (
                                                                                 <div className="recent-prompts-chips">
-                                                                                    {s.contextItems.slice(0, 6).map((c, ci) => (
-                                                                                        <Badge
-                                                                                            key={`ci-${ci}`}
-                                                                                            appearance="outline"
-                                                                                            color={c.type === "workspace" ? "brand" : "informative"}
-                                                                                            size="small"
-                                                                                            className="recent-prompts-chip"
-                                                                                        >
-                                                                                            {c.type === "workspace" ? "Workspace" : c.type}: {c.name}
-                                                                                        </Badge>
-                                                                                    ))}
+                                                                                    {s.contextItems.slice(0, 6).map((c, ci) => {
+                                                                                        const t = (c.type || "").toLowerCase();
+                                                                                        const variant = t === "workspace" ? "workspace"
+                                                                                            : t === "lakehouse" ? "lakehouse"
+                                                                                            : t === "warehouse" ? "warehouse"
+                                                                                            : "item";
+                                                                                        const Icon = variant === "workspace" ? PeopleTeam20Regular
+                                                                                            : variant === "warehouse" ? BuildingFactory20Regular
+                                                                                            : Database20Regular;
+                                                                                        return (
+                                                                                            <span
+                                                                                                key={`ci-${ci}`}
+                                                                                                className={`ctx-pill ctx-pill--${variant} recent-prompts-chip`}
+                                                                                                title={variant === "workspace" ? `Workspace · ${c.name}` : `${c.name} · ${c.type}`}
+                                                                                            >
+                                                                                                <Icon />
+                                                                                                <span>{c.name}</span>
+                                                                                            </span>
+                                                                                        );
+                                                                                    })}
                                                                                     {s.contextItems.length > 6 && (
-                                                                                        <Badge appearance="outline" size="small" className="recent-prompts-chip">
+                                                                                        <span className="ctx-pill ctx-pill--item recent-prompts-chip">
                                                                                             +{s.contextItems.length - 6} more
-                                                                                        </Badge>
+                                                                                        </span>
                                                                                     )}
-                                                                                    {s.attachments.slice(0, 4).map((a, ai) => (
-                                                                                        <Badge
-                                                                                            key={`at-${ai}`}
-                                                                                            appearance="tint"
-                                                                                            color="informative"
-                                                                                            size="small"
-                                                                                            className="recent-prompts-chip recent-prompts-chip-file"
-                                                                                        >
-                                                                                            {a.kind === "image" ? <Image20Regular /> :
-                                                                                             a.kind === "pdf" ? <DocumentPdf20Regular /> :
-                                                                                             <Document20Regular />}
-                                                                                            <span>{a.name}</span>
-                                                                                        </Badge>
-                                                                                    ))}
+                                                                                    {s.attachments.slice(0, 4).map((a, ai) => {
+                                                                                        const variant = a.kind === "image" ? "image"
+                                                                                            : a.kind === "pdf" ? "pdf"
+                                                                                            : "attachment";
+                                                                                        return (
+                                                                                            <span
+                                                                                                key={`at-${ai}`}
+                                                                                                className={`ctx-pill ctx-pill--${variant} recent-prompts-chip`}
+                                                                                                title={a.name}
+                                                                                            >
+                                                                                                {a.kind === "image" ? <Image20Regular /> :
+                                                                                                 a.kind === "pdf" ? <DocumentPdf20Regular /> :
+                                                                                                 <Document20Regular />}
+                                                                                                <span>{a.name}</span>
+                                                                                            </span>
+                                                                                        );
+                                                                                    })}
                                                                                     {s.attachments.length > 4 && (
-                                                                                        <Badge appearance="tint" size="small" className="recent-prompts-chip">
+                                                                                        <span className="ctx-pill ctx-pill--attachment recent-prompts-chip">
                                                                                             +{s.attachments.length - 4} file{s.attachments.length - 4 === 1 ? "" : "s"}
-                                                                                        </Badge>
+                                                                                        </span>
                                                                                     )}
                                                                                 </div>
                                                                             )}
@@ -2238,6 +2704,21 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                         </div>
                     </div>
                 </div>
+            )}
+
+            {previewWorkspace && (
+                <WorkspacePreviewModal
+                    workspace={previewWorkspace}
+                    items={previewWsItems}
+                    capturedAt={previewWsCapturedAt}
+                    loading={previewWsLoading}
+                    error={previewWsError}
+                    onRefresh={() => loadPreviewItems(previewWorkspace.id, { refresh: true })}
+                    onClose={() => { setPreviewWorkspace(null); setPreviewHighlightItemId(null); }}
+                    workloadClient={workloadClient}
+                    highlightItemId={previewHighlightItemId}
+                    autoOpenHighlighted={!!previewHighlightItemId}
+                />
             )}
 
             {manualDownloadUrl && (

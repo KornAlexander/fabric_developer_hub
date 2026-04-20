@@ -42,6 +42,8 @@ _POLICIES: tuple[ToolPolicy, ...] = (
                            "permitted to call it autonomously."),
     ToolPolicy("fabric_list_items", ToolSensitivity.READ_SAFE, auto_allowed=True,
                description="List items in a workspace"),
+    ToolPolicy("fabric_list_folders", ToolSensitivity.READ_SAFE, auto_allowed=True,
+               description="List folders in a workspace"),
     ToolPolicy("fabric_list_files", ToolSensitivity.READ_SAFE, auto_allowed=True,
                description="List files under a OneLake path"),
     ToolPolicy("fabric_read_file", ToolSensitivity.READ_SENSITIVE, auto_allowed=True,

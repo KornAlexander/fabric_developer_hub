@@ -3070,6 +3070,17 @@ html, body, #root {
     align-items: center;
     gap: 8px;
     margin-top: 12px;
+    margin-bottom: 8px;
+    &:empty { display: none; }
+}
+/* Dedicated row for the Add item / Add workspace / Attach files
+   buttons. Kept on its own line so it stays put as the user piles
+   more pills into `.composer-pills` above. */
+.composer-add-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
     margin-bottom: 16px;
 }
 .ctx-pill {
@@ -3378,6 +3389,368 @@ html, body, #root {
         overflow: auto;
     }
 }
+
+/* ── Workspace preview modal ─────────────────────────────────────
+ * Reuses .attachment-preview-backdrop + .attachment-preview-dialog
+ * chrome (.attachment-preview-head etc.). The body is a table styled
+ * to echo Fabric's native workspace view. */
+.workspace-preview-dialog {
+    width: min(820px, 94vw);
+    max-height: 78vh;
+}
+.workspace-preview-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;            /* breathing room between workspace icon and name */
+    min-width: 0;
+}
+.workspace-preview-title-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.workspace-preview-count {
+    color: #6b7280;
+    font-weight: 400;
+    margin-left: 10px;     /* clear gap after the workspace name */
+    font-size: 13px;
+    white-space: nowrap;
+}
+.workspace-preview-ts {
+    color: #9ca3af;
+    font-weight: 400;
+    font-size: 11px;
+    letter-spacing: 0.02em;
+    margin-right: 6px;     /* sits immediately left of the refresh button */
+    white-space: nowrap;
+}
+.workspace-preview-head-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.workspace-preview-refresh {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: none;
+    background: transparent;
+    color: #4b5563;
+    border-radius: 4px;
+    cursor: pointer;
+    &:hover:not(:disabled) { background: #f1f2f4; color: #111827; }
+    &:disabled { opacity: 0.5; cursor: default; }
+    svg { width: 16px; height: 16px; }
+}
+.workspace-preview-crumbs {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 14px;
+    border-bottom: 1px solid #eef0f2;
+    background: #fafbfc;
+    font-size: 12px;
+    color: #4b5563;
+    svg { width: 14px; height: 14px; color: #9ca3af; }
+}
+.workspace-preview-crumb {
+    background: transparent;
+    border: none;
+    padding: 2px 6px;
+    border-radius: 4px;
+    color: #0b5fa0;
+    font-size: 12px;
+    cursor: pointer;
+    &:hover:not(:disabled) { background: #eef3f8; }
+    &:disabled {
+        color: #1f2937;
+        cursor: default;
+        font-weight: 500;
+    }
+}
+.workspace-preview-body {
+    flex: 1;
+    overflow: auto;
+    background: #fff;
+    padding: 0;
+}
+.workspace-preview-loading,
+.workspace-preview-error,
+.workspace-preview-empty {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    justify-content: center;
+    padding: 40px 16px;
+    color: #4b5563;
+    font-size: 13px;
+}
+.workspace-preview-error {
+    color: #b91c1c;
+}
+.workspace-preview-fallback {
+    margin: 8px 12px;
+    padding: 10px 12px;
+    border: 1px solid #fde68a;
+    background: #fffbeb;
+    border-radius: 6px;
+    font-size: 12px;
+    color: #78350f;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    .workspace-preview-fallback-link {
+        word-break: break-all;
+        color: #0b5fa0;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 11px;
+    }
+    .workspace-preview-fallback-actions {
+        display: flex;
+        gap: 6px;
+        button {
+            padding: 2px 8px;
+            border: 1px solid #d6d3d1;
+            background: #fff;
+            border-radius: 4px;
+            font-size: 12px;
+            cursor: pointer;
+            &:hover { background: #f5f5f4; }
+        }
+    }
+}
+.workspace-preview-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    table-layout: auto;
+    thead th {
+        position: sticky;
+        top: 0;
+        background: #f7f7f8;
+        border-bottom: 1px solid #e5e7eb;
+        padding: 8px 12px;
+        text-align: left;
+        font-weight: 600;
+        color: #0b5fa0;
+        z-index: 1;
+        &:first-child {
+            padding: 6px 12px;
+            color: #9ca3af;
+            svg { width: 16px; height: 16px; display: block; }
+        }
+    }
+    tbody tr {
+        border-bottom: 1px solid #f1f2f4;
+        transition: background 0.1s;
+        &:hover { background: #f9fafb; }
+    }
+    .workspace-preview-row--clickable {
+        cursor: pointer;
+        &:hover { background: #eef3f8; }
+        &:focus-visible { outline: 2px solid #0b5fa0; outline-offset: -2px; }
+    }
+    td {
+        padding: 8px 12px;
+        color: #1f2937;
+        vertical-align: middle;
+    }
+    .workspace-preview-col-icon {
+        width: 36px;
+        padding-right: 0;
+        svg { width: 20px; height: 20px; display: block; }
+    }
+    .workspace-preview-col-name {
+        font-weight: 500;
+        color: #111827;
+        /* Name + folder-count badge + external-link button sit together
+         * on the left; remaining space stays empty so the Owner column
+         * sits close to the Name cell instead of being pushed far right. */
+        white-space: nowrap;
+    }
+    .workspace-preview-name-inner {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        max-width: 100%;
+    }
+    /* Highlighted row — flashed when the modal is opened with
+     * ``highlightItemId`` so the user sees exactly which item they
+     * picked from the composer. */
+    .workspace-preview-row--highlight > td {
+        background: #fffbeb;
+        animation: workspace-preview-flash 1.8s ease-out 1;
+    }
+    @keyframes workspace-preview-flash {
+        0%   { background: #fef08a; }
+        50%  { background: #fde68a; }
+        100% { background: #fffbeb; }
+    }
+    /* Child row (SQL endpoint under Lakehouse) — indented with a
+     * L-shaped connector drawn via a ::before so it lines up with the
+     * parent icon above. */
+    .workspace-preview-row--child {
+        .workspace-preview-col-icon { padding-left: 36px; position: relative; }
+        .workspace-preview-col-icon::before {
+            content: "";
+            position: absolute;
+            left: 22px;
+            top: -6px;
+            width: 12px;
+            height: 20px;
+            border-left: 1.5px solid #c5ced6;
+            border-bottom: 1.5px solid #c5ced6;
+            border-bottom-left-radius: 6px;
+        }
+    }
+    .workspace-preview-name-text {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        max-width: 340px;
+    }
+    .workspace-preview-folder-count {
+        color: #6b7280;
+        font-weight: 400;
+        font-size: 11px;
+        background: #f3f4f6;
+        padding: 1px 6px;
+        border-radius: 9999px;
+    }
+    .workspace-preview-open {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px;
+        height: 28px;
+        border: none;
+        background: transparent;
+        color: #0b5fa0;
+        text-decoration: none;
+        border-radius: 4px;
+        cursor: pointer;
+        opacity: 0.7;
+        transition: opacity 0.1s, background 0.1s, color 0.1s;
+        svg { width: 18px; height: 18px; }
+        &:hover { background: #eef3f8; color: #0b5fa0; opacity: 1; text-decoration: none; }
+        &:focus-visible { outline: 2px solid #0b5fa0; outline-offset: -2px; opacity: 1; }
+    }
+    tr:hover .workspace-preview-open,
+    tr:focus-within .workspace-preview-open { opacity: 1; }
+    .workspace-preview-manual {
+        border-top: 1px solid #e5e7eb;
+        background: #fffbe6;
+        padding: 10px 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+    }
+    .workspace-preview-manual-text {
+        font-size: 12px;
+        color: #4b5563;
+    }
+    .workspace-preview-manual-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .workspace-preview-manual-url {
+        flex: 1 1 auto;
+        min-width: 0;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+        background: #fff;
+        border: 1px solid #e5e7eb;
+        padding: 6px 8px;
+        border-radius: 4px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        user-select: all;
+    }
+    .workspace-preview-manual-copy {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        border: 1px solid #d1d5db;
+        background: #fff;
+        color: #111827;
+        font-size: 12px;
+        padding: 6px 10px;
+        border-radius: 4px;
+        cursor: pointer;
+        &:hover { background: #f3f4f6; }
+        &.is-copied { color: #0b8f5e; border-color: #0b8f5e; }
+        svg { width: 14px; height: 14px; }
+    }
+    .workspace-preview-manual-dismiss {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px;
+        height: 28px;
+        border: none;
+        background: transparent;
+        color: #6b7280;
+        border-radius: 4px;
+        cursor: pointer;
+        &:hover { background: #f3f4f6; color: #111827; }
+        svg { width: 16px; height: 16px; }
+    }
+    .workspace-preview-col-owner {
+        color: #4b5563;
+        width: 1px;             /* shrink-to-fit so Name stays tight against Owner */
+        white-space: nowrap;
+        padding-right: 24px;
+    }
+    .workspace-preview-col-type {
+        color: #4b5563;
+        width: 1px;
+        white-space: nowrap;
+    }
+    /* Colored per-type icons — matches Fabric's workspace view palette.
+     * Colours picked to mirror app.powerbi.com's per-type glyph colour so
+     * a user jumping between Fabric and the preview sees the same tone. */
+    .workspace-preview-icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        svg { width: 20px; height: 20px; display: block; }
+    }
+    .workspace-preview-icon--folder       svg { color: #e8a53d; }   /* amber  */
+    .workspace-preview-icon--lakehouse    svg { color: #0b90d6; }   /* cyan   */
+    .workspace-preview-icon--warehouse    svg { color: #107c41; }   /* green  */
+    .workspace-preview-icon--mirrored     svg { color: #0078d4; }   /* blue   */
+    .workspace-preview-icon--sqldb        svg { color: #b25900; }   /* brown  */
+    .workspace-preview-icon--kqldatabase  svg { color: #c13b8a; }   /* magenta*/
+    .workspace-preview-icon--eventhouse   svg { color: #a33ea1; }   /* fuchsia*/
+    .workspace-preview-icon--eventstream  svg { color: #d83b01; }   /* red-o  */
+    .workspace-preview-icon--reflex       svg { color: #cc4125; }   /* brick  */
+    .workspace-preview-icon--notebook     svg { color: #7a3ca7; }   /* purple */
+    .workspace-preview-icon--sparkjob     svg { color: #bb4d00; }   /* burnt  */
+    .workspace-preview-icon--environment  svg { color: #5b5fc7; }   /* slate  */
+    .workspace-preview-icon--pipeline     svg { color: #1a7fd6; }   /* blue   */
+    .workspace-preview-icon--dataflow     svg { color: #8f52cc; }   /* violet */
+    .workspace-preview-icon--report       svg { color: #f2a54a; }   /* orange */
+    .workspace-preview-icon--dashboard    svg { color: #d83b01; }   /* red    */
+    .workspace-preview-icon--paginated    svg { color: #b45309; }   /* ochre  */
+    .workspace-preview-icon--semantic     svg { color: #b78103; }   /* gold   */
+    .workspace-preview-icon--mlmodel      svg { color: #6e3b99; }   /* indigo */
+    .workspace-preview-icon--mlexperiment svg { color: #2e7d32; }   /* green  */
+    .workspace-preview-icon--userfunction svg { color: #6366f1; }   /* indigo */
+    .workspace-preview-icon--app          svg { color: #0b5fa0; }   /* navy   */
+    .workspace-preview-icon--map          svg { color: #c23b97; }   /* pink   */
+    .workspace-preview-icon--variables    svg { color: #0b8f5e; }   /* teal   */
+    .workspace-preview-icon--anomaly      svg { color: #f2a54a; }   /* orange */
+    .workspace-preview-icon--copyjob      svg { color: #0078d4; }   /* blue   */
+    .workspace-preview-icon--graphql      svg { color: #e10098; }   /* pink   */
+    .workspace-preview-icon--exploration  svg { color: #6366f1; }   /* indigo */
+    .workspace-preview-icon--generic      svg { color: #6b7280; }   /* grey   */
+}
+
 .ctx-pill-add {
     display: inline-flex;
     align-items: center;
@@ -3763,6 +4136,8 @@ html, body, #root {
         height: 18px;
         color: #f59e0b; // warm accent for the new branch
         flex: 0 0 auto;
+        align-self: flex-end;
+        margin-bottom: 5px;
     }
 }
 .branchtree-connector {
@@ -3804,6 +4179,158 @@ html, body, #root {
         box-shadow: 0 0 0 1px rgba(0, 95, 170, 0.2);
     }
     &::placeholder { color: #9ca3af; font-style: italic; }
+}
+/* Visibly-editable variant — shows a subtle outline + pencil hint so
+   users know the field is a text input they can change. The plain
+   ``.branchtree-child-name`` above looks like static text until
+   hovered, which hid the affordance. */
+.branchtree-child-name--editable {
+    background: #ffffff;
+    border: 1px solid rgba(148, 163, 184, 0.45);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+    cursor: text;
+    padding: 5px 10px 5px 10px;
+    &:hover { border-color: rgba(100, 116, 139, 0.55); background: #ffffff; }
+    &:focus {
+        background: #ffffff;
+        border-color: #005faa;
+        box-shadow: 0 0 0 2px rgba(0, 95, 170, 0.18);
+    }
+}
+.branchtree-field {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
+    min-width: 0;
+}
+.branchtree-field-label {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #64748b;
+    padding-left: 2px;
+}
+// Row holding the field label on the left and "manually edited" +
+// "Reset to AI" controls on the right. ``align-items: center`` keeps
+// the small uppercase label optically aligned with the pill + button.
+.branchtree-field-labelrow {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-height: 18px;
+    margin-bottom: 2px;
+}
+.branchtree-field-meta {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 0 auto;
+}
+// Small link-style button that restores the cached AI suggestion.
+// Shown only when the user has manually edited a field AND we have a
+// cached suggestion to restore.
+.branchtree-reset-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    border: 1px solid rgba(139, 92, 246, 0.35);
+    background: rgba(139, 92, 246, 0.08);
+    color: #6d28d9;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    text-transform: none;
+    cursor: pointer;
+    transition: background 0.12s, border-color 0.12s, color 0.12s;
+    svg {
+        width: 11px;
+        height: 11px;
+        flex: 0 0 auto;
+    }
+    &:hover {
+        background: rgba(139, 92, 246, 0.18);
+        border-color: rgba(139, 92, 246, 0.55);
+        color: #5b21b6;
+    }
+    &:focus-visible {
+        outline: 2px solid rgba(139, 92, 246, 0.45);
+        outline-offset: 1px;
+    }
+    &:disabled {
+        opacity: 0.55;
+        cursor: progress;
+        pointer-events: none;
+    }
+}
+.branchtree-ai-hint {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    text-transform: none;
+    color: #6d28d9;
+    background: rgba(139, 92, 246, 0.1);
+    svg {
+        width: 11px;
+        height: 11px;
+        animation: branchtree-ai-pulse 1.4s ease-in-out infinite;
+    }
+}
+// Variant shown when the user has hand-edited the field — signals
+// that AI suggestions will no longer overwrite their value.
+.branchtree-ai-hint--manual {
+    color: #475569;
+    background: rgba(100, 116, 139, 0.14);
+    border: 1px solid rgba(100, 116, 139, 0.22);
+    cursor: help;
+    svg { animation: none; }
+}
+@keyframes branchtree-ai-pulse {
+    0%, 100% { opacity: 0.6; transform: scale(1); }
+    50%      { opacity: 1;   transform: scale(1.15); }
+}
+// Loading skeleton shown in place of the input while the LLM is
+// generating the suggested name.
+.branchtree-child-name--loading {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    background: linear-gradient(
+        90deg,
+        rgba(139, 92, 246, 0.06) 0%,
+        rgba(139, 92, 246, 0.16) 50%,
+        rgba(139, 92, 246, 0.06) 100%
+    );
+    background-size: 200% 100%;
+    animation: branchtree-skeleton-shimmer 1.6s linear infinite;
+    color: #6d28d9;
+    font-size: 12px;
+    font-style: italic;
+    border: 1px dashed rgba(139, 92, 246, 0.35);
+}
+.branchtree-loading-icon {
+    width: 14px;
+    height: 14px;
+    flex: 0 0 auto;
+    animation: branchtree-ai-pulse 1.2s ease-in-out infinite;
+}
+.branchtree-loading-text {
+    line-height: 1.2;
+}
+@keyframes branchtree-skeleton-shimmer {
+    0%   { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
 }
 .branchtree-info {
     font-size: 10px;

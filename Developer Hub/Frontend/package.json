@@ -14,6 +14,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@fabric-msft/svg-icons": "^7.0.0",
     "@fluentui/react-components": "^9.7.2",
     "@fluentui/react-icons": "^2.0.324",
     "@ms-fabric/workload-client": "^2.1.0",

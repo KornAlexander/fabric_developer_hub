@@ -32,10 +32,12 @@ import {
     BrainCircuit24Regular,
     Checkmark16Regular,
     ErrorCircle16Regular,
+    PeopleTeam20Regular,
 } from "@fluentui/react-icons";
 import { WorkloadClientAPI } from "@ms-fabric/workload-client";
 import * as api from "../../controller/AgentHubApi";
 import { callAuthAcquireAccessToken } from "../../controller/AgentHubController";
+import { WorkspacePreviewModal } from "./WorkspacePreviewModal";
 
 interface SessionDetailPageProps {
     workloadClient: WorkloadClientAPI;
@@ -73,6 +75,12 @@ export function SessionDetailPage({ workloadClient }: SessionDetailPageProps) {
     const [filterTab, setFilterTab] = useState("all");
     const [elapsedSeconds, setElapsedSeconds] = useState(0);
     const [error, setError] = useState<string | null>(null);
+    // Historical workspace preview — opens when the user clicks the
+    // "View workspace state" chip in the header. Data is whatever was
+    // snapshotted into ``context.workspace_snapshot`` at plan-creation
+    // time (see backend ``create_session``), so we render it read-only
+    // with no refresh affordance.
+    const [snapshotOpen, setSnapshotOpen] = useState(false);
 
     const githubToken = sessionStorage.getItem("github_token") || "";
     // Fabric OBO token is required by the backend to authenticate the
@@ -351,6 +359,17 @@ export function SessionDetailPage({ workloadClient }: SessionDetailPageProps) {
                                 Created {new Date(job.created_at).toLocaleString()}
                             </Caption1>
                         )}
+                        {job.context?.workspace_snapshot?.items?.length ? (
+                            <button
+                                type="button"
+                                className="ctx-pill ctx-pill--workspace ctx-pill--clickable"
+                                onClick={() => setSnapshotOpen(true)}
+                                title="View workspace state captured at plan creation"
+                            >
+                                <PeopleTeam20Regular />
+                                Workspace at creation
+                            </button>
+                        ) : null}
                     </div>
                     <Body1 className="job-goal-text">{job.task_description}</Body1>
                 </div>
@@ -557,6 +576,22 @@ export function SessionDetailPage({ workloadClient }: SessionDetailPageProps) {
                         disabled={!chatInput.trim()}
                     />
                 </div>
+            )}
+
+            {snapshotOpen && job?.context?.workspace_snapshot && (
+                <WorkspacePreviewModal
+                    workspace={{
+                        id: job.context.workspace_snapshot.workspace_id || job.workspace_id || "",
+                        name: job.context.workspace_snapshot.workspace_name
+                            || job.workspace_name
+                            || "Workspace",
+                    }}
+                    items={job.context.workspace_snapshot.items || []}
+                    capturedAt={job.context.workspace_snapshot.captured_at || job.created_at || null}
+                    snapshot
+                    onClose={() => setSnapshotOpen(false)}
+                    workloadClient={workloadClient}
+                />
             )}
         </div>
     );

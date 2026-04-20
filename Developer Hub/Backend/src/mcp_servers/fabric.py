@@ -213,8 +213,35 @@ async def fabric_list_items(workspace_id: str, item_type: str | None = None) -> 
             "id": item_id,
             "displayName": item.get("displayName"),
             "type": item_type_value,
+            "folderId": item.get("folderId"),
             **_build_item_links(workspace_id, item_id, item_type_value),
         })
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+async def fabric_list_folders(workspace_id: str) -> str:
+    """List folders in a Fabric workspace (top-level container structure).
+
+    Folders are the Fabric workspace-view grouping shown alongside items
+    (e.g. a "raw" folder sitting next to a Lakehouse). Returns an array
+    of ``{id, displayName, parentFolderId}``.
+    """
+    url = f"{FABRIC_API_BASE}/workspaces/{workspace_id}/folders"
+    async with shared_client(30.0) as client:
+        resp = await client.get(url, headers=_fabric_headers())
+    if resp.status_code != 200:
+        return format_http_error(resp, 'listing folders')
+    data = resp.json()
+    folders = data.get("value", [])
+    result = [
+        {
+            "id": f.get("id"),
+            "displayName": f.get("displayName"),
+            "parentFolderId": f.get("parentFolderId"),
+        }
+        for f in folders
+    ]
     return json.dumps(result, indent=2)
 
 
