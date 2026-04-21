@@ -1,0 +1,492 @@
+/* ═══════════════════════════════════════════════════════════════════
+   03-mission-control — prototype-only additions
+   Loads AFTER ../../_shared/styles.css and the page's Tailwind config.
+   Everything in here is layered on top of the Developer Hub design
+   system (primary #005faa / #0078d4, emerald for running, surface
+   tokens, outline-variant, radii 4/6/12px, Inter + Material Symbols).
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ── Screen switcher (mission-control is a 6-screen clickthrough) ──── */
+
+.screen          { display: none; }
+.screen[data-active="true"] { display: flex; flex: 1 1 auto; min-height: 0; }
+
+/* Prompt recap details — hide default disclosure marker, keep our chevron */
+.mc-prompt-recap > summary { list-style: none; }
+.mc-prompt-recap > summary::-webkit-details-marker { display: none; }
+.mc-prompt-recap > summary::marker { display: none; }
+
+/* Bottom clickthrough nav — keeps page chrome minimal. */
+.mc-nav {
+    position: sticky; bottom: 0;
+    z-index: 40;
+    border-top: 1px solid rgba(192, 199, 212, 0.2);
+    background: #ffffff;
+    padding: 10px 20px;
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+}
+.mc-nav__crumbs { display: flex; gap: 4px; }
+.mc-nav__crumb {
+    width: 26px; height: 26px;
+    border-radius: 6px;
+    border: 1px solid #c0c7d4;
+    background: #ffffff;
+    color: #404752;
+    font-size: 11px; font-weight: 600;
+    display: inline-flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    transition: background .12s ease, border-color .12s ease, color .12s ease;
+}
+.mc-nav__crumb:hover { background: #f4f3f2; }
+.mc-nav__crumb[aria-current="true"] {
+    background: #005faa; color: #ffffff; border-color: #005faa;
+}
+.mc-nav__crumb[data-state="done"] {
+    background: #e8f5e9; color: #2e7d32; border-color: #c8e6c9;
+}
+
+/* ── Mock footer ──────────────────────────────────────────────────── */
+
+.mock-banner {
+    position: fixed; left: 0; right: 0; bottom: 0;
+    height: 22px;
+    background: #201f1e; color: #f1f0ef;
+    font-size: 11px; letter-spacing: .02em;
+    display: flex; align-items: center; justify-content: center;
+    z-index: 100;
+}
+/* leave room above for the banner */
+body.mc-body { padding-bottom: 22px; }
+
+/* ════════════════════════════════════════════════════════════════════
+   ORCHESTRATION GRAPH
+   Read-only SVG visualization of the suggested agentic architecture
+   for the submitted task. Not a node editor — the user cannot wire
+   nodes themselves; this is a preview of what the system proposes.
+   ════════════════════════════════════════════════════════════════════ */
+
+.orch-canvas {
+    position: relative;
+    background:
+        radial-gradient(circle at 1px 1px, rgba(64,71,82,0.08) 1px, transparent 0);
+    background-size: 24px 24px;
+    background-color: #ffffff;
+    border-radius: 12px;
+    border: 1px solid rgba(192, 199, 212, 0.25);
+    overflow: hidden;
+    /* Lock the drawing area to the SVG viewBox (740×460) so nodes
+       positioned in pixels line up with the edge paths. Center it
+       inside any wider card. */
+    width: 740px;
+    max-width: 100%;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+/* The SVG holds edges only. Nodes are positioned absolutely on top so
+   they keep real DOM semantics (focusable, ARIA, hover). */
+.orch-canvas svg.orch-edges {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+}
+.orch-edge {
+    fill: none;
+    stroke: #c0c7d4;
+    stroke-width: 1.5;
+}
+.orch-edge[data-kind="delegate"] { stroke: #a3c9ff; stroke-dasharray: 5 4; }
+.orch-edge[data-kind="report"]   { stroke: #c8e6c9; }
+.orch-edge[data-kind="peer"]     { stroke: #ffb689; stroke-dasharray: 2 4; }
+.orch-edge[data-active="true"] {
+    stroke: #0078d4;
+    stroke-width: 2.25;
+    stroke-dasharray: 6 3;
+    animation: mc-dash 1.2s linear infinite;
+}
+@keyframes mc-dash { to { stroke-dashoffset: -18; } }
+.orch-edge-label {
+    font-family: 'Inter', sans-serif;
+    font-size: 9px;
+    font-weight: 600;
+    fill: #404752;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+}
+
+/* Node styles — they sit over the SVG and look like Fluent surface cards. */
+.orch-node {
+    position: absolute;
+    width: 200px;
+    background: #ffffff;
+    border: 1.5px solid #c0c7d4;
+    border-radius: 12px;
+    padding: 12px 14px;
+    box-shadow: 0 1px 2px rgba(0,0,0,.04), 0 1px 3px rgba(0,0,0,.06);
+    font-family: 'Inter', sans-serif;
+    transition: box-shadow .15s ease, transform .15s ease, border-color .15s ease;
+}
+.orch-node:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 14px rgba(0,0,0,.06), 0 2px 4px rgba(0,0,0,.05);
+}
+.orch-node[data-state="planned"] { border-style: dashed; border-color: #a3c9ff; background: #ffffff; }
+.orch-node[data-state="active"]  { border-color: #0078d4; border-width: 2px; box-shadow: 0 0 0 4px rgba(0, 120, 212, .10); }
+.orch-node[data-state="done"]    { border-color: #a7d3a7; background: #f4faf4; }
+.orch-node[data-state="waiting"] { border-color: #ffb689; background: #fff8f1; }
+
+.orch-node__head  { display: flex; align-items: center; gap: 8px; }
+.orch-node__icon  {
+    width: 28px; height: 28px; border-radius: 8px; flex: 0 0 auto;
+    display: inline-flex; align-items: center; justify-content: center;
+}
+.orch-node__icon[data-agent="orch"]    { background: #ebf3fc; color: #005faa; }
+.orch-node__icon[data-agent="fde"]     { background: #e3f2fd; color: #1565c0; }
+.orch-node__icon[data-agent="admin"]   { background: #f3e5f5; color: #7b1fa2; }
+.orch-node__icon[data-agent="rt"]      { background: #e0f2f1; color: #00796b; }
+.orch-node__icon[data-agent="reporter"]{ background: #fff3e0; color: #e65100; }
+
+.orch-node__title { font-size: 13px; font-weight: 600; color: #1a1c1c; line-height: 1.2; }
+.orch-node__role  { font-size: 10px; color: #404752; letter-spacing: .04em; text-transform: uppercase; font-weight: 600; margin-top: 2px; }
+.orch-node__skills {
+    display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px;
+}
+.orch-node__skill {
+    font-size: 9px; line-height: 1;
+    padding: 3px 6px; border-radius: 999px;
+    background: #f4f3f2; color: #404752;
+    border: 1px solid rgba(192, 199, 212, 0.35);
+}
+
+.orch-node__state {
+    margin-top: 8px; padding-top: 8px;
+    border-top: 1px dashed rgba(192,199,212,0.5);
+    display: flex; align-items: center; gap: 6px;
+    font-size: 10px; color: #404752;
+}
+.orch-node__state-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: #c0c7d4;
+}
+.orch-node[data-state="active"]  .orch-node__state-dot { background: #0078d4; animation: mc-pulse 1.2s ease-in-out infinite; }
+.orch-node[data-state="done"]    .orch-node__state-dot { background: #2e7d32; }
+.orch-node[data-state="waiting"] .orch-node__state-dot { background: #e65100; }
+@keyframes mc-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(0, 120, 212, .45); }
+    50%      { box-shadow: 0 0 0 6px rgba(0, 120, 212, 0); }
+}
+
+/* Legend — a tiny chip row under/next to the graph. */
+.orch-legend {
+    display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+    font-size: 11px; color: #404752;
+}
+.orch-legend-item { display: inline-flex; align-items: center; gap: 6px; }
+.orch-legend-swatch { width: 22px; height: 2px; border-radius: 2px; }
+.orch-legend-swatch[data-kind="delegate"] { background: repeating-linear-gradient(90deg, #a3c9ff 0 5px, transparent 5px 9px); height: 2px; }
+.orch-legend-swatch[data-kind="report"]   { background: #c8e6c9; height: 2px; }
+.orch-legend-swatch[data-kind="peer"]     { background: repeating-linear-gradient(90deg, #ffb689 0 2px, transparent 2px 6px); height: 2px; }
+
+/* ── Small status pill helpers we didn't find in the shared CSS ─── */
+.mc-pill {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 10px; font-weight: 700;
+    padding: 2px 8px; border-radius: 999px;
+    letter-spacing: .04em; text-transform: uppercase;
+}
+.mc-pill--running { background: #e8f5e9; color: #2e7d32; }
+.mc-pill--running::before { content:""; width:6px; height:6px; border-radius:50%; background:#2e7d32; animation: mc-pulse 1.2s ease-in-out infinite; }
+.mc-pill--planned { background: #ebf3fc; color: #005faa; }
+.mc-pill--done    { background: #e8f5e9; color: #2e7d32; }
+.mc-pill--waiting { background: #fff3e0; color: #e65100; }
+
+/* Narrow-width collapse: stack graph + log vertically below 960 px. */
+@media (max-width: 960px) {
+    .mc-split-panel { grid-template-columns: 1fr !important; }
+    .orch-canvas { min-height: 420px; }
+}
+@media (max-width: 640px) {
+    .orch-node { width: 160px; padding: 10px 12px; }
+    .orch-node__title { font-size: 12px; }
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   COMPACT TEAM STRIP  (used on live screens 3, 4, 5 in place of the
+   full orchestration graph — keeps the who-is-active signal without
+   stealing half the viewport)
+   ════════════════════════════════════════════════════════════════════ */
+.mc-team-strip {
+    display: grid;
+    grid-template-columns: minmax(0,1fr) 28px minmax(0,3fr);
+    gap: 12px;
+    align-items: stretch;
+    padding: 14px 20px;
+    background: #ffffff;
+    border-bottom: 1px solid rgba(192,199,212,.15);
+}
+.mc-team-strip__lead,
+.mc-team-strip__workers { display: flex; gap: 12px; align-items: stretch; }
+.mc-team-strip__workers { justify-content: stretch; }
+.mc-team-strip__workers > * { flex: 1 1 0; min-width: 0; }
+
+.mc-agent-chip {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 12px;
+    background: #ffffff;
+    border: 1.5px solid #c0c7d4;
+    border-radius: 12px;
+    min-width: 0;
+    transition: box-shadow .15s ease, border-color .15s ease, transform .15s ease;
+}
+.mc-agent-chip[data-state="planned"] { border-style: dashed; border-color: #a3c9ff; }
+.mc-agent-chip[data-state="active"]  { border-color: #0078d4; border-width: 2px; box-shadow: 0 0 0 3px rgba(0,120,212,.10); }
+.mc-agent-chip[data-state="done"]    { border-color: #a7d3a7; background: #f4faf4; }
+.mc-agent-chip[data-state="waiting"] { border-color: #ffb689; background: #fff8f1; }
+
+.mc-agent-chip__icon {
+    width: 32px; height: 32px; border-radius: 10px; flex: 0 0 auto;
+    display: inline-flex; align-items: center; justify-content: center;
+}
+.mc-agent-chip__icon[data-agent="orch"]    { background: #ebf3fc; color: #005faa; }
+.mc-agent-chip__icon[data-agent="fde"]     { background: #e3f2fd; color: #1565c0; }
+.mc-agent-chip__icon[data-agent="admin"]   { background: #f3e5f5; color: #7b1fa2; }
+.mc-agent-chip__icon[data-agent="reporter"]{ background: #fff3e0; color: #e65100; }
+
+.mc-agent-chip__body { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
+.mc-agent-chip__name { font-size: 12px; font-weight: 700; color: #1a1c1c; line-height: 1.1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mc-agent-chip__status { font-size: 10px; color: #404752; letter-spacing: .02em; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mc-agent-chip[data-state="active"]  .mc-agent-chip__status { color: #005faa; font-weight: 600; }
+.mc-agent-chip[data-state="done"]    .mc-agent-chip__status { color: #2e7d32; }
+.mc-agent-chip[data-state="waiting"] .mc-agent-chip__status { color: #e65100; font-weight: 600; }
+
+/* Connector between lead (orchestrator) and workers — clean chevron */
+.mc-team-strip__connector {
+    display: flex; align-items: center; justify-content: center;
+    color: #a3c9ff;
+    font-size: 20px;
+    font-weight: 600;
+    line-height: 1;
+    user-select: none;
+}
+.mc-team-strip__connector::before { content: "›"; font-size: 28px; }
+
+@media (max-width: 960px) {
+    .mc-team-strip { grid-template-columns: 1fr; }
+    .mc-team-strip__connector { display: none; }
+    .mc-team-strip__workers { flex-wrap: wrap; }
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   Topology variants — same component, different multi-agent patterns
+   See: https://zams.com/blog/multi-agent-systems
+   • supervisor : one lead delegates to N workers (default)
+   • sequential : predetermined pipeline A → B → C (arrows between chips)
+   • network    : peer collaboration, no lead
+   • solo       : single agent or simple 1-2 agent runs
+   ──────────────────────────────────────────────────────────────────── */
+
+/* Sequential pipeline: chips in a row with arrow separators */
+.mc-team-strip[data-topology="sequential"] {
+    display: flex;
+    gap: 10px;
+    align-items: stretch;
+}
+.mc-team-strip[data-topology="sequential"] .mc-agent-chip { flex: 1 1 0; }
+.mc-team-strip[data-topology="sequential"] .mc-team-strip__arrow {
+    flex: 0 0 24px;
+    display: flex; align-items: center; justify-content: center;
+    color: #8a93a6;
+}
+.mc-team-strip[data-topology="sequential"] .mc-team-strip__arrow::before {
+    content: "→"; font-size: 18px; font-weight: 600;
+}
+.mc-team-strip[data-topology="sequential"] .mc-team-strip__arrow[data-active="true"] { color: #0078d4; }
+
+/* Peer network: chips equally flexed, dashed outline signalling handoffs */
+.mc-team-strip[data-topology="network"] {
+    display: flex;
+    gap: 12px;
+    align-items: stretch;
+}
+.mc-team-strip[data-topology="network"] .mc-agent-chip { flex: 1 1 0; }
+
+/* Solo: center a single chip with a compact caption */
+.mc-team-strip[data-topology="solo"] {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+}
+.mc-team-strip[data-topology="solo"] .mc-agent-chip { min-width: 260px; max-width: 420px; }
+
+@media (max-width: 960px) {
+    .mc-team-strip[data-topology="sequential"],
+    .mc-team-strip[data-topology="network"] { flex-wrap: wrap; }
+    .mc-team-strip[data-topology="sequential"] .mc-team-strip__arrow { display: none; }
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   Team panel — wraps the strip with a collapsible/expandable toolbar
+   and a layout picker. Expanded view shows a richer agent board.
+   ──────────────────────────────────────────────────────────────────── */
+.mc-team-panel {
+    background: #ffffff;
+    border-bottom: 1px solid rgba(192,199,212,.15);
+    display: flex;
+    flex-direction: column;
+}
+.mc-team-panel .mc-team-strip { border-bottom: none; }  /* strip sits inside panel */
+
+.mc-team-panel__bar {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px;
+    padding: 6px 20px;
+    background: #fafbfc;
+    border-bottom: 1px solid rgba(192,199,212,.12);
+    font-size: 11px; color: #404752;
+}
+.mc-team-panel__title { display: flex; align-items: center; gap: 6px; font-weight: 600; color: #1a1c1c; }
+.mc-team-panel__title .mc-team-panel__meta { color: #6b7380; font-weight: 500; }
+.mc-team-panel__tools { display: flex; align-items: center; gap: 4px; }
+.mc-team-panel__tool {
+    display: inline-flex; align-items: center; gap: 4px;
+    height: 26px; padding: 0 8px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    font: inherit; font-size: 11px; font-weight: 500; color: #404752;
+    cursor: pointer;
+    transition: background .15s ease, border-color .15s ease, color .15s ease;
+}
+.mc-team-panel__tool:hover { background: #eef2f7; color: #005faa; }
+.mc-team-panel__tool[aria-pressed="true"] { background: #e3f2fd; color: #005faa; border-color: #a3c9ff; }
+.mc-team-panel__tool[data-action="cycle-layout"] .mc-team-panel__layout-label { text-transform: capitalize; }
+
+/* Overflow chip appended to __workers when chips are clipped */
+.mc-agent-chip--overflow {
+    flex: 0 0 auto;
+    min-width: 52px; max-width: 80px;
+    justify-content: center;
+    border-style: dashed;
+    background: #f7f9fc;
+    color: #005faa;
+    font-size: 11px; font-weight: 700;
+    cursor: pointer;
+}
+.mc-agent-chip--overflow:hover { background: #eef2f7; border-color: #005faa; }
+
+/* Expanded view — reuses the .orch-canvas graph from screen 2
+   so the full team view is visually identical to the plan-review page.
+   Capped to ~42vh with internal scroll so the log area below never
+   gets clipped when the panel is expanded. */
+.mc-team-panel__full {
+    padding: 16px 20px 20px;
+    background: #ffffff;
+    border-top: 1px solid rgba(192,199,212,.15);
+    max-height: min(520px, 42vh);
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+.mc-team-panel[data-expanded="false"] .mc-team-panel__full { display: none; }
+.mc-team-panel[data-expanded="true"]  .mc-team-strip { display: none; }
+
+/* Shrink the orchestration canvas inside the expanded panel so the
+   full team view never monopolises the viewport. The standalone graph
+   on screen 2 is unaffected. */
+.mc-team-panel__full .orch-canvas {
+    height: 360px !important;
+}
+
+.mc-team-panel__full-header {
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+}
+.mc-team-panel__full-hint {
+    margin-left: auto;
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11px; color: #6b7380;
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   Full run log with per-agent filters (screen 6)
+   ──────────────────────────────────────────────────────────────────── */
+.mc-run-log__action {
+    display: inline-flex; align-items: center; gap: 4px;
+    height: 26px; padding: 0 8px;
+    background: transparent; border: 1px solid transparent;
+    border-radius: 6px;
+    font: inherit; font-size: 11px; font-weight: 500; color: #404752;
+    cursor: pointer;
+    transition: background .15s ease, color .15s ease;
+}
+.mc-run-log__action:hover { background: #eef2f7; color: #005faa; }
+
+.mc-run-log__filters {
+    display: flex; gap: 4px; flex-wrap: wrap;
+    padding: 8px 16px;
+    background: #fafbfc;
+    border-bottom: 1px solid rgba(192,199,212,.12);
+}
+.mc-run-log__tab {
+    display: inline-flex; align-items: center; gap: 6px;
+    height: 30px; padding: 0 10px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    font: inherit; font-size: 12px; font-weight: 500; color: #404752;
+    cursor: pointer;
+    transition: background .15s ease, border-color .15s ease, color .15s ease;
+}
+.mc-run-log__tab:hover { background: #eef2f7; color: #005faa; }
+.mc-run-log__tab[aria-selected="true"] {
+    background: #e3f2fd;
+    border-color: #a3c9ff;
+    color: #005faa;
+    font-weight: 700;
+}
+.mc-run-log__count {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 20px; height: 18px; padding: 0 6px;
+    background: rgba(107,115,128,.12);
+    border-radius: 9px;
+    font-size: 10px; font-weight: 700; color: #404752;
+    letter-spacing: .02em;
+}
+.mc-run-log__tab[aria-selected="true"] .mc-run-log__count {
+    background: #005faa; color: #ffffff;
+}
+
+.mc-run-log__entries { position: relative; }
+.mc-run-log__entry {
+    display: flex; flex-direction: column; gap: 6px;
+    padding-left: 34px;
+    position: relative;
+}
+.mc-run-log__entry::before {
+    content: ""; position: absolute;
+    left: 12px; top: 26px; bottom: -16px;
+    border-left: 2px solid rgba(192,199,212,.18);
+}
+.mc-run-log__entries .mc-run-log__entry:last-of-type::before { display: none; }
+.mc-run-log__row {
+    display: flex; align-items: center; gap: 10px;
+    margin-left: -34px;
+}
+.mc-run-log__meta { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+.mc-run-log__who  { font-size: 12px; font-weight: 700; color: #1a1c1c; line-height: 1.2; }
+.mc-run-log__time { font-size: 10px; color: #6b7380; letter-spacing: .02em; }
+.mc-run-log__body { font-size: 12.5px; color: #1a1c1c; line-height: 1.5; }
+.mc-run-log__body code {
+    background: #f0f3f8; padding: 1px 5px; border-radius: 4px;
+    font-size: 11px; color: #404752;
+}
+
+/* Filtering via data-log-filter attribute */
+.mc-run-log[data-log-filter="orch"]     .mc-run-log__entry:not([data-agent="orch"])     { display: none; }
+.mc-run-log[data-log-filter="fde"]      .mc-run-log__entry:not([data-agent="fde"])      { display: none; }
+.mc-run-log[data-log-filter="admin"]    .mc-run-log__entry:not([data-agent="admin"])    { display: none; }
+.mc-run-log[data-log-filter="reporter"] .mc-run-log__entry:not([data-agent="reporter"]) { display: none; }
+
+/* Empty-state placeholder — hidden unless a filter matches nothing visible */
+.mc-run-log__empty { display: none; }
+.mc-run-log[data-empty="true"] .mc-run-log__empty { display: block; }

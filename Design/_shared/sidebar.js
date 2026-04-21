@@ -18,12 +18,12 @@
 
   const NAV = {
     'Agent Hub': [
-      { key: 'new-session', label: 'New Session',       icon: 'add_circle', activeIcon: true },
-      { key: 'sessions',    label: 'Sessions',          icon: 'forum'                         },
-      { key: 'agents',      label: 'Agents and Skills', icon: 'smart_toy', activeIcon: true   },
+      { key: 'new-session', label: 'New Session',       icon: 'add_circle', activeIcon: true, href: 'new_session_step1_compose.html' },
+      { key: 'sessions',    label: 'Sessions',          icon: 'forum',                        href: 'sessions_overview.html' },
+      { key: 'agents',      label: 'Agents and Skills', icon: 'smart_toy', activeIcon: true,  href: 'agents_and_skills.html' },
     ],
     'Tools': [
-      { key: 'pbi-fixer',   label: 'Power BI Fixer',    icon: 'build'                         },
+      { key: 'pbi-fixer',   label: 'Power BI Fixer',    icon: 'build',                        href: '#' },
       { key: null,          label: '\u2026',            icon: 'more_horiz', muted: true       },
       { key: null,          label: '\u2026',            icon: 'more_horiz', muted: true       },
     ],
@@ -31,10 +31,11 @@
 
   // ─── Expanded variant ──────────────────────────────────────────────
   function expandedItem(item, active) {
+    const href = item.href || '#';
     if (active) {
       const iconStyle = item.activeIcon ? ' filled" style="color: #005faa;' : '';
       return (
-        '<a class="relative flex items-center bg-surface-container-lowest text-on-surface py-2.5 px-3 rounded-lg shadow-sm font-medium text-sm" href="#">' +
+        '<a class="relative flex items-center bg-surface-container-lowest text-on-surface py-2.5 px-3 rounded-lg shadow-sm font-medium text-sm" href="' + href + '">' +
           '<div class="absolute left-0 top-1/4 bottom-1/4 w-[3px] bg-primary rounded-full"></div>' +
           '<span class="material-symbols-outlined mr-2.5 text-[20px]' + iconStyle + '">' + item.icon + '</span>' +
           item.label +
@@ -43,7 +44,7 @@
     }
     const textTone = item.muted ? 'text-on-surface-variant/60' : 'text-on-surface-variant';
     return (
-      '<a class="flex items-center ' + textTone + ' py-2.5 px-3 hover:bg-surface-container-high/50 rounded-lg transition-all text-sm" href="#">' +
+      '<a class="flex items-center ' + textTone + ' py-2.5 px-3 hover:bg-surface-container-high/50 rounded-lg transition-all text-sm" href="' + href + '">' +
         '<span class="material-symbols-outlined mr-2.5 text-[20px]">' + item.icon + '</span>' +
         item.label +
       '</a>'
@@ -83,19 +84,20 @@
   // ─── Collapsed variant (icon rail) ────────────────────────────────
   function collapsedItem(item, active) {
     if (!item.key && item.muted) return ''; // hide the "..." placeholders in collapsed mode
+    const href = item.href || '#';
     if (active) {
       const iconExtra = item.activeIcon ? ' filled' : '';
       return (
-        '<button class="p-2 bg-surface-container-lowest text-primary rounded-lg shadow-sm relative" title="' + item.label + '">' +
+        '<a class="p-2 bg-surface-container-lowest text-primary rounded-lg shadow-sm relative block" href="' + href + '" title="' + item.label + '">' +
           '<span class="material-symbols-outlined text-[20px]' + iconExtra + '">' + item.icon + '</span>' +
           '<div class="absolute left-0 top-1/4 bottom-1/4 w-[3px] bg-primary rounded-full"></div>' +
-        '</button>'
+        '</a>'
       );
     }
     return (
-      '<button class="p-2 text-on-surface-variant hover:bg-surface-container-high rounded-lg transition-all" title="' + item.label + '">' +
+      '<a class="p-2 text-on-surface-variant hover:bg-surface-container-high rounded-lg transition-all block" href="' + href + '" title="' + item.label + '">' +
         '<span class="material-symbols-outlined text-[20px]">' + item.icon + '</span>' +
-      '</button>'
+      '</a>'
     );
   }
 

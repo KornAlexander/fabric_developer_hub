@@ -305,126 +305,169 @@
                     <h3 class="text-sm font-bold text-on-surface uppercase tracking-wider">Proposed Execution Plan</h3>
                 </div>
 
+                <!--
+                    SMOOTH-PATH VARIANT
+                    ─ Branch out: OFF (writes directly to Working workspace)
+                    ─ Require approvals: OFF
+                    ─ conflicts: []  clarificationsNeeded: []  executionBlocked: false
+                    ─ all prereqs resolved → satisfied; all steps low/medium risk + reversible
+                    Matches live PlanView.tsx rendering when footer.executionBlocked === false.
+                -->
                 <div class="bg-surface-container-lowest rounded-2xl border border-outline-variant/10 overflow-hidden shadow-sm">
-                    <!-- Plan steps — no approval gates since Require approvals is OFF -->
-                    <div class="divide-y divide-outline-variant/5">
-                        <!-- Step 1 -->
-                        <div class="flex items-start gap-4 p-4 hover:bg-surface-container-low/50 transition-colors">
-                            <div class="w-7 h-7 rounded-full bg-primary/10 text-primary flex items-center justify-center shrink-0 mt-0.5">
-                                <span class="text-xs font-bold">1</span>
-                            </div>
-                            <div class="flex-1">
-                                <div class="flex items-center gap-2 mb-1">
-                                    <span class="text-sm font-semibold text-on-surface">Discover & Map Data Sources</span>
-                                    <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold fabric-badge-lakehouse">
-                                        <span class="material-symbols-outlined text-[10px]">database</span>
-                                        Lakehouse
-                                    </span>
-                                </div>
-                                <p class="text-xs text-on-surface-variant leading-relaxed">Scan OneLake paths, identify all relevant parquet partitions, and profile schema metadata for the marketing domain.</p>
-                            </div>
-                            <div class="text-right shrink-0">
-                                <div class="text-[10px] text-on-surface-variant/60">Auto</div>
-                            </div>
-                        </div>
 
-                        <!-- Step 2 -->
-                        <div class="flex items-start gap-4 p-4 hover:bg-surface-container-low/50 transition-colors">
-                            <div class="w-7 h-7 rounded-full bg-primary/10 text-primary flex items-center justify-center shrink-0 mt-0.5">
-                                <span class="text-xs font-bold">2</span>
-                            </div>
-                            <div class="flex-1">
-                                <div class="flex items-center gap-2 mb-1">
-                                    <span class="text-sm font-semibold text-on-surface">Resolve Schema Conflicts</span>
-                                    <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold fabric-badge-warehouse">
-                                        <span class="material-symbols-outlined text-[10px]">warehouse</span>
-                                        Warehouse
-                                    </span>
-                                </div>
-                                <p class="text-xs text-on-surface-variant leading-relaxed">Compare source schemas, detect type mismatches, and generate SQL transforms and COALESCE handlers for Gold-layer compatibility.</p>
-                            </div>
-                            <div class="text-right shrink-0">
-                                <div class="text-[10px] text-on-surface-variant/60">Auto</div>
-                            </div>
-                        </div>
+                    <!-- Summary -->
+                    <div class="p-4 border-b border-outline-variant/10">
+                        <div class="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant mb-1.5 flex items-center gap-1.5"><span class="material-symbols-outlined text-[14px]">lightbulb</span>Summary</div>
+                        <p class="text-sm text-on-surface leading-relaxed">Ingest marketing raw data and publish a scheduled pipeline into <strong>Gold_Sales_DW</strong> within the current working workspace. Low-risk, reversible throughout.</p>
+                    </div>
 
-                        <!-- Step 3 — No approval gate (approvals OFF) -->
-                        <div class="flex items-start gap-4 p-4 hover:bg-surface-container-low/50 transition-colors">
-                            <div class="w-7 h-7 rounded-full bg-primary/10 text-primary flex items-center justify-center shrink-0 mt-0.5">
-                                <span class="text-xs font-bold">3</span>
-                            </div>
-                            <div class="flex-1">
-                                <div class="flex items-center gap-2 mb-1">
-                                    <span class="text-sm font-semibold text-on-surface">Create Data Factory Pipeline</span>
-                                    <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold fabric-badge-pipeline">
-                                        <span class="material-symbols-outlined text-[10px]">conversion_path</span>
-                                        Pipeline
-                                    </span>
+                    <!-- Prerequisites — all satisfied -->
+                    <div class="p-4 border-b border-outline-variant/10">
+                        <div class="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant mb-2 flex items-center gap-1.5"><span class="material-symbols-outlined text-[14px]">verified</span>Prerequisites<span class="ml-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-50 text-emerald-700">3 / 3 satisfied</span></div>
+                        <ul class="space-y-1.5">
+                            <li class="flex items-start gap-2 text-xs">
+                                <span class="material-symbols-outlined text-[14px] text-emerald-600 mt-0.5">check_circle</span>
+                                <div class="flex-1">
+                                    <span class="text-on-surface">Member+ role on Marketing Analytics</span>
+                                    <span class="ml-1.5 text-[10px] text-on-surface-variant/70">(workspace_role · fabric_api)</span>
                                 </div>
-                                <p class="text-xs text-on-surface-variant leading-relaxed">Build and deploy a scheduled pipeline with Copy, Dataflow Gen2, and Stored Procedure activities writing to production Gold layer.</p>
-                            </div>
-                            <div class="text-right shrink-0">
-                                <div class="text-[10px] text-on-surface-variant/60">Auto</div>
-                            </div>
-                        </div>
+                            </li>
+                            <li class="flex items-start gap-2 text-xs">
+                                <span class="material-symbols-outlined text-[14px] text-emerald-600 mt-0.5">check_circle</span>
+                                <div class="flex-1">
+                                    <span class="text-on-surface">Capacity F64 has headroom</span>
+                                    <span class="ml-1.5 text-[10px] text-on-surface-variant/70">(capacity · capacity_api)</span>
+                                </div>
+                            </li>
+                            <li class="flex items-start gap-2 text-xs">
+                                <span class="material-symbols-outlined text-[14px] text-emerald-600 mt-0.5">check_circle</span>
+                                <div class="flex-1">
+                                    <span class="text-on-surface">OneLake source connection is live</span>
+                                    <span class="ml-1.5 text-[10px] text-on-surface-variant/70">(connection · connection_probe)</span>
+                                </div>
+                            </li>
+                        </ul>
+                    </div>
 
-                        <!-- Step 4 -->
-                        <div class="flex items-start gap-4 p-4 hover:bg-surface-container-low/50 transition-colors">
-                            <div class="w-7 h-7 rounded-full bg-primary/10 text-primary flex items-center justify-center shrink-0 mt-0.5">
-                                <span class="text-xs font-bold">4</span>
-                            </div>
-                            <div class="flex-1">
-                                <div class="flex items-center gap-2 mb-1">
-                                    <span class="text-sm font-semibold text-on-surface">Validate & Test Pipeline</span>
-                                </div>
-                                <p class="text-xs text-on-surface-variant leading-relaxed">Run a test batch through the pipeline, compare output checksums, and verify Gold-layer view integrity.</p>
-                            </div>
-                            <div class="text-right shrink-0">
-                                <div class="text-[10px] text-on-surface-variant/60">Auto</div>
-                            </div>
-                        </div>
+                    <!-- Steps -->
+                    <div>
+                        <div class="px-4 pt-4 pb-1 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-widest text-on-surface-variant"><span class="material-symbols-outlined text-[14px]">route</span>Steps</div>
+                        <div class="divide-y divide-outline-variant/5">
 
-                        <!-- Step 5 -->
-                        <div class="flex items-start gap-4 p-4 hover:bg-surface-container-low/50 transition-colors">
-                            <div class="w-7 h-7 rounded-full bg-primary/10 text-primary flex items-center justify-center shrink-0 mt-0.5">
-                                <span class="text-xs font-bold">5</span>
-                            </div>
-                            <div class="flex-1">
-                                <div class="flex items-center gap-2 mb-1">
-                                    <span class="text-sm font-semibold text-on-surface">Generate Summary Report</span>
+                            <!-- s1 · create · low · reversible -->
+                            <div class="flex items-start gap-4 p-4 hover:bg-surface-container-low/50 transition-colors">
+                                <div class="w-7 h-7 rounded-full bg-primary/10 text-primary flex items-center justify-center shrink-0 mt-0.5"><span class="text-xs font-bold">1</span></div>
+                                <div class="flex-1 min-w-0">
+                                    <div class="flex flex-wrap items-center gap-2 mb-1">
+                                        <span class="text-sm font-semibold text-on-surface">Discover & profile raw partitions</span>
+                                        <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold fabric-badge-lakehouse"><span class="material-symbols-outlined text-[10px]">database</span>Lakehouse</span>
+                                        <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-50 text-blue-700">create</span>
+                                        <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-50 text-emerald-700">low</span>
+                                        <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium text-on-surface-variant border border-outline-variant/30">↺ reversible</span>
+                                    </div>
+                                    <p class="text-xs text-on-surface-variant leading-relaxed">Scan OneLake paths, identify parquet partitions, profile schema.</p>
                                 </div>
-                                <p class="text-xs text-on-surface-variant leading-relaxed">Create an executive summary of all changes made, data volumes processed, and scheduled pipeline details.</p>
+                                <div class="text-right shrink-0"><div class="text-[10px] text-on-surface-variant/60">Auto</div></div>
                             </div>
-                            <div class="text-right shrink-0">
-                                <div class="text-[10px] text-on-surface-variant/60">Auto</div>
+
+                            <!-- s2 · update · low · reversible · depends on s1 -->
+                            <div class="flex items-start gap-4 p-4 hover:bg-surface-container-low/50 transition-colors">
+                                <div class="w-7 h-7 rounded-full bg-primary/10 text-primary flex items-center justify-center shrink-0 mt-0.5"><span class="text-xs font-bold">2</span></div>
+                                <div class="flex-1 min-w-0">
+                                    <div class="flex flex-wrap items-center gap-2 mb-1">
+                                        <span class="text-sm font-semibold text-on-surface">Resolve schema conflicts into Gold</span>
+                                        <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold fabric-badge-warehouse"><span class="material-symbols-outlined text-[10px]">warehouse</span>Warehouse</span>
+                                        <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-50 text-blue-700">update</span>
+                                        <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-50 text-emerald-700">low</span>
+                                        <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium text-on-surface-variant border border-outline-variant/30">↺ reversible</span>
+                                        <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium text-on-surface-variant">depends on <a href="#" class="text-primary underline">s1</a></span>
+                                    </div>
+                                    <p class="text-xs text-on-surface-variant leading-relaxed">Map source columns to Gold schema with COALESCE and type casts.</p>
+                                </div>
+                                <div class="text-right shrink-0"><div class="text-[10px] text-on-surface-variant/60">Auto</div></div>
+                            </div>
+
+                            <!-- s3 · create · medium · reversible — NO approval gate (approvals OFF + risk≠high) -->
+                            <div class="flex items-start gap-4 p-4 hover:bg-surface-container-low/50 transition-colors">
+                                <div class="w-7 h-7 rounded-full bg-primary/10 text-primary flex items-center justify-center shrink-0 mt-0.5"><span class="text-xs font-bold">3</span></div>
+                                <div class="flex-1 min-w-0">
+                                    <div class="flex flex-wrap items-center gap-2 mb-1">
+                                        <span class="text-sm font-semibold text-on-surface">Create scheduled pipeline</span>
+                                        <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold fabric-badge-pipeline"><span class="material-symbols-outlined text-[10px]">conversion_path</span>Pipeline</span>
+                                        <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-50 text-blue-700">create</span>
+                                        <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-50 text-amber-700">medium</span>
+                                        <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium text-on-surface-variant border border-outline-variant/30">↺ reversible</span>
+                                    </div>
+                                    <p class="text-xs text-on-surface-variant leading-relaxed">Copy + Dataflow Gen2 + Stored Procedure activities — runs directly in the working workspace.</p>
+                                </div>
+                                <div class="text-right shrink-0"><div class="text-[10px] text-on-surface-variant/60">Auto</div></div>
+                            </div>
+
+                            <!-- s4 · validate · low · reversible -->
+                            <div class="flex items-start gap-4 p-4 hover:bg-surface-container-low/50 transition-colors">
+                                <div class="w-7 h-7 rounded-full bg-primary/10 text-primary flex items-center justify-center shrink-0 mt-0.5"><span class="text-xs font-bold">4</span></div>
+                                <div class="flex-1 min-w-0">
+                                    <div class="flex flex-wrap items-center gap-2 mb-1">
+                                        <span class="text-sm font-semibold text-on-surface">Validate output checksums</span>
+                                        <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-slate-100 text-slate-700">validate</span>
+                                        <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-50 text-emerald-700">low</span>
+                                        <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium text-on-surface-variant border border-outline-variant/30">↺ reversible</span>
+                                    </div>
+                                    <p class="text-xs text-on-surface-variant leading-relaxed">Test batch + Gold-layer view integrity check.</p>
+                                </div>
+                                <div class="text-right shrink-0"><div class="text-[10px] text-on-surface-variant/60">Auto</div></div>
                             </div>
                         </div>
                     </div>
 
-                    <!-- Plan footer — no approval points -->
-                    <div class="p-4 bg-surface-container-low/50 flex items-center justify-between">
-                        <div class="flex items-center gap-4">
-                            <div class="flex items-center gap-1.5 text-xs text-on-surface-variant">
-                                <span class="material-symbols-outlined text-[14px]">smart_toy</span>
-                                Agents: <span class="font-bold text-on-surface">2</span>
+                    <!-- Workspace items — simple (no branch-out, writes directly) -->
+                    <div class="p-4 border-t border-outline-variant/10">
+                        <div class="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant mb-2 flex items-center gap-1.5"><span class="material-symbols-outlined text-[14px]">inventory_2</span>Workspace items</div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+                            <div class="flex items-center gap-2 p-2 rounded-lg bg-emerald-50/40 border border-emerald-200/40">
+                                <span class="material-symbols-outlined text-[14px] text-emerald-700">lock</span>
+                                <div class="flex-1 min-w-0">
+                                    <div class="text-xs font-medium text-on-surface truncate">corporate-sales-raw</div>
+                                    <div class="text-[10px] text-emerald-700">keep_as_is (read-only source)</div>
+                                </div>
                             </div>
-                            <div class="flex items-center gap-1.5 text-xs text-on-surface-variant">
-                                <span class="material-symbols-outlined text-[14px]">format_list_numbered</span>
-                                Steps: <span class="font-bold text-on-surface">5</span>
+                            <div class="flex items-center gap-2 p-2 rounded-lg bg-blue-50/40 border border-blue-200/40">
+                                <span class="material-symbols-outlined text-[14px] text-blue-700">edit_note</span>
+                                <div class="flex-1 min-w-0">
+                                    <div class="text-xs font-medium text-on-surface truncate">Gold_Sales_DW</div>
+                                    <div class="text-[10px] text-blue-700">will_be_changed by <a href="#" class="underline">s2</a></div>
+                                </div>
                             </div>
-                            <div class="flex items-center gap-1.5 text-xs text-on-surface-variant">
-                                <span class="material-symbols-outlined text-[14px]">speed</span>
-                                Mode: <span class="font-bold text-on-surface">Fully automatic</span>
+                            <div class="flex items-center gap-2 p-2 rounded-lg bg-blue-50/40 border border-blue-200/40">
+                                <span class="material-symbols-outlined text-[14px] text-blue-700">add_circle</span>
+                                <div class="flex-1 min-w-0">
+                                    <div class="text-xs font-medium text-on-surface truncate">sales-ingest-daily (new)</div>
+                                    <div class="text-[10px] text-blue-700">will_be_changed by <a href="#" class="underline">s3</a></div>
+                                </div>
                             </div>
                         </div>
+                    </div>
+
+                    <!-- NO conflicts block (conflicts: []) -->
+                    <!-- NO clarifications block (clarificationsNeeded: []) -->
+
+                    <!-- Footer — executionBlocked: false → Execute is enabled -->
+                    <div class="p-4 bg-surface-container-low/50 flex items-center justify-between border-t border-outline-variant/10">
+                        <div class="flex items-center gap-4 flex-wrap">
+                            <div class="flex items-center gap-1.5 text-xs text-on-surface-variant"><span class="material-symbols-outlined text-[14px]">smart_toy</span>Agents: <span class="font-bold text-on-surface">2</span></div>
+                            <div class="flex items-center gap-1.5 text-xs text-on-surface-variant"><span class="material-symbols-outlined text-[14px]">format_list_numbered</span>Steps: <span class="font-bold text-on-surface">4</span></div>
+                            <div class="flex items-center gap-1.5 text-xs text-on-surface-variant"><span class="material-symbols-outlined text-[14px]">shield_person</span>Approval points: <span class="font-bold text-on-surface">0</span></div>
+                            <div class="flex items-center gap-1.5 text-xs text-emerald-700"><span class="material-symbols-outlined text-[14px]">check_circle</span>Ready to execute</div>
+                        </div>
                         <div class="flex items-center gap-2">
-                            <button class="flex items-center gap-1.5 px-4 py-2 text-on-surface-variant bg-surface-container-lowest border border-outline-variant/15 rounded-lg text-xs font-medium hover:bg-surface-container-low transition-colors">
-                                <span class="material-symbols-outlined text-[14px]">edit</span>
-                                Edit Plan
+                            <button class="flex items-center gap-1.5 px-3 py-2 text-on-surface-variant bg-surface-container-lowest border border-outline-variant/15 rounded-lg text-xs font-medium hover:bg-surface-container-low transition-colors" title="Regenerate plan with current prompt + settings">
+                                <span class="material-symbols-outlined text-[14px]">refresh</span>Regenerate
+                            </button>
+                            <button class="flex items-center gap-1.5 px-3 py-2 text-rose-700 bg-rose-50 rounded-lg text-xs font-medium hover:bg-rose-100 transition-colors">
+                                <span class="material-symbols-outlined text-[14px]">close</span>Reject
                             </button>
                             <button class="flex items-center gap-1.5 px-5 py-2 bg-gradient-to-br from-primary to-primary-container text-white rounded-lg text-xs font-bold shadow-md shadow-primary/15 hover:scale-[1.02] active:scale-[0.98] transition-all">
-                                <span class="material-symbols-outlined text-[14px]">play_arrow</span>
-                                Execute Plan
+                                <span class="material-symbols-outlined text-[14px]">play_arrow</span>Execute Plan
                             </button>
                         </div>
                     </div>

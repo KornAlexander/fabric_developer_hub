@@ -1,0 +1,1287 @@
+<!DOCTYPE html>
+<html class="light" lang="en">
+<head>
+    <meta charset="utf-8"/>
+    <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+    <title>Developer Hub | Multi-agent architecture variations</title>
+
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+    <link href="../../../_shared/styles.css" rel="stylesheet"/>
+    <link href="styles.css" rel="stylesheet"/>
+
+    <script>
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "outline-variant": "#c0c7d4",
+                        "on-secondary-container": "#656464",
+                        "secondary": "#5f5e5e",
+                        "on-surface": "#1a1c1c",
+                        "secondary-container": "#e4e2e1",
+                        "surface-bright": "#faf9f8",
+                        "on-primary": "#ffffff",
+                        "on-primary-container": "#ffffff",
+                        "surface-tint": "#0060ab",
+                        "on-background": "#1a1c1c",
+                        "surface-container-lowest": "#ffffff",
+                        "surface": "#faf9f8",
+                        "error": "#ba1a1a",
+                        "surface-container-highest": "#e3e2e1",
+                        "primary-container": "#0078d4",
+                        "primary": "#005faa",
+                        "surface-container": "#efeeed",
+                        "inverse-surface": "#2f3130",
+                        "primary-fixed": "#d3e3ff",
+                        "surface-container-low": "#f4f3f2",
+                        "error-container": "#ffdad6",
+                        "outline": "#717783",
+                        "surface-variant": "#e3e2e1",
+                        "on-surface-variant": "#404752",
+                        "surface-container-high": "#e9e8e7",
+                        "on-error": "#ffffff",
+                        "surface-dim": "#dadad9",
+                        "tertiary-container": "#bc5b00",
+                        "tertiary": "#974700",
+                        "background": "#faf9f8"
+                    },
+                    borderRadius: { DEFAULT: "0.125rem", lg: "0.25rem", xl: "0.5rem", full: "0.75rem" },
+                    fontFamily: { headline: ["Inter"], body: ["Inter"], label: ["Inter"] }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+        .material-symbols-outlined.filled { font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after { animation: none !important; transition: none !important; }
+        }
+
+        /* ─── Architectures page layout ───────────────────────────── */
+        .arch-section {
+            background: #ffffff;
+            border: 1px solid rgba(192, 199, 212, 0.25);
+            border-radius: 16px;
+            padding: 24px;
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+        }
+
+        .arch-eyebrow {
+            display: inline-flex; align-items: center; gap: 6px;
+            font-size: 10px; font-weight: 700;
+            letter-spacing: .15em; text-transform: uppercase;
+            padding: 4px 10px; border-radius: 999px;
+            background: #ebf3fc; color: #005faa;
+        }
+        .arch-eyebrow[data-kind="network"]      { background: #fff3e0; color: #e65100; }
+        .arch-eyebrow[data-kind="hierarchical"] { background: #f3e5f5; color: #7b1fa2; }
+        .arch-eyebrow[data-kind="sequential"]   { background: #e0f2f1; color: #00796b; }
+        .arch-eyebrow[data-kind="mixed"]        { background: #ede7f6; color: #4527a0; }
+
+        /* Prompt card — compact version of screen-1 composer */
+        .arch-prompt {
+            background: linear-gradient(to bottom right, rgba(0,95,170,0.04), transparent);
+            border: 1px solid rgba(192, 199, 212, 0.3);
+            border-radius: 12px;
+            padding: 14px 16px;
+            font-size: 12px;
+            color: #1a1c1c;
+            line-height: 1.5;
+        }
+        .arch-prompt__label {
+            display: block;
+            font-size: 10px; font-weight: 700;
+            letter-spacing: .12em; text-transform: uppercase;
+            color: #005faa;
+            margin-bottom: 6px;
+        }
+        .arch-prompt__chips {
+            display: flex; flex-wrap: wrap; gap: 4px;
+            margin-top: 10px;
+        }
+        .arch-prompt__chip {
+            display: inline-flex; align-items: center; gap: 3px;
+            font-size: 10px; font-weight: 600;
+            padding: 2px 7px; border-radius: 999px;
+            background: #f4f3f2; color: #404752;
+            border: 1px solid rgba(192, 199, 212, 0.35);
+        }
+
+        /* Execution log — scrollable list of dense entries */
+        .arch-log {
+            background: #fafbfc;
+            border: 1px solid rgba(192, 199, 212, 0.25);
+            border-radius: 12px;
+            padding: 10px 12px;
+            max-height: 320px;
+            overflow-y: auto;
+            font-family: 'Inter', sans-serif;
+            font-size: 11px;
+        }
+        .arch-log__entry {
+            display: grid;
+            grid-template-columns: 44px 16px 1fr;
+            gap: 8px;
+            padding: 6px 0;
+            border-bottom: 1px dashed rgba(192, 199, 212, 0.25);
+        }
+        .arch-log__entry:last-child { border-bottom: none; }
+        .arch-log__time {
+            font-variant-numeric: tabular-nums;
+            color: #6b7380;
+            font-size: 10px;
+            padding-top: 1px;
+        }
+        .arch-log__dot {
+            display: flex; align-items: flex-start; justify-content: center;
+            padding-top: 4px;
+        }
+        .arch-log__dot-inner {
+            width: 8px; height: 8px; border-radius: 50%;
+            background: #c0c7d4;
+        }
+        .arch-log__entry[data-agent="orch"]     .arch-log__dot-inner { background: #005faa; }
+        .arch-log__entry[data-agent="strategy"] .arch-log__dot-inner { background: #1565c0; }
+        .arch-log__entry[data-agent="content"]  .arch-log__dot-inner { background: #7b1fa2; }
+        .arch-log__entry[data-agent="analytics"].arch-log__dot-inner { background: #00796b; }
+        .arch-log__entry[data-agent="security"] .arch-log__dot-inner { background: #c62828; }
+        .arch-log__entry[data-agent="perf"]     .arch-log__dot-inner { background: #e65100; }
+        .arch-log__entry[data-agent="style"]    .arch-log__dot-inner { background: #6a1b9a; }
+        .arch-log__entry[data-agent="types"]    .arch-log__dot-inner { background: #00796b; }
+        .arch-log__entry[data-agent="cto"]      .arch-log__dot-inner { background: #005faa; }
+        .arch-log__entry[data-agent="infra"]    .arch-log__dot-inner { background: #1565c0; }
+        .arch-log__entry[data-agent="data"]     .arch-log__dot-inner { background: #7b1fa2; }
+        .arch-log__entry[data-agent="app"]      .arch-log__dot-inner { background: #00796b; }
+        .arch-log__entry[data-agent="net"]      .arch-log__dot-inner { background: #1565c0; }
+        .arch-log__entry[data-agent="dbm"]      .arch-log__dot-inner { background: #7b1fa2; }
+        .arch-log__entry[data-agent="refactor"] .arch-log__dot-inner { background: #00796b; }
+        .arch-log__entry[data-agent="retriever"].arch-log__dot-inner { background: #1565c0; }
+        .arch-log__entry[data-agent="summarizer"].arch-log__dot-inner { background: #7b1fa2; }
+        .arch-log__entry[data-agent="writer"]   .arch-log__dot-inner { background: #e65100; }
+        .arch-log__entry[data-agent="editor"]   .arch-log__dot-inner { background: #00796b; }
+        .arch-log__entry[data-kind="handoff"] .arch-log__dot-inner { background: #0078d4; box-shadow: 0 0 0 2px rgba(0,120,212,.15); }
+        .arch-log__entry[data-kind="approval"] .arch-log__dot-inner { background: #e65100; box-shadow: 0 0 0 2px rgba(230,81,0,.15); }
+        .arch-log__entry[data-kind="done"] .arch-log__dot-inner { background: #2e7d32; }
+
+        .arch-log__body { color: #1a1c1c; line-height: 1.5; }
+        .arch-log__agent {
+            font-weight: 700; font-size: 10px;
+            letter-spacing: .04em; text-transform: uppercase;
+            color: #404752;
+            margin-right: 6px;
+        }
+        .arch-log__msg { color: #1a1c1c; }
+        .arch-log__msg code {
+            font-family: ui-monospace, SFMono-Regular, monospace;
+            font-size: 10px;
+            padding: 1px 4px; border-radius: 4px;
+            background: #eef2f7; color: #005faa;
+        }
+
+        /* Architecture icon in its own tile */
+        .arch-icon-tile {
+            width: 40px; height: 40px; border-radius: 10px;
+            display: inline-flex; align-items: center; justify-content: center;
+            background: #ebf3fc; color: #005faa;
+            flex-shrink: 0;
+        }
+        .arch-icon-tile[data-kind="network"]      { background: #fff3e0; color: #e65100; }
+        .arch-icon-tile[data-kind="hierarchical"] { background: #f3e5f5; color: #7b1fa2; }
+        .arch-icon-tile[data-kind="sequential"]   { background: #e0f2f1; color: #00796b; }
+        .arch-icon-tile[data-kind="mixed"]        { background: #ede7f6; color: #4527a0; }
+
+        /* Dashed sub-team frames around clusters in the mixed graph */
+        .arch-subteam {
+            position: absolute;
+            border: 1.5px dashed rgba(69, 39, 160, 0.35);
+            border-radius: 14px;
+            background: rgba(237, 231, 246, 0.22);
+            pointer-events: none;
+        }
+        .arch-subteam__label {
+            position: absolute;
+            top: -10px; left: 12px;
+            padding: 2px 8px;
+            background: #ffffff;
+            border: 1px solid rgba(69, 39, 160, 0.35);
+            border-radius: 999px;
+            font-size: 9px;
+            font-weight: 700;
+            letter-spacing: .08em;
+            text-transform: uppercase;
+            color: #4527a0;
+        }
+
+        /* Sequential architecture uses narrower nodes to fit 4 across 740px */
+        .orch-canvas--sequential .orch-node { width: 160px; }
+
+        /* Small-screen: canvas scrolls horizontally rather than squish */
+        @media (max-width: 820px) {
+            .orch-canvas { overflow-x: auto; }
+        }
+    </style>
+</head>
+
+<body class="bg-surface text-on-surface font-body selection:bg-primary-fixed mc-body overflow-auto min-h-screen flex flex-col">
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     TOP NAV BAR — matches Developer Hub live pages
+     ═══════════════════════════════════════════════════════════════════ -->
+<header class="flex justify-between items-center px-5 w-full sticky top-0 z-50 bg-surface h-12 border-b border-outline-variant/10 shrink-0">
+    <div class="flex items-center gap-3">
+        <div class="flex items-center gap-2">
+            <div class="w-6 h-6 bg-primary-container rounded-lg flex items-center justify-center text-white">
+                <span class="material-symbols-outlined text-[14px] filled">dataset</span>
+            </div>
+            <span class="text-base font-semibold text-on-surface tracking-tight">Developer Hub</span>
+        </div>
+        <div class="h-3.5 w-px bg-outline-variant/30"></div>
+        <nav class="flex items-center gap-1.5" aria-label="Breadcrumb">
+            <span class="material-symbols-outlined text-[18px] filled text-on-surface-variant">schema</span>
+            <a class="text-xs font-semibold text-on-surface-variant hover:text-primary" href="index.html">Mission Control</a>
+            <span class="text-on-surface-variant/40 text-xs">/</span>
+            <span class="text-xs font-semibold text-on-surface">Architecture variations</span>
+            <span class="ml-2 px-1.5 py-0.5 rounded bg-surface-container-high text-[9px] font-bold uppercase tracking-wider text-on-surface-variant">Prototype</span>
+        </nav>
+    </div>
+    <div class="flex items-center gap-2">
+        <a class="flex items-center gap-1.5 px-3 py-1.5 bg-surface-container-low hover:bg-surface-container-high rounded-lg text-xs font-medium text-on-surface-variant" href="index.html">
+            <span class="material-symbols-outlined text-[16px]">arrow_back</span>
+            Back to Mission Control
+        </a>
+        <div class="w-7 h-7 rounded-full overflow-hidden border border-outline-variant/20 ml-1">
+            <div class="w-full h-full bg-primary-container flex items-center justify-center text-white text-[10px] font-bold">LO</div>
+        </div>
+    </div>
+</header>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     PAGE INTRO
+     ═══════════════════════════════════════════════════════════════════ -->
+<main class="flex-1 overflow-y-auto">
+<div class="max-w-[1180px] mx-auto px-8 pt-8 pb-16 space-y-8">
+
+    <header class="text-center max-w-3xl mx-auto space-y-3">
+        <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-primary/10 text-primary text-[11px] font-bold uppercase tracking-widest">
+            <span class="material-symbols-outlined text-[14px] filled">hub</span>
+            Four ways agents coordinate
+        </div>
+        <h1 class="dh-h1">One outcome, four architectures.</h1>
+        <p class="dh-subtitle">Every Developer Hub run is a team of agents. Depending on the task shape, the team can look very different — a single lead coordinating workers, a mesh of peers voting, a deep hierarchy, or a rigid pipeline. Below: the same three things (<strong>prompt</strong>, <strong>orchestration graph</strong>, <strong>execution log</strong>) for four distinct flows, each the most natural fit for its architecture.</p>
+    </header>
+
+    <!-- ═══════════════════════════════════════════════════════════════
+         1 — SUPERVISOR  (centralized; one lead + workers)
+         Use case: Q2 marketing campaign launch
+         ═══════════════════════════════════════════════════════════════ -->
+    <section class="arch-section" aria-labelledby="arch-1-title">
+        <div class="flex items-start gap-4 mb-5">
+            <div class="arch-icon-tile" data-kind="supervisor">
+                <span class="material-symbols-outlined text-[22px] filled">hub</span>
+            </div>
+            <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2 flex-wrap mb-1">
+                    <span class="arch-eyebrow" data-kind="supervisor">Supervisor · centralized</span>
+                    <span class="text-[11px] text-on-surface-variant">1 lead · 3 workers · aggregates results</span>
+                </div>
+                <h2 class="dh-h2" id="arch-1-title">Plan the Q2 marketing campaign launch.</h2>
+                <p class="text-[12px] text-on-surface-variant mt-1 leading-relaxed max-w-[56rem]">
+                    A single <strong>Orchestrator</strong> owns the task. It decomposes the brief, dispatches three specialist workers in parallel, receives their artifacts, and stitches them into a final plan. Best for workflows with a well-understood decomposition and clear deliverables per specialist.
+                </p>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 xl:grid-cols-[minmax(0,320px)_minmax(0,1fr)] gap-6 mb-6">
+            <!-- Prompt -->
+            <div class="arch-prompt">
+                <span class="arch-prompt__label">User prompt</span>
+                <div>Plan our Q2 product launch campaign: target SMB and mid-market segments in NA and EU, draft the narrative, propose a paid-media budget split, and define success metrics I can report to the board on June 30.</div>
+                <div class="arch-prompt__chips">
+                    <span class="arch-prompt__chip"><span class="material-symbols-outlined text-[12px]">campaign</span>launch-brief-q2.md</span>
+                    <span class="arch-prompt__chip"><span class="material-symbols-outlined text-[12px]">insights</span>q1-performance</span>
+                    <span class="arch-prompt__chip"><span class="material-symbols-outlined text-[12px]">event</span>deadline · Jun 30</span>
+                </div>
+            </div>
+
+            <!-- Orchestration graph -->
+            <div>
+                <div class="flex items-center justify-between mb-2">
+                    <div class="flex items-center gap-2">
+                        <span class="mc-pill mc-pill--running">Live · 3 workers running</span>
+                        <span class="text-[11px] text-on-surface-variant">Orch delegates → workers report back → orch aggregates</span>
+                    </div>
+                </div>
+                <div class="orch-canvas" style="height: 420px;" role="img" aria-label="Supervisor architecture: Orchestrator delegates to Strategy, Content, and Analytics workers">
+                    <svg class="orch-edges" viewBox="0 0 740 420" preserveAspectRatio="none" aria-hidden="true">
+                        <defs>
+                            <marker id="arr-sv" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+                                <path d="M0,0 L10,5 L0,10 Z" fill="#0078d4"/>
+                            </marker>
+                        </defs>
+                        <!-- delegate: orch → each worker -->
+                        <path class="orch-edge" data-kind="delegate" data-active="true" d="M 370 110 C 370 190, 130 210, 130 280" marker-end="url(#arr-sv)"/>
+                        <path class="orch-edge" data-kind="delegate" data-active="true" d="M 370 110 L 370 280" marker-end="url(#arr-sv)"/>
+                        <path class="orch-edge" data-kind="delegate" data-active="true" d="M 370 110 C 370 190, 610 210, 610 280" marker-end="url(#arr-sv)"/>
+                    </svg>
+
+                    <!-- Orchestrator -->
+                    <div class="orch-node" data-state="active" style="left: 270px; top: 20px;" tabindex="0">
+                        <div class="orch-node__head">
+                            <div class="orch-node__icon" data-agent="orch"><span class="material-symbols-outlined text-[18px] filled">hub</span></div>
+                            <div>
+                                <div class="orch-node__title">Orchestrator</div>
+                                <div class="orch-node__role">Supervisor · aggregates</div>
+                            </div>
+                        </div>
+                        <div class="orch-node__state"><span class="orch-node__state-dot"></span> Waiting for worker reports (3/3 out)</div>
+                    </div>
+
+                    <!-- Strategy -->
+                    <div class="orch-node" data-state="active" style="left: 30px; top: 280px;" tabindex="0">
+                        <div class="orch-node__head">
+                            <div class="orch-node__icon" data-agent="fde"><span class="material-symbols-outlined text-[18px]">insights</span></div>
+                            <div>
+                                <div class="orch-node__title">StrategyAgent</div>
+                                <div class="orch-node__role">Positioning · segments</div>
+                            </div>
+                        </div>
+                        <div class="orch-node__skills">
+                            <span class="orch-node__skill">market-research</span>
+                            <span class="orch-node__skill">icp-sizing</span>
+                        </div>
+                        <div class="orch-node__state"><span class="orch-node__state-dot"></span> Drafting SMB positioning</div>
+                    </div>
+
+                    <!-- Content -->
+                    <div class="orch-node" data-state="active" style="left: 270px; top: 280px;" tabindex="0">
+                        <div class="orch-node__head">
+                            <div class="orch-node__icon" data-agent="admin"><span class="material-symbols-outlined text-[18px]">edit_note</span></div>
+                            <div>
+                                <div class="orch-node__title">ContentAgent</div>
+                                <div class="orch-node__role">Narrative · creative</div>
+                            </div>
+                        </div>
+                        <div class="orch-node__skills">
+                            <span class="orch-node__skill">copy-authoring</span>
+                            <span class="orch-node__skill">brand-voice</span>
+                        </div>
+                        <div class="orch-node__state"><span class="orch-node__state-dot"></span> Writing 4 headline variants</div>
+                    </div>
+
+                    <!-- Analytics -->
+                    <div class="orch-node" data-state="done" style="left: 510px; top: 280px;" tabindex="0">
+                        <div class="orch-node__head">
+                            <div class="orch-node__icon" data-agent="rt"><span class="material-symbols-outlined text-[18px]">bar_chart</span></div>
+                            <div>
+                                <div class="orch-node__title">AnalyticsAgent</div>
+                                <div class="orch-node__role">Metrics · budget split</div>
+                            </div>
+                        </div>
+                        <div class="orch-node__skills">
+                            <span class="orch-node__skill">funnel-forecast</span>
+                        </div>
+                        <div class="orch-node__state"><span class="orch-node__state-dot"></span> Done · 60/30/10 budget proposal</div>
+                    </div>
+                </div>
+
+                <div class="orch-legend mt-3">
+                    <div class="orch-legend-item"><span class="orch-legend-swatch" data-kind="delegate"></span> Delegate (Orch → worker)</div>
+                    <div class="orch-legend-item text-on-surface-variant">Each worker runs independently; reports bubble up for the Orchestrator to aggregate.</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Execution log -->
+        <div class="flex items-center gap-2 mb-2">
+            <span class="material-symbols-outlined text-[16px] text-on-surface-variant">terminal</span>
+            <span class="text-[11px] font-bold uppercase tracking-widest text-on-surface-variant">Execution log</span>
+            <span class="text-[11px] text-on-surface-variant">— first 00:42 of the run</span>
+        </div>
+        <div class="arch-log">
+            <div class="arch-log__entry" data-agent="orch" data-kind="plan">
+                <span class="arch-log__time">00:00</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">Orch</span><span class="arch-log__msg">Decomposed brief into 3 workstreams: positioning, creative, budget. Dispatching in parallel.</span></span>
+            </div>
+            <div class="arch-log__entry" data-agent="orch" data-kind="handoff">
+                <span class="arch-log__time">00:02</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">Orch → Strategy</span><span class="arch-log__msg">Goal: <code>icp=SMB+mid-market</code>, regions <code>NA, EU</code>. Produce 1-pager.</span></span>
+            </div>
+            <div class="arch-log__entry" data-agent="orch" data-kind="handoff">
+                <span class="arch-log__time">00:02</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">Orch → Content</span><span class="arch-log__msg">Draft 4 headline variants aligned to brand voice; wait on Strategy for ICP refinement.</span></span>
+            </div>
+            <div class="arch-log__entry" data-agent="orch" data-kind="handoff">
+                <span class="arch-log__time">00:02</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">Orch → Analytics</span><span class="arch-log__msg">Propose budget split &amp; success KPIs; baseline against Q1 report.</span></span>
+            </div>
+            <div class="arch-log__entry" data-agent="strategy">
+                <span class="arch-log__time">00:11</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">Strategy</span><span class="arch-log__msg">ICP refined — SMB ARR band $50K–$500K, mid-market $500K–$5M. Drafting.</span></span>
+            </div>
+            <div class="arch-log__entry" data-agent="analytics" data-kind="done">
+                <span class="arch-log__time">00:28</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">Analytics ✓</span><span class="arch-log__msg">Budget 60/30/10 (search / social / events). 3 KPIs: MQL count, SQL→opp rate, pipeline $.</span></span>
+            </div>
+            <div class="arch-log__entry" data-agent="content">
+                <span class="arch-log__time">00:34</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">Content</span><span class="arch-log__msg">4 headlines drafted. Pulling Strategy ICP for alignment pass.</span></span>
+            </div>
+            <div class="arch-log__entry" data-agent="orch">
+                <span class="arch-log__time">00:42</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">Orch</span><span class="arch-log__msg">Analytics complete. Waiting on Strategy + Content. Will stitch launch plan + present for approval.</span></span>
+            </div>
+        </div>
+    </section>
+
+
+    <!-- ═══════════════════════════════════════════════════════════════
+         2 — NETWORK  (decentralized; peers, no lead)
+         Use case: Code review for production readiness
+         ═══════════════════════════════════════════════════════════════ -->
+    <section class="arch-section" aria-labelledby="arch-2-title">
+        <div class="flex items-start gap-4 mb-5">
+            <div class="arch-icon-tile" data-kind="network">
+                <span class="material-symbols-outlined text-[22px] filled">polyline</span>
+            </div>
+            <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2 flex-wrap mb-1">
+                    <span class="arch-eyebrow" data-kind="network">Network · decentralized</span>
+                    <span class="text-[11px] text-on-surface-variant">4 peers · mesh handoffs · consensus on merge</span>
+                </div>
+                <h2 class="dh-h2" id="arch-2-title">Review this pull request for production readiness.</h2>
+                <p class="text-[12px] text-on-surface-variant mt-1 leading-relaxed max-w-[56rem]">
+                    Four specialist reviewers inspect the diff <em>in parallel</em> and can freely hand off findings to each other — e.g. a performance concern that surfaces a types issue. No single lead; the run completes when all peers post a verdict and consensus is reached. Great for tasks where domains overlap and there isn't an obvious top-down decomposition.
+                </p>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 xl:grid-cols-[minmax(0,320px)_minmax(0,1fr)] gap-6 mb-6">
+            <!-- Prompt -->
+            <div class="arch-prompt">
+                <span class="arch-prompt__label">User prompt</span>
+                <div>Review PR #2184 (feat/realtime-orders) for production readiness. Cover security, performance, API style, and types. Flag anything that should block merge.</div>
+                <div class="arch-prompt__chips">
+                    <span class="arch-prompt__chip"><span class="material-symbols-outlined text-[12px]">commit</span>PR #2184</span>
+                    <span class="arch-prompt__chip"><span class="material-symbols-outlined text-[12px]">difference</span>+412 −88</span>
+                    <span class="arch-prompt__chip"><span class="material-symbols-outlined text-[12px]">folder</span>Orders service</span>
+                </div>
+            </div>
+
+            <!-- Orchestration graph: diamond/mesh -->
+            <div>
+                <div class="flex items-center justify-between mb-2">
+                    <div class="flex items-center gap-2">
+                        <span class="mc-pill mc-pill--running">Live · 4 peers reviewing</span>
+                        <span class="text-[11px] text-on-surface-variant">Every peer can message every other peer directly</span>
+                    </div>
+                </div>
+                <div class="orch-canvas" style="height: 500px;" role="img" aria-label="Network architecture: four peer reviewer agents connected in a full mesh">
+                    <svg class="orch-edges" viewBox="0 0 740 500" preserveAspectRatio="none" aria-hidden="true">
+                        <!-- Node centers: Security(370,55), Perf(610,250), Style(370,445), Types(130,250) -->
+                        <!-- All-to-all peer edges (6) -->
+                        <path class="orch-edge" data-kind="peer" d="M 370 55 L 610 250"/>
+                        <path class="orch-edge" data-kind="peer" data-active="true" d="M 370 55 L 130 250"/>
+                        <path class="orch-edge" data-kind="peer" d="M 370 55 L 370 445"/>
+                        <path class="orch-edge" data-kind="peer" d="M 610 250 L 370 445"/>
+                        <path class="orch-edge" data-kind="peer" data-active="true" d="M 130 250 L 370 445"/>
+                        <path class="orch-edge" data-kind="peer" d="M 130 250 L 610 250"/>
+                    </svg>
+
+                    <!-- Top: Security -->
+                    <div class="orch-node" data-state="active" style="left: 270px; top: 10px;" tabindex="0">
+                        <div class="orch-node__head">
+                            <div class="orch-node__icon" data-agent="orch" style="background:#ffebee;color:#c62828"><span class="material-symbols-outlined text-[18px]">shield</span></div>
+                            <div>
+                                <div class="orch-node__title">SecurityReviewer</div>
+                                <div class="orch-node__role">Authz · secrets · injection</div>
+                            </div>
+                        </div>
+                        <div class="orch-node__state"><span class="orch-node__state-dot"></span> Found: tenant-id leak in log</div>
+                    </div>
+
+                    <!-- Right: Performance -->
+                    <div class="orch-node" data-state="done" style="left: 510px; top: 205px;" tabindex="0">
+                        <div class="orch-node__head">
+                            <div class="orch-node__icon" data-agent="reporter"><span class="material-symbols-outlined text-[18px]">speed</span></div>
+                            <div>
+                                <div class="orch-node__title">PerfReviewer</div>
+                                <div class="orch-node__role">Latency · throughput</div>
+                            </div>
+                        </div>
+                        <div class="orch-node__state"><span class="orch-node__state-dot"></span> Done · N+1 query flagged</div>
+                    </div>
+
+                    <!-- Bottom: Style -->
+                    <div class="orch-node" data-state="active" style="left: 270px; top: 400px;" tabindex="0">
+                        <div class="orch-node__head">
+                            <div class="orch-node__icon" data-agent="admin"><span class="material-symbols-outlined text-[18px]">format_paint</span></div>
+                            <div>
+                                <div class="orch-node__title">StyleReviewer</div>
+                                <div class="orch-node__role">API shape · naming</div>
+                            </div>
+                        </div>
+                        <div class="orch-node__state"><span class="orch-node__state-dot"></span> Checking endpoint verbs</div>
+                    </div>
+
+                    <!-- Left: Types -->
+                    <div class="orch-node" data-state="active" style="left: 30px; top: 205px;" tabindex="0">
+                        <div class="orch-node__head">
+                            <div class="orch-node__icon" data-agent="rt"><span class="material-symbols-outlined text-[18px]">data_object</span></div>
+                            <div>
+                                <div class="orch-node__title">TypesReviewer</div>
+                                <div class="orch-node__role">Schema · nullability</div>
+                            </div>
+                        </div>
+                        <div class="orch-node__state"><span class="orch-node__state-dot"></span> Suggested: `OrderId` brand type</div>
+                    </div>
+                </div>
+
+                <div class="orch-legend mt-3">
+                    <div class="orch-legend-item"><span class="orch-legend-swatch" data-kind="peer"></span> Peer message (any direction)</div>
+                    <div class="orch-legend-item text-on-surface-variant">No central coordinator — run finishes when every peer posts a verdict and consensus is reached.</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Execution log -->
+        <div class="flex items-center gap-2 mb-2">
+            <span class="material-symbols-outlined text-[16px] text-on-surface-variant">terminal</span>
+            <span class="text-[11px] font-bold uppercase tracking-widest text-on-surface-variant">Execution log</span>
+            <span class="text-[11px] text-on-surface-variant">— mesh conversation, ordered by timestamp</span>
+        </div>
+        <div class="arch-log">
+            <div class="arch-log__entry" data-agent="security">
+                <span class="arch-log__time">00:00</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">Security</span><span class="arch-log__msg">Scanning diff for secrets, authz boundaries, injection sinks.</span></span>
+            </div>
+            <div class="arch-log__entry" data-agent="perf">
+                <span class="arch-log__time">00:00</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">Perf</span><span class="arch-log__msg">Baselining order-placement endpoint against last week's p95 (143 ms).</span></span>
+            </div>
+            <div class="arch-log__entry" data-agent="types">
+                <span class="arch-log__time">00:00</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">Types</span><span class="arch-log__msg">Diffing schemas against <code>orders/v2.schema.json</code>.</span></span>
+            </div>
+            <div class="arch-log__entry" data-agent="style">
+                <span class="arch-log__time">00:01</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">Style</span><span class="arch-log__msg">Linting endpoint verbs, response envelopes, cursor naming.</span></span>
+            </div>
+            <div class="arch-log__entry" data-agent="perf" data-kind="handoff">
+                <span class="arch-log__time">00:14</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">Perf → Types</span><span class="arch-log__msg">Spotted N+1 around <code>order.customer</code>. Could you check the eager-loading type?</span></span>
+            </div>
+            <div class="arch-log__entry" data-agent="types" data-kind="handoff">
+                <span class="arch-log__time">00:17</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">Types → Perf</span><span class="arch-log__msg">Confirmed — <code>Order.customer</code> is nullable and fetched lazily. Safer to prefetch.</span></span>
+            </div>
+            <div class="arch-log__entry" data-agent="security" data-kind="handoff">
+                <span class="arch-log__time">00:22</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">Security → Style</span><span class="arch-log__msg">Logging <code>tenantId</code> at INFO looks wrong — propose scrubber or lower level.</span></span>
+            </div>
+            <div class="arch-log__entry" data-agent="style" data-kind="handoff">
+                <span class="arch-log__time">00:24</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">Style → Security</span><span class="arch-log__msg">Agreed. Also <code>/orders</code> should be <code>POST</code>, not <code>PUT</code>. Rolling into my verdict.</span></span>
+            </div>
+            <div class="arch-log__entry" data-agent="perf" data-kind="done">
+                <span class="arch-log__time">00:31</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">Perf ✓ verdict</span><span class="arch-log__msg"><strong>Changes requested</strong> — N+1 query, must prefetch.</span></span>
+            </div>
+            <div class="arch-log__entry" data-agent="types">
+                <span class="arch-log__time">00:33</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">Types</span><span class="arch-log__msg">Proposing <code>OrderId</code> brand type; draft verdict pending.</span></span>
+            </div>
+        </div>
+    </section>
+
+
+    <!-- ═══════════════════════════════════════════════════════════════
+         3 — HIERARCHICAL  (tree: lead → sub-leads → workers)
+         Use case: Migrate e-commerce platform to Azure
+         ═══════════════════════════════════════════════════════════════ -->
+    <section class="arch-section" aria-labelledby="arch-3-title">
+        <div class="flex items-start gap-4 mb-5">
+            <div class="arch-icon-tile" data-kind="hierarchical">
+                <span class="material-symbols-outlined text-[22px] filled">account_tree</span>
+            </div>
+            <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2 flex-wrap mb-1">
+                    <span class="arch-eyebrow" data-kind="hierarchical">Hierarchical · multi-level</span>
+                    <span class="text-[11px] text-on-surface-variant">1 CTO-agent · 3 leads · 3 workers · reports bubble up</span>
+                </div>
+                <h2 class="dh-h2" id="arch-3-title">Migrate our e-commerce platform to Azure.</h2>
+                <p class="text-[12px] text-on-surface-variant mt-1 leading-relaxed max-w-[56rem]">
+                    A <strong>top-level planner</strong> hands three domain <em>leads</em> their slice of the migration. Each lead then delegates to their own workers. Status rolls back up level by level. Chosen when the task is large, clearly domain-sliced, and each domain has its own sub-plan worth surfacing.
+                </p>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 xl:grid-cols-[minmax(0,320px)_minmax(0,1fr)] gap-6 mb-6">
+            <!-- Prompt -->
+            <div class="arch-prompt">
+                <span class="arch-prompt__label">User prompt</span>
+                <div>Produce a migration plan to move our on-prem e-commerce platform to Azure over two quarters. Cover infrastructure (networking, identity, hosting), data (Postgres → Azure SQL / Cosmos), and application refactors. Call out risks and cutover order.</div>
+                <div class="arch-prompt__chips">
+                    <span class="arch-prompt__chip"><span class="material-symbols-outlined text-[12px]">cloud</span>target · Azure</span>
+                    <span class="arch-prompt__chip"><span class="material-symbols-outlined text-[12px]">inventory_2</span>inventory-2026.xlsx</span>
+                    <span class="arch-prompt__chip"><span class="material-symbols-outlined text-[12px]">schedule</span>2 quarters</span>
+                </div>
+            </div>
+
+            <!-- Orchestration graph: 3-level tree -->
+            <div>
+                <div class="flex items-center justify-between mb-2">
+                    <div class="flex items-center gap-2">
+                        <span class="mc-pill mc-pill--planned">Planning</span>
+                        <span class="text-[11px] text-on-surface-variant">CTO → 3 leads → workers · reports bubble up</span>
+                    </div>
+                </div>
+                <div class="orch-canvas" style="height: 500px;" role="img" aria-label="Hierarchical architecture: CTO agent delegates to three leads, each of which delegates to a worker">
+                    <svg class="orch-edges" viewBox="0 0 740 500" preserveAspectRatio="none" aria-hidden="true">
+                        <defs>
+                            <marker id="arr-h" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+                                <path d="M0,0 L10,5 L0,10 Z" fill="#a3c9ff"/>
+                            </marker>
+                        </defs>
+                        <!-- CTO (370,55) → each lead (130/370/610, 220) -->
+                        <path class="orch-edge" data-kind="delegate" d="M 370 110 C 370 170, 130 160, 130 190" marker-end="url(#arr-h)"/>
+                        <path class="orch-edge" data-kind="delegate" data-active="true" d="M 370 110 L 370 190" marker-end="url(#arr-h)"/>
+                        <path class="orch-edge" data-kind="delegate" d="M 370 110 C 370 170, 610 160, 610 190" marker-end="url(#arr-h)"/>
+                        <!-- Each lead (x, 300) → its worker (x, 390) -->
+                        <path class="orch-edge" data-kind="delegate" d="M 130 300 L 130 370" marker-end="url(#arr-h)"/>
+                        <path class="orch-edge" data-kind="delegate" data-active="true" d="M 370 300 L 370 370" marker-end="url(#arr-h)"/>
+                        <path class="orch-edge" data-kind="delegate" d="M 610 300 L 610 370" marker-end="url(#arr-h)"/>
+                    </svg>
+
+                    <!-- Level 0: CTO -->
+                    <div class="orch-node" data-state="active" style="left: 270px; top: 20px;" tabindex="0">
+                        <div class="orch-node__head">
+                            <div class="orch-node__icon" data-agent="orch"><span class="material-symbols-outlined text-[18px] filled">hub</span></div>
+                            <div>
+                                <div class="orch-node__title">CTO-Agent</div>
+                                <div class="orch-node__role">Top-level planner</div>
+                            </div>
+                        </div>
+                        <div class="orch-node__state"><span class="orch-node__state-dot"></span> Waiting on all 3 leads</div>
+                    </div>
+
+                    <!-- Level 1: Leads -->
+                    <div class="orch-node" data-state="active" style="left: 30px; top: 190px;" tabindex="0">
+                        <div class="orch-node__head">
+                            <div class="orch-node__icon" data-agent="fde"><span class="material-symbols-outlined text-[18px]">dns</span></div>
+                            <div>
+                                <div class="orch-node__title">InfraLead</div>
+                                <div class="orch-node__role">Network · identity · hosting</div>
+                            </div>
+                        </div>
+                        <div class="orch-node__state"><span class="orch-node__state-dot"></span> Sub-plan drafted</div>
+                    </div>
+                    <div class="orch-node" data-state="active" style="left: 270px; top: 190px;" tabindex="0">
+                        <div class="orch-node__head">
+                            <div class="orch-node__icon" data-agent="admin"><span class="material-symbols-outlined text-[18px]">database</span></div>
+                            <div>
+                                <div class="orch-node__title">DataLead</div>
+                                <div class="orch-node__role">Postgres → Azure SQL / Cosmos</div>
+                            </div>
+                        </div>
+                        <div class="orch-node__state"><span class="orch-node__state-dot"></span> Sizing SKUs</div>
+                    </div>
+                    <div class="orch-node" data-state="planned" style="left: 510px; top: 190px;" tabindex="0">
+                        <div class="orch-node__head">
+                            <div class="orch-node__icon" data-agent="reporter"><span class="material-symbols-outlined text-[18px]">code</span></div>
+                            <div>
+                                <div class="orch-node__title">AppLead</div>
+                                <div class="orch-node__role">App refactor · cutover</div>
+                            </div>
+                        </div>
+                        <div class="orch-node__state"><span class="orch-node__state-dot"></span> Queued · waits on Infra</div>
+                    </div>
+
+                    <!-- Level 2: Workers -->
+                    <div class="orch-node" data-state="done" style="left: 30px; top: 370px;" tabindex="0">
+                        <div class="orch-node__head">
+                            <div class="orch-node__icon" data-agent="fde"><span class="material-symbols-outlined text-[18px]">lan</span></div>
+                            <div>
+                                <div class="orch-node__title">NetworkWorker</div>
+                                <div class="orch-node__role">Worker · topology</div>
+                            </div>
+                        </div>
+                        <div class="orch-node__state"><span class="orch-node__state-dot"></span> Done · hub-spoke w/ 2 regions</div>
+                    </div>
+                    <div class="orch-node" data-state="active" style="left: 270px; top: 370px;" tabindex="0">
+                        <div class="orch-node__head">
+                            <div class="orch-node__icon" data-agent="admin"><span class="material-symbols-outlined text-[18px]">sync_alt</span></div>
+                            <div>
+                                <div class="orch-node__title">DBMigrationWorker</div>
+                                <div class="orch-node__role">Worker · schema + data</div>
+                            </div>
+                        </div>
+                        <div class="orch-node__state"><span class="orch-node__state-dot"></span> Drafting cutover plan</div>
+                    </div>
+                    <div class="orch-node" data-state="planned" style="left: 510px; top: 370px;" tabindex="0">
+                        <div class="orch-node__head">
+                            <div class="orch-node__icon" data-agent="reporter"><span class="material-symbols-outlined text-[18px]">construction</span></div>
+                            <div>
+                                <div class="orch-node__title">RefactorWorker</div>
+                                <div class="orch-node__role">Worker · app code</div>
+                            </div>
+                        </div>
+                        <div class="orch-node__state"><span class="orch-node__state-dot"></span> Queued</div>
+                    </div>
+                </div>
+
+                <div class="orch-legend mt-3">
+                    <div class="orch-legend-item"><span class="orch-legend-swatch" data-kind="delegate"></span> Delegate ↓ · Report ↑</div>
+                    <div class="orch-legend-item text-on-surface-variant">CTO never talks to leaf workers directly — status rolls up through each lead.</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Execution log -->
+        <div class="flex items-center gap-2 mb-2">
+            <span class="material-symbols-outlined text-[16px] text-on-surface-variant">terminal</span>
+            <span class="text-[11px] font-bold uppercase tracking-widest text-on-surface-variant">Execution log</span>
+            <span class="text-[11px] text-on-surface-variant">— showing Infra subtree + CTO rollup</span>
+        </div>
+        <div class="arch-log">
+            <div class="arch-log__entry" data-agent="cto">
+                <span class="arch-log__time">00:00</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">CTO</span><span class="arch-log__msg">Partitioning migration into 3 tracks: Infra, Data, App. Dispatching leads.</span></span>
+            </div>
+            <div class="arch-log__entry" data-agent="cto" data-kind="handoff">
+                <span class="arch-log__time">00:01</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">CTO → InfraLead</span><span class="arch-log__msg">Own networking, identity, hosting. Target production-ready by end of Q2.</span></span>
+            </div>
+            <div class="arch-log__entry" data-agent="infra">
+                <span class="arch-log__time">00:05</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">InfraLead</span><span class="arch-log__msg">Decomposing: network topology → identity → hosting. Spinning up NetworkWorker.</span></span>
+            </div>
+            <div class="arch-log__entry" data-agent="infra" data-kind="handoff">
+                <span class="arch-log__time">00:06</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">InfraLead → NetworkWorker</span><span class="arch-log__msg">Produce hub-spoke topology for <code>eu-west</code>, <code>us-east</code>. Document peering + firewall.</span></span>
+            </div>
+            <div class="arch-log__entry" data-agent="net">
+                <span class="arch-log__time">00:18</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">NetworkWorker</span><span class="arch-log__msg">Drafted hub-spoke with Azure Firewall Premium + private endpoints.</span></span>
+            </div>
+            <div class="arch-log__entry" data-agent="net" data-kind="done">
+                <span class="arch-log__time">00:24</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">NetworkWorker ✓</span><span class="arch-log__msg">Handoff to InfraLead: topology + peering matrix + IaC bicep stubs.</span></span>
+            </div>
+            <div class="arch-log__entry" data-agent="infra" data-kind="done">
+                <span class="arch-log__time">00:27</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">InfraLead ✓ partial</span><span class="arch-log__msg">Network plan ready. Identity + hosting still in progress. Reporting to CTO.</span></span>
+            </div>
+            <div class="arch-log__entry" data-agent="data">
+                <span class="arch-log__time">00:29</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">DataLead</span><span class="arch-log__msg">SKU sized: Azure SQL Business Critical DC-8. Spinning DBMigrationWorker.</span></span>
+            </div>
+            <div class="arch-log__entry" data-agent="cto">
+                <span class="arch-log__time">00:31</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">CTO</span><span class="arch-log__msg">Infra network track: OK. Data track: progressing. App track still blocked on Infra. Holding plan consolidation.</span></span>
+            </div>
+        </div>
+    </section>
+
+
+    <!-- ═══════════════════════════════════════════════════════════════
+         4 — SEQUENTIAL  (pipeline: A → B → C → D)
+         Use case: Turn a paper into a blog post
+         ═══════════════════════════════════════════════════════════════ -->
+    <section class="arch-section" aria-labelledby="arch-4-title">
+        <div class="flex items-start gap-4 mb-5">
+            <div class="arch-icon-tile" data-kind="sequential">
+                <span class="material-symbols-outlined text-[22px] filled">linear_scale</span>
+            </div>
+            <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2 flex-wrap mb-1">
+                    <span class="arch-eyebrow" data-kind="sequential">Sequential · pipeline</span>
+                    <span class="text-[11px] text-on-surface-variant">4 stages · strict order · each stage transforms the previous output</span>
+                </div>
+                <h2 class="dh-h2" id="arch-4-title">Turn this research paper into a customer-facing blog post.</h2>
+                <p class="text-[12px] text-on-surface-variant mt-1 leading-relaxed max-w-[56rem]">
+                    A fixed chain: <strong>Retriever → Summarizer → Writer → Editor</strong>. Each agent consumes the previous agent's output and produces the next one. No branching, no peer chat — simple, deterministic, easy to reason about. Best when the transformation steps are well known and ordered.
+                </p>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 xl:grid-cols-[minmax(0,320px)_minmax(0,1fr)] gap-6 mb-6">
+            <!-- Prompt -->
+            <div class="arch-prompt">
+                <span class="arch-prompt__label">User prompt</span>
+                <div>Read the attached paper on retrieval-augmented generation and produce an 800-word blog post for our product customers. Keep tone friendly, avoid jargon, cite 3 key findings, and close with a call-to-action linking our docs.</div>
+                <div class="arch-prompt__chips">
+                    <span class="arch-prompt__chip"><span class="material-symbols-outlined text-[12px]">picture_as_pdf</span>rag-survey-2026.pdf</span>
+                    <span class="arch-prompt__chip"><span class="material-symbols-outlined text-[12px]">translate</span>tone · friendly</span>
+                    <span class="arch-prompt__chip"><span class="material-symbols-outlined text-[12px]">edit</span>800 words</span>
+                </div>
+            </div>
+
+            <!-- Orchestration graph: horizontal chain with arrows -->
+            <div>
+                <div class="flex items-center justify-between mb-2">
+                    <div class="flex items-center gap-2">
+                        <span class="mc-pill mc-pill--running">Live · stage 3 of 4</span>
+                        <span class="text-[11px] text-on-surface-variant">Each arrow is a concrete artifact handed forward</span>
+                    </div>
+                </div>
+                <div class="orch-canvas orch-canvas--sequential" style="height: 260px;" role="img" aria-label="Sequential architecture: four agents in a pipeline from Retriever to Editor">
+                    <svg class="orch-edges" viewBox="0 0 740 260" preserveAspectRatio="none" aria-hidden="true">
+                        <defs>
+                            <marker id="arr-seq-done" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                                <path d="M0,0 L10,5 L0,10 Z" fill="#2e7d32"/>
+                            </marker>
+                            <marker id="arr-seq-active" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                                <path d="M0,0 L10,5 L0,10 Z" fill="#0078d4"/>
+                            </marker>
+                            <marker id="arr-seq-pending" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                                <path d="M0,0 L10,5 L0,10 Z" fill="#a3c9ff"/>
+                            </marker>
+                        </defs>
+                        <!-- Node y-center = 130 (for height=260, node top=85). Node width 160 → x-centers:100,280,460,640.
+                             Node edges: right of 1st=180, left of 2nd=200; right of 2nd=360, left of 3rd=380;
+                             right of 3rd=540, left of 4th=560 -->
+                        <path style="stroke:#2e7d32;stroke-width:2.5;fill:none;" d="M 180 130 L 196 130" marker-end="url(#arr-seq-done)"/>
+                        <path style="stroke:#0078d4;stroke-width:2.5;stroke-dasharray:6 3;fill:none;animation: mc-dash 1.2s linear infinite;" d="M 360 130 L 376 130" marker-end="url(#arr-seq-active)"/>
+                        <path style="stroke:#a3c9ff;stroke-width:1.75;stroke-dasharray:5 4;fill:none;" d="M 540 130 L 556 130" marker-end="url(#arr-seq-pending)"/>
+                    </svg>
+
+                    <!-- 1. Retriever -->
+                    <div class="orch-node" data-state="done" style="left: 20px; top: 85px;" tabindex="0">
+                        <div class="orch-node__head">
+                            <div class="orch-node__icon" data-agent="fde"><span class="material-symbols-outlined text-[18px]">search</span></div>
+                            <div>
+                                <div class="orch-node__title">Retriever</div>
+                                <div class="orch-node__role">Source extraction</div>
+                            </div>
+                        </div>
+                        <div class="orch-node__state"><span class="orch-node__state-dot"></span> Done · 14 passages</div>
+                    </div>
+
+                    <!-- 2. Summarizer -->
+                    <div class="orch-node" data-state="done" style="left: 200px; top: 85px;" tabindex="0">
+                        <div class="orch-node__head">
+                            <div class="orch-node__icon" data-agent="admin"><span class="material-symbols-outlined text-[18px]">compress</span></div>
+                            <div>
+                                <div class="orch-node__title">Summarizer</div>
+                                <div class="orch-node__role">Condense to notes</div>
+                            </div>
+                        </div>
+                        <div class="orch-node__state"><span class="orch-node__state-dot"></span> Done · 3 key findings</div>
+                    </div>
+
+                    <!-- 3. Writer -->
+                    <div class="orch-node" data-state="active" style="left: 380px; top: 85px;" tabindex="0">
+                        <div class="orch-node__head">
+                            <div class="orch-node__icon" data-agent="reporter"><span class="material-symbols-outlined text-[18px]">edit</span></div>
+                            <div>
+                                <div class="orch-node__title">Writer</div>
+                                <div class="orch-node__role">Draft prose</div>
+                            </div>
+                        </div>
+                        <div class="orch-node__state"><span class="orch-node__state-dot"></span> Writing · 540 / 800 words</div>
+                    </div>
+
+                    <!-- 4. Editor -->
+                    <div class="orch-node" data-state="planned" style="left: 560px; top: 85px;" tabindex="0">
+                        <div class="orch-node__head">
+                            <div class="orch-node__icon" data-agent="rt"><span class="material-symbols-outlined text-[18px]">spellcheck</span></div>
+                            <div>
+                                <div class="orch-node__title">Editor</div>
+                                <div class="orch-node__role">Tone · polish · fact-check</div>
+                            </div>
+                        </div>
+                        <div class="orch-node__state"><span class="orch-node__state-dot"></span> Queued</div>
+                    </div>
+                </div>
+
+                <div class="orch-legend mt-3">
+                    <div class="orch-legend-item"><span class="orch-legend-swatch" data-kind="report" style="background:#2e7d32"></span> Handoff complete</div>
+                    <div class="orch-legend-item"><span class="orch-legend-swatch" style="background:repeating-linear-gradient(90deg, #0078d4 0 6px, transparent 6px 9px)"></span> Handoff in progress</div>
+                    <div class="orch-legend-item"><span class="orch-legend-swatch" data-kind="delegate"></span> Pending</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Execution log -->
+        <div class="flex items-center gap-2 mb-2">
+            <span class="material-symbols-outlined text-[16px] text-on-surface-variant">terminal</span>
+            <span class="text-[11px] font-bold uppercase tracking-widest text-on-surface-variant">Execution log</span>
+            <span class="text-[11px] text-on-surface-variant">— strictly ordered, one stage at a time</span>
+        </div>
+        <div class="arch-log">
+            <div class="arch-log__entry" data-agent="retriever">
+                <span class="arch-log__time">00:00</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">Retriever</span><span class="arch-log__msg">Parsing <code>rag-survey-2026.pdf</code> (38 pages). Chunking + embedding.</span></span>
+            </div>
+            <div class="arch-log__entry" data-agent="retriever" data-kind="done">
+                <span class="arch-log__time">00:12</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">Retriever ✓</span><span class="arch-log__msg">Extracted 14 relevant passages (sections 2, 4, 7). Handing off.</span></span>
+            </div>
+            <div class="arch-log__entry" data-agent="summarizer" data-kind="handoff">
+                <span class="arch-log__time">00:13</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">Retriever → Summarizer</span><span class="arch-log__msg">Artifact: <code>passages.json</code> (14 items, 4 900 tokens).</span></span>
+            </div>
+            <div class="arch-log__entry" data-agent="summarizer">
+                <span class="arch-log__time">00:14</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">Summarizer</span><span class="arch-log__msg">Condensing to 3 key findings + quote bank.</span></span>
+            </div>
+            <div class="arch-log__entry" data-agent="summarizer" data-kind="done">
+                <span class="arch-log__time">00:22</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">Summarizer ✓</span><span class="arch-log__msg">3 findings: (1) hybrid retrieval +18% recall, (2) reranking matters most, (3) citation tools boost trust.</span></span>
+            </div>
+            <div class="arch-log__entry" data-agent="writer" data-kind="handoff">
+                <span class="arch-log__time">00:23</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">Summarizer → Writer</span><span class="arch-log__msg">Artifact: <code>notes.md</code> + tone brief (friendly, no jargon).</span></span>
+            </div>
+            <div class="arch-log__entry" data-agent="writer">
+                <span class="arch-log__time">00:24</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">Writer</span><span class="arch-log__msg">Draft outline: hook · 3 findings · practical tip · CTA to docs.</span></span>
+            </div>
+            <div class="arch-log__entry" data-agent="writer">
+                <span class="arch-log__time">00:36</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">Writer</span><span class="arch-log__msg">540 / 800 words. Next: finish practical-tip section, then CTA.</span></span>
+            </div>
+            <div class="arch-log__entry" data-agent="editor">
+                <span class="arch-log__time">—</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">Editor (queued)</span><span class="arch-log__msg">Will verify citations against <code>passages.json</code>, tighten prose, suggest headline options.</span></span>
+            </div>
+        </div>
+    </section>
+
+
+    <!-- ═══════════════════════════════════════════════════════════════
+         5 — MIXED / COMPOSITE  (combines multiple patterns)
+         Use case: Incident response — prod checkout outage
+         ═══════════════════════════════════════════════════════════════ -->
+    <section class="arch-section" aria-labelledby="arch-5-title">
+        <div class="flex items-start gap-4 mb-5">
+            <div class="arch-icon-tile" data-kind="mixed">
+                <span class="material-symbols-outlined text-[22px] filled">extension</span>
+            </div>
+            <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2 flex-wrap mb-1">
+                    <span class="arch-eyebrow" data-kind="mixed">Mixed · composite</span>
+                    <span class="text-[11px] text-on-surface-variant">1 commander · 3 sub-teams · each sub-team uses its own pattern</span>
+                </div>
+                <h2 class="dh-h2" id="arch-5-title">Resolve the prod checkout outage.</h2>
+                <p class="text-[12px] text-on-surface-variant mt-1 leading-relaxed max-w-[56rem]">
+                    Real runs rarely fit one shape. Developer Hub can <strong>compose</strong> patterns: a top-level <em>Supervisor</em> delegates to sub-teams, and each sub-team picks the pattern that fits its own sub-task. Here: an incident commander kicks off a <strong>sequential</strong> hotfix pipeline on the left, a <strong>peer-network</strong> investigation in the middle, and a <strong>solo</strong> comms agent on the right — all in parallel, all reporting back up.
+                </p>
+                <p class="text-[11px] text-on-surface-variant mt-2 leading-relaxed max-w-[56rem]">
+                    <strong class="text-on-surface">Why mix?</strong> Different sub-tasks have different shapes. The fix needs strict ordering (diagnose → patch → deploy). The investigation benefits from peer chat (SRE and Security cross-referencing signals). Customer comms is a single, independent workstream. Forcing all three into one pattern would either over-serialize the whole run or drop the causal links that matter.
+                </p>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 xl:grid-cols-[minmax(0,320px)_minmax(0,1fr)] gap-6 mb-6">
+            <!-- Prompt -->
+            <div class="arch-prompt">
+                <span class="arch-prompt__label">User prompt</span>
+                <div>Sev-1: checkout is failing for ~40% of users since 14:12 UTC. Coordinate incident response — diagnose root cause, ship a hotfix, investigate whether data was exposed, and keep customers informed until resolved. Priority: mitigate first, RCA after.</div>
+                <div class="arch-prompt__chips">
+                    <span class="arch-prompt__chip"><span class="material-symbols-outlined text-[12px]">emergency</span>Sev-1</span>
+                    <span class="arch-prompt__chip"><span class="material-symbols-outlined text-[12px]">schedule</span>since 14:12 UTC</span>
+                    <span class="arch-prompt__chip"><span class="material-symbols-outlined text-[12px]">link</span>alert · INC-4821</span>
+                </div>
+            </div>
+
+            <!-- Orchestration graph: supervisor + 3 sub-teams -->
+            <div>
+                <div class="flex items-center justify-between mb-2">
+                    <div class="flex items-center gap-2">
+                        <span class="mc-pill mc-pill--running">Live · 3 sub-teams in flight</span>
+                        <span class="text-[11px] text-on-surface-variant">Commander supervises · each cluster runs its own pattern internally</span>
+                    </div>
+                </div>
+                <div class="orch-canvas" style="height: 640px;" role="img" aria-label="Mixed architecture: IncidentCommander supervises a sequential hotfix pipeline, a peer investigation pair, and a solo comms agent">
+                    <svg class="orch-edges" viewBox="0 0 740 640" preserveAspectRatio="none" aria-hidden="true">
+                        <defs>
+                            <marker id="arr-mx-del" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+                                <path d="M0,0 L10,5 L0,10 Z" fill="#a3c9ff"/>
+                            </marker>
+                            <marker id="arr-mx-done" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                                <path d="M0,0 L10,5 L0,10 Z" fill="#2e7d32"/>
+                            </marker>
+                            <marker id="arr-mx-active" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                                <path d="M0,0 L10,5 L0,10 Z" fill="#0078d4"/>
+                            </marker>
+                        </defs>
+
+                        <!-- Commander (x-center 370, bottom ~115) → each sub-team head (y ~210) -->
+                        <path class="orch-edge" data-kind="delegate" d="M 370 115 C 370 170, 130 170, 130 200" marker-end="url(#arr-mx-del)"/>
+                        <path class="orch-edge" data-kind="delegate" data-active="true" d="M 370 115 L 370 200" marker-end="url(#arr-mx-del)"/>
+                        <path class="orch-edge" data-kind="delegate" d="M 370 115 C 370 170, 610 170, 610 200" marker-end="url(#arr-mx-del)"/>
+
+                        <!-- Left column: sequential Diagnose → Hotfix → Deploy -->
+                        <path style="stroke:#2e7d32;stroke-width:2.5;fill:none;" d="M 130 310 L 130 336" marker-end="url(#arr-mx-done)"/>
+                        <path style="stroke:#0078d4;stroke-width:2.5;stroke-dasharray:6 3;fill:none;animation: mc-dash 1.2s linear infinite;" d="M 130 450 L 130 476" marker-end="url(#arr-mx-active)"/>
+
+                        <!-- Middle column: peer handoff between Sec & SRE -->
+                        <path class="orch-edge" data-kind="peer" data-active="true" d="M 270 345 L 250 345 C 230 345, 230 395, 250 395 L 270 395"/>
+                        <path class="orch-edge" data-kind="peer" d="M 470 345 L 490 345 C 510 345, 510 395, 490 395 L 470 395"/>
+                    </svg>
+
+                    <!-- Sub-team frames (dashed rounded rectangles behind the clusters) -->
+                    <div class="arch-subteam" style="left: 12px; top: 170px; width: 236px; height: 450px;">
+                        <span class="arch-subteam__label">Sequential · hotfix pipeline</span>
+                    </div>
+                    <div class="arch-subteam" style="left: 252px; top: 170px; width: 236px; height: 310px;">
+                        <span class="arch-subteam__label">Network · investigation peers</span>
+                    </div>
+                    <div class="arch-subteam" style="left: 492px; top: 170px; width: 236px; height: 180px;">
+                        <span class="arch-subteam__label">Solo · comms</span>
+                    </div>
+
+                    <!-- Level 0: IncidentCommander -->
+                    <div class="orch-node" data-state="active" style="left: 270px; top: 20px;" tabindex="0">
+                        <div class="orch-node__head">
+                            <div class="orch-node__icon" data-agent="orch"><span class="material-symbols-outlined text-[18px] filled">emergency_home</span></div>
+                            <div>
+                                <div class="orch-node__title">IncidentCommander</div>
+                                <div class="orch-node__role">Supervisor · all sub-teams</div>
+                            </div>
+                        </div>
+                        <div class="orch-node__state"><span class="orch-node__state-dot"></span> Coordinating · 3 sub-teams</div>
+                    </div>
+
+                    <!-- Left cluster: sequential pipeline -->
+                    <div class="orch-node" data-state="done" style="left: 30px; top: 200px;" tabindex="0">
+                        <div class="orch-node__head">
+                            <div class="orch-node__icon" data-agent="fde"><span class="material-symbols-outlined text-[18px]">bug_report</span></div>
+                            <div>
+                                <div class="orch-node__title">DiagnoseAgent</div>
+                                <div class="orch-node__role">Stage 1 · root-cause</div>
+                            </div>
+                        </div>
+                        <div class="orch-node__state"><span class="orch-node__state-dot"></span> Done · bad cache key deploy</div>
+                    </div>
+                    <div class="orch-node" data-state="active" style="left: 30px; top: 340px;" tabindex="0">
+                        <div class="orch-node__head">
+                            <div class="orch-node__icon" data-agent="admin"><span class="material-symbols-outlined text-[18px]">healing</span></div>
+                            <div>
+                                <div class="orch-node__title">HotfixAgent</div>
+                                <div class="orch-node__role">Stage 2 · patch + test</div>
+                            </div>
+                        </div>
+                        <div class="orch-node__state"><span class="orch-node__state-dot"></span> Running · 3/5 tests passing</div>
+                    </div>
+                    <div class="orch-node" data-state="planned" style="left: 30px; top: 480px;" tabindex="0">
+                        <div class="orch-node__head">
+                            <div class="orch-node__icon" data-agent="reporter"><span class="material-symbols-outlined text-[18px]">rocket_launch</span></div>
+                            <div>
+                                <div class="orch-node__title">DeployAgent</div>
+                                <div class="orch-node__role">Stage 3 · ship + verify</div>
+                            </div>
+                        </div>
+                        <div class="orch-node__state"><span class="orch-node__state-dot"></span> Queued · awaits hotfix</div>
+                    </div>
+
+                    <!-- Middle cluster: peer pair -->
+                    <div class="orch-node" data-state="active" style="left: 270px; top: 200px;" tabindex="0">
+                        <div class="orch-node__head">
+                            <div class="orch-node__icon" data-agent="orch" style="background:#ffebee;color:#c62828"><span class="material-symbols-outlined text-[18px]">shield</span></div>
+                            <div>
+                                <div class="orch-node__title">SecurityAgent</div>
+                                <div class="orch-node__role">Peer · data exposure?</div>
+                            </div>
+                        </div>
+                        <div class="orch-node__state"><span class="orch-node__state-dot"></span> Auditing access logs</div>
+                    </div>
+                    <div class="orch-node" data-state="active" style="left: 270px; top: 340px;" tabindex="0">
+                        <div class="orch-node__head">
+                            <div class="orch-node__icon" data-agent="rt"><span class="material-symbols-outlined text-[18px]">monitoring</span></div>
+                            <div>
+                                <div class="orch-node__title">SREAgent</div>
+                                <div class="orch-node__role">Peer · traffic &amp; errors</div>
+                            </div>
+                        </div>
+                        <div class="orch-node__state"><span class="orch-node__state-dot"></span> Cross-ref: 4xx spike + leak?</div>
+                    </div>
+
+                    <!-- Right cluster: solo comms -->
+                    <div class="orch-node" data-state="active" style="left: 510px; top: 200px;" tabindex="0">
+                        <div class="orch-node__head">
+                            <div class="orch-node__icon" data-agent="admin"><span class="material-symbols-outlined text-[18px]">campaign</span></div>
+                            <div>
+                                <div class="orch-node__title">CommsAgent</div>
+                                <div class="orch-node__role">Solo · status page + Slack</div>
+                            </div>
+                        </div>
+                        <div class="orch-node__state"><span class="orch-node__state-dot"></span> Posting update #3</div>
+                    </div>
+                </div>
+
+                <div class="orch-legend mt-3">
+                    <div class="orch-legend-item"><span class="orch-legend-swatch" data-kind="delegate"></span> Commander delegates down</div>
+                    <div class="orch-legend-item"><span class="orch-legend-swatch" data-kind="peer"></span> Peer handoff (inside network cluster)</div>
+                    <div class="orch-legend-item"><span class="orch-legend-swatch" style="background:#2e7d32"></span> Pipeline stage complete</div>
+                    <div class="orch-legend-item text-on-surface-variant">· Dashed purple frames = sub-teams</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Execution log -->
+        <div class="flex items-center gap-2 mb-2">
+            <span class="material-symbols-outlined text-[16px] text-on-surface-variant">terminal</span>
+            <span class="text-[11px] font-bold uppercase tracking-widest text-on-surface-variant">Execution log</span>
+            <span class="text-[11px] text-on-surface-variant">— interleaved across all 3 sub-teams, prefixed by cluster</span>
+        </div>
+        <div class="arch-log">
+            <div class="arch-log__entry" data-agent="cto">
+                <span class="arch-log__time">00:00</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">Commander</span><span class="arch-log__msg">Sev-1 confirmed. Spawning 3 sub-teams: <strong>pipeline</strong> (fix), <strong>net</strong> (investigate), <strong>solo</strong> (comms).</span></span>
+            </div>
+            <div class="arch-log__entry" data-agent="cto" data-kind="handoff">
+                <span class="arch-log__time">00:01</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">Commander → Comms</span><span class="arch-log__msg">Post initial status (investigating) on status page + #incidents.</span></span>
+            </div>
+            <div class="arch-log__entry" data-agent="content">
+                <span class="arch-log__time">00:02</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">[solo] Comms</span><span class="arch-log__msg">Posted update #1 · 14:14 UTC · "We are investigating elevated errors on checkout."</span></span>
+            </div>
+            <div class="arch-log__entry" data-agent="retriever">
+                <span class="arch-log__time">00:03</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">[pipeline] Diagnose</span><span class="arch-log__msg">Pulling last 2 deploys + error spike window. Scanning stack traces.</span></span>
+            </div>
+            <div class="arch-log__entry" data-agent="security">
+                <span class="arch-log__time">00:03</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">[net] Security</span><span class="arch-log__msg">Auditing access logs for anomalous reads during the error window.</span></span>
+            </div>
+            <div class="arch-log__entry" data-agent="perf">
+                <span class="arch-log__time">00:04</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">[net] SRE</span><span class="arch-log__msg">4xx on <code>/checkout</code> started at 14:12:03 UTC, right after deploy <code>d-8a11</code>.</span></span>
+            </div>
+            <div class="arch-log__entry" data-agent="perf" data-kind="handoff">
+                <span class="arch-log__time">00:06</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">[net] SRE → Security</span><span class="arch-log__msg">No unusual reads. Errors look like logic, not exposure. Handing findings up.</span></span>
+            </div>
+            <div class="arch-log__entry" data-agent="retriever" data-kind="done">
+                <span class="arch-log__time">00:07</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">[pipeline] Diagnose ✓</span><span class="arch-log__msg">Root cause: cache key collision introduced in <code>d-8a11</code> for NA region. Handing off to Hotfix.</span></span>
+            </div>
+            <div class="arch-log__entry" data-agent="summarizer" data-kind="handoff">
+                <span class="arch-log__time">00:07</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">[pipeline] Diagnose → Hotfix</span><span class="arch-log__msg">Artifact: <code>rca.md</code> + proposed patch (scope cache key by region).</span></span>
+            </div>
+            <div class="arch-log__entry" data-agent="summarizer">
+                <span class="arch-log__time">00:08</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">[pipeline] Hotfix</span><span class="arch-log__msg">Patch applied locally. Running regression suite: 3/5 passing.</span></span>
+            </div>
+            <div class="arch-log__entry" data-agent="content">
+                <span class="arch-log__time">00:09</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">[solo] Comms</span><span class="arch-log__msg">Update #2 posted · "Identified root cause, preparing hotfix. ETA ~10 min."</span></span>
+            </div>
+            <div class="arch-log__entry" data-agent="cto">
+                <span class="arch-log__time">00:11</span>
+                <span class="arch-log__dot"><span class="arch-log__dot-inner"></span></span>
+                <span class="arch-log__body"><span class="arch-log__agent">Commander</span><span class="arch-log__msg">Investigation cleared (no data exposure). Pipeline on track. Holding deploy gate for user approval once Hotfix tests pass.</span></span>
+            </div>
+        </div>
+    </section>
+
+
+    <!-- ═══════════════════════════════════════════════════════════════
+         FOOTER — pattern comparison
+         ═══════════════════════════════════════════════════════════════ -->
+    <section class="bg-surface-container-lowest border border-outline-variant/15 rounded-xl p-6 shadow-[0_2px_12px_rgba(0,0,0,0.04)]">
+        <h3 class="dh-h2 mb-1">Picking a pattern</h3>
+        <p class="text-[12px] text-on-surface-variant mb-4">Developer Hub proposes the pattern that fits your task shape — and can <strong>combine patterns</strong> within a single run when no single shape fits. You can always regenerate or edit the team before anything runs.</p>
+        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4 text-[12px]">
+            <div class="border border-outline-variant/20 rounded-lg p-4">
+                <div class="flex items-center gap-2 mb-2">
+                    <span class="arch-icon-tile" data-kind="supervisor" style="width:28px;height:28px"><span class="material-symbols-outlined text-[16px] filled">hub</span></span>
+                    <span class="text-[13px] font-bold">Supervisor</span>
+                </div>
+                <p class="text-on-surface-variant leading-relaxed"><strong class="text-on-surface">Pick when:</strong> decomposition is clear &amp; specialists don't overlap much. <strong class="text-on-surface">Watch for:</strong> single point of coordination failure.</p>
+            </div>
+            <div class="border border-outline-variant/20 rounded-lg p-4">
+                <div class="flex items-center gap-2 mb-2">
+                    <span class="arch-icon-tile" data-kind="network" style="width:28px;height:28px"><span class="material-symbols-outlined text-[16px] filled">polyline</span></span>
+                    <span class="text-[13px] font-bold">Network</span>
+                </div>
+                <p class="text-on-surface-variant leading-relaxed"><strong class="text-on-surface">Pick when:</strong> domains overlap, peer feedback improves quality. <strong class="text-on-surface">Watch for:</strong> loops / no consensus. Set a vote rule.</p>
+            </div>
+            <div class="border border-outline-variant/20 rounded-lg p-4">
+                <div class="flex items-center gap-2 mb-2">
+                    <span class="arch-icon-tile" data-kind="hierarchical" style="width:28px;height:28px"><span class="material-symbols-outlined text-[16px] filled">account_tree</span></span>
+                    <span class="text-[13px] font-bold">Hierarchical</span>
+                </div>
+                <p class="text-on-surface-variant leading-relaxed"><strong class="text-on-surface">Pick when:</strong> task is big &amp; domain-sliced; each domain deserves its own sub-plan. <strong class="text-on-surface">Watch for:</strong> reporting latency across levels.</p>
+            </div>
+            <div class="border border-outline-variant/20 rounded-lg p-4">
+                <div class="flex items-center gap-2 mb-2">
+                    <span class="arch-icon-tile" data-kind="sequential" style="width:28px;height:28px"><span class="material-symbols-outlined text-[16px] filled">linear_scale</span></span>
+                    <span class="text-[13px] font-bold">Sequential</span>
+                </div>
+                <p class="text-on-surface-variant leading-relaxed"><strong class="text-on-surface">Pick when:</strong> order is known and each stage's output feeds the next. <strong class="text-on-surface">Watch for:</strong> one bad stage spoils the whole run.</p>
+            </div>
+            <div class="border border-outline-variant/20 rounded-lg p-4">
+                <div class="flex items-center gap-2 mb-2">
+                    <span class="arch-icon-tile" data-kind="mixed" style="width:28px;height:28px"><span class="material-symbols-outlined text-[16px] filled">extension</span></span>
+                    <span class="text-[13px] font-bold">Mixed / composite</span>
+                </div>
+                <p class="text-on-surface-variant leading-relaxed"><strong class="text-on-surface">Pick when:</strong> one shape isn't enough — parallel sub-teams need different internal patterns (e.g. incident response). <strong class="text-on-surface">Watch for:</strong> graph legibility. Label sub-teams clearly.</p>
+            </div>
+        </div>
+    </section>
+
+</div>
+</main>
+
+<!-- Mock footer banner to match mission-control chrome -->
+<div class="mock-banner">Prototype · static content · no runtime or network calls</div>
+
+</body>
+</html>

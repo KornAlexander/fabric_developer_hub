@@ -322,116 +322,235 @@
                 </div>
             </section>
 
-            <!-- ═══ PLAN DECOMPOSITION PREVIEW (shows after Generate Plan) ═══ -->
-            <section class="max-w-3xl mx-auto slide-up">
-                <div class="flex items-center gap-2 mb-4">
+            <!-- ═══ PLAN REVIEW (matches live Backend/src/domain/models/plan.py schema — see Frontend/src/components/AgentHub/plan/PlanView.tsx) ═══ -->
+            <section class="max-w-3xl mx-auto slide-up space-y-4">
+                <div class="flex items-center gap-2">
                     <span class="material-symbols-outlined text-primary text-[20px] filled">auto_awesome</span>
-                    <h3 class="text-sm font-bold text-on-surface uppercase tracking-wider">Proposed Execution Plan</h3>
+                    <h3 class="text-sm font-bold text-on-surface uppercase tracking-wider">Plan</h3>
+                    <span class="text-[11px] text-on-surface-variant">Workspace: <strong class="text-on-surface">Marketing Analytics · feature-alpha</strong></span>
                 </div>
 
-                <div class="bg-surface-container-lowest rounded-2xl border border-outline-variant/10 overflow-hidden shadow-sm">
-                    <!-- Plan steps -->
-                    <div class="divide-y divide-outline-variant/5">
-                        <!-- Step 1 -->
-                        <div class="flex items-start gap-4 p-4 hover:bg-surface-container-low/50 transition-colors">
-                            <div class="w-7 h-7 rounded-full bg-primary/10 text-primary flex items-center justify-center shrink-0 mt-0.5">
-                                <span class="text-xs font-bold">1</span>
-                            </div>
-                            <div class="flex-1">
-                                <div class="flex items-center gap-2 mb-1">
-                                    <span class="text-sm font-semibold text-on-surface">Discover & Map Data Sources</span>
-                                    <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold fabric-badge-lakehouse">
-                                        <span class="material-symbols-outlined text-[10px]">database</span>
-                                        Lakehouse
-                                    </span>
-                                </div>
-                                <p class="text-xs text-on-surface-variant leading-relaxed">Scan OneLake paths, identify all relevant parquet partitions, and profile schema metadata for the marketing domain.</p>
-                            </div>
-                            <div class="text-right shrink-0">
-                                <div class="text-[10px] text-on-surface-variant/60">Auto</div>
-                            </div>
-                        </div>
+                <!-- While plan is generating, we show this skeleton instead. -->
+                <div class="hidden bg-surface-container-lowest rounded-xl border border-outline-variant/10 p-4 flex items-center gap-3 text-[12px]">
+                    <span class="material-symbols-outlined text-primary animate-spin">progress_activity</span>
+                    <span class="font-semibold text-on-surface">Generating plan…</span>
+                    <span class="text-on-surface-variant">Edits made to the prompt while we plan won't be reflected.</span>
+                </div>
 
-                        <!-- Step 2 -->
-                        <div class="flex items-start gap-4 p-4 hover:bg-surface-container-low/50 transition-colors">
-                            <div class="w-7 h-7 rounded-full bg-primary/10 text-primary flex items-center justify-center shrink-0 mt-0.5">
-                                <span class="text-xs font-bold">2</span>
-                            </div>
-                            <div class="flex-1">
-                                <div class="flex items-center gap-2 mb-1">
-                                    <span class="text-sm font-semibold text-on-surface">Resolve Schema Conflicts</span>
-                                    <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold fabric-badge-warehouse">
-                                        <span class="material-symbols-outlined text-[10px]">warehouse</span>
-                                        Warehouse
-                                    </span>
-                                </div>
-                                <p class="text-xs text-on-surface-variant leading-relaxed">Compare source schemas, detect type mismatches, and generate SQL transforms and COALESCE handlers for Gold-layer compatibility.</p>
-                            </div>
-                            <div class="text-right shrink-0">
-                                <div class="text-[10px] text-on-surface-variant/60">Auto</div>
-                            </div>
-                        </div>
+                <div class="bg-surface-container-lowest rounded-2xl border border-outline-variant/10 overflow-hidden shadow-sm divide-y divide-outline-variant/10">
 
-                        <!-- Step 3 — Requires approval -->
-                        <div class="flex items-start gap-4 p-4 bg-amber-50/30 hover:bg-amber-50/50 transition-colors">
-                            <div class="w-7 h-7 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center shrink-0 mt-0.5">
-                                <span class="material-symbols-outlined text-[14px]">shield_person</span>
-                            </div>
-                            <div class="flex-1">
-                                <div class="flex items-center gap-2 mb-1">
-                                    <span class="text-sm font-semibold text-on-surface">Create Data Factory Pipeline</span>
-                                    <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold fabric-badge-pipeline">
-                                        <span class="material-symbols-outlined text-[10px]">conversion_path</span>
-                                        Pipeline
-                                    </span>
-                                    <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-100 text-amber-700">
-                                        <span class="material-symbols-outlined text-[10px]">shield_person</span>
-                                        Approval needed
-                                    </span>
-                                </div>
-                                <p class="text-xs text-on-surface-variant leading-relaxed">Build and deploy a scheduled pipeline with Copy, Dataflow Gen2, and Stored Procedure activities writing to production Gold layer.</p>
-                            </div>
-                            <div class="text-right shrink-0">
-                                <div class="text-[10px] text-amber-600 font-bold">Review</div>
-                            </div>
-                        </div>
+                    <!-- ── SUMMARY ── -->
+                    <div class="p-4">
+                        <div class="flex items-center gap-1.5 mb-1.5 text-[10px] font-bold uppercase tracking-widest text-on-surface-variant"><span class="material-symbols-outlined text-[14px]">summarize</span>Summary</div>
+                        <p class="text-[13px] text-on-surface leading-relaxed">Automate weekly ingestion of regional sales data from OneLake raw zone into the Gold warehouse, normalise the schema, and create SQL views for the Finance dashboard.</p>
+                    </div>
 
-                        <!-- Step 4 -->
-                        <div class="flex items-start gap-4 p-4 hover:bg-surface-container-low/50 transition-colors">
-                            <div class="w-7 h-7 rounded-full bg-primary/10 text-primary flex items-center justify-center shrink-0 mt-0.5">
-                                <span class="text-xs font-bold">4</span>
-                            </div>
-                            <div class="flex-1">
-                                <div class="flex items-center gap-2 mb-1">
-                                    <span class="text-sm font-semibold text-on-surface">Validate & Test Pipeline</span>
-                                </div>
-                                <p class="text-xs text-on-surface-variant leading-relaxed">Run a test batch through the pipeline, compare output checksums, and verify Gold-layer view integrity.</p>
-                            </div>
-                            <div class="text-right shrink-0">
-                                <div class="text-[10px] text-on-surface-variant/60">Auto</div>
-                            </div>
-                        </div>
+                    <!-- ── ASSUMPTIONS ── -->
+                    <div class="p-4">
+                        <div class="flex items-center gap-1.5 mb-1.5 text-[10px] font-bold uppercase tracking-widest text-on-surface-variant"><span class="material-symbols-outlined text-[14px]">info</span>Assumptions</div>
+                        <ul class="text-[12px] text-on-surface-variant space-y-1 list-disc pl-5">
+                            <li>Raw parquet files follow the <code class="text-[11px]">region=YYYY-MM-DD</code> partitioning scheme.</li>
+                            <li>Gold_Sales_DW is reachable from the session's capacity.</li>
+                            <li>Finance dashboard consumes SQL views, not direct warehouse tables.</li>
+                        </ul>
+                    </div>
 
-                        <!-- Step 5 -->
-                        <div class="flex items-start gap-4 p-4 hover:bg-surface-container-low/50 transition-colors">
-                            <div class="w-7 h-7 rounded-full bg-primary/10 text-primary flex items-center justify-center shrink-0 mt-0.5">
-                                <span class="text-xs font-bold">5</span>
-                            </div>
-                            <div class="flex-1">
-                                <div class="flex items-center gap-2 mb-1">
-                                    <span class="text-sm font-semibold text-on-surface">Generate Summary Report</span>
+                    <!-- ── PREREQUISITES (live: satisfied / missing / unknown, with verification.evidence) ── -->
+                    <div class="p-4">
+                        <div class="flex items-center gap-1.5 mb-2 text-[10px] font-bold uppercase tracking-widest text-on-surface-variant"><span class="material-symbols-outlined text-[14px]">fact_check</span>Prerequisites</div>
+                        <div class="space-y-1.5">
+                            <div class="flex items-start gap-2 p-2 rounded-lg bg-emerald-50/60 border border-emerald-200/50">
+                                <span class="material-symbols-outlined text-[16px] text-emerald-700 mt-0.5">check_circle</span>
+                                <div class="flex-1 min-w-0">
+                                    <div class="flex items-center gap-2 text-[12px] font-semibold text-on-surface">Workspace Contributor role on <em>Marketing Analytics</em>
+                                        <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-100 text-emerald-800">satisfied</span>
+                                        <span class="text-[10px] text-on-surface-variant/70">workspace_role · fabric_api</span>
+                                    </div>
+                                    <div class="text-[11px] text-on-surface-variant">Verified via Fabric API at 10:42 · applies to steps <a class="text-primary underline" href="#">s1</a>, <a class="text-primary underline" href="#">s3</a>.</div>
                                 </div>
-                                <p class="text-xs text-on-surface-variant leading-relaxed">Create an executive summary of all changes made, data volumes processed, and scheduled pipeline details.</p>
                             </div>
-                            <div class="text-right shrink-0">
-                                <div class="text-[10px] text-on-surface-variant/60">Auto</div>
+                            <div class="flex items-start gap-2 p-2 rounded-lg bg-amber-50/60 border border-amber-200/60">
+                                <span class="material-symbols-outlined text-[16px] text-amber-700 mt-0.5">error</span>
+                                <div class="flex-1 min-w-0">
+                                    <div class="flex items-center gap-2 text-[12px] font-semibold text-on-surface">Connection to <em>corporate-sales-raw</em> source
+                                        <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-100 text-amber-800">missing</span>
+                                        <span class="text-[10px] text-on-surface-variant/70">connection · connection_probe</span>
+                                    </div>
+                                    <div class="text-[11px] text-on-surface-variant">No cloud connection registered for the source lakehouse. Blocks <a class="text-primary underline" href="#">s2</a>. <button class="text-primary font-medium hover:underline">Create connection…</button></div>
+                                </div>
+                            </div>
+                            <div class="flex items-start gap-2 p-2 rounded-lg bg-surface-container-low/70 border border-outline-variant/20">
+                                <span class="material-symbols-outlined text-[16px] text-on-surface-variant mt-0.5">help</span>
+                                <div class="flex-1 min-w-0">
+                                    <div class="flex items-center gap-2 text-[12px] font-semibold text-on-surface">Capacity supports Dataflow Gen2
+                                        <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-surface-container-high text-on-surface-variant">unknown</span>
+                                        <span class="text-[10px] text-on-surface-variant/70">capacity · capacity_api</span>
+                                    </div>
+                                    <div class="text-[11px] text-on-surface-variant">Couldn't reach capacity API (403). We'll proceed and the step will self-check. <a class="text-primary font-medium hover:underline" href="#">Re-verify</a></div>
+                                </div>
                             </div>
                         </div>
                     </div>
 
-                    <!-- Plan footer -->
-                    <div class="p-4 bg-surface-container-low/50 flex items-center justify-between">
-                        <div class="flex items-center gap-4">
+                    <!-- ── STEPS (live: action + risk + reversible + dependsOn, NO estimated duration per spec §1) ── -->
+                    <div>
+                        <div class="px-4 pt-4 pb-1 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-widest text-on-surface-variant"><span class="material-symbols-outlined text-[14px]">route</span>Steps</div>
+                        <!-- Plan steps (enriched with action + risk + reversibility + dependsOn badges) -->
+                        <div class="divide-y divide-outline-variant/5">
+
+                        <!-- s1 · create · low risk · reversible -->
+                        <div class="flex items-start gap-4 p-4 hover:bg-surface-container-low/50 transition-colors" data-testid="plan-step-s1">
+                            <div class="w-7 h-7 rounded-full bg-primary/10 text-primary flex items-center justify-center shrink-0 mt-0.5">
+                                <span class="text-xs font-bold">1</span>
+                            </div>
+                            <div class="flex-1 min-w-0">
+                                <div class="flex flex-wrap items-center gap-2 mb-1">
+                                    <span class="text-sm font-semibold text-on-surface">Discover & profile raw partitions</span>
+                                    <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold fabric-badge-lakehouse"><span class="material-symbols-outlined text-[10px]">database</span>Lakehouse · corporate-sales-raw</span>
+                                    <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-50 text-blue-700">create</span>
+                                    <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-50 text-emerald-700" title="risk">low</span>
+                                    <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium text-on-surface-variant border border-outline-variant/30" title="Can be undone">↺ reversible</span>
+                                </div>
+                                <p class="text-xs text-on-surface-variant leading-relaxed">Scan OneLake paths, identify relevant parquet partitions, and profile schema metadata.</p>
+                            </div>
+                            <div class="text-right shrink-0"><div class="text-[10px] text-on-surface-variant/60">Auto</div></div>
+                        </div>
+
+                        <!-- s2 · create · medium · depends on s1 · blocked by missing connection prereq -->
+                        <div class="flex items-start gap-4 p-4 bg-surface-container-low/40" data-testid="plan-step-s2">
+                            <div class="w-7 h-7 rounded-full bg-outline-variant/30 text-on-surface-variant flex items-center justify-center shrink-0 mt-0.5">
+                                <span class="text-xs font-bold">2</span>
+                            </div>
+                            <div class="flex-1 min-w-0">
+                                <div class="flex flex-wrap items-center gap-2 mb-1">
+                                    <span class="text-sm font-semibold text-on-surface">Normalise schema into Gold_Sales_DW</span>
+                                    <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold fabric-badge-warehouse"><span class="material-symbols-outlined text-[10px]">warehouse</span>Warehouse</span>
+                                    <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-50 text-blue-700">update</span>
+                                    <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-50 text-amber-700">medium</span>
+                                    <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium text-on-surface-variant border border-outline-variant/30">↺ reversible</span>
+                                    <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium text-on-surface-variant">depends on <a href="#" class="text-primary underline">s1</a></span>
+                                </div>
+                                <p class="text-xs text-on-surface-variant leading-relaxed">Map source columns to Gold schema with COALESCE and type casts.</p>
+                                <div class="mt-1.5 inline-flex items-center gap-1 text-[11px] text-amber-700"><span class="material-symbols-outlined text-[12px]">block</span>Blocked — connection prerequisite missing</div>
+                            </div>
+                            <div class="text-right shrink-0"><div class="text-[10px] text-on-surface-variant/60">Blocked</div></div>
+                        </div>
+
+                        <!-- s3 · create · high · NOT reversible · approval (requireApprovals OFF by default; this one still gates because risk=high + !reversible) -->
+                        <div class="flex items-start gap-4 p-4 bg-amber-50/30 hover:bg-amber-50/50 transition-colors" data-testid="plan-step-s3">
+                            <div class="w-7 h-7 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center shrink-0 mt-0.5">
+                                <span class="material-symbols-outlined text-[14px]">shield_person</span>
+                            </div>
+                            <div class="flex-1 min-w-0">
+                                <div class="flex flex-wrap items-center gap-2 mb-1">
+                                    <span class="text-sm font-semibold text-on-surface">Publish scheduled pipeline to Gold</span>
+                                    <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold fabric-badge-pipeline"><span class="material-symbols-outlined text-[10px]">conversion_path</span>Pipeline</span>
+                                    <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-50 text-blue-700">create</span>
+                                    <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-rose-50 text-rose-700">high</span>
+                                    <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium text-rose-700 border border-rose-200">⊘ not reversible</span>
+                                    <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-100 text-amber-800"><span class="material-symbols-outlined text-[10px]">shield_person</span>approval</span>
+                                </div>
+                                <p class="text-xs text-on-surface-variant leading-relaxed">Copy + Dataflow Gen2 + Stored Procedure activities writing to production Gold layer.</p>
+                                <p class="text-[11px] text-amber-700 mt-1"><em>Risk note:</em> writes to production without branch-out enabled — consider toggling <strong>Branch out</strong> before running.</p>
+                            </div>
+                            <div class="text-right shrink-0"><div class="text-[10px] text-amber-700 font-bold">Review</div></div>
+                        </div>
+
+                        <!-- s4 · validate · low · reversible -->
+                        <div class="flex items-start gap-4 p-4 hover:bg-surface-container-low/50 transition-colors" data-testid="plan-step-s4">
+                            <div class="w-7 h-7 rounded-full bg-primary/10 text-primary flex items-center justify-center shrink-0 mt-0.5">
+                                <span class="text-xs font-bold">4</span>
+                            </div>
+                            <div class="flex-1 min-w-0">
+                                <div class="flex flex-wrap items-center gap-2 mb-1">
+                                    <span class="text-sm font-semibold text-on-surface">Validate pipeline output</span>
+                                    <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-50 text-blue-700">validate</span>
+                                    <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-50 text-emerald-700">low</span>
+                                    <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium text-on-surface-variant border border-outline-variant/30">↺ reversible</span>
+                                </div>
+                                <p class="text-xs text-on-surface-variant leading-relaxed">Run a test batch and compare checksums against the Silver staging layer.</p>
+                            </div>
+                            <div class="text-right shrink-0"><div class="text-[10px] text-on-surface-variant/60">Auto</div></div>
+                        </div>
+
+                        <!-- s5 · create · low · reversible -->
+                        <div class="flex items-start gap-4 p-4 hover:bg-surface-container-low/50 transition-colors" data-testid="plan-step-s5">
+                            <div class="w-7 h-7 rounded-full bg-primary/10 text-primary flex items-center justify-center shrink-0 mt-0.5">
+                                <span class="text-xs font-bold">5</span>
+                            </div>
+                            <div class="flex-1 min-w-0">
+                                <div class="flex flex-wrap items-center gap-2 mb-1">
+                                    <span class="text-sm font-semibold text-on-surface">Generate run summary report</span>
+                                    <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-50 text-blue-700">create</span>
+                                    <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-50 text-emerald-700">low</span>
+                                    <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium text-on-surface-variant border border-outline-variant/30">↺ reversible</span>
+                                </div>
+                                <p class="text-xs text-on-surface-variant leading-relaxed">Executive summary of changes, data volumes, and pipeline schedule.</p>
+                            </div>
+                            <div class="text-right shrink-0"><div class="text-[10px] text-on-surface-variant/60">Auto</div></div>
+                        </div>
+
+                    </div>
+                    </div>
+
+                    <!-- ── WORKSPACE ITEMS (keep_as_is / will_be_changed — replaces legacy noAction per spec §2) ── -->
+                    <div class="p-4">
+                        <div class="flex items-center gap-1.5 mb-2 text-[10px] font-bold uppercase tracking-widest text-on-surface-variant"><span class="material-symbols-outlined text-[14px]">inventory_2</span>Workspace items</div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-1.5">
+                            <div class="flex items-center gap-2 p-2 rounded-lg bg-surface-container-low/50 border border-outline-variant/15 text-[11.5px]">
+                                <span class="material-symbols-outlined text-[14px] text-emerald-700">lock</span>
+                                <span class="font-semibold text-on-surface">Finance_DW</span>
+                                <span class="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800">keep as-is</span>
+                                <span class="text-on-surface-variant/80 truncate" title="reason">consumer-only, not written</span>
+                            </div>
+                            <div class="flex items-center gap-2 p-2 rounded-lg bg-blue-50/60 border border-blue-200/50 text-[11.5px]">
+                                <span class="material-symbols-outlined text-[14px] text-blue-700">edit</span>
+                                <span class="font-semibold text-on-surface">Gold_Sales_DW</span>
+                                <span class="text-[9px] font-bold px-1.5 py-0.5 rounded bg-blue-100 text-blue-800">will be changed</span>
+                                <span class="text-on-surface-variant/80 truncate">schema update by <a class="text-primary underline" href="#">s2</a></span>
+                            </div>
+                            <div class="flex items-center gap-2 p-2 rounded-lg bg-surface-container-low/50 border border-outline-variant/15 text-[11.5px]">
+                                <span class="material-symbols-outlined text-[14px] text-on-surface-variant">lock</span>
+                                <span class="font-semibold text-on-surface">marketing-legacy-notebook</span>
+                                <span class="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800">keep as-is</span>
+                                <span class="text-on-surface-variant/80 truncate">unrelated to pipeline scope</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- ── CONFLICTS (live: rendered when plan.conflicts.length > 0 — blocks execution) ── -->
+                    <div class="p-4 bg-rose-50/40 border-t border-rose-200/40">
+                        <div class="flex items-center gap-1.5 mb-2 text-[10px] font-bold uppercase tracking-widest text-rose-800"><span class="material-symbols-outlined text-[14px]">report</span>Conflicts</div>
+                        <div class="flex items-start gap-2 text-[12px]">
+                            <span class="material-symbols-outlined text-[16px] text-rose-700 mt-0.5">error</span>
+                            <div class="flex-1">
+                                <div class="font-semibold text-on-surface">Gold_Sales_DW schema: <code class="text-[11px]">order_total DECIMAL(18,2)</code> vs source <code class="text-[11px]">FLOAT</code></div>
+                                <div class="text-[11.5px] text-on-surface-variant">Resolve:
+                                    <button class="text-primary font-medium hover:underline ml-1">Cast in s2 (recommended)</button>
+                                    ·
+                                    <button class="text-primary font-medium hover:underline ml-1">Widen Gold column to FLOAT</button>
+                                    ·
+                                    <button class="text-primary font-medium hover:underline ml-1">Abort</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- ── CLARIFICATIONS (live: rendered when plan.clarificationsNeeded.length > 0 — execute disabled) ── -->
+                    <div class="p-4 bg-surface-container-low/60 border-t border-outline-variant/15">
+                        <div class="flex items-center gap-1.5 mb-2 text-[10px] font-bold uppercase tracking-widest text-on-surface-variant"><span class="material-symbols-outlined text-[14px]">help</span>Clarifications needed</div>
+                        <div class="flex items-start gap-2 text-[12px]">
+                            <span class="material-symbols-outlined text-[16px] text-primary mt-0.5">contact_support</span>
+                            <div class="flex-1">
+                                <div class="font-semibold text-on-surface">Which refresh schedule? Daily 02:00 UTC vs. hourly during business hours.</div>
+                                <div class="text-[11.5px] text-on-surface-variant">Blocks <a class="text-primary underline" href="#">s3</a>. <button class="text-primary font-medium hover:underline ml-1">Answer…</button></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Plan footer (live: plan.footer — executionBlocked disables Execute button) -->
+                    <div class="p-4 bg-surface-container-low/50 flex items-center justify-between border-t border-outline-variant/10">
+                        <div class="flex items-center gap-4 flex-wrap">
                             <div class="flex items-center gap-1.5 text-xs text-on-surface-variant">
                                 <span class="material-symbols-outlined text-[14px]">smart_toy</span>
                                 Agents: <span class="font-bold text-on-surface">2</span>
@@ -444,13 +563,21 @@
                                 <span class="material-symbols-outlined text-[14px]">shield_person</span>
                                 <span class="font-bold">1 approval point</span>
                             </div>
+                            <div class="flex items-center gap-1.5 text-xs text-rose-700">
+                                <span class="material-symbols-outlined text-[14px]">block</span>
+                                <span class="font-bold">Execution blocked · resolve conflict + clarification</span>
+                            </div>
                         </div>
                         <div class="flex items-center gap-2">
-                            <button class="flex items-center gap-1.5 px-4 py-2 text-on-surface-variant bg-surface-container-lowest border border-outline-variant/15 rounded-lg text-xs font-medium hover:bg-surface-container-low transition-colors">
-                                <span class="material-symbols-outlined text-[14px]">edit</span>
-                                Edit Plan
+                            <button class="flex items-center gap-1.5 px-3 py-2 text-on-surface-variant bg-surface-container-lowest border border-outline-variant/15 rounded-lg text-xs font-medium hover:bg-surface-container-low transition-colors">
+                                <span class="material-symbols-outlined text-[14px]">refresh</span>
+                                Regenerate
                             </button>
-                            <button class="flex items-center gap-1.5 px-5 py-2 bg-gradient-to-br from-primary to-primary-container text-white rounded-lg text-xs font-bold shadow-md shadow-primary/15 hover:scale-[1.02] active:scale-[0.98] transition-all">
+                            <button class="flex items-center gap-1.5 px-4 py-2 text-on-surface-variant bg-surface-container-lowest border border-outline-variant/15 rounded-lg text-xs font-medium hover:bg-surface-container-low transition-colors">
+                                <span class="material-symbols-outlined text-[14px]">close</span>
+                                Reject
+                            </button>
+                            <button class="flex items-center gap-1.5 px-5 py-2 bg-gradient-to-br from-primary to-primary-container text-white rounded-lg text-xs font-bold shadow-md shadow-primary/15 opacity-50 cursor-not-allowed" title="Execution blocked by footer.executionBlocked">
                                 <span class="material-symbols-outlined text-[14px]">play_arrow</span>
                                 Execute Plan
                             </button>

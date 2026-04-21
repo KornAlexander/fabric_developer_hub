@@ -100,10 +100,15 @@
             <span class="text-xs font-semibold text-on-surface">Sessions</span>
         </nav>
     </div>
+    <!-- Topbar search — mirrors live TopbarSearchInput.tsx: two visual modes.
+         Mode A (default, shown): magnifier icon + placeholder. Type + Enter = submit → Mode B.
+         Mode B (filter): tinted wrap, filter_list icon, `Filter` pill on the right, escape/clear to exit. -->
     <div class="flex items-center gap-4 flex-1 max-w-md mx-8">
-        <div class="relative w-full">
-            <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant text-[16px]">search</span>
-            <input class="w-full bg-surface-container-low border-none rounded-lg py-1.5 pl-9 pr-4 text-xs focus:ring-1 focus:ring-primary/20 placeholder:text-on-surface-variant/50" placeholder="Search Developer Hub…" type="text"/>
+        <div class="relative w-full" data-mode="filter" title="Active filter — Enter or Esc to clear">
+            <!-- Filter mode (active): icon swapped + subtle primary tint + `Filter` badge -->
+            <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-primary text-[16px]">filter_list</span>
+            <input class="w-full bg-primary/5 border border-primary/20 rounded-lg py-1.5 pl-9 pr-20 text-xs text-on-surface focus:ring-1 focus:ring-primary/30 placeholder:text-on-surface-variant/50" value="q4 pipeline" type="text"/>
+            <span class="absolute right-2 top-1/2 -translate-y-1/2 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-primary/10 text-primary uppercase tracking-wider">Filter</span>
         </div>
     </div>
     <div class="flex items-center gap-2">
@@ -135,7 +140,7 @@
 </div>
 <button class="flex items-center gap-1.5 px-4 py-2 bg-gradient-to-br from-primary to-primary-container text-white rounded-lg text-[13px] font-bold shadow-sm hover:scale-[1.02] active:scale-[0.98] transition-all">
 <span class="material-symbols-outlined text-[16px]" data-icon="add">add</span>
-                Create New Job
+                New session
             </button>
 </header>
 <!-- Bento Grid: Active Agents -->
@@ -150,8 +155,11 @@
 </div>
 <div class="overflow-x-auto rounded-xl pb-2" style="scrollbar-width: thin; scrollbar-color: #e3e2e1 transparent;">
 <div class="flex gap-6 min-w-max">
-<!-- Agent Card 1: Running -->
-<div class="bg-surface-container-lowest p-6 rounded-xl border border-outline-variant/10 shadow-sm flex flex-col justify-between group hover:border-primary/30 transition-all w-[360px] shrink-0">
+<!-- Agent Card 1: Running — dismissable (hover to reveal X; live: opens in-app confirm dialog since window.confirm is blocked in Fabric iframe) -->
+<div class="bg-surface-container-lowest p-6 rounded-xl border border-outline-variant/10 shadow-sm flex flex-col justify-between group hover:border-primary/30 transition-all w-[360px] shrink-0 relative">
+<button class="absolute top-2 right-2 p-1 rounded-md text-on-surface-variant opacity-0 group-hover:opacity-100 hover:bg-rose-50 hover:text-rose-700 transition-all" title="Dismiss session" aria-label="Dismiss session">
+<span class="material-symbols-outlined text-[16px]">close</span>
+</button>
 <div class="flex justify-between items-start mb-4">
 <div class="flex items-center gap-3">
 <div class="w-10 h-10 bg-primary-fixed rounded-lg flex items-center justify-center text-primary">
@@ -366,9 +374,9 @@
 </div>
 </div>
 </section>
-<!-- Recent Successes Section -->
+<!-- Recent Sessions Section (renamed from Jobs → Sessions in live, commit 7fd9a38) -->
 <section>
-<h2 class="dh-h2 mb-6">Recent Jobs</h2>
+<h2 class="dh-h2 mb-6">Recent Sessions</h2>
 <div class="bg-surface-container-lowest rounded-xl border border-outline-variant/10 shadow-sm overflow-hidden">
 <table class="w-full text-left border-collapse">
 <thead>
@@ -437,5 +445,32 @@
 </div>
 </section>
 </main>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════
+     IN-APP CONFIRM DIALOG (live: ConfirmDialog.tsx)
+     Fabric hosts the workload in an iframe where window.confirm()
+     is blocked. All destructive actions (dismiss session, reject
+     plan, abort execution) use this Fluent-Dialog-based replacement.
+     Shown here in its open state, layered above the page content.
+══════════════════════════════════════════════════════════════ -->
+<div class="fixed inset-0 z-[60] flex items-center justify-center bg-black/30 backdrop-blur-[2px]" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+    <div class="bg-surface-container-lowest rounded-2xl shadow-2xl border border-outline-variant/10 w-[420px] max-w-[92vw] overflow-hidden">
+        <div class="p-5">
+            <div class="flex items-start gap-3">
+                <div class="w-10 h-10 rounded-full bg-rose-50 text-rose-700 flex items-center justify-center shrink-0">
+                    <span class="material-symbols-outlined text-[20px]">delete</span>
+                </div>
+                <div class="flex-1 min-w-0">
+                    <h3 id="confirm-title" class="text-sm font-bold text-on-surface mb-1">Dismiss this session?</h3>
+                    <p class="text-xs text-on-surface-variant leading-relaxed">“Optimizing Pipeline X for Q4 Reporting” will be hidden from Sessions. Its logs and artifacts in the workspace are unaffected. You can’t undo this from the UI.</p>
+                </div>
+            </div>
+        </div>
+        <div class="px-5 py-3 bg-surface-container-low/50 flex items-center justify-end gap-2 border-t border-outline-variant/10">
+            <button class="px-3 py-1.5 rounded-lg text-xs font-medium text-on-surface-variant hover:bg-surface-container-high transition-colors">Cancel</button>
+            <button class="px-3 py-1.5 rounded-lg text-xs font-bold bg-rose-600 text-white hover:bg-rose-700 transition-colors">Dismiss</button>
+        </div>
+    </div>
 </div>
 </body></html>

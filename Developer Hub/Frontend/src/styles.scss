@@ -818,7 +818,9 @@ html, body, #root {
     /* Reserve scrollbar space so the horizontal layout doesn't shift
        when content height changes between loading and loaded states. */
     scrollbar-gutter: stable;
-    padding: 28px 32px;
+    /* Fluid padding: tighter on small laptops, generous on desktops.
+       Scales from ~16px at 1024px viewport to 32px at 1600px+. */
+    padding: clamp(16px, 2.2vw, 28px) clamp(20px, 2.6vw, 32px);
     background: #faf9f8;
     position: relative;
 }
@@ -861,7 +863,7 @@ html, body, #root {
     flex-wrap: wrap;
 }
 .sessions-title {
-    font-size: 24px;
+    font-size: clamp(20px, 1.8vw, 24px);
     font-weight: 300;
     line-height: 1.2;
     letter-spacing: -0.01em;
@@ -908,7 +910,7 @@ html, body, #root {
     margin-bottom: 16px;
 }
 .sessions-h2 {
-    font-size: 18px;
+    font-size: clamp(15px, 1.3vw, 18px);
     font-weight: 600;
     letter-spacing: -0.01em;
     margin: 0;
@@ -2849,12 +2851,18 @@ html, body, #root {
     padding: 0;
 }
 .compose-container {
-    max-width: 960px;
+    // Grow with the viewport on large monitors so the composer, plan
+    // card, and agent panels don't feel dwarfed on 1440px+ screens,
+    // while still leaving generous side margins. Breakpoints mirror
+    // typical laptop (14"), desktop (1080p), and ultra-wide (1440p+).
+    // On small laptops (<=1366px) the container stays nearly full-width;
+    // on desktops it caps at 1440px so line lengths remain readable.
+    max-width: min(1440px, 94vw);
     margin: 0 auto;
-    padding: 32px 32px 64px;
+    padding: clamp(20px, 2.6vw, 32px) clamp(20px, 2.6vw, 32px) clamp(32px, 4vw, 64px);
     display: flex;
     flex-direction: column;
-    gap: 32px;
+    gap: clamp(20px, 2.2vw, 32px);
 }
 
 /* Global search quick-results panel (topbar-driven, New Session page) */
@@ -2959,8 +2967,8 @@ html, body, #root {
     gap: 8px;
 }
 .compose-hero-icon {
-    width: 40px;
-    height: 40px;
+    width: clamp(32px, 3vw, 40px);
+    height: clamp(32px, 3vw, 40px);
     border-radius: 12px;
     background: rgba(0, 95, 170, 0.08);
     color: #005faa;
@@ -2970,11 +2978,12 @@ html, body, #root {
     font-size: 20px;
 }
 .compose-hero-icon svg {
-    width: 20px;
-    height: 20px;
+    width: clamp(16px, 1.6vw, 20px);
+    height: clamp(16px, 1.6vw, 20px);
 }
 .compose-hero-title {
-    font-size: 24px;
+    /* Fluid type: ~20px on small laptops, 24px on desktops. */
+    font-size: clamp(20px, 1.8vw, 24px);
     font-weight: 300;
     letter-spacing: -0.01em;
     color: #1a1c1c;
@@ -2983,7 +2992,7 @@ html, body, #root {
 }
 .compose-hero-sub {
     color: #5f5e5e;
-    font-size: 13px;
+    font-size: clamp(12px, 1vw, 13px);
     max-width: 60ch;
     margin: 0 auto;
     line-height: 1.5;
@@ -2991,16 +3000,21 @@ html, body, #root {
 
 /* Composer */
 .composer-wrap {
-    max-width: 720px;
+    // Match the outer container width on large screens. On laptops the
+    // composer card shouldn't feel oversized, so we cap the wrap to a
+    // readable line length. On ultra-wide monitors the clamp lets it
+    // breathe up to 1100px — wider than that hurts scannability of the
+    // label/textarea/pills stack.
+    max-width: min(1100px, 100%);
     margin: 0 auto;
     width: 100%;
 }
 .composer-card {
     background: #ffffff;
-    border-radius: 16px;
+    border-radius: clamp(12px, 1vw, 16px);
     box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
     border: 1px solid rgba(192, 199, 212, 0.3);
-    padding: 20px;
+    padding: clamp(14px, 1.6vw, 20px) clamp(16px, 1.8vw, 22px);
     position: relative;
     overflow: hidden;
 }
@@ -3058,7 +3072,11 @@ html, body, #root {
     color: #1a1c1c;
     line-height: 1.5;
     resize: none;
-    height: 84px;
+    // Scale height with viewport height: ~60px on short laptop screens,
+    // up to 96px on tall desktop monitors. Keeps the composer compact
+    // on 720p laptops while still roomy on desktops.
+    height: clamp(60px, 9vh, 96px);
+    min-height: 60px;
     font-family: inherit;
     &::placeholder { color: rgba(95, 94, 94, 0.4); }
 }
@@ -4934,7 +4952,9 @@ html, body, #root {
 
 .agenthub-topbar-search {
     flex: 1;
-    max-width: 420px;
+    // Allow the search to grow a bit on wider screens while keeping
+    // a sane cap — was 420px, felt cramped on 1440px+ monitors.
+    max-width: 560px;
     margin: 0 32px;
     position: relative;
 
@@ -4942,15 +4962,19 @@ html, body, #root {
         width: 100%;
         background: #f4f3f2;
         border: none;
-        border-radius: 8px;
-        padding: 6px 14px;
-        font-size: 12px;
+        border-radius: 10px;
+        // Taller, more comfortable hit target (was 6px/12px/8px). The
+        // bigger radius + padding makes it feel like a first-class
+        // control rather than a slim secondary affordance.
+        padding: 10px 16px;
+        min-height: 38px;
+        font-size: 13px;
         color: #1a1c1c;
         font-family: inherit;
         outline: none;
         transition: box-shadow 0.15s;
 
-        &::placeholder { color: rgba(95, 94, 94, 0.5); }
+        &::placeholder { color: rgba(95, 94, 94, 0.55); }
         &:focus { box-shadow: 0 0 0 2px rgba(0, 95, 170, 0.2); }
     }
 }
@@ -4963,20 +4987,21 @@ html, body, #root {
     width: 100%;
 
     > input {
-        padding-left: 34px;  /* room for the leading icon */
-        padding-right: 32px; /* room for the clear button */
+        padding-left: 40px;  /* room for the leading icon (larger now) */
+        padding-right: 36px; /* room for the clear button */
     }
 }
 .topbar-search-icon {
     position: absolute;
-    left: 9px;
+    left: 12px;
     color: #6e6d6b;
     pointer-events: none;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 20px;
-    height: 20px;
+    // Bump from 20px to 22px so the icon matches the taller input.
+    width: 22px;
+    height: 22px;
 }
 .topbar-search-clear {
     position: absolute;
@@ -5468,3 +5493,123 @@ html, body, #root {
     }
 }
 
+
+/* ═══════════════════════════════════════════════════════════════════
+   Responsive refinements (laptop → small mobile)
+   ───────────────────────────────────────────────────────────────────
+   The rules above use clamp() for fluid typography and spacing on the
+   most visible surfaces (compose hero, composer card, sessions header,
+   agenthub main padding). This block handles breakpoint-specific
+   adjustments where a continuous scale isn't enough — e.g. switching
+   grids from 2-col to 1-col, hiding optional meta, tightening gaps.
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* Laptops & small desktops (≤ 1366px) — the most common developer
+   screen. Slightly tighter composer + narrower max-widths so the
+   task-description textbox and plan cards don't feel oversized. */
+@media (max-width: 1366px) {
+    .compose-container { max-width: 96vw; }
+    .composer-wrap     { max-width: min(960px, 100%); }
+
+    /* Plan card and agent panels: keep content visually balanced
+       with the tightened composer. */
+    .plan-card,
+    .compose-plan,
+    .compose-agents { max-width: 100%; }
+
+    /* Session cards: tighten horizontal scroller gaps. */
+    .agent-cards-row { gap: 12px; }
+
+    /* Agent detail two-column splits collapse earlier on laptops. */
+    .agent-detail-checks { grid-template-columns: 1fr 1fr; gap: 6px; }
+}
+
+/* Tablets / compact laptops (≤ 1024px) — reduce paddings further and
+   allow the composer to use the full available width. */
+@media (max-width: 1024px) {
+    .compose-container {
+        max-width: 100%;
+        padding: 20px 20px 40px;
+        gap: 20px;
+    }
+    .composer-wrap  { max-width: 100%; }
+    .composer-card  { padding: 14px 16px; }
+    .composer-textarea { height: 72px; }
+
+    /* Sessions page header wraps earlier so the CTA keeps its full
+       width and doesn't get squeezed. */
+    .sessions-header { margin-bottom: 20px; gap: 16px; }
+    .sessions-section { margin-bottom: 20px; }
+
+    /* Two-column grids collapse to single column. */
+    .agent-detail-checks { grid-template-columns: 1fr; }
+
+    /* Ensure the topbar search doesn't push branding/avatar off-screen. */
+    .agenthub-topbar-search { max-width: 42vw; }
+}
+
+/* Phones (≤ 480px) — extend the existing 768px mobile rules with the
+   last-mile polish: stack composer actions, shrink hero icon further,
+   tighten status pills, allow horizontal session cards to snap. */
+@media (max-width: 480px) {
+    .agenthub-main { padding: 12px; }
+
+    .compose-container { padding: 14px 14px 28px; gap: 16px; }
+    .composer-card     { padding: 12px; border-radius: 12px; }
+    .composer-textarea { height: 64px; font-size: 13.5px; }
+    .composer-label    { font-size: 9.5px; margin-bottom: 6px; }
+
+    /* Stack composer action buttons and context pills cleanly on narrow
+       viewports — they already wrap, this just trims extra space. */
+    .composer-pills,
+    .composer-add-actions { gap: 6px; margin-top: 8px; margin-bottom: 8px; }
+
+    /* Hero: drop the icon below the heading weight class so the title
+       dominates on small screens. */
+    .compose-hero-icon { width: 32px; height: 32px; }
+    .compose-hero-icon svg { width: 16px; height: 16px; }
+    .compose-hero-title { font-size: 19px; }
+    .compose-hero-sub   { font-size: 12px; }
+
+    /* Sessions header: title + CTA stack vertically on very small screens. */
+    .sessions-header { flex-direction: column; align-items: flex-start; }
+    .sessions-cta    { width: 100%; justify-content: center; }
+
+    /* Status pills can overflow on tiny screens — let them wrap. */
+    .sessions-status-pills { flex-wrap: wrap; }
+
+    /* Make horizontal session scrollers snap so thumbs can page them. */
+    .agent-cards-scroller { scroll-snap-type: x mandatory; }
+    .agent-cards-row > * { scroll-snap-align: start; }
+
+    /* Topbar: drop the search and large breadcrumb text on the smallest
+       viewports so the hamburger + brand + avatar fit comfortably. */
+    .agenthub-topbar-search { display: none; }
+    .topbar-breadcrumb      { max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
+
+/* Ultra-wide monitors (≥ 1920px) — give content a little more breathing
+   room without letting lines become unreadable. The clamp() values above
+   already scale up; this caps a few max-widths at sensible ceilings. */
+@media (min-width: 1920px) {
+    .compose-container  { max-width: 1600px; }
+    .composer-wrap      { max-width: 1180px; }
+    .sessions-subtitle,
+    .compose-hero-sub   { max-width: 72ch; }
+}
+
+/* Accessibility: respect reduced-motion for all scale/transform
+   transitions added across cards and CTAs. */
+@media (prefers-reduced-motion: reduce) {
+    .sessions-cta,
+    .plan-card__btn,
+    .session-card,
+    .skill-tile,
+    .ctx-pill {
+        transition: none !important;
+        animation: none !important;
+    }
+    .sessions-cta:hover:not(:disabled),
+    .plan-card__btn:not(:disabled):hover,
+    .session-card:hover { transform: none !important; }
+}

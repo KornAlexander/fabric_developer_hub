@@ -1,0 +1,1950 @@
+<!DOCTYPE html>
+<html class="light" lang="en">
+<head>
+    <meta charset="utf-8"/>
+    <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+    <title>Developer Hub | Mission Control — multi-agent orchestration prototype</title>
+
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+    <link href="../../../_shared/styles.css" rel="stylesheet"/>
+    <link href="styles.css" rel="stylesheet"/>
+
+    <script>
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "outline-variant": "#c0c7d4",
+                        "on-secondary-container": "#656464",
+                        "secondary": "#5f5e5e",
+                        "on-surface": "#1a1c1c",
+                        "secondary-container": "#e4e2e1",
+                        "surface-bright": "#faf9f8",
+                        "on-primary": "#ffffff",
+                        "on-primary-container": "#ffffff",
+                        "surface-tint": "#0060ab",
+                        "on-background": "#1a1c1c",
+                        "surface-container-lowest": "#ffffff",
+                        "surface": "#faf9f8",
+                        "error": "#ba1a1a",
+                        "surface-container-highest": "#e3e2e1",
+                        "primary-container": "#0078d4",
+                        "primary": "#005faa",
+                        "surface-container": "#efeeed",
+                        "inverse-surface": "#2f3130",
+                        "primary-fixed": "#d3e3ff",
+                        "surface-container-low": "#f4f3f2",
+                        "error-container": "#ffdad6",
+                        "outline": "#717783",
+                        "surface-variant": "#e3e2e1",
+                        "on-surface-variant": "#404752",
+                        "surface-container-high": "#e9e8e7",
+                        "on-error": "#ffffff",
+                        "surface-dim": "#dadad9",
+                        "tertiary-container": "#bc5b00",
+                        "tertiary": "#974700",
+                        "background": "#faf9f8"
+                    },
+                    borderRadius: { DEFAULT: "0.125rem", lg: "0.25rem", xl: "0.5rem", full: "0.75rem" },
+                    fontFamily: { headline: ["Inter"], body: ["Inter"], label: ["Inter"] }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+        .material-symbols-outlined.filled { font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+        .tonal-transition { transition: background-color 0.2s ease; }
+        @keyframes fadeInUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+        .stream-in { animation: fadeInUp 0.3s ease-out forwards; }
+        @keyframes thinkPulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
+        .think-pulse { animation: thinkPulse 1.5s ease-in-out infinite; }
+        /* From live new_session_step1_compose.html */
+        @keyframes pillIn { from { opacity: 0; transform: scale(0.9); } to { opacity: 1; transform: scale(1); } }
+        .pill-in { animation: pillIn 0.2s ease-out; }
+        @keyframes slideUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+        .slide-up { animation: slideUp 0.3s ease-out forwards; }
+        .suggestion-card { transition: all 0.2s ease; }
+        .suggestion-card:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0,0,0,0.06); }
+        .log-scroll::-webkit-scrollbar,
+        .smooth-scroll::-webkit-scrollbar { width: 4px; }
+        .log-scroll::-webkit-scrollbar-thumb,
+        .smooth-scroll::-webkit-scrollbar-thumb { background: #e3e2e1; border-radius: 4px; }
+        .step-connector { position: relative; }
+        .step-connector::before { content: ''; position: absolute; left: 11px; top: 28px; bottom: -8px; width: 2px; background: #e4e2e1; }
+        .step-connector.active::before { background: linear-gradient(to bottom, #0078d4, #e4e2e1); }
+        .step-connector.completed::before { background: #0078d4; }
+        .fabric-badge-lakehouse { background: #e8f5e9; color: #2e7d32; }
+        .fabric-badge-warehouse { background: #e3f2fd; color: #1565c0; }
+        .fabric-badge-pipeline  { background: #fff3e0; color: #e65100; }
+        .fabric-badge-notebook  { background: #f3e5f5; color: #7b1fa2; }
+        /* Section label pattern from live pages */
+        .dh-section-label { display: flex; align-items: center; gap: 0.5rem; color: #005faa; }
+        .dh-section-label h3 { font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.15em; }
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after { animation: none !important; transition: none !important; }
+        }
+    </style>
+</head>
+
+<body class="bg-surface text-on-surface font-body selection:bg-primary-fixed mc-body overflow-hidden h-screen flex flex-col">
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     TOP NAV BAR — matches Developer Hub live pages (search + user)
+     ═══════════════════════════════════════════════════════════════════ -->
+<header class="flex justify-between items-center px-5 w-full sticky top-0 z-50 bg-surface h-12 border-b border-outline-variant/10 tonal-transition shrink-0">
+    <div class="flex items-center gap-3">
+        <div class="flex items-center gap-2">
+            <div class="w-6 h-6 bg-primary-container rounded-lg flex items-center justify-center text-white">
+                <span class="material-symbols-outlined text-[14px] filled">dataset</span>
+            </div>
+            <span class="text-base font-semibold text-on-surface tracking-tight">Developer Hub</span>
+        </div>
+        <div class="h-3.5 w-px bg-outline-variant/30"></div>
+        <nav class="flex items-center gap-1.5" aria-label="Breadcrumb">
+            <span class="material-symbols-outlined text-[18px] filled text-on-surface-variant">add_circle</span>
+            <span class="text-xs font-semibold text-on-surface">New Session</span>
+            <span class="ml-2 px-1.5 py-0.5 rounded bg-surface-container-high text-[9px] font-bold uppercase tracking-wider text-on-surface-variant">Mission Control · Prototype</span>
+        </nav>
+    </div>
+    <div class="flex items-center gap-4 flex-1 max-w-md mx-8">
+        <div class="relative w-full">
+            <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant text-[16px]">search</span>
+            <input class="w-full bg-surface-container-low border-none rounded-lg py-1.5 pl-9 pr-4 text-xs focus:ring-1 focus:ring-primary/20 placeholder:text-on-surface-variant/50" placeholder="Search Developer Hub…" type="text"/>
+        </div>
+    </div>
+    <div class="flex items-center gap-2">
+        <div class="flex items-center gap-2 px-3 py-1 bg-surface-container-low rounded-lg mr-2" title="Prototype screen counter">
+            <span class="material-symbols-outlined text-[14px] text-on-surface-variant">slideshow</span>
+            <span class="text-[11px] font-mono font-semibold text-on-surface" id="mc-counter">1 / 6</span>
+        </div>
+        <button class="p-1.5 text-on-surface-variant hover:bg-surface-container-low rounded-lg transition-colors" aria-label="Notifications">
+            <span class="material-symbols-outlined text-[20px]">notifications</span>
+        </button>
+        <button class="p-1.5 text-on-surface-variant hover:bg-surface-container-low rounded-lg transition-colors" aria-label="Help">
+            <span class="material-symbols-outlined text-[20px]">help</span>
+        </button>
+        <div class="w-7 h-7 rounded-full overflow-hidden border border-outline-variant/20 ml-1">
+            <div class="w-full h-full bg-primary-container flex items-center justify-center text-white text-[10px] font-bold">LO</div>
+        </div>
+    </div>
+</header>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     MAIN LAYOUT: shared expanded sidebar + screen area + bottom nav
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="flex flex-1 overflow-hidden min-h-0">
+
+    <aside id="agenthub-sidebar"></aside>
+    <script src="../../../_shared/sidebar.js"></script>
+    <script>renderAgentHubSidebar('new-session');</script>
+
+    <main class="flex-1 flex flex-col overflow-hidden min-w-0">
+
+    <!-- ══════════════════════════════════════════════════════════════
+         SCREEN 1 — Submit Task  (mirrors new_session_step1_compose.html)
+         Centered hero + rich prompt composer + prompt-starter strip.
+         "Propose team" → screen 2 (orchestration graph reveal).
+         ══════════════════════════════════════════════════════════════ -->
+    <section class="screen flex-col overflow-y-auto smooth-scroll" data-screen="1" data-active="true" aria-labelledby="s1-title">
+
+        <div class="max-w-4xl mx-auto px-8 pt-8 pb-12 space-y-8 w-full">
+
+            <!-- ═══ HERO ═══ -->
+            <section class="text-center max-w-2xl mx-auto">
+                <div class="inline-flex items-center justify-center w-10 h-10 bg-primary/10 text-primary rounded-xl mb-3">
+                    <span class="material-symbols-outlined text-[22px] filled">account_tree</span>
+                </div>
+                <h1 class="dh-h1" id="s1-title">Orchestrate your vision.</h1>
+                <p class="dh-subtitle mt-2 max-w-[42rem] mx-auto">Describe the outcome. Developer Hub proposes a team of agents, shows how they'll coordinate, and — with your approval — gets to work.</p>
+            </section>
+
+            <!-- ═══ RICH PROMPT COMPOSER ═══ -->
+            <section class="max-w-3xl mx-auto">
+                <div class="bg-surface-container-lowest p-5 rounded-xl shadow-[0_2px_12px_rgba(0,0,0,0.04)] border border-outline-variant/15 relative overflow-hidden">
+                    <!-- Decorative glow -->
+                    <div class="absolute -top-28 -right-28 w-72 h-72 bg-primary/5 rounded-full blur-3xl pointer-events-none"></div>
+
+                    <div class="relative z-10">
+                        <!-- Eyebrow label -->
+                        <label for="s1-task" class="block text-xs font-bold text-primary tracking-widest uppercase mb-3">New Task Description</label>
+
+                        <!-- Borderless textarea -->
+                        <textarea id="s1-task"
+                            class="w-full bg-transparent border-none text-sm focus:ring-0 focus:outline-none placeholder:text-on-surface-variant/40 resize-none h-20 leading-relaxed"
+                            placeholder="Describe the outcome in plain language…">Automate weekly ingestion of regional sales data from the NA and EU raw lakehouses, normalize the schema for Gold-layer reporting, and certify the dataset used by the Finance dashboard.</textarea>
+
+                        <!-- Attached context pills: 3 Fabric items · workspace · file -->
+                        <div class="flex flex-wrap items-center gap-2 mt-3 mb-4">
+                            <button class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium pill-in fabric-badge-lakehouse border border-outline-variant/15 hover:ring-2 hover:ring-primary/20" title="Highlight in workspace">
+                                <span class="material-symbols-outlined text-[14px]">database</span>
+                                corporate-sales-raw
+                                <span class="ml-0.5 hover:text-error transition-colors"><span class="material-symbols-outlined text-[11px]">close</span></span>
+                            </button>
+                            <button class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium pill-in fabric-badge-lakehouse border border-outline-variant/15 hover:ring-2 hover:ring-primary/20">
+                                <span class="material-symbols-outlined text-[14px]">database</span>
+                                sales_raw_eu
+                                <span class="ml-0.5 hover:text-error transition-colors"><span class="material-symbols-outlined text-[11px]">close</span></span>
+                            </button>
+                            <button class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium pill-in fabric-badge-warehouse border border-outline-variant/15 hover:ring-2 hover:ring-primary/20">
+                                <span class="material-symbols-outlined text-[14px]">warehouse</span>
+                                Gold_Sales_DW
+                                <span class="ml-0.5 hover:text-error transition-colors"><span class="material-symbols-outlined text-[11px]">close</span></span>
+                            </button>
+                            <button class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium text-primary hover:bg-primary/5 border border-dashed border-primary/30 transition-colors">
+                                <span class="material-symbols-outlined text-[14px]">add</span>
+                                Add Fabric item
+                            </button>
+                            <div class="h-3 w-px bg-outline-variant/20"></div>
+                            <button class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium pill-in border border-outline-variant/15 hover:ring-2 hover:ring-primary/20" style="background: #ede7f6; color: #5e35b1;">
+                                <span class="material-symbols-outlined text-[14px]">workspaces</span>
+                                Sales Operations
+                                <span class="ml-0.5 hover:text-error transition-colors"><span class="material-symbols-outlined text-[11px]">close</span></span>
+                            </button>
+                            <button class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium text-primary hover:bg-primary/5 border border-dashed border-primary/30 transition-colors">
+                                <span class="material-symbols-outlined text-[14px]">add</span>
+                                Add workspace
+                            </button>
+                            <div class="h-3 w-px bg-outline-variant/20"></div>
+                            <button class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium pill-in bg-rose-50 text-rose-700 border border-rose-200 hover:ring-2 hover:ring-primary/20" title="Open in-app preview">
+                                <span class="material-symbols-outlined text-[14px]">picture_as_pdf</span>
+                                schema_reference_v3.pdf
+                                <span class="ml-0.5 hover:text-error transition-colors"><span class="material-symbols-outlined text-[11px]">close</span></span>
+                            </button>
+                        </div>
+
+                        <!-- Action bar -->
+                        <div class="pt-4 border-t border-outline-variant/10 space-y-3">
+                            <!-- Settings row — Require approvals ON for this prototype (safer default for multi-agent), Branch out OFF -->
+                            <div class="flex items-center gap-2">
+                                <button class="flex items-center gap-1.5 text-on-surface-variant text-xs font-medium px-2.5 py-1.5 rounded-lg bg-surface-container-low hover:bg-surface-container-high transition-colors" aria-pressed="true">
+                                    <span class="material-symbols-outlined text-[16px] text-primary">shield_person</span>
+                                    Require approvals
+                                    <span class="w-7 h-4 bg-primary rounded-full relative inline-block ml-1">
+                                        <span class="absolute right-0.5 top-0.5 w-3 h-3 bg-white rounded-full shadow-sm"></span>
+                                    </span>
+                                </button>
+                                <button class="flex items-center gap-1.5 text-on-surface-variant text-xs font-medium px-2.5 py-1.5 rounded-lg bg-surface-container-low hover:bg-surface-container-high transition-colors" aria-pressed="false">
+                                    <span class="material-symbols-outlined text-[16px]">fork_right</span>
+                                    Branch out
+                                    <span class="w-7 h-4 bg-outline-variant/40 rounded-full relative inline-block ml-1">
+                                        <span class="absolute left-0.5 top-0.5 w-3 h-3 bg-white rounded-full shadow-sm"></span>
+                                    </span>
+                                </button>
+                            </div>
+
+                            <!-- Actions row -->
+                            <div class="flex items-center justify-between">
+                                <div class="flex items-center gap-3">
+                                    <button class="flex items-center gap-1.5 text-on-surface-variant hover:text-primary text-xs font-medium transition-colors px-2 py-1 rounded hover:bg-primary/5">
+                                        <span class="material-symbols-outlined text-[16px]">attach_file</span>
+                                        Upload file
+                                    </button>
+                                    <button class="flex items-center gap-1.5 text-on-surface-variant hover:text-primary text-xs font-medium transition-colors px-2 py-1 rounded hover:bg-primary/5">
+                                        <span class="material-symbols-outlined text-[16px]">history</span>
+                                        Recent prompts
+                                    </button>
+                                </div>
+                                <button class="bg-primary text-white px-6 py-2.5 rounded-xl font-bold flex items-center gap-2 shadow-lg shadow-primary/15 hover:bg-primary/90 hover:-translate-y-0.5 active:translate-y-0 transition-all" data-goto="2">
+                                    Propose team
+                                    <span class="material-symbols-outlined text-[18px]">auto_awesome</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ═══ PROMPT STARTERS (discovery rhythm, scoped to multi-agent) ═══ -->
+            <section class="space-y-4">
+                <div class="flex items-center justify-between">
+                    <div class="dh-section-label">
+                        <span class="material-symbols-outlined text-[20px] filled">insights</span>
+                        <h3>Start from a playbook</h3>
+                    </div>
+                    <button class="text-xs font-bold text-on-surface-variant hover:text-primary transition-colors">View all playbooks</button>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <button class="suggestion-card flex flex-col p-5 bg-surface-container-lowest rounded-xl border border-outline-variant/8 text-left">
+                        <div class="p-2.5 bg-amber-50 text-amber-600 rounded-xl w-fit mb-4">
+                            <span class="material-symbols-outlined">bolt</span>
+                        </div>
+                        <h4 class="font-bold text-sm mb-1.5">Optimize a sales pipeline</h4>
+                        <p class="text-xs text-on-surface-variant leading-relaxed flex-1">Diagnose latency, re-partition the source, and re-certify the Gold dataset. Typical team: 3 agents, 2 approvals.</p>
+                        <div class="mt-4 flex items-center text-primary text-xs font-bold">
+                            Use playbook <span class="material-symbols-outlined ml-1 text-[14px]">arrow_forward</span>
+                        </div>
+                    </button>
+                    <button class="suggestion-card flex flex-col p-5 bg-surface-container-lowest rounded-xl border border-outline-variant/8 text-left">
+                        <div class="p-2.5 bg-blue-50 text-blue-600 rounded-xl w-fit mb-4">
+                            <span class="material-symbols-outlined">security</span>
+                        </div>
+                        <h4 class="font-bold text-sm mb-1.5">Review workspace permissions</h4>
+                        <p class="text-xs text-on-surface-variant leading-relaxed flex-1">Audit access on a Gold schema, flag suspicious grants, and draft remediation. Typical team: 2 agents, 1 approval.</p>
+                        <div class="mt-4 flex items-center text-primary text-xs font-bold">
+                            Use playbook <span class="material-symbols-outlined ml-1 text-[14px]">arrow_forward</span>
+                        </div>
+                    </button>
+                    <button class="suggestion-card flex flex-col p-5 bg-surface-container-lowest rounded-xl border border-outline-variant/8 text-left bg-gradient-to-br from-primary/5 to-transparent">
+                        <div class="p-2.5 bg-primary/10 text-primary rounded-xl w-fit mb-4">
+                            <span class="material-symbols-outlined">add_circle</span>
+                        </div>
+                        <h4 class="font-bold text-sm mb-1.5">Start from a blank prompt</h4>
+                        <p class="text-xs text-on-surface-variant leading-relaxed flex-1">Just describe the outcome above. Developer Hub will propose the shape of the team before anything runs.</p>
+                        <div class="mt-4 flex items-center text-primary text-xs font-bold">
+                            Compose freely <span class="material-symbols-outlined ml-1 text-[14px]">arrow_forward</span>
+                        </div>
+                    </button>
+                </div>
+            </section>
+
+            <!-- Hairline reassurance -->
+            <p class="text-center text-[11px] text-on-surface-variant">
+                <span class="material-symbols-outlined text-[12px] align-[-2px]">info</span>
+                Nothing runs from this screen. The next screen shows the proposed team and how they'll coordinate.
+            </p>
+
+        </div>
+
+    </section>
+
+    <!-- ══════════════════════════════════════════════════════════════
+         SCREEN 2 — Orchestration Graph (suggested architecture)
+         ══════════════════════════════════════════════════════════════ -->
+    <section class="screen flex-col overflow-y-auto smooth-scroll" data-screen="2" aria-labelledby="s2-title">
+
+        <div class="max-w-[1240px] mx-auto w-full px-8 pt-8 pb-12 space-y-6">
+
+            <header class="flex items-start justify-between gap-4 slide-up">
+                <div>
+                    <div class="dh-section-label mb-2">
+                        <span class="material-symbols-outlined text-[20px] filled">account_tree</span>
+                        <h3>Proposed team &amp; orchestration</h3>
+                    </div>
+                    <h1 class="dh-h1" id="s2-title">A supervisor with three specialists.</h1>
+                    <p class="dh-subtitle mt-1 max-w-[42rem]">One orchestrator coordinates three domain agents. Regenerate, swap agents, or dive into any node before anything runs.</p>
+                </div>
+                <div class="flex items-center gap-2 shrink-0">
+                    <a class="flex items-center gap-1.5 px-3 py-1.5 bg-primary/10 hover:bg-primary/15 rounded-lg text-xs font-semibold text-primary" href="architectures.html" title="Compare supervisor, network, hierarchical, and sequential patterns">
+                        <span class="material-symbols-outlined text-[16px]">schema</span>
+                        Compare architectures
+                    </a>
+                    <button class="flex items-center gap-1.5 px-3 py-1.5 bg-surface-container-low hover:bg-surface-container-high rounded-lg text-xs font-medium text-on-surface-variant">
+                        <span class="material-symbols-outlined text-[16px]">refresh</span>
+                        Regenerate
+                    </button>
+                    <button class="flex items-center gap-1.5 px-3 py-1.5 bg-surface-container-low hover:bg-surface-container-high rounded-lg text-xs font-medium text-on-surface-variant">
+                        <span class="material-symbols-outlined text-[16px]">edit</span>
+                        Edit agents
+                    </button>
+                </div>
+            </header>
+
+            <!-- Task prompt recap: persistent context from Screen 1, expandable -->
+            <details class="mc-prompt-recap group bg-surface-container-lowest rounded-xl border border-outline-variant/15 shadow-[0_2px_12px_rgba(0,0,0,0.04)] slide-up" open>
+                <summary class="flex items-center gap-3 px-4 py-3 cursor-pointer list-none select-none">
+                    <span class="material-symbols-outlined text-primary text-[18px] filled shrink-0">edit_note</span>
+                    <div class="flex-1 min-w-0">
+                        <div class="flex items-center gap-2">
+                            <span class="text-[10px] font-bold uppercase tracking-widest text-primary">Task prompt</span>
+                            <span class="text-[10px] text-on-surface-variant">· Sales Operations · 3 items · 1 file</span>
+                        </div>
+                        <div class="text-[13px] text-on-surface truncate group-open:whitespace-normal">Automate weekly ingestion of regional sales data from the NA and EU raw lakehouses, normalize the schema for Gold-layer reporting, and certify the dataset used by the Finance dashboard.</div>
+                    </div>
+                    <div class="hidden md:flex items-center gap-1 shrink-0">
+                        <span class="fabric-badge-lakehouse px-1.5 py-0.5 rounded-full text-[10px] font-bold inline-flex items-center gap-0.5" title="2 lakehouses in scope"><span class="material-symbols-outlined text-[11px]">database</span>2</span>
+                        <span class="fabric-badge-warehouse px-1.5 py-0.5 rounded-full text-[10px] font-bold inline-flex items-center gap-0.5" title="1 warehouse in scope"><span class="material-symbols-outlined text-[11px]">warehouse</span>1</span>
+                        <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold inline-flex items-center gap-0.5" style="background:#ede7f6;color:#5e35b1" title="1 workspace in scope"><span class="material-symbols-outlined text-[11px]">workspaces</span>1</span>
+                    </div>
+                    <a class="flex items-center gap-1 text-[11px] text-on-surface-variant hover:text-primary px-2 py-1 rounded hover:bg-primary/5 shrink-0" href="#" data-goto="1" onclick="event.stopPropagation();">
+                        <span class="material-symbols-outlined text-[14px]">edit</span>
+                        Edit
+                    </a>
+                    <span class="material-symbols-outlined text-on-surface-variant text-[18px] transition-transform group-open:rotate-180 shrink-0">expand_more</span>
+                </summary>
+                <div class="px-4 pb-4 pt-2 border-t border-outline-variant/10 space-y-3">
+                    <div class="flex flex-wrap items-center gap-2">
+                        <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium fabric-badge-lakehouse border border-outline-variant/15"><span class="material-symbols-outlined text-[13px]">database</span>corporate-sales-raw</span>
+                        <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium fabric-badge-lakehouse border border-outline-variant/15"><span class="material-symbols-outlined text-[13px]">database</span>sales_raw_eu</span>
+                        <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium fabric-badge-warehouse border border-outline-variant/15"><span class="material-symbols-outlined text-[13px]">warehouse</span>Gold_Sales_DW</span>
+                        <div class="h-3 w-px bg-outline-variant/20"></div>
+                        <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium border border-outline-variant/15" style="background:#ede7f6;color:#5e35b1"><span class="material-symbols-outlined text-[13px]">workspaces</span>Sales Operations</span>
+                        <div class="h-3 w-px bg-outline-variant/20"></div>
+                        <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-rose-50 text-rose-700 border border-rose-200"><span class="material-symbols-outlined text-[13px]">picture_as_pdf</span>schema_reference_v3.pdf</span>
+                    </div>
+                    <div class="flex items-center gap-4 text-[11px] text-on-surface-variant">
+                        <span class="inline-flex items-center gap-1"><span class="material-symbols-outlined text-[13px] text-primary">shield_person</span>Require approvals <strong class="text-primary">ON</strong></span>
+                        <span class="inline-flex items-center gap-1"><span class="material-symbols-outlined text-[13px]">fork_right</span>Branch out OFF</span>
+                    </div>
+                </div>
+            </details>
+
+            <div class="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-5 mc-split-panel slide-up" style="animation-delay: 0.1s">
+
+                <!-- ── Graph canvas ── -->
+                <div class="bg-surface-container-lowest rounded-xl border border-outline-variant/15 p-5 shadow-[0_2px_12px_rgba(0,0,0,0.04)]">
+                    <div class="flex items-center justify-between mb-3">
+                        <div class="flex items-center gap-2">
+                            <span class="mc-pill mc-pill--planned">Supervisor pattern</span>
+                            <span class="text-[11px] text-on-surface-variant">1 orchestrator · 3 workers · 2 handoffs</span>
+                        </div>
+                        <div class="flex items-center gap-1.5 text-[11px] text-on-surface-variant">
+                            <span class="material-symbols-outlined text-[14px]">fullscreen</span>
+                            Click any node for detail
+                        </div>
+                    </div>
+
+                    <!-- The graph itself -->
+                    <div class="orch-canvas" style="height: 460px;" role="img" aria-label="Proposed orchestration graph: Orchestrator supervises FabricDataEngineer, FabricAdmin, and SalesReporter agents.">
+                        <svg class="orch-edges" viewBox="0 0 740 460" preserveAspectRatio="none" aria-hidden="true">
+                            <!-- delegate edges from Orchestrator to workers -->
+                            <path class="orch-edge" data-kind="delegate" d="M 370 115 C 370 200, 130 220, 130 300"/>
+                            <path class="orch-edge" data-kind="delegate" d="M 370 115 L 370 300"/>
+                            <path class="orch-edge" data-kind="delegate" d="M 370 115 C 370 200, 610 220, 610 300"/>
+                            <!-- peer handoffs between workers -->
+                            <path class="orch-edge" data-kind="peer" d="M 230 345 L 270 345"/>
+                            <path class="orch-edge" data-kind="peer" d="M 470 345 L 510 345"/>
+                        </svg>
+
+                        <!-- Orchestrator -->
+                        <div class="orch-node" data-state="planned" style="left: 270px; top: 30px;" tabindex="0">
+                            <div class="orch-node__head">
+                                <div class="orch-node__icon" data-agent="orch"><span class="material-symbols-outlined text-[18px] filled">hub</span></div>
+                                <div>
+                                    <div class="orch-node__title">Orchestrator</div>
+                                    <div class="orch-node__role">Supervisor · plan + route</div>
+                                </div>
+                            </div>
+                            <p class="text-[11px] text-on-surface-variant leading-snug mt-2">Decomposes the task, assigns work, watches for failures, and keeps you in the loop.</p>
+                        </div>
+
+                        <!-- FabricDataEngineer -->
+                        <div class="orch-node" data-state="planned" style="left: 30px; top: 300px;" tabindex="0">
+                            <div class="orch-node__head">
+                                <div class="orch-node__icon" data-agent="fde"><span class="material-symbols-outlined text-[18px]">engineering</span></div>
+                                <div>
+                                    <div class="orch-node__title">FabricDataEngineer</div>
+                                    <div class="orch-node__role">Ingestion · transform</div>
+                                </div>
+                            </div>
+                            <div class="orch-node__skills">
+                                <span class="orch-node__skill">spark-authoring</span>
+                                <span class="orch-node__skill">sqldw-authoring</span>
+                            </div>
+                            <div class="orch-node__state"><span class="orch-node__state-dot"></span> Planned · 2 writes · 1 approval</div>
+                        </div>
+
+                        <!-- FabricAdmin -->
+                        <div class="orch-node" data-state="planned" style="left: 270px; top: 300px;" tabindex="0">
+                            <div class="orch-node__head">
+                                <div class="orch-node__icon" data-agent="admin"><span class="material-symbols-outlined text-[18px]">admin_panel_settings</span></div>
+                                <div>
+                                    <div class="orch-node__title">FabricAdmin</div>
+                                    <div class="orch-node__role">Governance · validation</div>
+                                </div>
+                            </div>
+                            <div class="orch-node__skills">
+                                <span class="orch-node__skill">sqldw-consumption</span>
+                                <span class="orch-node__skill">check-updates</span>
+                            </div>
+                            <div class="orch-node__state"><span class="orch-node__state-dot"></span> Planned · reconcile &amp; certify</div>
+                        </div>
+
+                        <!-- SalesReporter -->
+                        <div class="orch-node" data-state="planned" style="left: 510px; top: 300px;" tabindex="0">
+                            <div class="orch-node__head">
+                                <div class="orch-node__icon" data-agent="reporter"><span class="material-symbols-outlined text-[18px]">bar_chart</span></div>
+                                <div>
+                                    <div class="orch-node__title">SalesReporter</div>
+                                    <div class="orch-node__role">Semantic model · docs</div>
+                                </div>
+                            </div>
+                            <div class="orch-node__skills">
+                                <span class="orch-node__skill">powerbi-authoring</span>
+                                <span class="orch-node__skill">powerbi-consumption</span>
+                            </div>
+                            <div class="orch-node__state"><span class="orch-node__state-dot"></span> Planned · 1 approval</div>
+                        </div>
+                    </div>
+
+                    <!-- Legend -->
+                    <div class="orch-legend mt-4">
+                        <div class="orch-legend-item"><span class="orch-legend-swatch" data-kind="delegate"></span> Delegates &amp; reports</div>
+                        <div class="orch-legend-item"><span class="orch-legend-swatch" data-kind="peer"></span> Peer handoff</div>
+                        <div class="orch-legend-item text-on-surface-variant">· Dashed border = planned · Solid blue ring = running · Green = done</div>
+                    </div>
+                </div>
+
+                <!-- ── Side panel: agent roles in this task ── -->
+                <aside class="bg-surface-container-lowest rounded-xl border border-outline-variant/15 p-5 shadow-[0_2px_12px_rgba(0,0,0,0.04)] flex flex-col gap-4 min-w-0">
+                    <div>
+                        <div class="dh-eyebrow">Agents in this run</div>
+                        <h3 class="dh-h2 mt-1">Roles &amp; handoffs</h3>
+                    </div>
+
+                    <div class="space-y-3">
+                        <article class="rounded-lg border border-outline-variant/15 p-3">
+                            <div class="flex items-center gap-2">
+                                <span class="orch-node__icon" data-agent="orch"><span class="material-symbols-outlined text-[16px] filled">hub</span></span>
+                                <div class="min-w-0">
+                                    <div class="text-sm font-semibold">Orchestrator</div>
+                                    <div class="text-[10px] text-on-surface-variant uppercase tracking-wider font-semibold">Supervisor</div>
+                                </div>
+                            </div>
+                            <p class="text-[11px] text-on-surface-variant leading-snug mt-2">Splits the task into 3 workstreams, delegates each, and gates approvals to you.</p>
+                        </article>
+
+                        <article class="rounded-lg border border-outline-variant/15 p-3">
+                            <div class="flex items-center gap-2">
+                                <span class="orch-node__icon" data-agent="fde"><span class="material-symbols-outlined text-[16px]">engineering</span></span>
+                                <div class="min-w-0">
+                                    <div class="text-sm font-semibold">FabricDataEngineer</div>
+                                    <div class="text-[10px] text-on-surface-variant uppercase tracking-wider font-semibold">Ingestion · transform</div>
+                                </div>
+                            </div>
+                            <p class="text-[11px] text-on-surface-variant leading-snug mt-2">Profiles raw lakehouses, authors the clean-load pipeline, writes the normalized table, hands off to FabricAdmin for reconciliation.</p>
+                        </article>
+
+                        <article class="rounded-lg border border-outline-variant/15 p-3">
+                            <div class="flex items-center gap-2">
+                                <span class="orch-node__icon" data-agent="admin"><span class="material-symbols-outlined text-[16px]">admin_panel_settings</span></span>
+                                <div class="min-w-0">
+                                    <div class="text-sm font-semibold">FabricAdmin</div>
+                                    <div class="text-[10px] text-on-surface-variant uppercase tracking-wider font-semibold">Governance · validation</div>
+                                </div>
+                            </div>
+                            <p class="text-[11px] text-on-surface-variant leading-snug mt-2">Reconciles row counts, validates schema policy, certifies the Gold dataset. Blocks on row-count drift.</p>
+                        </article>
+
+                        <article class="rounded-lg border border-outline-variant/15 p-3">
+                            <div class="flex items-center gap-2">
+                                <span class="orch-node__icon" data-agent="reporter"><span class="material-symbols-outlined text-[16px]">bar_chart</span></span>
+                                <div class="min-w-0">
+                                    <div class="text-sm font-semibold">SalesReporter</div>
+                                    <div class="text-[10px] text-on-surface-variant uppercase tracking-wider font-semibold">Semantic model</div>
+                                </div>
+                            </div>
+                            <p class="text-[11px] text-on-surface-variant leading-snug mt-2">Refreshes the semantic model, updates the dashboard's dataset docs, and publishes.</p>
+                        </article>
+                    </div>
+
+                    <button class="mt-auto w-full bg-primary hover:bg-primary/90 text-white font-bold text-sm px-6 py-2.5 rounded-xl flex items-center justify-center gap-2 shadow-lg shadow-primary/15 hover:-translate-y-0.5 active:translate-y-0 transition-all" data-goto="3">
+                        <span class="material-symbols-outlined text-[18px] filled">play_arrow</span>
+                        Run this orchestration
+                    </button>
+                    <button class="w-full flex items-center justify-center gap-2 text-on-surface-variant text-xs hover:text-on-surface" data-goto="1">
+                        <span class="material-symbols-outlined text-[14px]">arrow_back</span>
+                        Back — edit task
+                    </button>
+                </aside>
+
+            </div>
+        </div>
+    </section>
+
+    <!-- ══════════════════════════════════════════════════════════════
+         SCREEN 3 — Run in progress (FabricDataEngineer active)
+         Graph (live state) + streaming log
+         ══════════════════════════════════════════════════════════════ -->
+    <section class="screen flex-col overflow-hidden" data-screen="3" aria-labelledby="s3-title">
+
+        <!-- Identity strip, same rhythm as session_live_execution -->
+        <div class="px-6 py-3 bg-surface-container-lowest border-b border-outline-variant/5 flex items-center justify-between shrink-0">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-primary to-primary-container flex items-center justify-center shadow-md shadow-primary/10">
+                    <span class="material-symbols-outlined text-white text-[20px] filled">hub</span>
+                </div>
+                <div>
+                    <div class="flex items-center gap-2">
+                        <h1 class="text-base font-bold tracking-tight" id="s3-title">Weekly regional sales ingestion</h1>
+                        <span class="mc-pill mc-pill--running">Running</span>
+                    </div>
+                    <p class="text-[11px] text-on-surface-variant max-w-xl truncate">Supervisor pattern · 3 agents · step 2 of 7 · active: FabricDataEngineer</p>
+                </div>
+            </div>
+            <div class="flex items-center gap-2">
+                <div class="flex items-center gap-2 px-3 py-1 bg-surface-container-low rounded-lg">
+                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                    <span class="text-[11px] font-mono font-semibold text-on-surface">00:00:47</span>
+                </div>
+                <button class="flex items-center gap-1.5 px-3 py-1.5 bg-surface-container-low hover:bg-surface-container-high text-on-surface-variant rounded-lg text-xs font-medium">
+                    <span class="material-symbols-outlined text-[16px]">pause</span>
+                    Pause
+                </button>
+                <button class="flex items-center gap-1.5 px-3 py-1.5 text-error bg-error-container/30 hover:bg-error-container/50 rounded-lg text-xs font-medium">
+                    <span class="material-symbols-outlined text-[16px]">stop</span>
+                    Terminate
+                </button>
+            </div>
+        </div>
+
+        <!-- Persistent task prompt recap (collapsed on live screens; click to expand) -->
+        <details class="mc-prompt-recap group bg-surface-container-lowest border-b border-outline-variant/10 shrink-0">
+            <summary class="flex items-center gap-3 px-6 py-2 cursor-pointer list-none select-none">
+                <span class="material-symbols-outlined text-primary text-[16px] filled shrink-0">edit_note</span>
+                <div class="flex-1 min-w-0">
+                    <div class="text-[13px] text-on-surface truncate group-open:whitespace-normal"><span class="text-[10px] font-bold uppercase tracking-widest text-primary mr-2">Task</span>Automate weekly ingestion of regional sales data from the NA and EU raw lakehouses, normalize the schema for Gold-layer reporting, and certify the dataset used by the Finance dashboard.</div>
+                </div>
+                <div class="hidden md:flex items-center gap-1 shrink-0">
+                    <span class="fabric-badge-lakehouse px-1.5 py-0.5 rounded-full text-[10px] font-bold inline-flex items-center gap-0.5"><span class="material-symbols-outlined text-[11px]">database</span>2</span>
+                    <span class="fabric-badge-warehouse px-1.5 py-0.5 rounded-full text-[10px] font-bold inline-flex items-center gap-0.5"><span class="material-symbols-outlined text-[11px]">warehouse</span>1</span>
+                    <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold inline-flex items-center gap-0.5" style="background:#ede7f6;color:#5e35b1"><span class="material-symbols-outlined text-[11px]">workspaces</span>1</span>
+                    <span class="inline-flex items-center gap-1 text-[10px] text-primary font-bold ml-2"><span class="material-symbols-outlined text-[12px]">shield_person</span>approvals ON</span>
+                </div>
+                <span class="material-symbols-outlined text-on-surface-variant text-[16px] transition-transform group-open:rotate-180 shrink-0">expand_more</span>
+            </summary>
+            <div class="px-6 pb-3 pt-1 border-t border-outline-variant/5 flex flex-wrap items-center gap-2">
+                <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium fabric-badge-lakehouse border border-outline-variant/15"><span class="material-symbols-outlined text-[12px]">database</span>corporate-sales-raw</span>
+                <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium fabric-badge-lakehouse border border-outline-variant/15"><span class="material-symbols-outlined text-[12px]">database</span>sales_raw_eu</span>
+                <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium fabric-badge-warehouse border border-outline-variant/15"><span class="material-symbols-outlined text-[12px]">warehouse</span>Gold_Sales_DW</span>
+                <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium border border-outline-variant/15" style="background:#ede7f6;color:#5e35b1"><span class="material-symbols-outlined text-[12px]">workspaces</span>Sales Operations</span>
+                <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-rose-50 text-rose-700 border border-rose-200"><span class="material-symbols-outlined text-[12px]">picture_as_pdf</span>schema_reference_v3.pdf</span>
+                <a class="ml-auto flex items-center gap-1 text-[11px] text-on-surface-variant hover:text-primary" href="#" data-goto="1" onclick="event.stopPropagation();">
+                    <span class="material-symbols-outlined text-[14px]">edit</span>Edit task
+                </a>
+            </div>
+        </details>
+
+        <!-- ── Team panel: collapsible strip + expanded graph (full view from screen 2) ── -->
+        <div class="mc-team-panel shrink-0" data-expanded="false" data-topology="supervisor" data-overflow-threshold="3" role="group" aria-label="Agent team">
+            <div class="mc-team-panel__bar">
+                <div class="mc-team-panel__title">
+                    <span class="material-symbols-outlined text-[14px]">groups</span>
+                    Team
+                    <span class="mc-team-panel__meta">· 4 agents · Supervisor pattern</span>
+                </div>
+                <div class="mc-team-panel__tools">
+                    <button type="button" class="mc-team-panel__tool" data-action="toggle-expand" title="Show full team view" aria-pressed="false" aria-expanded="false">
+                        <span class="material-symbols-outlined text-[14px]" data-role="expand-icon">expand_more</span>
+                        <span data-role="expand-label">Expand</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Compact view -->
+            <div class="mc-team-strip" data-topology="supervisor" role="group" aria-label="Agent team status">
+                <div class="mc-team-strip__lead">
+                    <div class="mc-agent-chip" data-state="done" tabindex="0">
+                        <div class="mc-agent-chip__icon" data-agent="orch"><span class="material-symbols-outlined text-[18px] filled">hub</span></div>
+                        <div class="mc-agent-chip__body">
+                            <div class="mc-agent-chip__name">Orchestrator</div>
+                            <div class="mc-agent-chip__status">Plan issued · 3 workstreams</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="mc-team-strip__connector" aria-hidden="true"></div>
+                <div class="mc-team-strip__workers">
+                    <div class="mc-agent-chip" data-state="active" tabindex="0">
+                        <div class="mc-agent-chip__icon" data-agent="fde"><span class="material-symbols-outlined text-[18px]">engineering</span></div>
+                        <div class="mc-agent-chip__body">
+                            <div class="mc-agent-chip__name">FabricDataEngineer</div>
+                            <div class="mc-agent-chip__status">Running · reading corporate-sales-raw</div>
+                        </div>
+                    </div>
+                    <div class="mc-agent-chip" data-state="planned" tabindex="0">
+                        <div class="mc-agent-chip__icon" data-agent="admin"><span class="material-symbols-outlined text-[18px]">admin_panel_settings</span></div>
+                        <div class="mc-agent-chip__body">
+                            <div class="mc-agent-chip__name">FabricAdmin</div>
+                            <div class="mc-agent-chip__status">Queued · reconcile &amp; certify</div>
+                        </div>
+                    </div>
+                    <div class="mc-agent-chip" data-state="planned" tabindex="0">
+                        <div class="mc-agent-chip__icon" data-agent="reporter"><span class="material-symbols-outlined text-[18px]">bar_chart</span></div>
+                        <div class="mc-agent-chip__body">
+                            <div class="mc-agent-chip__name">SalesReporter</div>
+                            <div class="mc-agent-chip__status">Queued · refresh &amp; publish</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Expanded view — full orchestration graph (matches screen 2) -->
+            <div class="mc-team-panel__full">
+                <div class="mc-team-panel__full-header">
+                    <span class="mc-pill mc-pill--planned">Supervisor pattern</span>
+                    <span class="text-[11px] text-on-surface-variant">1 orchestrator · 3 workers · 2 handoffs</span>
+                    <span class="mc-team-panel__full-hint">
+                        <span class="material-symbols-outlined text-[14px]">fullscreen</span>
+                        Click any node for detail
+                    </span>
+                </div>
+
+                <div class="orch-canvas" style="height: 460px;" role="img" aria-label="Live orchestration graph">
+                    <svg class="orch-edges" viewBox="0 0 740 460" preserveAspectRatio="none" aria-hidden="true">
+                        <path class="orch-edge" data-kind="delegate" data-active="true" d="M 370 115 C 370 200, 130 220, 130 300"/>
+                        <path class="orch-edge" data-kind="delegate" d="M 370 115 L 370 300"/>
+                        <path class="orch-edge" data-kind="delegate" d="M 370 115 C 370 200, 610 220, 610 300"/>
+                        <path class="orch-edge" data-kind="peer" d="M 230 345 L 270 345"/>
+                        <path class="orch-edge" data-kind="peer" d="M 470 345 L 510 345"/>
+                    </svg>
+
+                    <div class="orch-node" data-state="done" style="left: 270px; top: 30px;" tabindex="0">
+                        <div class="orch-node__head">
+                            <div class="orch-node__icon" data-agent="orch"><span class="material-symbols-outlined text-[18px] filled">hub</span></div>
+                            <div>
+                                <div class="orch-node__title">Orchestrator</div>
+                                <div class="orch-node__role">Supervisor · plan + route</div>
+                            </div>
+                        </div>
+                        <div class="orch-node__state"><span class="orch-node__state-dot"></span> Plan issued · 3 workstreams · 3 s</div>
+                    </div>
+
+                    <div class="orch-node" data-state="active" style="left: 30px; top: 300px;" tabindex="0">
+                        <div class="orch-node__head">
+                            <div class="orch-node__icon" data-agent="fde"><span class="material-symbols-outlined text-[18px]">engineering</span></div>
+                            <div>
+                                <div class="orch-node__title">FabricDataEngineer</div>
+                                <div class="orch-node__role">Ingestion · transform</div>
+                            </div>
+                        </div>
+                        <div class="orch-node__skills">
+                            <span class="orch-node__skill">spark-authoring</span>
+                            <span class="orch-node__skill">schema-align</span>
+                        </div>
+                        <div class="orch-node__state"><span class="orch-node__state-dot"></span> Running · reading corporate-sales-raw</div>
+                    </div>
+
+                    <div class="orch-node" data-state="planned" style="left: 270px; top: 300px;" tabindex="0">
+                        <div class="orch-node__head">
+                            <div class="orch-node__icon" data-agent="admin"><span class="material-symbols-outlined text-[18px]">admin_panel_settings</span></div>
+                            <div>
+                                <div class="orch-node__title">FabricAdmin</div>
+                                <div class="orch-node__role">Governance · validation</div>
+                            </div>
+                        </div>
+                        <div class="orch-node__skills">
+                            <span class="orch-node__skill">sqldw-consumption</span>
+                            <span class="orch-node__skill">governance</span>
+                        </div>
+                        <div class="orch-node__state"><span class="orch-node__state-dot"></span> Queued · reconcile &amp; certify</div>
+                    </div>
+
+                    <div class="orch-node" data-state="planned" style="left: 510px; top: 300px;" tabindex="0">
+                        <div class="orch-node__head">
+                            <div class="orch-node__icon" data-agent="reporter"><span class="material-symbols-outlined text-[18px]">bar_chart</span></div>
+                            <div>
+                                <div class="orch-node__title">SalesReporter</div>
+                                <div class="orch-node__role">Semantic model · docs</div>
+                            </div>
+                        </div>
+                        <div class="orch-node__skills">
+                            <span class="orch-node__skill">powerbi-authoring</span>
+                            <span class="orch-node__skill">notify</span>
+                        </div>
+                        <div class="orch-node__state"><span class="orch-node__state-dot"></span> Queued · refresh &amp; publish</div>
+                    </div>
+                </div>
+
+                <div class="orch-legend mt-4">
+                    <div class="orch-legend-item"><span class="orch-legend-swatch" data-kind="delegate"></span> Delegates &amp; reports</div>
+                    <div class="orch-legend-item"><span class="orch-legend-swatch" data-kind="peer"></span> Peer handoff</div>
+                    <div class="orch-legend-item text-on-surface-variant">· Dashed border = planned · Solid blue ring = running · Green = done</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex-1 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_320px] overflow-hidden mc-split-panel">
+
+            <!-- ── Streaming log ── -->
+            <div class="flex flex-col overflow-hidden border-r border-outline-variant/10">
+
+                <div class="px-5 py-3 border-b border-outline-variant/10 flex items-center justify-between shrink-0">
+                    <div class="flex items-center gap-2">
+                        <span class="material-symbols-outlined text-[18px] text-on-surface-variant">terminal</span>
+                        <span class="text-sm font-semibold">Live log</span>
+                        <span class="mc-pill mc-pill--running">FabricDataEngineer</span>
+                    </div>
+                    <div class="flex items-center gap-1 text-[10px] text-on-surface-variant">
+                        <button class="p-1 rounded hover:bg-surface-container-low" title="Filter"><span class="material-symbols-outlined text-[16px]">filter_list</span></button>
+                        <button class="p-1 rounded hover:bg-surface-container-low" title="Copy"><span class="material-symbols-outlined text-[16px]">content_copy</span></button>
+                    </div>
+                </div>
+
+                <div class="flex-1 overflow-y-auto log-scroll px-5 py-4 space-y-5 bg-surface">
+
+                    <!-- Orchestrator — plan issued -->
+                    <div class="flex gap-3 stream-in">
+                        <div class="flex flex-col items-center step-connector completed">
+                            <div class="w-6 h-6 rounded-full bg-primary flex items-center justify-center shrink-0">
+                                <span class="material-symbols-outlined text-white text-[14px] filled">check</span>
+                            </div>
+                        </div>
+                        <div class="flex-1 pb-4 min-w-0">
+                            <div class="flex items-center gap-2 mb-1.5 flex-wrap">
+                                <span class="orch-node__icon" data-agent="orch" style="width:22px; height:22px;"><span class="material-symbols-outlined text-[14px] filled">hub</span></span>
+                                <span class="text-[13px] font-bold">Orchestrator</span>
+                                <span class="text-[10px] text-on-surface-variant">delegated plan</span>
+                                <span class="text-[10px] text-on-surface-variant font-mono bg-surface-container-low px-1.5 py-0.5 rounded ml-auto">00:00:03</span>
+                            </div>
+                            <p class="text-[13px] text-on-surface-variant leading-relaxed">Split task into 3 workstreams. FDE → ingest &amp; normalize. Admin → reconcile &amp; certify. Reporter → refresh &amp; publish.</p>
+                        </div>
+                    </div>
+
+                    <!-- FDE — step 1 complete -->
+                    <div class="flex gap-3 stream-in">
+                        <div class="flex flex-col items-center step-connector completed">
+                            <div class="w-6 h-6 rounded-full bg-primary flex items-center justify-center shrink-0">
+                                <span class="material-symbols-outlined text-white text-[14px] filled">check</span>
+                            </div>
+                        </div>
+                        <div class="flex-1 pb-4 min-w-0">
+                            <div class="flex items-center gap-2 mb-1.5 flex-wrap">
+                                <span class="orch-node__icon" data-agent="fde" style="width:22px; height:22px;"><span class="material-symbols-outlined text-[14px]">engineering</span></span>
+                                <span class="text-[13px] font-bold">FabricDataEngineer</span>
+                                <span class="text-[10px] text-on-surface-variant">source discovery</span>
+                                <span class="text-[10px] text-emerald-600 font-medium ml-auto">done · 32s</span>
+                            </div>
+                            <p class="text-[13px] text-on-surface-variant leading-relaxed mb-2">Scanning <code class="text-[11px] bg-surface-container-low px-1 rounded text-primary font-mono">OneLake://corporate-sales-raw</code>. Identified 4 missing partitions for 2024-Q3.</p>
+                            <div class="flex flex-wrap gap-1.5">
+                                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold fabric-badge-lakehouse">
+                                    <span class="material-symbols-outlined text-[12px]">database</span>
+                                    corporate-sales-raw
+                                </span>
+                                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold fabric-badge-lakehouse">
+                                    <span class="material-symbols-outlined text-[12px]">database</span>
+                                    sales_raw_eu
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- FDE — step 2 active -->
+                    <div class="flex gap-3 stream-in">
+                        <div class="flex flex-col items-center step-connector active">
+                            <div class="w-6 h-6 rounded-full bg-primary-container flex items-center justify-center shrink-0 think-pulse">
+                                <span class="material-symbols-outlined text-white text-[14px]">bolt</span>
+                            </div>
+                        </div>
+                        <div class="flex-1 pb-2 min-w-0">
+                            <div class="flex items-center gap-2 mb-1.5 flex-wrap">
+                                <span class="orch-node__icon" data-agent="fde" style="width:22px; height:22px;"><span class="material-symbols-outlined text-[14px]">engineering</span></span>
+                                <span class="text-[13px] font-bold">FabricDataEngineer</span>
+                                <span class="text-[10px] text-on-surface-variant">schema alignment</span>
+                                <span class="ml-auto mc-pill mc-pill--running">Running</span>
+                            </div>
+                            <p class="text-[13px] text-on-surface-variant leading-relaxed mb-2">Detected <code class="text-[11px] bg-surface-container-low px-1 rounded text-primary font-mono">currency</code> column type conflict between NA (String) and EU (Enum). Casting to ISO-4217 codes.</p>
+
+                            <div class="p-3 rounded-lg bg-[#1e1e1e] font-mono text-[11px] text-emerald-400 leading-relaxed">
+                                <div class="flex items-center gap-2 mb-2 text-[10px] text-gray-500">
+                                    <span class="material-symbols-outlined text-[12px]">terminal</span>
+                                    spark-authoring · schema_align.py
+                                </div>
+                                <div>&gt; Reading na partition … <span class="text-blue-300">12,413,044 rows</span></div>
+                                <div>&gt; Reading eu partition … <span class="text-blue-300">3,027,802 rows</span></div>
+                                <div>&gt; Casting currency → <span class="text-amber-300">ISO-4217</span> enum …</div>
+                                <div>&gt; Writing sales_clean …<span class="typing-cursor"></span></div>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+
+                <!-- Log footer: jump button -->
+                <div class="px-5 py-3 border-t border-outline-variant/10 flex items-center justify-between shrink-0 bg-surface-container-lowest">
+                    <div class="text-[11px] text-on-surface-variant flex items-center gap-1">
+                        <span class="material-symbols-outlined text-[14px]">info</span>
+                        Next approval expected on schema handoff
+                    </div>
+                    <button class="flex items-center gap-1.5 text-xs text-primary font-semibold hover:underline" data-goto="4">
+                        Skip ahead to handoff
+                        <span class="material-symbols-outlined text-[14px]">arrow_forward</span>
+                    </button>
+                </div>
+
+            </div>
+
+            <!-- ── Run overview (plan progress · artifacts · changes) ── -->
+            <aside class="hidden lg:flex flex-col border-l border-outline-variant/10 bg-surface-container-lowest overflow-hidden">
+                <div class="px-4 py-3 border-b border-outline-variant/5 flex items-center justify-between shrink-0">
+                    <h2 class="text-xs font-bold uppercase tracking-wider">Run overview</h2>
+                    <span class="text-[10px] font-bold text-primary bg-primary/10 px-2 py-0.5 rounded-full">step 3 / 7</span>
+                </div>
+                <div class="flex-1 overflow-y-auto log-scroll divide-y divide-outline-variant/5">
+
+                    <!-- Plan progress -->
+                    <div class="px-4 py-3">
+                        <h3 class="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant mb-2">Plan progress</h3>
+                        <ol class="space-y-2">
+                            <li class="flex items-start gap-2.5">
+                                <div class="w-4 h-4 rounded-full bg-primary flex items-center justify-center shrink-0 mt-0.5"><span class="material-symbols-outlined text-white text-[10px] filled">check</span></div>
+                                <div class="min-w-0"><div class="text-[11px] font-medium text-on-surface">Issue decomposition</div><div class="text-[10px] text-on-surface-variant">Orchestrator · 3s</div></div>
+                            </li>
+                            <li class="flex items-start gap-2.5">
+                                <div class="w-4 h-4 rounded-full bg-primary flex items-center justify-center shrink-0 mt-0.5"><span class="material-symbols-outlined text-white text-[10px] filled">check</span></div>
+                                <div class="min-w-0"><div class="text-[11px] font-medium text-on-surface">Source discovery</div><div class="text-[10px] text-on-surface-variant">FDE · 32s · 4 missing partitions</div></div>
+                            </li>
+                            <li class="flex items-start gap-2.5">
+                                <div class="w-4 h-4 rounded-full bg-primary-container flex items-center justify-center shrink-0 mt-0.5 think-pulse"><span class="material-symbols-outlined text-white text-[10px]">bolt</span></div>
+                                <div class="min-w-0"><div class="text-[11px] font-semibold text-primary">Schema alignment</div><div class="text-[10px] text-on-surface-variant">FDE · running …</div></div>
+                            </li>
+                            <li class="flex items-start gap-2.5 opacity-60">
+                                <div class="w-4 h-4 rounded-full bg-surface-container-high flex items-center justify-center shrink-0 mt-0.5"><span class="text-[8px] font-bold text-on-surface-variant">4</span></div>
+                                <div class="min-w-0"><div class="text-[11px] font-medium text-on-surface">Write sales_clean</div><div class="text-[10px] text-amber-600 font-medium">FDE · approval required</div></div>
+                            </li>
+                            <li class="flex items-start gap-2.5 opacity-40">
+                                <div class="w-4 h-4 rounded-full bg-surface-container-high flex items-center justify-center shrink-0 mt-0.5"><span class="text-[8px] font-bold text-on-surface-variant">5</span></div>
+                                <div class="min-w-0"><div class="text-[11px] font-medium">Reconcile &amp; certify</div><div class="text-[10px] text-on-surface-variant">Admin</div></div>
+                            </li>
+                            <li class="flex items-start gap-2.5 opacity-40">
+                                <div class="w-4 h-4 rounded-full bg-surface-container-high flex items-center justify-center shrink-0 mt-0.5"><span class="text-[8px] font-bold text-on-surface-variant">6</span></div>
+                                <div class="min-w-0"><div class="text-[11px] font-medium">Refresh semantic model</div><div class="text-[10px] text-on-surface-variant">Reporter</div></div>
+                            </li>
+                            <li class="flex items-start gap-2.5 opacity-40">
+                                <div class="w-4 h-4 rounded-full bg-surface-container-high flex items-center justify-center shrink-0 mt-0.5"><span class="text-[8px] font-bold text-on-surface-variant">7</span></div>
+                                <div class="min-w-0"><div class="text-[11px] font-medium">Publish &amp; notify</div><div class="text-[10px] text-on-surface-variant">Reporter</div></div>
+                            </li>
+                        </ol>
+                    </div>
+
+                    <!-- Artifacts so far -->
+                    <div class="px-4 py-3">
+                        <div class="flex items-center justify-between mb-2">
+                            <h3 class="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">Artifacts so far</h3>
+                            <span class="text-[10px] text-on-surface-variant font-bold bg-surface-container-low px-1.5 py-0.5 rounded-full">1</span>
+                        </div>
+                        <div class="space-y-1.5">
+                            <div class="flex items-center gap-2 p-2 bg-surface-container-low rounded-lg hover:bg-surface-container-high transition-colors cursor-pointer group">
+                                <div class="w-7 h-7 rounded-md flex items-center justify-center fabric-badge-notebook shrink-0"><span class="material-symbols-outlined text-[14px]">code</span></div>
+                                <div class="flex-1 min-w-0">
+                                    <div class="text-[11px] font-semibold text-on-surface truncate">normalize_sales.py</div>
+                                    <div class="text-[10px] text-amber-600 font-medium flex items-center gap-1"><span class="w-1 h-1 rounded-full bg-amber-400 think-pulse"></span>Draft · not yet written</div>
+                                </div>
+                                <span class="material-symbols-outlined text-[13px] text-on-surface-variant opacity-0 group-hover:opacity-100 transition-opacity">open_in_new</span>
+                            </div>
+                            <div class="text-center text-[10px] text-on-surface-variant/70 italic py-0.5">More artifacts appear as steps complete.</div>
+                        </div>
+                    </div>
+
+                    <!-- Changes & actions -->
+                    <div class="px-4 py-3">
+                        <h3 class="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant mb-2">Changes &amp; actions</h3>
+                        <div class="space-y-1.5">
+                            <div class="flex items-center gap-2 p-2 bg-surface-container-low/60 rounded-lg">
+                                <span class="w-1.5 h-1.5 rounded-full bg-primary shrink-0"></span>
+                                <div class="flex-1 min-w-0">
+                                    <div class="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wide">Read</div>
+                                    <div class="text-[11px] text-on-surface truncate">Scanned corporate-sales-raw · 4 partitions</div>
+                                </div>
+                                <span class="text-[10px] text-on-surface-variant font-mono shrink-0">00:32</span>
+                            </div>
+                            <div class="flex items-center gap-2 p-2 bg-surface-container-low/60 rounded-lg">
+                                <span class="w-1.5 h-1.5 rounded-full bg-primary shrink-0"></span>
+                                <div class="flex-1 min-w-0">
+                                    <div class="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wide">Read</div>
+                                    <div class="text-[11px] text-on-surface truncate">Scanned sales_raw_eu · schema resolved</div>
+                                </div>
+                                <span class="text-[10px] text-on-surface-variant font-mono shrink-0">00:41</span>
+                            </div>
+                            <div class="flex items-center gap-2 p-2 bg-amber-50/60 border border-amber-200/60 rounded-lg">
+                                <span class="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0"></span>
+                                <div class="flex-1 min-w-0">
+                                    <div class="text-[10px] font-semibold text-amber-700 uppercase tracking-wide">Connection</div>
+                                    <div class="text-[11px] text-on-surface truncate">Gold_Sales_DW linked via service principal</div>
+                                </div>
+                                <span class="text-[10px] text-on-surface-variant font-mono shrink-0">00:12</span>
+                            </div>
+                            <div class="text-[10px] text-on-surface-variant/70 italic px-2 py-1">No writes yet — require-approvals gate is ON.</div>
+                        </div>
+                    </div>
+
+                </div>
+            </aside>
+
+        </div>
+    </section>
+    <section class="screen flex-col overflow-hidden" data-screen="4" aria-labelledby="s4-title">
+
+        <div class="px-6 py-3 bg-surface-container-lowest border-b border-outline-variant/5 flex items-center justify-between shrink-0">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-400 to-amber-600 flex items-center justify-center shadow-md shadow-amber-500/10">
+                    <span class="material-symbols-outlined text-white text-[20px] filled">front_hand</span>
+                </div>
+                <div>
+                    <div class="flex items-center gap-2">
+                        <h1 class="text-base font-bold tracking-tight" id="s4-title">Weekly regional sales ingestion</h1>
+                        <span class="mc-pill mc-pill--waiting">Waiting on you</span>
+                    </div>
+                    <p class="text-[11px] text-on-surface-variant max-w-xl truncate">Supervisor pattern · FabricAdmin requests approval before certifying the Gold dataset</p>
+                </div>
+            </div>
+            <div class="flex items-center gap-2">
+                <div class="flex items-center gap-2 px-3 py-1 bg-surface-container-low rounded-lg">
+                    <span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+                    <span class="text-[11px] font-mono font-semibold text-on-surface">00:02:14</span>
+                </div>
+                <button class="flex items-center gap-1.5 px-3 py-1.5 bg-surface-container-low hover:bg-surface-container-high text-on-surface-variant rounded-lg text-xs font-medium">
+                    <span class="material-symbols-outlined text-[16px]">pause</span>
+                    Pause
+                </button>
+            </div>
+        </div>
+
+        <!-- Persistent task prompt recap -->
+        <details class="mc-prompt-recap group bg-surface-container-lowest border-b border-outline-variant/10 shrink-0">
+            <summary class="flex items-center gap-3 px-6 py-2 cursor-pointer list-none select-none">
+                <span class="material-symbols-outlined text-primary text-[16px] filled shrink-0">edit_note</span>
+                <div class="flex-1 min-w-0">
+                    <div class="text-[13px] text-on-surface truncate group-open:whitespace-normal"><span class="text-[10px] font-bold uppercase tracking-widest text-primary mr-2">Task</span>Automate weekly ingestion of regional sales data from the NA and EU raw lakehouses, normalize the schema for Gold-layer reporting, and certify the dataset used by the Finance dashboard.</div>
+                </div>
+                <div class="hidden md:flex items-center gap-1 shrink-0">
+                    <span class="fabric-badge-lakehouse px-1.5 py-0.5 rounded-full text-[10px] font-bold inline-flex items-center gap-0.5"><span class="material-symbols-outlined text-[11px]">database</span>2</span>
+                    <span class="fabric-badge-warehouse px-1.5 py-0.5 rounded-full text-[10px] font-bold inline-flex items-center gap-0.5"><span class="material-symbols-outlined text-[11px]">warehouse</span>1</span>
+                    <span class="inline-flex items-center gap-1 text-[10px] text-primary font-bold ml-2"><span class="material-symbols-outlined text-[12px]">shield_person</span>approvals ON</span>
+                </div>
+                <span class="material-symbols-outlined text-on-surface-variant text-[16px] transition-transform group-open:rotate-180 shrink-0">expand_more</span>
+            </summary>
+            <div class="px-6 pb-3 pt-1 border-t border-outline-variant/5 flex flex-wrap items-center gap-2">
+                <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium fabric-badge-lakehouse border border-outline-variant/15"><span class="material-symbols-outlined text-[12px]">database</span>corporate-sales-raw</span>
+                <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium fabric-badge-lakehouse border border-outline-variant/15"><span class="material-symbols-outlined text-[12px]">database</span>sales_raw_eu</span>
+                <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium fabric-badge-warehouse border border-outline-variant/15"><span class="material-symbols-outlined text-[12px]">warehouse</span>Gold_Sales_DW</span>
+                <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium border border-outline-variant/15" style="background:#ede7f6;color:#5e35b1"><span class="material-symbols-outlined text-[12px]">workspaces</span>Sales Operations</span>
+                <a class="ml-auto flex items-center gap-1 text-[11px] text-on-surface-variant hover:text-primary" href="#" data-goto="1" onclick="event.stopPropagation();">
+                    <span class="material-symbols-outlined text-[14px]">edit</span>Edit task
+                </a>
+            </div>
+        </details>
+
+        <!-- ── Team panel: collapsible strip + expanded board; user-selectable layout ── -->
+        <div class="mc-team-panel shrink-0" data-expanded="false" data-topology="supervisor" data-overflow-threshold="3" role="group" aria-label="Agent team">
+            <div class="mc-team-panel__bar">
+                <div class="mc-team-panel__title">
+                    <span class="material-symbols-outlined text-[14px]">groups</span>
+                    Team
+                    <span class="mc-team-panel__meta">· 4 agents · Supervisor pattern</span>
+                </div>
+                <div class="mc-team-panel__tools">
+                    <button type="button" class="mc-team-panel__tool" data-action="toggle-expand" title="Show full team view" aria-pressed="false" aria-expanded="false">
+                        <span class="material-symbols-outlined text-[14px]" data-role="expand-icon">expand_more</span>
+                        <span data-role="expand-label">Expand</span>
+                    </button>
+                </div>
+            </div>
+
+            <div class="mc-team-strip" data-topology="supervisor" role="group" aria-label="Agent team status">
+                <div class="mc-team-strip__lead">
+                    <div class="mc-agent-chip" data-state="done" tabindex="0">
+                        <div class="mc-agent-chip__icon" data-agent="orch"><span class="material-symbols-outlined text-[18px] filled">hub</span></div>
+                        <div class="mc-agent-chip__body">
+                            <div class="mc-agent-chip__name">Orchestrator</div>
+                            <div class="mc-agent-chip__status">Paused · awaiting human</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="mc-team-strip__connector" aria-hidden="true"></div>
+                <div class="mc-team-strip__workers">
+                    <div class="mc-agent-chip" data-state="done" tabindex="0">
+                        <div class="mc-agent-chip__icon" data-agent="fde"><span class="material-symbols-outlined text-[18px]">engineering</span></div>
+                        <div class="mc-agent-chip__body">
+                            <div class="mc-agent-chip__name">FabricDataEngineer</div>
+                            <div class="mc-agent-chip__status">Done · sales_clean · 15.4M rows</div>
+                        </div>
+                    </div>
+                    <div class="mc-agent-chip" data-state="waiting" tabindex="0">
+                        <div class="mc-agent-chip__icon" data-agent="admin"><span class="material-symbols-outlined text-[18px]">admin_panel_settings</span></div>
+                        <div class="mc-agent-chip__body">
+                            <div class="mc-agent-chip__name">FabricAdmin</div>
+                            <div class="mc-agent-chip__status">Waiting on you · certify?</div>
+                        </div>
+                    </div>
+                    <div class="mc-agent-chip" data-state="planned" tabindex="0">
+                        <div class="mc-agent-chip__icon" data-agent="reporter"><span class="material-symbols-outlined text-[18px]">bar_chart</span></div>
+                        <div class="mc-agent-chip__body">
+                            <div class="mc-agent-chip__name">SalesReporter</div>
+                            <div class="mc-agent-chip__status">Blocked by approval</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Expanded view — full orchestration graph (matches screen 2) -->
+            <div class="mc-team-panel__full">
+                <div class="mc-team-panel__full-header">
+                    <span class="mc-pill mc-pill--waiting">Approval required</span>
+                    <span class="text-[11px] text-on-surface-variant">1 orchestrator · 3 workers · paused on handoff</span>
+                    <span class="mc-team-panel__full-hint">
+                        <span class="material-symbols-outlined text-[14px]">fullscreen</span>
+                        Click any node for detail
+                    </span>
+                </div>
+
+                <div class="orch-canvas" style="height: 460px;" role="img" aria-label="Live orchestration graph — paused on approval">
+                    <svg class="orch-edges" viewBox="0 0 740 460" preserveAspectRatio="none" aria-hidden="true">
+                        <path class="orch-edge" data-kind="delegate" d="M 370 115 C 370 200, 130 220, 130 300"/>
+                        <path class="orch-edge" data-kind="delegate" d="M 370 115 L 370 300"/>
+                        <path class="orch-edge" data-kind="delegate" d="M 370 115 C 370 200, 610 220, 610 300"/>
+                        <path class="orch-edge" data-kind="peer" data-active="true" d="M 230 345 L 270 345"/>
+                        <path class="orch-edge" data-kind="peer" d="M 470 345 L 510 345"/>
+                    </svg>
+
+                    <div class="orch-node" data-state="done" style="left: 270px; top: 30px;" tabindex="0">
+                        <div class="orch-node__head">
+                            <div class="orch-node__icon" data-agent="orch"><span class="material-symbols-outlined text-[18px] filled">hub</span></div>
+                            <div>
+                                <div class="orch-node__title">Orchestrator</div>
+                                <div class="orch-node__role">Supervisor · plan + route</div>
+                            </div>
+                        </div>
+                        <div class="orch-node__state"><span class="orch-node__state-dot"></span> Paused · awaiting human</div>
+                    </div>
+
+                    <div class="orch-node" data-state="done" style="left: 30px; top: 300px;" tabindex="0">
+                        <div class="orch-node__head">
+                            <div class="orch-node__icon" data-agent="fde"><span class="material-symbols-outlined text-[18px]">engineering</span></div>
+                            <div>
+                                <div class="orch-node__title">FabricDataEngineer</div>
+                                <div class="orch-node__role">Ingestion · transform</div>
+                            </div>
+                        </div>
+                        <div class="orch-node__skills">
+                            <span class="orch-node__skill">spark-authoring</span>
+                        </div>
+                        <div class="orch-node__state"><span class="orch-node__state-dot"></span> Done · sales_clean · 15.4M rows</div>
+                    </div>
+
+                    <div class="orch-node" data-state="waiting" style="left: 270px; top: 300px;" tabindex="0">
+                        <div class="orch-node__head">
+                            <div class="orch-node__icon" data-agent="admin"><span class="material-symbols-outlined text-[18px]">admin_panel_settings</span></div>
+                            <div>
+                                <div class="orch-node__title">FabricAdmin</div>
+                                <div class="orch-node__role">Governance · validation</div>
+                            </div>
+                        </div>
+                        <div class="orch-node__skills">
+                            <span class="orch-node__skill">sqldw-consumption</span>
+                            <span class="orch-node__skill">governance</span>
+                        </div>
+                        <div class="orch-node__state"><span class="orch-node__state-dot"></span> Waiting on you · certify?</div>
+                    </div>
+
+                    <div class="orch-node" data-state="planned" style="left: 510px; top: 300px;" tabindex="0">
+                        <div class="orch-node__head">
+                            <div class="orch-node__icon" data-agent="reporter"><span class="material-symbols-outlined text-[18px]">bar_chart</span></div>
+                            <div>
+                                <div class="orch-node__title">SalesReporter</div>
+                                <div class="orch-node__role">Semantic model · docs</div>
+                            </div>
+                        </div>
+                        <div class="orch-node__skills">
+                            <span class="orch-node__skill">powerbi-authoring</span>
+                        </div>
+                        <div class="orch-node__state"><span class="orch-node__state-dot"></span> Blocked by approval</div>
+                    </div>
+                </div>
+
+                <div class="orch-legend mt-4">
+                    <div class="orch-legend-item"><span class="orch-legend-swatch" data-kind="delegate"></span> Delegates &amp; reports</div>
+                    <div class="orch-legend-item"><span class="orch-legend-swatch" data-kind="peer"></span> Peer handoff (active)</div>
+                    <div class="orch-legend-item text-on-surface-variant">· Dashed border = planned · Amber = waiting · Green = done</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex-1 overflow-hidden mc-split-panel">
+
+            <!-- Approval panel (full-width focus) -->
+            <div class="flex flex-col overflow-hidden max-w-3xl mx-auto w-full">
+
+                <div class="px-5 py-3 border-b border-outline-variant/10 flex items-center justify-between shrink-0">
+                    <div class="flex items-center gap-2">
+                        <span class="material-symbols-outlined text-[18px] text-amber-600 filled">front_hand</span>
+                        <span class="text-sm font-semibold">Approval required</span>
+                        <span class="mc-pill mc-pill--waiting">FabricAdmin</span>
+                    </div>
+                </div>
+
+                <div class="flex-1 overflow-y-auto log-scroll px-5 py-4 bg-surface">
+
+                    <div class="p-4 rounded-xl bg-amber-50 border border-amber-200 mb-4">
+                        <div class="flex items-center gap-2 mb-2">
+                            <span class="material-symbols-outlined text-amber-700 text-[16px] filled">psychology</span>
+                            <span class="text-[11px] font-bold text-amber-800 uppercase tracking-wider">Agent request</span>
+                        </div>
+                        <p class="text-sm text-on-surface leading-relaxed">
+                            "Row counts reconcile at <strong>99.994 %</strong> (Δ 743 rows / 0.006 %) — within tolerance. Certifying <code class="text-xs bg-white/60 px-1 py-0.5 rounded font-mono">Gold_Sales_DW.sales_clean</code> will stamp the dataset as production-ready and is visible to all dashboard consumers."
+                        </p>
+                    </div>
+
+                    <dl class="text-[13px] space-y-2.5 mb-4">
+                        <div class="flex gap-3">
+                            <dt class="w-28 shrink-0 text-[11px] uppercase tracking-wider font-bold text-on-surface-variant">What happens</dt>
+                            <dd class="flex-1">Sets the <code class="text-xs bg-surface-container-low px-1 py-0.5 rounded font-mono">certified</code> flag on <code class="text-xs bg-surface-container-low px-1 py-0.5 rounded font-mono">Gold_Sales_DW.sales_clean</code>. No row-level writes.</dd>
+                        </div>
+                        <div class="flex gap-3">
+                            <dt class="w-28 shrink-0 text-[11px] uppercase tracking-wider font-bold text-on-surface-variant">Reversible?</dt>
+                            <dd class="flex-1 text-emerald-700 font-semibold">Yes — one click to un-certify.</dd>
+                        </div>
+                        <div class="flex gap-3">
+                            <dt class="w-28 shrink-0 text-[11px] uppercase tracking-wider font-bold text-on-surface-variant">Blast radius</dt>
+                            <dd class="flex-1">2 Power BI dashboards downstream will see the freshness badge update.</dd>
+                        </div>
+                        <div class="flex gap-3">
+                            <dt class="w-28 shrink-0 text-[11px] uppercase tracking-wider font-bold text-on-surface-variant">Tool call</dt>
+                            <dd class="flex-1 font-mono text-[11px] text-primary">sqldw.set_certification(workspace, table, certified=true)</dd>
+                        </div>
+                    </dl>
+
+                    <div class="p-3 rounded-lg bg-[#1e1e1e] font-mono text-[11px] text-emerald-400 leading-relaxed mb-4">
+                        <div class="flex items-center gap-2 mb-2 text-[10px] text-gray-500">
+                            <span class="material-symbols-outlined text-[12px]">terminal</span>
+                            reconciliation report
+                        </div>
+                        <div>&gt; source rows (NA+EU) ..... <span class="text-blue-300">15,440,846</span></div>
+                        <div>&gt; sales_clean rows ........ <span class="text-blue-300">15,440,103</span></div>
+                        <div>&gt; delta .................. <span class="text-amber-300">-743  (0.006%)</span></div>
+                        <div>&gt; tolerance .............. <span class="text-blue-300">≤ 0.05% ✓</span></div>
+                    </div>
+
+                    <div class="flex flex-col gap-2">
+                        <button class="bg-primary hover:bg-primary/90 text-white font-bold text-sm px-6 py-2.5 rounded-xl flex items-center justify-center gap-2 shadow-lg shadow-primary/15 hover:-translate-y-0.5 active:translate-y-0 transition-all" data-goto="5">
+                            <span class="material-symbols-outlined text-[18px] filled">check_circle</span>
+                            Approve &amp; certify
+                        </button>
+                        <div class="grid grid-cols-2 gap-2">
+                            <button class="flex items-center justify-center gap-1.5 bg-surface-container-low hover:bg-surface-container-high text-on-surface-variant text-xs font-medium px-3 py-2 rounded-lg">
+                                <span class="material-symbols-outlined text-[14px]">tune</span>
+                                Tighten tolerance
+                            </button>
+                            <button class="flex items-center justify-center gap-1.5 bg-surface-container-low hover:bg-surface-container-high text-on-surface-variant text-xs font-medium px-3 py-2 rounded-lg">
+                                <span class="material-symbols-outlined text-[14px]">swap_horiz</span>
+                                Swap agent
+                            </button>
+                            <button class="flex items-center justify-center gap-1.5 bg-surface-container-low hover:bg-surface-container-high text-on-surface-variant text-xs font-medium px-3 py-2 rounded-lg">
+                                <span class="material-symbols-outlined text-[14px]">skip_next</span>
+                                Skip certification
+                            </button>
+                            <button class="flex items-center justify-center gap-1.5 bg-error-container/30 hover:bg-error-container/50 text-error text-xs font-medium px-3 py-2 rounded-lg">
+                                <span class="material-symbols-outlined text-[14px]">stop</span>
+                                Abandon run
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </section>
+
+    <!-- ══════════════════════════════════════════════════════════════
+         SCREEN 5 — Later stage (SalesReporter active)
+         Graph reflects progress; log continues
+         ══════════════════════════════════════════════════════════════ -->
+    <section class="screen flex-col overflow-hidden" data-screen="5" aria-labelledby="s5-title">
+
+        <div class="px-6 py-3 bg-surface-container-lowest border-b border-outline-variant/5 flex items-center justify-between shrink-0">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-orange-400 to-orange-600 flex items-center justify-center shadow-md shadow-orange-500/10">
+                    <span class="material-symbols-outlined text-white text-[20px] filled">bar_chart</span>
+                </div>
+                <div>
+                    <div class="flex items-center gap-2">
+                        <h1 class="text-base font-bold tracking-tight" id="s5-title">Weekly regional sales ingestion</h1>
+                        <span class="mc-pill mc-pill--running">Running</span>
+                    </div>
+                    <p class="text-[11px] text-on-surface-variant max-w-xl truncate">Supervisor pattern · step 6 of 7 · active: SalesReporter · 2 agents done</p>
+                </div>
+            </div>
+            <div class="flex items-center gap-2">
+                <div class="flex items-center gap-2 px-3 py-1 bg-surface-container-low rounded-lg">
+                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                    <span class="text-[11px] font-mono font-semibold text-on-surface">00:03:02</span>
+                </div>
+                <button class="flex items-center gap-1.5 px-3 py-1.5 bg-surface-container-low hover:bg-surface-container-high text-on-surface-variant rounded-lg text-xs font-medium">
+                    <span class="material-symbols-outlined text-[16px]">pause</span>
+                    Pause
+                </button>
+            </div>
+        </div>
+
+        <!-- Persistent task prompt recap -->
+        <details class="mc-prompt-recap group bg-surface-container-lowest border-b border-outline-variant/10 shrink-0">
+            <summary class="flex items-center gap-3 px-6 py-2 cursor-pointer list-none select-none">
+                <span class="material-symbols-outlined text-primary text-[16px] filled shrink-0">edit_note</span>
+                <div class="flex-1 min-w-0">
+                    <div class="text-[13px] text-on-surface truncate group-open:whitespace-normal"><span class="text-[10px] font-bold uppercase tracking-widest text-primary mr-2">Task</span>Automate weekly ingestion of regional sales data from the NA and EU raw lakehouses, normalize the schema for Gold-layer reporting, and certify the dataset used by the Finance dashboard.</div>
+                </div>
+                <div class="hidden md:flex items-center gap-1 shrink-0">
+                    <span class="fabric-badge-lakehouse px-1.5 py-0.5 rounded-full text-[10px] font-bold inline-flex items-center gap-0.5"><span class="material-symbols-outlined text-[11px]">database</span>2</span>
+                    <span class="fabric-badge-warehouse px-1.5 py-0.5 rounded-full text-[10px] font-bold inline-flex items-center gap-0.5"><span class="material-symbols-outlined text-[11px]">warehouse</span>1</span>
+                    <span class="inline-flex items-center gap-1 text-[10px] text-primary font-bold ml-2"><span class="material-symbols-outlined text-[12px]">shield_person</span>approvals ON</span>
+                </div>
+                <span class="material-symbols-outlined text-on-surface-variant text-[16px] transition-transform group-open:rotate-180 shrink-0">expand_more</span>
+            </summary>
+            <div class="px-6 pb-3 pt-1 border-t border-outline-variant/5 flex flex-wrap items-center gap-2">
+                <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium fabric-badge-lakehouse border border-outline-variant/15"><span class="material-symbols-outlined text-[12px]">database</span>corporate-sales-raw</span>
+                <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium fabric-badge-lakehouse border border-outline-variant/15"><span class="material-symbols-outlined text-[12px]">database</span>sales_raw_eu</span>
+                <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium fabric-badge-warehouse border border-outline-variant/15"><span class="material-symbols-outlined text-[12px]">warehouse</span>Gold_Sales_DW</span>
+                <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium border border-outline-variant/15" style="background:#ede7f6;color:#5e35b1"><span class="material-symbols-outlined text-[12px]">workspaces</span>Sales Operations</span>
+                <a class="ml-auto flex items-center gap-1 text-[11px] text-on-surface-variant hover:text-primary" href="#" data-goto="1" onclick="event.stopPropagation();">
+                    <span class="material-symbols-outlined text-[14px]">edit</span>Edit task
+                </a>
+            </div>
+        </details>
+
+        <!-- Team panel: collapsible strip + expanded board; user-selectable layout -->
+        <div class="mc-team-panel shrink-0" data-expanded="false" data-topology="supervisor" data-overflow-threshold="3" role="group" aria-label="Agent team">
+            <div class="mc-team-panel__bar">
+                <div class="mc-team-panel__title">
+                    <span class="material-symbols-outlined text-[14px]">groups</span>
+                    Team
+                    <span class="mc-team-panel__meta">· 4 agents · Supervisor pattern</span>
+                </div>
+                <div class="mc-team-panel__tools">
+                    <button type="button" class="mc-team-panel__tool" data-action="toggle-expand" title="Show full team view" aria-pressed="false" aria-expanded="false">
+                        <span class="material-symbols-outlined text-[14px]" data-role="expand-icon">expand_more</span>
+                        <span data-role="expand-label">Expand</span>
+                    </button>
+                </div>
+            </div>
+
+            <div class="mc-team-strip" data-topology="supervisor" role="group" aria-label="Agent team status">
+                <div class="mc-team-strip__lead">
+                    <div class="mc-agent-chip" data-state="done" tabindex="0">
+                        <div class="mc-agent-chip__icon" data-agent="orch"><span class="material-symbols-outlined text-[18px] filled">hub</span></div>
+                        <div class="mc-agent-chip__body">
+                            <div class="mc-agent-chip__name">Orchestrator</div>
+                            <div class="mc-agent-chip__status">Monitoring · on track</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="mc-team-strip__connector" aria-hidden="true"></div>
+                <div class="mc-team-strip__workers">
+                    <div class="mc-agent-chip" data-state="done" tabindex="0">
+                        <div class="mc-agent-chip__icon" data-agent="fde"><span class="material-symbols-outlined text-[18px]">engineering</span></div>
+                        <div class="mc-agent-chip__body">
+                            <div class="mc-agent-chip__name">FabricDataEngineer</div>
+                            <div class="mc-agent-chip__status">Done · 2 writes · 1m 48s</div>
+                        </div>
+                    </div>
+                    <div class="mc-agent-chip" data-state="done" tabindex="0">
+                        <div class="mc-agent-chip__icon" data-agent="admin"><span class="material-symbols-outlined text-[18px]">admin_panel_settings</span></div>
+                        <div class="mc-agent-chip__body">
+                            <div class="mc-agent-chip__name">FabricAdmin</div>
+                            <div class="mc-agent-chip__status">Done · certified</div>
+                        </div>
+                    </div>
+                    <div class="mc-agent-chip" data-state="active" tabindex="0">
+                        <div class="mc-agent-chip__icon" data-agent="reporter"><span class="material-symbols-outlined text-[18px]">bar_chart</span></div>
+                        <div class="mc-agent-chip__body">
+                            <div class="mc-agent-chip__name">SalesReporter</div>
+                            <div class="mc-agent-chip__status">Running · refreshing semantic model</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Expanded view — full orchestration graph (matches screen 2) -->
+            <div class="mc-team-panel__full">
+                <div class="mc-team-panel__full-header">
+                    <span class="mc-pill mc-pill--running">Reporter running</span>
+                    <span class="text-[11px] text-on-surface-variant">1 orchestrator · 3 workers · final handoff</span>
+                    <span class="mc-team-panel__full-hint">
+                        <span class="material-symbols-outlined text-[14px]">fullscreen</span>
+                        Click any node for detail
+                    </span>
+                </div>
+
+                <div class="orch-canvas" style="height: 460px;" role="img" aria-label="Live orchestration graph — reporter refreshing">
+                    <svg class="orch-edges" viewBox="0 0 740 460" preserveAspectRatio="none" aria-hidden="true">
+                        <path class="orch-edge" data-kind="delegate" d="M 370 115 C 370 200, 130 220, 130 300"/>
+                        <path class="orch-edge" data-kind="delegate" d="M 370 115 L 370 300"/>
+                        <path class="orch-edge" data-kind="delegate" d="M 370 115 C 370 200, 610 220, 610 300"/>
+                        <path class="orch-edge" data-kind="peer" d="M 230 345 L 270 345"/>
+                        <path class="orch-edge" data-kind="peer" data-active="true" d="M 470 345 L 510 345"/>
+                    </svg>
+
+                    <div class="orch-node" data-state="done" style="left: 270px; top: 30px;" tabindex="0">
+                        <div class="orch-node__head">
+                            <div class="orch-node__icon" data-agent="orch"><span class="material-symbols-outlined text-[18px] filled">hub</span></div>
+                            <div>
+                                <div class="orch-node__title">Orchestrator</div>
+                                <div class="orch-node__role">Supervisor · monitoring</div>
+                            </div>
+                        </div>
+                        <div class="orch-node__state"><span class="orch-node__state-dot"></span> Monitoring · on track</div>
+                    </div>
+
+                    <div class="orch-node" data-state="done" style="left: 30px; top: 300px;" tabindex="0">
+                        <div class="orch-node__head">
+                            <div class="orch-node__icon" data-agent="fde"><span class="material-symbols-outlined text-[18px]">engineering</span></div>
+                            <div>
+                                <div class="orch-node__title">FabricDataEngineer</div>
+                                <div class="orch-node__role">Ingestion · transform</div>
+                            </div>
+                        </div>
+                        <div class="orch-node__skills">
+                            <span class="orch-node__skill">spark-authoring</span>
+                        </div>
+                        <div class="orch-node__state"><span class="orch-node__state-dot"></span> Done · 2 writes · 1m 48s</div>
+                    </div>
+
+                    <div class="orch-node" data-state="done" style="left: 270px; top: 300px;" tabindex="0">
+                        <div class="orch-node__head">
+                            <div class="orch-node__icon" data-agent="admin"><span class="material-symbols-outlined text-[18px]">admin_panel_settings</span></div>
+                            <div>
+                                <div class="orch-node__title">FabricAdmin</div>
+                                <div class="orch-node__role">Governance · validation</div>
+                            </div>
+                        </div>
+                        <div class="orch-node__skills">
+                            <span class="orch-node__skill">sqldw-consumption</span>
+                            <span class="orch-node__skill">governance</span>
+                        </div>
+                        <div class="orch-node__state"><span class="orch-node__state-dot"></span> Done · certified</div>
+                    </div>
+
+                    <div class="orch-node" data-state="active" style="left: 510px; top: 300px;" tabindex="0">
+                        <div class="orch-node__head">
+                            <div class="orch-node__icon" data-agent="reporter"><span class="material-symbols-outlined text-[18px]">bar_chart</span></div>
+                            <div>
+                                <div class="orch-node__title">SalesReporter</div>
+                                <div class="orch-node__role">Semantic model · docs</div>
+                            </div>
+                        </div>
+                        <div class="orch-node__skills">
+                            <span class="orch-node__skill">powerbi-authoring</span>
+                        </div>
+                        <div class="orch-node__state"><span class="orch-node__state-dot"></span> Refreshing Sales Weekly · partition 2/3</div>
+                    </div>
+                </div>
+
+                <div class="orch-legend mt-4">
+                    <div class="orch-legend-item"><span class="orch-legend-swatch" data-kind="delegate"></span> Delegates &amp; reports</div>
+                    <div class="orch-legend-item"><span class="orch-legend-swatch" data-kind="peer"></span> Peer handoff (active)</div>
+                    <div class="orch-legend-item text-on-surface-variant">· Dashed border = planned · Green = done · Blue pulse = running</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex-1 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_320px] overflow-hidden mc-split-panel">
+
+            <div class="flex flex-col overflow-hidden border-r border-outline-variant/10">
+                <div class="px-5 py-3 border-b border-outline-variant/10 flex items-center justify-between shrink-0">
+                    <div class="flex items-center gap-2">
+                        <span class="material-symbols-outlined text-[18px] text-on-surface-variant">terminal</span>
+                        <span class="text-sm font-semibold">Live log</span>
+                        <span class="mc-pill mc-pill--running">SalesReporter</span>
+                    </div>
+                </div>
+
+                <div class="flex-1 overflow-y-auto log-scroll px-5 py-4 space-y-5 bg-surface">
+
+                    <!-- Admin — certify done -->
+                    <div class="flex gap-3 stream-in">
+                        <div class="flex flex-col items-center step-connector completed">
+                            <div class="w-6 h-6 rounded-full bg-primary flex items-center justify-center shrink-0">
+                                <span class="material-symbols-outlined text-white text-[14px] filled">check</span>
+                            </div>
+                        </div>
+                        <div class="flex-1 pb-4 min-w-0">
+                            <div class="flex items-center gap-2 mb-1.5 flex-wrap">
+                                <span class="orch-node__icon" data-agent="admin" style="width:22px; height:22px;"><span class="material-symbols-outlined text-[14px]">admin_panel_settings</span></span>
+                                <span class="text-[13px] font-bold">FabricAdmin</span>
+                                <span class="text-[10px] text-on-surface-variant">certified Gold dataset</span>
+                                <span class="text-[10px] text-emerald-600 font-medium ml-auto">done · 0.3 s</span>
+                            </div>
+                            <div class="p-3 rounded-xl bg-primary/5 border border-primary/15">
+                                <div class="flex items-center gap-2 mb-1.5">
+                                    <span class="material-symbols-outlined text-emerald-600 text-[14px]">check_circle</span>
+                                    <span class="text-[10px] font-bold text-emerald-700 uppercase tracking-wider">Human-approved</span>
+                                </div>
+                                <p class="text-[12px] text-on-surface leading-relaxed">Set <code class="text-[11px] bg-white/60 px-1 rounded font-mono">certified=true</code> on <code class="text-[11px] bg-white/60 px-1 rounded font-mono">Gold_Sales_DW.sales_clean</code>. Handed off to SalesReporter.</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Reporter — active -->
+                    <div class="flex gap-3 stream-in">
+                        <div class="flex flex-col items-center step-connector active">
+                            <div class="w-6 h-6 rounded-full bg-primary-container flex items-center justify-center shrink-0 think-pulse">
+                                <span class="material-symbols-outlined text-white text-[14px]">bolt</span>
+                            </div>
+                        </div>
+                        <div class="flex-1 pb-2 min-w-0">
+                            <div class="flex items-center gap-2 mb-1.5 flex-wrap">
+                                <span class="orch-node__icon" data-agent="reporter" style="width:22px; height:22px;"><span class="material-symbols-outlined text-[14px]">bar_chart</span></span>
+                                <span class="text-[13px] font-bold">SalesReporter</span>
+                                <span class="text-[10px] text-on-surface-variant">semantic model refresh</span>
+                                <span class="ml-auto mc-pill mc-pill--running">Running</span>
+                            </div>
+                            <p class="text-[13px] text-on-surface-variant leading-relaxed mb-2">Refreshing <code class="text-[11px] bg-surface-container-low px-1 rounded text-primary font-mono">Sales Weekly</code> semantic model against the newly-certified Gold dataset.</p>
+
+                            <div class="p-3 rounded-lg bg-[#1e1e1e] font-mono text-[11px] text-emerald-400 leading-relaxed">
+                                <div class="flex items-center gap-2 mb-2 text-[10px] text-gray-500">
+                                    <span class="material-symbols-outlined text-[12px]">terminal</span>
+                                    powerbi-authoring · refresh
+                                </div>
+                                <div>&gt; triggering refresh id=<span class="text-blue-300">a1f2…c7</span></div>
+                                <div>&gt; tables: sales_clean, dim_region, dim_product</div>
+                                <div>&gt; progress: <span class="text-amber-300">partition 2 of 3</span> <span class="typing-cursor"></span></div>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+
+                <div class="px-5 py-3 border-t border-outline-variant/10 flex items-center justify-between shrink-0 bg-surface-container-lowest">
+                    <div class="text-[11px] text-on-surface-variant flex items-center gap-1">
+                        <span class="material-symbols-outlined text-[14px]">info</span>
+                        Last step (publish) will auto-complete
+                    </div>
+                    <button class="flex items-center gap-1.5 text-xs text-primary font-semibold hover:underline" data-goto="6">
+                        Skip to result
+                        <span class="material-symbols-outlined text-[14px]">arrow_forward</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- ── Run overview (plan progress · artifacts · changes) ── -->
+            <aside class="hidden lg:flex flex-col border-l border-outline-variant/10 bg-surface-container-lowest overflow-hidden">
+                <div class="px-4 py-3 border-b border-outline-variant/5 flex items-center justify-between shrink-0">
+                    <h2 class="text-xs font-bold uppercase tracking-wider">Run overview</h2>
+                    <span class="text-[10px] font-bold text-primary bg-primary/10 px-2 py-0.5 rounded-full">step 6 / 7</span>
+                </div>
+                <div class="flex-1 overflow-y-auto log-scroll divide-y divide-outline-variant/5">
+
+                    <!-- Plan progress -->
+                    <div class="px-4 py-3">
+                        <h3 class="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant mb-2">Plan progress</h3>
+                        <ol class="space-y-2">
+                            <li class="flex items-start gap-2.5"><div class="w-4 h-4 rounded-full bg-primary flex items-center justify-center shrink-0 mt-0.5"><span class="material-symbols-outlined text-white text-[10px] filled">check</span></div><div class="min-w-0"><div class="text-[11px] font-medium text-on-surface">Issue decomposition</div><div class="text-[10px] text-on-surface-variant">Orchestrator · 3s</div></div></li>
+                            <li class="flex items-start gap-2.5"><div class="w-4 h-4 rounded-full bg-primary flex items-center justify-center shrink-0 mt-0.5"><span class="material-symbols-outlined text-white text-[10px] filled">check</span></div><div class="min-w-0"><div class="text-[11px] font-medium text-on-surface">Source discovery</div><div class="text-[10px] text-on-surface-variant">FDE · 32s</div></div></li>
+                            <li class="flex items-start gap-2.5"><div class="w-4 h-4 rounded-full bg-primary flex items-center justify-center shrink-0 mt-0.5"><span class="material-symbols-outlined text-white text-[10px] filled">check</span></div><div class="min-w-0"><div class="text-[11px] font-medium text-on-surface">Schema alignment</div><div class="text-[10px] text-on-surface-variant">FDE · 28s</div></div></li>
+                            <li class="flex items-start gap-2.5"><div class="w-4 h-4 rounded-full bg-primary flex items-center justify-center shrink-0 mt-0.5"><span class="material-symbols-outlined text-white text-[10px] filled">check</span></div><div class="min-w-0"><div class="text-[11px] font-medium text-on-surface">Write sales_clean</div><div class="text-[10px] text-on-surface-variant">FDE · 15.4M rows</div></div></li>
+                            <li class="flex items-start gap-2.5"><div class="w-4 h-4 rounded-full bg-primary flex items-center justify-center shrink-0 mt-0.5"><span class="material-symbols-outlined text-white text-[10px] filled">check</span></div><div class="min-w-0"><div class="text-[11px] font-medium text-on-surface">Reconcile &amp; certify</div><div class="text-[10px] text-on-surface-variant">Admin · human-approved</div></div></li>
+                            <li class="flex items-start gap-2.5"><div class="w-4 h-4 rounded-full bg-primary-container flex items-center justify-center shrink-0 mt-0.5 think-pulse"><span class="material-symbols-outlined text-white text-[10px]">bolt</span></div><div class="min-w-0"><div class="text-[11px] font-semibold text-primary">Refresh semantic model</div><div class="text-[10px] text-on-surface-variant">Reporter · running …</div></div></li>
+                            <li class="flex items-start gap-2.5 opacity-40"><div class="w-4 h-4 rounded-full bg-surface-container-high flex items-center justify-center shrink-0 mt-0.5"><span class="text-[8px] font-bold text-on-surface-variant">7</span></div><div class="min-w-0"><div class="text-[11px] font-medium">Publish &amp; notify</div><div class="text-[10px] text-on-surface-variant">Reporter</div></div></li>
+                        </ol>
+                    </div>
+
+                    <!-- Artifacts so far -->
+                    <div class="px-4 py-3">
+                        <div class="flex items-center justify-between mb-2">
+                            <h3 class="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">Artifacts so far</h3>
+                            <span class="text-[10px] text-on-surface-variant font-bold bg-surface-container-low px-1.5 py-0.5 rounded-full">4</span>
+                        </div>
+                        <div class="space-y-1.5">
+                            <div class="flex items-center gap-2 p-2 bg-surface-container-low rounded-lg hover:bg-surface-container-high transition-colors cursor-pointer group">
+                                <div class="w-7 h-7 rounded-md flex items-center justify-center fabric-badge-notebook shrink-0"><span class="material-symbols-outlined text-[14px]">code</span></div>
+                                <div class="flex-1 min-w-0"><div class="text-[11px] font-semibold text-on-surface truncate">normalize_sales.py</div><div class="text-[10px] text-on-surface-variant">FDE · committed</div></div>
+                                <span class="material-symbols-outlined text-[13px] text-on-surface-variant opacity-0 group-hover:opacity-100">open_in_new</span>
+                            </div>
+                            <div class="flex items-center gap-2 p-2 bg-surface-container-low rounded-lg hover:bg-surface-container-high transition-colors cursor-pointer group">
+                                <div class="w-7 h-7 rounded-md flex items-center justify-center fabric-badge-warehouse shrink-0"><span class="material-symbols-outlined text-[14px]">warehouse</span></div>
+                                <div class="flex-1 min-w-0"><div class="text-[11px] font-semibold text-on-surface truncate">sales_clean (table)</div><div class="text-[10px] text-emerald-600 font-medium">15,440,103 rows · certified</div></div>
+                                <span class="material-symbols-outlined text-[13px] text-on-surface-variant opacity-0 group-hover:opacity-100">open_in_new</span>
+                            </div>
+                            <div class="flex items-center gap-2 p-2 bg-surface-container-low rounded-lg hover:bg-surface-container-high transition-colors cursor-pointer group">
+                                <div class="w-7 h-7 rounded-md flex items-center justify-center fabric-badge-pipeline shrink-0"><span class="material-symbols-outlined text-[14px]">conversion_path</span></div>
+                                <div class="flex-1 min-w-0"><div class="text-[11px] font-semibold text-on-surface truncate">reconciliation_report.md</div><div class="text-[10px] text-on-surface-variant">Admin · within tolerance</div></div>
+                                <span class="material-symbols-outlined text-[13px] text-on-surface-variant opacity-0 group-hover:opacity-100">open_in_new</span>
+                            </div>
+                            <div class="flex items-center gap-2 p-2 bg-surface-container-low rounded-lg opacity-80">
+                                <div class="w-7 h-7 rounded-md flex items-center justify-center fabric-badge-report shrink-0" style="background:#fce4ec;color:#c62828"><span class="material-symbols-outlined text-[14px]">monitoring</span></div>
+                                <div class="flex-1 min-w-0"><div class="text-[11px] font-semibold text-on-surface truncate">Sales Weekly (semantic model)</div><div class="text-[10px] text-amber-600 font-medium flex items-center gap-1"><span class="w-1 h-1 rounded-full bg-amber-400 think-pulse"></span>Refreshing · partition 2/3</div></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Changes & actions -->
+                    <div class="px-4 py-3">
+                        <h3 class="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant mb-2">Changes &amp; actions</h3>
+                        <div class="space-y-1.5">
+                            <div class="flex items-center gap-2 p-2 bg-emerald-50/60 border border-emerald-200/50 rounded-lg">
+                                <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0"></span>
+                                <div class="flex-1 min-w-0">
+                                    <div class="text-[10px] font-semibold text-emerald-700 uppercase tracking-wide">Approved</div>
+                                    <div class="text-[11px] text-on-surface truncate">Certify Gold_Sales_DW.sales_clean</div>
+                                </div>
+                                <span class="text-[10px] text-on-surface-variant font-mono shrink-0">02:41</span>
+                            </div>
+                            <div class="flex items-center gap-2 p-2 bg-surface-container-low/60 rounded-lg">
+                                <span class="w-1.5 h-1.5 rounded-full bg-primary shrink-0"></span>
+                                <div class="flex-1 min-w-0">
+                                    <div class="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wide">Write</div>
+                                    <div class="text-[11px] text-on-surface truncate">Upserted sales_clean · 15.4M rows</div>
+                                </div>
+                                <span class="text-[10px] text-on-surface-variant font-mono shrink-0">02:12</span>
+                            </div>
+                            <div class="flex items-center gap-2 p-2 bg-amber-50/60 border border-amber-200/60 rounded-lg">
+                                <span class="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0"></span>
+                                <div class="flex-1 min-w-0">
+                                    <div class="text-[10px] font-semibold text-amber-700 uppercase tracking-wide">Setting</div>
+                                    <div class="text-[11px] text-on-surface truncate">certified=true on sales_clean</div>
+                                </div>
+                                <span class="text-[10px] text-on-surface-variant font-mono shrink-0">02:43</span>
+                            </div>
+                            <div class="flex items-center gap-2 p-2 bg-surface-container-low/60 rounded-lg">
+                                <span class="w-1.5 h-1.5 rounded-full bg-primary shrink-0"></span>
+                                <div class="flex-1 min-w-0">
+                                    <div class="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wide">Connection</div>
+                                    <div class="text-[11px] text-on-surface truncate">Sales Weekly → Gold_Sales_DW</div>
+                                </div>
+                                <span class="text-[10px] text-on-surface-variant font-mono shrink-0">02:58</span>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+            </aside>
+
+        </div>
+    </section>
+
+    <!-- ══════════════════════════════════════════════════════════════
+         SCREEN 6 — Complete
+         Graph all green + result summary + contributions
+         ══════════════════════════════════════════════════════════════ -->
+    <section class="screen flex-col overflow-y-auto smooth-scroll" data-screen="6" aria-labelledby="s6-title">
+
+        <div class="max-w-[1240px] mx-auto w-full px-8 pt-8 pb-12 space-y-6">
+
+            <header class="flex items-start justify-between gap-4 slide-up">
+                <div>
+                    <div class="dh-section-label mb-2" style="color: #2e7d32;">
+                        <span class="material-symbols-outlined text-[20px] filled">check_circle</span>
+                        <h3>Run complete · 3 min 47 s</h3>
+                    </div>
+                    <h1 class="dh-h1" id="s6-title">Weekly sales Gold dataset is certified &amp; published.</h1>
+                    <p class="dh-subtitle mt-1 max-w-[42rem]">3 agents · 7 steps · 2 approvals · 0 errors. Everything the team produced is below.</p>
+                </div>
+                <div class="flex items-center gap-2 shrink-0">
+                    <button class="flex items-center gap-1.5 px-3 py-1.5 bg-surface-container-low hover:bg-surface-container-high rounded-lg text-xs font-medium text-on-surface-variant">
+                        <span class="material-symbols-outlined text-[16px]">download</span>
+                        Export as Markdown
+                    </button>
+                    <button class="flex items-center gap-1.5 px-3 py-1.5 bg-surface-container-low hover:bg-surface-container-high rounded-lg text-xs font-medium text-on-surface-variant">
+                        <span class="material-symbols-outlined text-[16px]">bookmark_add</span>
+                        Save as template
+                    </button>
+                    <button class="flex items-center gap-1.5 px-3 py-1.5 bg-primary hover:bg-primary/90 text-white rounded-lg text-xs font-semibold" data-goto="1">
+                        <span class="material-symbols-outlined text-[16px]">add_circle</span>
+                        Start another
+                    </button>
+                </div>
+            </header>
+
+            <div class="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_360px] gap-5 mc-split-panel">
+
+                <!-- Final graph -->
+                <div class="bg-surface-container-lowest rounded-xl border border-outline-variant/15 p-5 shadow-[0_2px_12px_rgba(0,0,0,0.04)]">
+                    <div class="flex items-center justify-between mb-3">
+                        <div class="flex items-center gap-2">
+                            <span class="mc-pill mc-pill--done">Run complete</span>
+                            <span class="text-[11px] text-on-surface-variant">Supervisor pattern · 4 nodes all green</span>
+                        </div>
+                    </div>
+
+                    <div class="orch-canvas" style="height: 420px;">
+                        <svg class="orch-edges" viewBox="0 0 740 460" preserveAspectRatio="none" aria-hidden="true">
+                            <path class="orch-edge" data-kind="report" d="M 370 115 C 370 200, 130 220, 130 300"/>
+                            <path class="orch-edge" data-kind="report" d="M 370 115 L 370 300"/>
+                            <path class="orch-edge" data-kind="report" d="M 370 115 C 370 200, 610 220, 610 300"/>
+                            <path class="orch-edge" data-kind="peer" d="M 230 345 L 270 345"/>
+                            <path class="orch-edge" data-kind="peer" d="M 470 345 L 510 345"/>
+                        </svg>
+
+                        <div class="orch-node" data-state="done" style="left: 270px; top: 30px;">
+                            <div class="orch-node__head">
+                                <div class="orch-node__icon" data-agent="orch"><span class="material-symbols-outlined text-[18px] filled">hub</span></div>
+                                <div><div class="orch-node__title">Orchestrator</div><div class="orch-node__role">Finalized</div></div>
+                            </div>
+                            <div class="orch-node__state"><span class="orch-node__state-dot"></span> 7 steps · 0 errors</div>
+                        </div>
+                        <div class="orch-node" data-state="done" style="left: 30px; top: 300px;">
+                            <div class="orch-node__head">
+                                <div class="orch-node__icon" data-agent="fde"><span class="material-symbols-outlined text-[18px]">engineering</span></div>
+                                <div><div class="orch-node__title">FabricDataEngineer</div><div class="orch-node__role">Done</div></div>
+                            </div>
+                            <div class="orch-node__state"><span class="orch-node__state-dot"></span> 1m 48s · wrote sales_clean</div>
+                        </div>
+                        <div class="orch-node" data-state="done" style="left: 270px; top: 300px;">
+                            <div class="orch-node__head">
+                                <div class="orch-node__icon" data-agent="admin"><span class="material-symbols-outlined text-[18px]">admin_panel_settings</span></div>
+                                <div><div class="orch-node__title">FabricAdmin</div><div class="orch-node__role">Done</div></div>
+                            </div>
+                            <div class="orch-node__state"><span class="orch-node__state-dot"></span> certified · 99.994 %</div>
+                        </div>
+                        <div class="orch-node" data-state="done" style="left: 510px; top: 300px;">
+                            <div class="orch-node__head">
+                                <div class="orch-node__icon" data-agent="reporter"><span class="material-symbols-outlined text-[18px]">bar_chart</span></div>
+                                <div><div class="orch-node__title">SalesReporter</div><div class="orch-node__role">Done · published</div></div>
+                            </div>
+                            <div class="orch-node__state"><span class="orch-node__state-dot"></span> refreshed + doc'd</div>
+                        </div>
+                    </div>
+
+                    <div class="orch-legend mt-4">
+                        <div class="orch-legend-item"><span class="orch-legend-swatch" data-kind="report"></span> Reports back (complete)</div>
+                        <div class="orch-legend-item"><span class="orch-legend-swatch" data-kind="peer"></span> Peer handoff</div>
+                    </div>
+                </div>
+
+                <!-- Results column -->
+                <aside class="flex flex-col gap-4 min-w-0">
+
+                    <div class="bg-surface-container-lowest rounded-xl border border-outline-variant/15 p-5 shadow-[0_2px_12px_rgba(0,0,0,0.04)]">
+                        <div class="dh-eyebrow mb-2">Artifacts produced</div>
+                        <ul class="space-y-2">
+                            <li class="flex items-center gap-2">
+                                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold fabric-badge-warehouse">
+                                    <span class="material-symbols-outlined text-[12px]">warehouse</span>
+                                    Gold_Sales_DW.sales_clean
+                                </span>
+                                <span class="text-[10px] text-emerald-700 font-bold">certified</span>
+                            </li>
+                            <li class="flex items-center gap-2">
+                                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold fabric-badge-pipeline">
+                                    <span class="material-symbols-outlined text-[12px]">conveyor_belt</span>
+                                    weekly_sales_ingest
+                                </span>
+                                <span class="text-[10px] text-on-surface-variant">new pipeline</span>
+                            </li>
+                            <li class="flex items-center gap-2">
+                                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold fabric-badge-notebook">
+                                    <span class="material-symbols-outlined text-[12px]">description</span>
+                                    sales_weekly_run_notes.md
+                                </span>
+                            </li>
+                            <li class="flex items-center gap-2">
+                                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold" style="background:#e3f2fd;color:#1565c0;">
+                                    <span class="material-symbols-outlined text-[12px]">table_chart</span>
+                                    Sales Weekly (semantic model)
+                                </span>
+                                <span class="text-[10px] text-emerald-700 font-bold">refreshed</span>
+                            </li>
+                        </ul>
+                    </div>
+
+                    <div class="bg-surface-container-lowest rounded-xl border border-outline-variant/15 p-5 shadow-[0_2px_12px_rgba(0,0,0,0.04)]">
+                        <div class="dh-eyebrow mb-2">Who did what</div>
+                        <ul class="space-y-3 text-[13px]">
+                            <li class="flex items-start gap-2.5">
+                                <span class="orch-node__icon" data-agent="orch" style="width:26px; height:26px;"><span class="material-symbols-outlined text-[16px] filled">hub</span></span>
+                                <div class="min-w-0">
+                                    <div class="font-semibold">Orchestrator</div>
+                                    <div class="text-[11px] text-on-surface-variant leading-snug">Planned 7 steps, routed 2 handoffs, escalated 1 approval to you.</div>
+                                </div>
+                            </li>
+                            <li class="flex items-start gap-2.5">
+                                <span class="orch-node__icon" data-agent="fde" style="width:26px; height:26px;"><span class="material-symbols-outlined text-[16px]">engineering</span></span>
+                                <div class="min-w-0">
+                                    <div class="font-semibold">FabricDataEngineer</div>
+                                    <div class="text-[11px] text-on-surface-variant leading-snug">Discovered sources, aligned schema, wrote 15.4 M rows to <code class="text-[11px]">sales_clean</code>.</div>
+                                </div>
+                            </li>
+                            <li class="flex items-start gap-2.5">
+                                <span class="orch-node__icon" data-agent="admin" style="width:26px; height:26px;"><span class="material-symbols-outlined text-[16px]">admin_panel_settings</span></span>
+                                <div class="min-w-0">
+                                    <div class="font-semibold">FabricAdmin</div>
+                                    <div class="text-[11px] text-on-surface-variant leading-snug">Reconciled row counts, ran policy check, certified Gold dataset (human-approved).</div>
+                                </div>
+                            </li>
+                            <li class="flex items-start gap-2.5">
+                                <span class="orch-node__icon" data-agent="reporter" style="width:26px; height:26px;"><span class="material-symbols-outlined text-[16px]">bar_chart</span></span>
+                                <div class="min-w-0">
+                                    <div class="font-semibold">SalesReporter</div>
+                                    <div class="text-[11px] text-on-surface-variant leading-snug">Refreshed Sales Weekly model, updated dataset docs, notified 2 dashboards.</div>
+                                </div>
+                            </li>
+                        </ul>
+                    </div>
+
+                </aside>
+
+            </div>
+
+            <!-- ── Full run log with per-agent filters ───────────────── -->
+            <section class="bg-surface-container-lowest rounded-xl border border-outline-variant/15 shadow-[0_2px_12px_rgba(0,0,0,0.04)] overflow-hidden mc-run-log" data-log-filter="all" aria-label="Full run log">
+
+                <header class="flex items-center justify-between gap-3 px-5 py-3 border-b border-outline-variant/10 bg-surface-container-lowest">
+                    <div class="flex items-center gap-2">
+                        <span class="material-symbols-outlined text-[18px] text-on-surface-variant">terminal</span>
+                        <h2 class="text-sm font-semibold">Full run log</h2>
+                        <span class="text-[11px] text-on-surface-variant">23 entries · 3 min 47 s</span>
+                    </div>
+                    <div class="flex items-center gap-1 text-[11px] text-on-surface-variant">
+                        <button class="mc-run-log__action" title="Copy log"><span class="material-symbols-outlined text-[14px]">content_copy</span> Copy</button>
+                        <button class="mc-run-log__action" title="Download as text"><span class="material-symbols-outlined text-[14px]">download</span> .log</button>
+                    </div>
+                </header>
+
+                <!-- Filter tabs -->
+                <div class="mc-run-log__filters" role="tablist" aria-label="Filter log by agent">
+                    <button type="button" class="mc-run-log__tab" data-filter="all" role="tab" aria-selected="true">
+                        <span class="material-symbols-outlined text-[14px]">select_all</span>
+                        All agents
+                        <span class="mc-run-log__count">23</span>
+                    </button>
+                    <button type="button" class="mc-run-log__tab" data-filter="orch" role="tab" aria-selected="false">
+                        <span class="mc-agent-chip__icon" data-agent="orch" style="width:20px; height:20px; border-radius:6px;"><span class="material-symbols-outlined text-[12px] filled">hub</span></span>
+                        Orchestrator
+                        <span class="mc-run-log__count">5</span>
+                    </button>
+                    <button type="button" class="mc-run-log__tab" data-filter="fde" role="tab" aria-selected="false">
+                        <span class="mc-agent-chip__icon" data-agent="fde" style="width:20px; height:20px; border-radius:6px;"><span class="material-symbols-outlined text-[12px]">engineering</span></span>
+                        FabricDataEngineer
+                        <span class="mc-run-log__count">7</span>
+                    </button>
+                    <button type="button" class="mc-run-log__tab" data-filter="admin" role="tab" aria-selected="false">
+                        <span class="mc-agent-chip__icon" data-agent="admin" style="width:20px; height:20px; border-radius:6px;"><span class="material-symbols-outlined text-[12px]">admin_panel_settings</span></span>
+                        FabricAdmin
+                        <span class="mc-run-log__count">6</span>
+                    </button>
+                    <button type="button" class="mc-run-log__tab" data-filter="reporter" role="tab" aria-selected="false">
+                        <span class="mc-agent-chip__icon" data-agent="reporter" style="width:20px; height:20px; border-radius:6px;"><span class="material-symbols-outlined text-[12px]">bar_chart</span></span>
+                        SalesReporter
+                        <span class="mc-run-log__count">5</span>
+                    </button>
+                </div>
+
+                <!-- Log entries — each tagged with data-agent for filtering -->
+                <div class="mc-run-log__entries px-5 py-4 space-y-4">
+
+                    <div class="mc-run-log__entry" data-agent="orch">
+                        <div class="mc-run-log__row">
+                            <span class="mc-agent-chip__icon" data-agent="orch" style="width:24px; height:24px;"><span class="material-symbols-outlined text-[14px] filled">hub</span></span>
+                            <div class="mc-run-log__meta">
+                                <div class="mc-run-log__who">Orchestrator · plan issued</div>
+                                <div class="mc-run-log__time">00:00:03</div>
+                            </div>
+                        </div>
+                        <div class="mc-run-log__body">Split task into 3 workstreams. FDE → ingest &amp; normalize. Admin → reconcile &amp; certify. Reporter → refresh &amp; publish.</div>
+                    </div>
+
+                    <div class="mc-run-log__entry" data-agent="fde">
+                        <div class="mc-run-log__row">
+                            <span class="mc-agent-chip__icon" data-agent="fde" style="width:24px; height:24px;"><span class="material-symbols-outlined text-[14px]">engineering</span></span>
+                            <div class="mc-run-log__meta">
+                                <div class="mc-run-log__who">FabricDataEngineer · source discovery</div>
+                                <div class="mc-run-log__time">00:00:06 · 32 s</div>
+                            </div>
+                        </div>
+                        <div class="mc-run-log__body">Scanning <code>OneLake://corporate-sales-raw</code>. Identified 4 missing partitions for 2024-Q3.</div>
+                    </div>
+
+                    <div class="mc-run-log__entry" data-agent="fde">
+                        <div class="mc-run-log__row">
+                            <span class="mc-agent-chip__icon" data-agent="fde" style="width:24px; height:24px;"><span class="material-symbols-outlined text-[14px]">engineering</span></span>
+                            <div class="mc-run-log__meta">
+                                <div class="mc-run-log__who">FabricDataEngineer · schema alignment</div>
+                                <div class="mc-run-log__time">00:00:38 · 28 s</div>
+                            </div>
+                        </div>
+                        <div class="mc-run-log__body">Detected <code>currency</code> column type conflict between NA (String) and EU (Enum). Cast to ISO-4217 codes.</div>
+                    </div>
+
+                    <div class="mc-run-log__entry" data-agent="fde">
+                        <div class="mc-run-log__row">
+                            <span class="mc-agent-chip__icon" data-agent="fde" style="width:24px; height:24px;"><span class="material-symbols-outlined text-[14px]">engineering</span></span>
+                            <div class="mc-run-log__meta">
+                                <div class="mc-run-log__who">FabricDataEngineer · wrote sales_clean</div>
+                                <div class="mc-run-log__time">00:01:06 · 42 s</div>
+                            </div>
+                        </div>
+                        <div class="mc-run-log__body">Wrote 15,440,103 rows to <code>Gold_Sales_DW.sales_clean</code>. Handed off to FabricAdmin.</div>
+                    </div>
+
+                    <div class="mc-run-log__entry" data-agent="admin">
+                        <div class="mc-run-log__row">
+                            <span class="mc-agent-chip__icon" data-agent="admin" style="width:24px; height:24px;"><span class="material-symbols-outlined text-[14px]">admin_panel_settings</span></span>
+                            <div class="mc-run-log__meta">
+                                <div class="mc-run-log__who">FabricAdmin · row-count reconciliation</div>
+                                <div class="mc-run-log__time">00:01:48 · 14 s</div>
+                            </div>
+                        </div>
+                        <div class="mc-run-log__body">Source 15,440,846 · target 15,440,103 · Δ −743 (0.006 %) · within ≤ 0.05 % tolerance.</div>
+                    </div>
+
+                    <div class="mc-run-log__entry" data-agent="admin">
+                        <div class="mc-run-log__row">
+                            <span class="mc-agent-chip__icon" data-agent="admin" style="width:24px; height:24px;"><span class="material-symbols-outlined text-[14px]">admin_panel_settings</span></span>
+                            <div class="mc-run-log__meta">
+                                <div class="mc-run-log__who">FabricAdmin · approval request</div>
+                                <div class="mc-run-log__time">00:02:02</div>
+                            </div>
+                        </div>
+                        <div class="mc-run-log__body"><span class="text-amber-700 font-semibold">Requested human approval</span> to set <code>certified=true</code> on sales_clean. Approved by <em>you</em> at 00:02:34.</div>
+                    </div>
+
+                    <div class="mc-run-log__entry" data-agent="admin">
+                        <div class="mc-run-log__row">
+                            <span class="mc-agent-chip__icon" data-agent="admin" style="width:24px; height:24px;"><span class="material-symbols-outlined text-[14px]">admin_panel_settings</span></span>
+                            <div class="mc-run-log__meta">
+                                <div class="mc-run-log__who">FabricAdmin · certified Gold dataset</div>
+                                <div class="mc-run-log__time">00:02:34 · 0.3 s</div>
+                            </div>
+                        </div>
+                        <div class="mc-run-log__body">Set <code>certified=true</code> on <code>Gold_Sales_DW.sales_clean</code>. Handed off to SalesReporter.</div>
+                    </div>
+
+                    <div class="mc-run-log__entry" data-agent="reporter">
+                        <div class="mc-run-log__row">
+                            <span class="mc-agent-chip__icon" data-agent="reporter" style="width:24px; height:24px;"><span class="material-symbols-outlined text-[14px]">bar_chart</span></span>
+                            <div class="mc-run-log__meta">
+                                <div class="mc-run-log__who">SalesReporter · semantic model refresh</div>
+                                <div class="mc-run-log__time">00:02:36 · 58 s</div>
+                            </div>
+                        </div>
+                        <div class="mc-run-log__body">Refreshed <code>Sales Weekly</code> against newly-certified Gold dataset. 3 partitions processed.</div>
+                    </div>
+
+                    <div class="mc-run-log__entry" data-agent="reporter">
+                        <div class="mc-run-log__row">
+                            <span class="mc-agent-chip__icon" data-agent="reporter" style="width:24px; height:24px;"><span class="material-symbols-outlined text-[14px]">bar_chart</span></span>
+                            <div class="mc-run-log__meta">
+                                <div class="mc-run-log__who">SalesReporter · published &amp; notified</div>
+                                <div class="mc-run-log__time">00:03:34 · 13 s</div>
+                            </div>
+                        </div>
+                        <div class="mc-run-log__body">Updated dataset docs. Notified 2 downstream dashboards (Sales Overview · Exec KPIs).</div>
+                    </div>
+
+                    <div class="mc-run-log__entry" data-agent="orch">
+                        <div class="mc-run-log__row">
+                            <span class="mc-agent-chip__icon" data-agent="orch" style="width:24px; height:24px;"><span class="material-symbols-outlined text-[14px] filled">hub</span></span>
+                            <div class="mc-run-log__meta">
+                                <div class="mc-run-log__who">Orchestrator · run finalized</div>
+                                <div class="mc-run-log__time">00:03:47</div>
+                            </div>
+                        </div>
+                        <div class="mc-run-log__body">7 steps · 2 approvals · 0 errors. Saving run transcript and run-notes artifact.</div>
+                    </div>
+
+                    <p class="mc-run-log__empty text-[12px] text-on-surface-variant italic text-center py-6">No entries for the selected agent.</p>
+                </div>
+            </section>
+
+        </div>
+    </section>
+
+    <!-- ══════════════════════════════════════════════════════════════
+         Bottom clickthrough nav
+         ══════════════════════════════════════════════════════════════ -->
+    <nav class="mc-nav" aria-label="Prototype screens">
+        <button id="mc-prev" class="flex items-center gap-1.5 px-3 py-1.5 bg-surface-container-low hover:bg-surface-container-high text-on-surface-variant rounded-lg text-xs font-medium disabled:opacity-40 disabled:cursor-not-allowed">
+            <span class="material-symbols-outlined text-[16px]">arrow_back</span>
+            Back
+        </button>
+        <div class="mc-nav__crumbs" id="mc-crumbs" role="tablist" aria-label="Jump to screen"></div>
+        <button id="mc-next" class="flex items-center gap-1.5 px-3 py-1.5 bg-primary hover:bg-primary/90 text-white rounded-lg text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed">
+            Next
+            <span class="material-symbols-outlined text-[16px]">arrow_forward</span>
+        </button>
+    </nav>
+
+    </main>
+
+</div>
+
+<div class="mock-banner" role="note">Prototype — not connected to any backend · no agents run · no tools are called</div>
+
+<script src="strings.js"></script>
+<script src="nav.js"></script>
+<script src="team-panel.js"></script>
+
+</body>
+</html>
