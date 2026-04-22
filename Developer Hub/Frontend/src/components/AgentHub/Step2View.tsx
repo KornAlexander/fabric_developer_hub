@@ -211,6 +211,14 @@ export interface Step2ViewProps {
     branchOut?: boolean;
     branchName?: string | null;
     sourceWorkspaceName?: string | null;
+    /** Display name of the compose model the user picked in Step 1
+     *  (e.g. ``"GPT-4.1"``). Surfaced in the task-prompt recap so the
+     *  model stays visible through planning and review. */
+    modelName?: string | null;
+    /** ``true`` when the chosen model is the composer's top pick. */
+    modelTopPick?: boolean;
+    /** ``true`` when the chosen model is in the recommended tier. */
+    modelRecommended?: boolean;
     onRun: () => void;
     onBack: () => void;
     /** Called when the user picks a different architecture from the
@@ -239,6 +247,9 @@ export function Step2View({
     branchOut,
     branchName,
     sourceWorkspaceName,
+    modelName,
+    modelTopPick,
+    modelRecommended,
     onRun,
     onBack,
     onRegenerateAs,
@@ -290,7 +301,60 @@ export function Step2View({
     // the canvas at the floor and let the wrapper scroll horizontally —
     // panning beats scaling on small viewports.
     const canvasWrapRef = useRef<HTMLDivElement | null>(null);
-    const team: Team | null = plan?.team ?? null;
+    const rawTeam: Team | null = plan?.team ?? null;
+
+    // Resolve workspace GUIDs appearing in node role strings to their
+    // human-readable names before rendering. The backend sometimes
+    // composes roles like "Configure the default Spark pool on
+    // workspace 9e460dd1-…" — raw GUIDs are unreadable on a card,
+    // so we substitute the destination-workspace name when the GUID
+    // matches, names for any added context workspaces, and fall back
+    // to a short "<last-8>…" form for truly unknown ids. Memoised so
+    // node identity stays stable across re-renders (prevents canvas
+    // relayout on hover, etc.).
+    const workspaceNameById = useMemo(() => {
+        const map = new Map<string, string>();
+        if (workspaceId && workspaceName) {
+            map.set(workspaceId.toLowerCase(), workspaceName);
+        }
+        (workspaceItems || []).forEach((it: any) => {
+            const typeLower = String(it?.itemType || it?.type || "").toLowerCase();
+            if (!typeLower.includes("workspace")) return;
+            const id = String(it?.id || "").toLowerCase();
+            const name = it?.displayName || it?.name;
+            if (id && name) map.set(id, name);
+        });
+        return map;
+    }, [workspaceId, workspaceName, workspaceItems]);
+
+    const humanizeRoleText = useMemo(() => {
+        // 36-char canonical UUID form. Matches anywhere in the role
+        // text (with or without a preceding "workspace " word).
+        const UUID_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
+        return (raw: string): string => {
+            if (!raw) return raw;
+            return raw.replace(UUID_RE, (guid) => {
+                const hit = workspaceNameById.get(guid.toLowerCase());
+                if (hit) return `"${hit}"`;
+                // Unknown workspace — keep a compact reference the
+                // user can still correlate, without blowing up the
+                // card width. "…def84" reads as a short reference.
+                return `"…${guid.slice(-8)}"`;
+            });
+        };
+    }, [workspaceNameById]);
+
+    const team: Team | null = useMemo(() => {
+        if (!rawTeam) return null;
+        const anyNeedsRewrite = rawTeam.nodes.some(n =>
+            /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i.test(n.role || "")
+        );
+        if (!anyNeedsRewrite) return rawTeam;
+        return {
+            ...rawTeam,
+            nodes: rawTeam.nodes.map(n => ({ ...n, role: humanizeRoleText(n.role) })),
+        };
+    }, [rawTeam, humanizeRoleText]);
     // Shared hover/focus state for cross-highlighting between the
     // graph nodes and the sidebar role cards. Hovering a node in
     // either surface lights up the matching peer in the other.
@@ -576,6 +640,35 @@ export function Step2View({
                     <p className="mc-review__subtitle mc-step2__subtitle" key={subtitle}>
                         {subtitle}
                     </p>
+                    {/* "Planning with / Planned by" attribution — tells
+                       the user which LLM composed this team. Lives in
+                       the header (not the task-prompt recap) because
+                       the model is an authoring artefact of the plan,
+                       not part of the user's task input.
+
+                       Design notes: no leading icon (the eyebrow above
+                       already owns the sparkle treatment) and no
+                       uppercase label (competes with the eyebrow as a
+                       third hierarchy tier). Plain sentence-case reads
+                       as a natural continuation of the subtitle. */}
+                    {modelName && (
+                        <div
+                            className="mc-step2__attribution"
+                            title={
+                                loading || !team
+                                    ? `Planning this team with ${modelName}${modelTopPick ? " (recommended for this task)" : ""}`
+                                    : `This plan was composed by ${modelName}${modelTopPick ? " (recommended for this task)" : ""}`
+                            }
+                        >
+                            <span className="mc-step2__attribution-prefix">
+                                {loading || !team ? "Planning with" : "Planned by"}
+                            </span>
+                            <span className="mc-step2__attribution-model">{modelName}</span>
+                            {modelTopPick && (
+                                <span className="mc-step2__attribution-badge">Recommended</span>
+                            )}
+                        </div>
+                    )}
                 </div>
                 <div className="mc-review__actions">
                     <button

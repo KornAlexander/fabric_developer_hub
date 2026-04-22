@@ -284,6 +284,10 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
     // once on mount; persists across re-renders. Empty list ⇒ hide the
     // picker and let the backend pick the default.
     const [composeModels, setComposeModels] = useState<api.ComposeModelEntry[]>([]);
+    // True until the initial catalog fetch resolves (success or fail).
+    // Drives a shimmer placeholder in the picker so it never reads
+    // "Default model" while we're actually still loading.
+    const [composeModelsLoading, setComposeModelsLoading] = useState<boolean>(true);
     // User's current selection. When null we send no ``model`` to the
     // backend and it picks the top-ranked option from the catalog.
     const [selectedModel, setSelectedModel] = useState<string | null>(
@@ -305,6 +309,8 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                 }
             } catch {
                 if (!cancelled) setComposeModels([]);
+            } finally {
+                if (!cancelled) setComposeModelsLoading(false);
             }
         })();
         return () => { cancelled = true; };
@@ -3288,13 +3294,26 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                                                 <Button
                                                     appearance="subtle"
                                                     size="small"
-                                                    className="composer-model-btn"
-                                                    disabled={planning || composeModels.length === 0}
-                                                    title={effectiveModel ? `Composer model: ${effectiveModel.name}` : "Loading models…"}
+                                                    className={`composer-model-btn${composeModelsLoading ? " composer-model-btn--loading" : ""}`}
+                                                    disabled={planning || composeModelsLoading || composeModels.length === 0}
+                                                    title={
+                                                        composeModelsLoading
+                                                            ? "Loading available models\u2026"
+                                                            : effectiveModel
+                                                                ? `Composer model: ${effectiveModel.name}`
+                                                                : "No compatible models available"
+                                                    }
                                                     iconPosition="after"
-                                                    icon={<ChevronDown16Regular />}
+                                                    icon={composeModelsLoading ? undefined : <ChevronDown16Regular />}
                                                 >
-                                                    {effectiveModel?.name || "Default model"}
+                                                    {composeModelsLoading ? (
+                                                        <span className="composer-model-loading" aria-live="polite">
+                                                            <span className="composer-model-loading-shimmer" aria-hidden="true" />
+                                                            <span className="composer-model-loading-label">Loading models…</span>
+                                                        </span>
+                                                    ) : (
+                                                        effectiveModel?.name || "No models available"
+                                                    )}
                                                 </Button>
                                             </MenuTrigger>
                                             <MenuPopover className="composer-model-menu">
@@ -3378,6 +3397,9 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                                 branchOut={branchOut}
                                 branchName={branchOut ? (branchName || null) : null}
                                 sourceWorkspaceName={branchOut ? (wsName || null) : null}
+                                modelName={effectiveModel?.name || null}
+                                modelTopPick={!!effectiveModel?.top_pick}
+                                modelRecommended={!!effectiveModel?.recommended}
                                 onRun={handleApprove}
                                 onBack={handleCancelPlanning}
                                 error={error}

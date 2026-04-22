@@ -725,14 +725,17 @@ export function OrchCanvas({
                                     nodeLabel={n.agent}
                                 />
                             ) : null}
-                            {/* Pre-run (``planned``) adds no value here — the
-                                dashed border + legend already communicate it.
-                                Only render the state row once a node has an
-                                actual runtime status worth calling out. */}
-                            {state !== "planned" && (
+                            {/* Runtime status row — only rendered when the
+                                node has a real ``status`` from the backend
+                                (e.g. live execution in mission control).
+                                In Step 2 / Review no status exists yet, so
+                                hovering must not fake a "Running" label;
+                                the lit ``data-active`` border conveys the
+                                highlight on its own. */}
+                            {n.status && n.status !== "planned" && (
                                 <div className="mc-node__state">
                                     <span className="mc-node__state-dot" />
-                                    {STATE_LABEL[state] || state}
+                                    {STATE_LABEL[n.status] || n.status}
                                 </div>
                             )}
                         </div>
