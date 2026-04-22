@@ -706,7 +706,7 @@ export function OrchCanvas({
                                     <div className="mc-node__role">{formatRole(n.role)}</div>
                                 </div>
                             </div>
-                            {n.id !== "orchestrator" && (n.skills?.length || n.allSkills?.length) ? (
+                            {(n.skills?.length || n.allSkills?.length) ? (
                                 <NodeSkills
                                     skills={n.skills}
                                     allSkills={n.allSkills}

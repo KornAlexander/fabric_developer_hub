@@ -227,6 +227,24 @@ skills:
       User asks whether skills are up-to-date or wants the changelog for
       Skills for Fabric.
 
+  team-orchestration:
+    name: Team orchestration
+    description: >-
+      Coordinator-plane capability owned by the Orchestrator. Covers
+      routing work across the team, validating handoffs between phases,
+      and expanding the team on demand — i.e. spinning up additional
+      agents mid-run when the plan turns out to need a capability that
+      isn't on the roster yet (e.g. realising partway through that an
+      Admin is needed to provision a workspace). Not backed by an MCP
+      tool; exposed via the ``POST /api/sessions/{id}/agents`` control
+      endpoint which the Orchestrator (or a human supervisor) calls to
+      attach a new ``AgentAssignment`` to the running job.
+    tools: []
+    applicable_when: >-
+      Always applicable to the Orchestrator. Never selected on worker
+      agents — those run a single scoped assignment and do not shape
+      the team.
+
   # ── Unique additions from AnalyticsPlatformAgents (3) ────────────
 
   paginated-report-authoring:
@@ -374,7 +392,12 @@ agent_skills:
   creator:
     - e2e-medallion-architecture
 
-  # Orchestrator coordinates the team. Its only direct concern is
-  # version hygiene across the marketplace.
+  # Orchestrator coordinates the team. Its skill surface is
+  # deliberately one entry — the coordinator-plane capability itself —
+  # so the UI shows a single accurate chip ("Team orchestration")
+  # rather than leaking implementation-detail skills onto the lead
+  # node. The runtime-side implementation lives in
+  # ``OrchestratorEngine.add_agent_to_job`` and is reachable via
+  # ``POST /api/sessions/{id}/agents``.
   orchestrator:
-    - check-updates
+    - team-orchestration

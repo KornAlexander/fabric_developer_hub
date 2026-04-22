@@ -117,6 +117,49 @@ def test_copilot_headers_shape() -> None:
     assert h["Content-Type"] == "application/json"
 
 
+@pytest.mark.asyncio
+async def test_add_agent_to_job_unknown_job_returns_none() -> None:
+    """Orchestrator's team-orchestration capability: attaching a new
+    agent to a job that doesn't exist in ``_active_jobs`` is a no-op
+    that returns ``None`` (not an exception)."""
+    engine = OrchestratorEngine()
+    result = await engine.add_agent_to_job(
+        "missing-job", agent_id="fabric-admin", role="Admin",
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_add_agent_to_job_unknown_agent_returns_none() -> None:
+    """Catalog protection: unknown ``agent_id`` is dropped rather than
+    crashing the running job."""
+    engine = OrchestratorEngine()
+    job = _make_job()
+    exe = _JobExecution(job, copilot_token="t", mcp_tokens=None)
+    engine._active_jobs[job.id] = exe
+    result = await engine.add_agent_to_job(
+        job.id, agent_id="does-not-exist", role="Ghost",
+    )
+    assert result is None
+    assert job.agents == []  # no assignment leaked in
+
+
+@pytest.mark.asyncio
+async def test_add_agent_to_job_when_cancelling_returns_none() -> None:
+    """A job that is stopping (cancel_event set) must refuse new
+    attachments — otherwise the new agent would race against
+    ``_monitor_job`` completion."""
+    engine = OrchestratorEngine()
+    job = _make_job()
+    exe = _JobExecution(job, copilot_token="t", mcp_tokens=None)
+    exe.cancel_event.set()
+    engine._active_jobs[job.id] = exe
+    result = await engine.add_agent_to_job(
+        job.id, agent_id="fabric-admin", role="Admin",
+    )
+    assert result is None
+
+
 # ── _detect_action_from_tool sweep ──────────────────────────────────
 
 

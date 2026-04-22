@@ -23,8 +23,9 @@ def test_default_catalog_loads_and_matches_known_shape() -> None:
     # Spot-check the count so future additions don't slip through
     # unnoticed — bump this number when you deliberately add a skill.
     # Current: 10 from skills-for-fabric + 3 unique from
-    # AnalyticsPlatformAgents + 1 Fabric Local MCP docs grounding = 14.
-    assert len(skills) == 14
+    # AnalyticsPlatformAgents + 1 Fabric Local MCP docs grounding
+    # + 1 team-orchestration (coordinator-plane) = 15.
+    assert len(skills) == 15
     assert len(agent_skills) == 7
 
     expected_agents = {
@@ -38,6 +39,14 @@ def test_default_catalog_loads_and_matches_known_shape() -> None:
     assert "fabric-api-docs" in skills
     for agent in ("fabric-app-dev", "fabric-data-engineer", "architect", "modeler"):
         assert "fabric-api-docs" in agent_skills[agent]
+
+    # Orchestrator surfaces ONLY its coordinator-plane capability —
+    # no domain skills leak onto the lead node (was leaking
+    # ``check-updates`` before the catalog refactor).
+    assert agent_skills["orchestrator"] == ["team-orchestration"]
+    assert "team-orchestration" in skills
+    # team-orchestration is intentionally tool-less (control plane).
+    assert skills["team-orchestration"].tools == []
 
 
 def test_every_skill_agent_reference_resolves() -> None:

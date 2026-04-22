@@ -299,6 +299,29 @@ class SendMessageRequest(BaseModel):
         return v
 
 
+class AddAgentRequest(BaseModel):
+    """Body for ``POST /api/sessions/{id}/agents``.
+
+    Drives the Orchestrator's team-orchestration capability: attach a
+    new agent to a running job on demand. ``agent_id`` must reference
+    a registered :class:`AgentTemplate` (e.g. ``fabric-admin``).
+    ``goal`` is optional — when omitted the engine synthesises one
+    from the job task + ``role`` + template skills, matching the path
+    used by ``start_job``.
+    """
+
+    agent_id: str = Field(min_length=1, max_length=64)
+    role: str = Field(min_length=1, max_length=160)
+    goal: str | None = Field(default=None, max_length=_MAX_MESSAGE_LEN)
+
+    @field_validator("agent_id")
+    @classmethod
+    def _validate_agent_id(cls, v: str) -> str:
+        if not _AGENT_ID_RE.match(v):
+            raise ValueError("agent_id has an invalid format")
+        return v
+
+
 class AgentConfigRequest(BaseModel):
     agent_template_id: str = Field(min_length=1, max_length=64)
     access_levels: dict[str, bool] = Field(default_factory=dict)

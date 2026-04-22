@@ -18,6 +18,7 @@ from api import github_chat_controller
 from domain.constants.workload_scopes import WorkloadScopes
 from domain.exceptions.exceptions import AuthenticationException
 from domain.models.agent_models import (
+    AddAgentRequest,
     AgentConfigRequest,
     ApprovePlanRequest,
     ComposeRequest,
@@ -1112,6 +1113,42 @@ async def send_message_to_session(
     if not ok:
         raise HTTPException(404, "Session not running or not found")
     return {"status": "sent"}
+
+
+@router.post("/sessions/{session_id}/agents")
+async def add_agent_to_session(
+    session_id: UUID,
+    req: AddAgentRequest,
+    ctx: AuthorizationContext | None = Depends(require_user),
+):
+    """Attach a new agent to a running session on demand.
+
+    Implements the runtime-side half of the Orchestrator's
+    ``team-orchestration`` skill. Callable by the session owner when
+    the execution surfaces a missing capability (e.g. realising
+    mid-run that a ``fabric-admin`` is needed to create a workspace).
+    Returns the newly-created ``AgentAssignment`` so the UI can
+    render it optimistically before the ``agent_added`` SSE frame
+    arrives.
+    """
+    user_key = _user_key_from_context(ctx)
+    _rate_limit(user_key, "add_agent")
+    _ensure_owner(session_store.get_session(str(session_id)), user_key)
+    assignment = await get_orchestrator_engine().add_agent_to_job(
+        str(session_id),
+        agent_id=req.agent_id,
+        role=req.role,
+        goal=req.goal,
+    )
+    if assignment is None:
+        raise HTTPException(
+            404,
+            "Session not running, stopping, or agent id unknown",
+        )
+    return {
+        "status": "attached",
+        "agent": assignment.model_dump(mode="json", by_alias=True),
+    }
 
 
 @router.get("/sessions/{session_id}/events")

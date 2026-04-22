@@ -809,6 +809,91 @@ class OrchestratorEngine:
                 q.put_nowait(message)
         return True
 
+    async def add_agent_to_job(
+        self,
+        job_id: str,
+        *,
+        agent_id: str,
+        role: str,
+        goal: str | None = None,
+    ) -> AgentAssignment | None:
+        """Attach a brand-new agent to an already-running job.
+
+        This is the runtime-side half of the Orchestrator's
+        ``team-orchestration`` skill: when execution reveals that the
+        original composition is missing a capability (e.g. the plan
+        needs a ``fabric-admin`` to provision a workspace but none was
+        composed), the Orchestrator (or a human supervisor, via the
+        ``POST /api/sessions/{id}/agents`` endpoint) can spawn an
+        additional agent without rebuilding the composition.
+
+        Mirrors the per-slot branch of :meth:`start_job` — builds an
+        ``AgentAssignment``, creates a user-message queue for it,
+        narrows the tool surface to the union of the template's
+        declared skills, and schedules the agent loop task on the same
+        ``_JobExecution``. Emits ``agent_added`` so SSE subscribers
+        can render the new node live.
+
+        Returns the created ``AgentAssignment`` on success, ``None``
+        when the job isn't running or the agent id is unknown.
+        """
+        exe = self._active_jobs.get(job_id)
+        if exe is None:
+            logger.info(
+                "[ORCHESTRATOR] add_agent_to_job: no active job %s", job_id,
+            )
+            return None
+        if exe.cancelled or exe.cancel_event.is_set():
+            logger.info(
+                "[ORCHESTRATOR] add_agent_to_job: job %s already stopping", job_id,
+            )
+            return None
+        tpl = get_template(agent_id)
+        if tpl is None:
+            logger.warning(
+                "[ORCHESTRATOR] add_agent_to_job: unknown agent '%s'", agent_id,
+            )
+            return None
+
+        job = exe.job
+        assignment = AgentAssignment(
+            agent_id=agent_id,
+            session_id=str(uuid.uuid4()),
+            role=role,
+            goal=(
+                goal
+                or _build_slot_goal(
+                    task=(job.composition.task if job.composition else job.task_description),
+                    slot_role=role,
+                    skills=[sk.name for sk in tpl.skills],
+                )
+            ),
+            status=AgentStatus.QUEUED,
+        )
+        job.agents.append(assignment)
+        update_session(job)
+
+        user_q: asyncio.Queue = asyncio.Queue()
+        exe.user_message_queues[assignment.session_id] = user_q
+        # Dynamically-added agents get the template's full tool surface
+        # by default — there's no composition slot to narrow against.
+        allowed = set(tpl.available_tools)
+        task = asyncio.create_task(
+            self._run_agent(exe, assignment, tpl, user_q, allowed_tools=allowed)
+        )
+        exe.tasks.append(task)
+
+        exe.emit(
+            "agent_added",
+            jobId=job.id,
+            agent=assignment.model_dump(mode="json", by_alias=True),
+        )
+        logger.info(
+            "[ORCHESTRATOR] add_agent_to_job: attached %s (%s) to job %s",
+            agent_id, assignment.session_id, job_id,
+        )
+        return assignment
+
 
 # ── Output parsing helpers (stateless) ───────────────────────────────
 
