@@ -64,6 +64,12 @@ export interface OrchCanvasProps {
      *  and passes the clamped width so the layout adapts to the card,
      *  rather than always baking to 740 and relying on a CSS scale. */
     canvasWidth?: number;
+    /** Hover/focus callbacks so the parent can cross-highlight a
+     *  matching role card in the sidebar. Pass ``null`` on leave/blur
+     *  to clear the hover. Click is intentionally not wired — the
+     *  canvas-to-sidebar highlight is a transient "what is this?"
+     *  affordance, not a selection. */
+    onNodeHover?: (agentId: string | null) => void;
 }
 
 export function agentKind(agent: string, id: string): string {
@@ -426,6 +432,7 @@ export function OrchCanvas({
     showLegend = true,
     compact = false,
     canvasWidth,
+    onNodeHover,
 }: OrchCanvasProps) {
     const effectiveW = Math.max(NATURAL_W_FLOOR, canvasWidth ?? CANVAS_W_DEFAULT);
     const { positions, height, canvasClass } = useMemo(
@@ -690,8 +697,13 @@ export function OrchCanvas({
                             className="mc-node"
                             data-agent={kind}
                             data-state={state}
+                            data-active={active ? "true" : undefined}
                             tabIndex={0}
                             style={{ left: pos.x, top: pos.y, width: pos.w }}
+                            onMouseEnter={onNodeHover ? () => onNodeHover(n.id) : undefined}
+                            onMouseLeave={onNodeHover ? () => onNodeHover(null) : undefined}
+                            onFocus={onNodeHover ? () => onNodeHover(n.id) : undefined}
+                            onBlur={onNodeHover ? () => onNodeHover(null) : undefined}
                         >
                             <div className="mc-node__head">
                                 <span

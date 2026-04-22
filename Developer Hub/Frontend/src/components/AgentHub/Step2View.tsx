@@ -291,6 +291,10 @@ export function Step2View({
     // panning beats scaling on small viewports.
     const canvasWrapRef = useRef<HTMLDivElement | null>(null);
     const team: Team | null = plan?.team ?? null;
+    // Shared hover/focus state for cross-highlighting between the
+    // graph nodes and the sidebar role cards. Hovering a node in
+    // either surface lights up the matching peer in the other.
+    const [hoveredAgentId, setHoveredAgentId] = useState<string | null>(null);
     const pattern = (team?.pattern || "supervisor") as TeamPattern;
     const meta = PATTERN_META[pattern] || PATTERN_META.supervisor;
     const agentCount = team?.nodes.length || 0;
@@ -346,6 +350,21 @@ export function Step2View({
     // use this true height so the initial fit-to-view centers on the
     // real bounding box instead of clipping rows.
     const [measuredH, setMeasuredH] = useState<number>(naturalSize.height);
+    // Observed viewport height — ``useCanvasFit`` measures width, but
+    // fit-to-view must consider both axes or a tall hierarchical tree
+    // overflows the top of the stage when the width-fit scale is too
+    // generous. We keep a separate observer tied to the same element
+    // so ``scale`` and ``measuredH`` combine into a true "fit" below.
+    const [measuredViewportH, setMeasuredViewportH] = useState<number>(0);
+    useLayoutEffect(() => {
+        const el = canvasScrollRef.current;
+        if (!el) return undefined;
+        const read = () => setMeasuredViewportH(el.clientHeight);
+        read();
+        const ro = new ResizeObserver(read);
+        ro.observe(el);
+        return () => ro.disconnect();
+    }, []);
     useLayoutEffect(() => {
         const el = canvasInnerRef.current;
         if (!el) return undefined;
@@ -374,7 +393,20 @@ export function Step2View({
         el.querySelectorAll<HTMLElement>(".mc-node").forEach((n) => ro.observe(n));
         return () => ro.disconnect();
     }, [naturalSize.height, team]);
-    const effectiveScale = scale * userZoom;
+    // Height-aware fit correction. ``scale`` from ``useCanvasFit`` only
+    // considers width, so a hierarchical tree — taller than wide —
+    // overflowed the top of the stage at the default zoom, clipping
+    // the root node. We multiply in a "height fit" ratio when the
+    // content would overflow vertically at ``scale``, so the
+    // effective fit scale honours both axes.
+    const heightFitMultiplier = useMemo(() => {
+        if (!measuredViewportH || measuredH <= 0 || scale <= 0) return 1;
+        const displayH = measuredH * scale;
+        if (displayH <= measuredViewportH) return 1;
+        return measuredViewportH / displayH;
+    }, [measuredH, scale, measuredViewportH]);
+    const autoFitScale = scale * heightFitMultiplier;
+    const effectiveScale = autoFitScale * userZoom;
     const effectiveDisplayW = canvasWidth * effectiveScale;
     const effectiveDisplayH = measuredH * effectiveScale;
     const isInteractive = userZoom !== 1 || scrolls;
@@ -393,7 +425,7 @@ export function Step2View({
         const cy = (vh - effectiveDisplayH) / 2;
         setPan({ x: cx, y: cy });
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [canvasWidth, measuredH, scale]);
+    }, [canvasWidth, measuredH, autoFitScale]);
     // (effectiveDisplayW/H are derived from the above — no need to add.)
 
     /** Zoom while keeping ``focal`` (in viewport-local px) stationary
@@ -408,8 +440,8 @@ export function Step2View({
             const nextZ = Math.max(USER_ZOOM_MIN, Math.min(USER_ZOOM_MAX, z + delta));
             const rounded = Math.round(nextZ * 100) / 100;
             if (rounded === z) return z;
-            const prevEff = scale * z;
-            const nextEff = scale * rounded;
+            const prevEff = autoFitScale * z;
+            const nextEff = autoFitScale * rounded;
             const r = nextEff / prevEff;
             setPan((p) => {
                 const px = p ? p.x : 0;
@@ -429,8 +461,8 @@ export function Step2View({
         setUserZoom(1);
         const el = canvasScrollRef.current;
         if (el) {
-            const fitW = canvasWidth * scale;
-            const fitH = measuredH * scale;
+            const fitW = canvasWidth * autoFitScale;
+            const fitH = measuredH * autoFitScale;
             setPan({
                 x: (el.clientWidth - fitW) / 2,
                 y: (el.clientHeight - fitH) / 2,
@@ -695,6 +727,8 @@ export function Step2View({
                                     team={team}
                                     showLegend={false}
                                     canvasWidth={canvasWidth}
+                                    activeAgentId={hoveredAgentId}
+                                    onNodeHover={setHoveredAgentId}
                                 />
                             </div>
                         ) : (
@@ -730,7 +764,16 @@ export function Step2View({
                                 const kind = agentKind(n.agent, n.id);
                                 const summary = n.summary || roleSummary(n, team, workers.length);
                                 return (
-                                <article key={n.id} className="mc-role-card mc-slide-up">
+                                <article
+                                    key={n.id}
+                                    className="mc-role-card mc-slide-up"
+                                    data-active={hoveredAgentId === n.id ? "true" : undefined}
+                                    onMouseEnter={() => setHoveredAgentId(n.id)}
+                                    onMouseLeave={() => setHoveredAgentId(null)}
+                                    onFocus={() => setHoveredAgentId(n.id)}
+                                    onBlur={() => setHoveredAgentId(null)}
+                                    tabIndex={0}
+                                >
                                     <div className="mc-role-card__head">
                                         <span className="mc-role-card__icon" data-agent={kind} aria-hidden="true">
                                             {agentIcon(kind)}

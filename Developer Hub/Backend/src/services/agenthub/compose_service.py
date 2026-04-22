@@ -100,6 +100,28 @@ right *people* for the job.
 # Agents available
 {agents}
 
+# Boundary rules — resolve overlaps deterministically
+These rules OVERRIDE any ambiguity in the agent descriptions.
+
+- Architecture design (layers, SCD, patterns) → **Architect**, never
+  Modeler or FabricDataEngineer.
+- Choosing which Fabric items go where + writing DDL → **Modeler**,
+  never FabricDataEngineer.
+- Creating Fabric items, loading data, writing Spark / T-SQL / KQL
+  notebooks, building Bronze→Silver→Gold transforms, authoring the
+  Power BI semantic model, AND building the final Power BI report →
+  **FabricDataEngineer**. All of this is ONE phase owned by ONE slot,
+  not split across multiple FabricDataEngineer slots.
+- Workspaces, capacities, default Spark pools, RBAC, governance →
+  **FabricAdmin**, always runs BEFORE any builder.
+- External application code (Python / Node / .NET reading Fabric via
+  ODBC / XMLA / REST) → **FabricAppDev**. Do NOT pick for pure
+  end-to-end analytics tasks.
+- Dispatching work packages between multiple builders → **Creator**.
+  Only useful when the plan has Architect + Modeler + ≥2 builders.
+- Lead in supervisor or hierarchical plans → **Orchestrator**. Never
+  in sequential plans — sequential has no lead.
+
 # Picking rules
 1. Prefer the simplest architecture that fits. Start at `solo` and
    escalate only when the task clearly needs coordination.
@@ -108,27 +130,58 @@ right *people* for the job.
    task). Explain briefly in `rationale` if you override it.
 3. Every slot's `agentId` MUST be one of the agent ids above. Every
    `skills[].id` MUST be one of that agent's declared skills.
-4. Keep the slot count minimal. Don't add an agent unless it owns a
-   distinct capability the task needs.
-5. For `reflection`: exactly two slots — an actor and a critic.
-6. For `sequential`: slots are ordered; handoffs go slot[i] → slot[i+1]
-   with kind="report".
-7. For `supervisor`: one lead slot at index 0 delegating to
-   each worker with kind="delegate".
-8. For `parallel`: one fan-out supervisor, N parallel workers, one
-   reducer. Workers report to the reducer, not back to the supervisor.
-9. For `router`: one triage slot, with kind="handoff" edges to each
-   candidate specialist.
-10. For `hierarchical`: 2-3 sub-leads under one lead, each
-    owning their own workers. Use `parentId` to express the tree.
-11. For `mixed`: label each cluster with a `subteam` string on its
+4. **Uniqueness**: never emit two slots with the same `agentId` in a
+   sequential or supervisor plan. One agent handles its entire phase
+   in one slot, even if that phase has internal stages. Repeating an
+   agent is only allowed in `parallel` (fan-out over independent
+   inputs) or `mixed` (labelled sub-teams).
+5. **Minimality**: omit every agent whose description doesn't map to
+   an explicit sentence in the user's task. When unsure, leave it
+   out — the Orchestrator can spawn it at runtime if execution proves
+   it's needed.
+6. For `reflection`: exactly two slots — an actor and a critic.
+7. For `sequential`: slots are ordered; handoffs go slot[i] →
+   slot[i+1] with kind="report". No `Orchestrator` slot.
+8. For `supervisor`: one lead slot at index 0 delegating to each
+   worker with kind="delegate".
+9. For `parallel`: one fan-out supervisor, N parallel workers, one
+   reducer. Workers report to the reducer, not the supervisor.
+10. For `router`: one triage slot, with kind="handoff" edges to each
+    candidate specialist.
+11. For `hierarchical`: 2-3 sub-leads under one lead, each owning
+    their own workers. Use `parentId` to express the tree.
+12. For `mixed`: label each cluster with a `subteam` string on its
     member slots.
-12. Pick a sensible `budget`. Default (20/100/600) is fine for most
+13. Pick a sensible `budget`. Default (20/100/600) is fine for most
     tasks; scale up for genuinely big work, never above the schema
     caps.
-13. `architecture` MUST be exactly one of the ids from the
+14. `architecture` MUST be exactly one of the ids from the
     "Architectures available" section above — never a slot role
     like `lead`, `worker`, or `reducer`.
+
+# Task-type recipes (canonical compositions)
+Use these as the default shape when the task matches. Deviate only
+with a clear reason recorded in `rationale`.
+
+- "End-to-end analytics solution" (ingest + transform + semantic
+  model + report), greenfield or nearly so, no external app:
+    → `sequential`, 4 slots:
+       1. Architect — design the layers + SCD + contracts
+       2. Modeler — translate to Fabric blueprint + DDL
+       3. FabricAdmin — provision workspace / capacity / pool / RBAC
+       4. FabricDataEngineer — build all items, pipelines, semantic
+          model, and report in one phase
+- Same, but brownfield / small / tactical:
+    → `solo`, 1 FabricDataEngineer slot.
+- End-to-end analytics + a consumer application:
+    → `sequential` with 5 slots: Architect → Modeler → FabricAdmin →
+      FabricDataEngineer → FabricAppDev.
+- Migration or tenant-scale programme with parallel tracks:
+    → `hierarchical`, Orchestrator on top, domain sub-leads.
+- Audit / review across many workspaces or items:
+    → `parallel`, one worker per unit, one reducer.
+- Single-artifact quality pass (tune a DAX measure, fix a notebook):
+    → `reflection`, actor + critic.
 
 # Output
 Respond with ONLY valid JSON matching this schema (camelCase keys):
@@ -310,7 +363,14 @@ class ComposeService:
         body = {
             "model": model or COMPOSE_MODEL,
             "messages": messages,
-            "temperature": 0.3,
+            # Low temperature: compose should be near-deterministic
+            # given a static catalog + fixed rules. The original 0.3
+            # let different LLM families produce materially different
+            # team shapes for the same prompt (two FDE slots vs one,
+            # Architect included vs not). 0.1 keeps a tiny amount of
+            # slack for genuinely ambiguous tasks without inviting
+            # creative composition for unambiguous ones.
+            "temperature": 0.1,
             "max_tokens": 2_000,
             "response_format": {"type": "json_object"},
         }
@@ -451,6 +511,19 @@ class ComposeService:
 
         rationale = str(payload.get("rationale") or "Composition derived from the task prompt.").strip()
 
+        # Post-parse normalisation: enforce the uniqueness rule from
+        # the system prompt even when the LLM ignores it. For
+        # sequential and supervisor architectures, emitting two slots
+        # with the same ``agentId`` produces two disjoint agent loops
+        # with no shared state — almost always wrong. We merge
+        # consecutive duplicates into a single slot (first one wins,
+        # roles are concatenated) and rewrite handoffs to match. See
+        # SYSTEM_PROMPT_TEMPLATE "Uniqueness" rule.
+        if arch in ("sequential", "supervisor"):
+            slots, handoffs, entrypoint = _collapse_duplicate_agent_slots(
+                slots, handoffs, entrypoint,
+            )
+
         return Composition(
             session_id=session_id,
             task=task[:16_000],
@@ -473,3 +546,75 @@ def get_compose_service() -> ComposeService:
     if _service_singleton is None:
         _service_singleton = ComposeService()
     return _service_singleton
+
+
+def _collapse_duplicate_agent_slots(
+    slots: list[AgentSlot],
+    handoffs: list[Handoff],
+    entrypoint: str,
+) -> tuple[list[AgentSlot], list[Handoff], str]:
+    """Merge consecutive slots that share the same ``agent_id``.
+
+    Sequential / supervisor plans should never instantiate the same
+    agent twice — it produces two disjoint agent loops with no shared
+    memory, which almost always means the composer mis-decomposed the
+    task (e.g. two ``FabricDataEngineer`` slots for "ingestion" and
+    "transformation", when one slot covers the whole build phase).
+
+    Strategy: keep the first occurrence, concatenate its ``role`` with
+    the duplicates' roles so context isn't lost, then rewrite every
+    handoff that referenced the dropped slot ids to the kept one.
+    Self-loop handoffs (from=to) created by the rewrite are removed.
+
+    No-op when all agent_ids are already unique.
+    """
+    if not slots:
+        return slots, handoffs, entrypoint
+    seen: dict[str, AgentSlot] = {}
+    id_remap: dict[str, str] = {}
+    kept: list[AgentSlot] = []
+    for s in slots:
+        first = seen.get(s.agent_id)
+        if first is None:
+            seen[s.agent_id] = s
+            kept.append(s)
+            id_remap[s.id] = s.id
+            continue
+        # Fold this slot into the first one with the same agent.
+        id_remap[s.id] = first.id
+        dup_role = (s.role or "").strip()
+        if dup_role and dup_role not in first.role:
+            combined = f"{first.role}; {dup_role}" if first.role else dup_role
+            first.role = combined[:160]
+        # Merge skills (dedup by id) so we don't lose skill hints.
+        known = {sk.id for sk in first.skills}
+        for sk in s.skills:
+            if sk.id not in known:
+                first.skills.append(sk)
+                known.add(sk.id)
+    if len(kept) == len(slots):
+        return slots, handoffs, entrypoint
+    # Rewrite handoffs.
+    new_handoffs: list[Handoff] = []
+    seen_pairs: set[tuple[str, str, str]] = set()
+    for h in handoffs:
+        frm = id_remap.get(h.from_, h.from_)
+        to = id_remap.get(h.to, h.to)
+        if frm == to:
+            continue  # self-loop after merge — drop
+        key = (frm, to, h.kind)
+        if key in seen_pairs:
+            continue  # dedup
+        seen_pairs.add(key)
+        new_handoffs.append(Handoff.model_validate({
+            "from": frm, "to": to, "kind": h.kind, "condition": h.condition,
+        }))
+    new_entry = id_remap.get(entrypoint, entrypoint)
+    if new_entry not in {s.id for s in kept}:
+        new_entry = kept[0].id
+    logger.info(
+        "compose merged %d duplicate agent slot(s): %s",
+        len(slots) - len(kept),
+        [s for s, k in id_remap.items() if s != k],
+    )
+    return kept, new_handoffs, new_entry

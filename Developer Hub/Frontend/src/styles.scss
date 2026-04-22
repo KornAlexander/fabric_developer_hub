@@ -7762,6 +7762,16 @@ button.select-wrap--trigger {
     &[data-state="active"]  { border-color: #0078d4; border-width: 2px; box-shadow: 0 0 0 4px rgba(0, 120, 212, .10); }
     &[data-state="done"]    { border-color: #a7d3a7; background: #f4faf4; }
     &[data-state="waiting"] { border-color: #ffb689; background: #fff8f1; }
+    /* Cross-highlight peer: lit when the user hovers/focuses the
+       matching sidebar role card. Layered ON TOP of ``data-state`` so
+       a planned node can still look "active" during a hover without
+       us having to override every runtime-state combination. */
+    &[data-active="true"] {
+        border-color: #0078d4;
+        box-shadow: 0 0 0 3px rgba(0, 120, 212, 0.14), 0 4px 14px rgba(0, 0, 0, 0.06);
+        transform: translateY(-1px);
+        z-index: 20;
+    }
 
     &__head { display: flex; align-items: center; gap: 10px; }
     &__icon {
@@ -8033,6 +8043,12 @@ button.select-wrap--trigger {
     &:hover {
         border-color: rgba(0, 120, 212, 0.3);
         box-shadow: 0 2px 8px rgba(0,0,0,.04);
+    }
+
+    &[data-active="true"] {
+        border-color: #0078d4;
+        background: #fafcff;
+        box-shadow: 0 0 0 3px rgba(0, 120, 212, 0.14), 0 4px 14px rgba(0, 0, 0, 0.06);
     }
 
     &__head {
