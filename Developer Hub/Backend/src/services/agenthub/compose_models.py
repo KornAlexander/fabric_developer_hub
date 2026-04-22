@@ -1,121 +1,42 @@
 """Prioritized model recommendations for the Compose step.
 
-The composer LLM is asked to produce a small JSON object describing an
-agent team for a user task. What matters most, in priority order:
+The composer LLM produces a small JSON object describing an agent
+team for a user task. What matters, in priority order:
 
  1. **Fit / accuracy** — follows instructions, respects our architecture
     and agent catalog, emits clean JSON with `response_format=json_object`.
  2. **Structured output reliability** — must not drift into prose /
-    markdown / hallucinated agent ids (we have a repair retry but it
-    doubles latency).
- 3. **Speed** — the user is staring at a spinner; anything above ~20s
-    feels broken. Long-context isn't needed (prompt is < 8k tokens).
- 4. **Vision support** — only matters when the user attached images.
-    Nice-to-have, not a gate; we fall back gracefully.
+    markdown / hallucinated agent ids.
+ 3. **Speed** — the user is staring at a spinner; > 20s feels broken.
 
-This module exposes:
+The Copilot catalog evolves constantly (new families, codex variants,
+MiniMax, etc.). Rather than pin a literal id list that goes stale,
+we classify models by substring patterns of their id / name and
+compute both ``tier`` (lower = better for compose) and ``latency``
+(fast / medium / slow) from those patterns. This keeps the picker
+useful even for ids we've never seen before.
 
- * ``COMPOSE_MODEL_PRIORITY`` — canonical ordered list of *preferred*
-   model ids, best first. Used as the tiebreaker when ranking the
-   models the user actually has access to in their Copilot catalog.
- * ``COMPOSE_FALLBACK_MODEL`` — used when the user's catalog contains
-   none of the preferred ids.
- * ``rank_compose_models(available)`` — takes the raw list returned by
-   ``/api/github/models`` and returns a ranked + annotated list of
-   compose-capable entries the UI can render directly next to the
-   "Plan this" button.
+Exports:
 
-Rationale for the ordering below (April 2026 Copilot catalog):
-
- * ``gpt-4.1`` — current flagship for structured output; excellent at
-   respecting JSON schemas and emitting clean catalog references.
-   Slightly slower than 4o but the accuracy gain outweighs it for the
-   one-shot plan.  Top recommendation.
- * ``gpt-4o`` — the proven default. Very fast, reliable JSON mode,
-   extremely strong on short structured tasks. Still our fallback when
-   nothing else is available.
- * ``claude-sonnet-4`` / ``claude-3.7-sonnet`` — excellent planners,
-   strong at following detailed rules; marginally slower than gpt-4o
-   but produce richer rationales.
- * ``claude-3.5-sonnet`` — reliable second-tier Claude; good fallback
-   when Sonnet-4 isn't in the catalog.
- * ``o4-mini`` / ``o3-mini`` — reasoning models. Highest correctness
-   for complex team shapes (hierarchical, mixed) but noticeably slower
-   (5-15s). Worth surfacing for power users.
- * ``gemini-2.5-pro`` — competitive on reasoning, JSON mode works, but
-   empirically more variable on strict catalog adherence than the
-   OpenAI / Anthropic tiers above.
- * ``gpt-4.1-mini`` / ``gpt-4o-mini`` — fastest options; good for the
-   simple solo/sequential cases. Trade some planning depth for speed.
- * Models we deliberately exclude from the picker: embedding models,
-   vision-only variants (e.g. ``gpt-4-vision-preview``), legacy
-   ``gpt-3.5-turbo``, and the highest-latency ``o3`` reasoning model
-   (the accuracy gain over ``o4-mini`` doesn't justify the latency for
-   this one-shot step).
+ * ``rank_compose_models(raw)`` — filter + dedupe + tier + sort; the
+   UI renders the result directly.
+ * ``pick_compose_model(requested, available)`` — resolve the final
+   id to send to the Copilot chat API.
+ * ``COMPOSE_FALLBACK_MODEL`` — last-resort id if the catalog is empty.
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 
-# Ordered best→worst. The index of an entry is its tier; lower is
-# better. Entries not in this list get a tier of ``len(_PRIORITY)``.
-COMPOSE_MODEL_PRIORITY: list[str] = [
-    "gpt-4.1",
-    "gpt-4o",
-    "claude-sonnet-4",
-    "claude-3.7-sonnet",
-    "claude-3-7-sonnet",  # alternate id spelling
-    "claude-3.5-sonnet",
-    "claude-3-5-sonnet",
-    "o4-mini",
-    "o3-mini",
-    "gemini-2.5-pro",
-    "gpt-4.1-mini",
-    "gpt-4o-mini",
-]
-
-# Short, stable "why this model" label we render next to recommended
-# entries. Keep these < 42 chars so the menu stays tidy.
-_REASONS: dict[str, str] = {
-    "gpt-4.1": "Best fit · strong JSON structure",
-    "gpt-4o": "Recommended · fast and accurate",
-    "claude-sonnet-4": "Deep reasoning · rich rationales",
-    "claude-3.7-sonnet": "Deep reasoning · rich rationales",
-    "claude-3-7-sonnet": "Deep reasoning · rich rationales",
-    "claude-3.5-sonnet": "Reliable planner",
-    "claude-3-5-sonnet": "Reliable planner",
-    "o4-mini": "Reasoning model · highest accuracy",
-    "o3-mini": "Reasoning model · slower, more careful",
-    "gemini-2.5-pro": "Strong reasoning alternative",
-    "gpt-4.1-mini": "Fastest · good for simple teams",
-    "gpt-4o-mini": "Fastest · good for simple teams",
-}
-
-# Latency-class hint rendered as a small pill. Intentionally coarse —
-# the user just wants to know "is this the slow one?".
-_LATENCY_HINT: dict[str, str] = {
-    "gpt-4.1": "medium",
-    "gpt-4o": "fast",
-    "claude-sonnet-4": "medium",
-    "claude-3.7-sonnet": "medium",
-    "claude-3-7-sonnet": "medium",
-    "claude-3.5-sonnet": "medium",
-    "claude-3-5-sonnet": "medium",
-    "o4-mini": "slow",
-    "o3-mini": "slow",
-    "gemini-2.5-pro": "medium",
-    "gpt-4.1-mini": "fast",
-    "gpt-4o-mini": "fast",
-}
-
-# Fallback used by the compose service when no explicit model was
-# requested and nothing in the catalog matches the priority list.
 COMPOSE_FALLBACK_MODEL = "gpt-4o"
 
 
-# Substrings that clearly identify a model as unsuitable for the
-# compose step (embedding, image-only, transcription, legacy).
+# ── Filtering ──────────────────────────────────────────────────────
+
+# Substrings that clearly identify a model as unsuitable for compose
+# (embeddings, audio, image-only, moderation, legacy text-davinci).
 _EXCLUDED_SUBSTRINGS: tuple[str, ...] = (
     "embedding",
     "embed",
@@ -125,81 +46,205 @@ _EXCLUDED_SUBSTRINGS: tuple[str, ...] = (
     "dalle",
     "moderation",
     "text-davinci",
-    "gpt-3.5",
     "text-embedding",
+    "gpt-3.5",
     "vision-preview",
 )
 
+# Codex-style / coding-specialist ids — excluded because the composer
+# output is a JSON team description, not code. Codex variants tend to
+# be less compliant on pure JSON schema tasks.
+_CODEX_PATTERNS: tuple[str, ...] = (
+    "codex",
+    "-code-",
+    "code-davinci",
+)
 
-def _is_excluded(model_id: str) -> bool:
+
+def _is_excluded(model_id: str, name: str, capabilities: Any) -> bool:
     mid = (model_id or "").lower()
-    return any(s in mid for s in _EXCLUDED_SUBSTRINGS)
+    nm = (name or "").lower()
+    mtype = ""
+    if isinstance(capabilities, dict):
+        mtype = str(capabilities.get("type") or "").lower()
+    # If the catalog tells us this isn't a chat model, trust it.
+    if mtype and mtype not in ("chat", "completion", "text"):
+        return True
+    if any(s in mid or s in nm for s in _EXCLUDED_SUBSTRINGS):
+        return True
+    if any(s in mid for s in _CODEX_PATTERNS):
+        return True
+    return False
 
 
-def _tier(model_id: str) -> int:
-    """Lower is better. Unknown models sort below every known one."""
-    try:
-        return COMPOSE_MODEL_PRIORITY.index(model_id)
-    except ValueError:
-        return len(COMPOSE_MODEL_PRIORITY)
+# ── Tiering (lower = better for compose) ───────────────────────────
+
+# Ordered list of (pattern, tier, reason, latency). The first match
+# wins, so put more specific patterns before general ones. Patterns
+# match on the lowercase model id; we also try the name for resilience.
+#
+# Tier semantics:
+#   0  — top picks (flagship, strong JSON, balanced latency)
+#   1  — strong alternatives (rich rationales, deep reasoning)
+#   2  — reliable second-tier
+#   3  — reasoning-specialised (slower, highest accuracy)
+#   4  — fast mini variants (good for simple teams)
+#   5  — legacy chat models (still functional)
+_TIER_RULES: list[tuple[re.Pattern[str], int, str, str]] = [
+    # Tier 0 — flagships
+    (re.compile(r"^gpt-5(?:\.\d+)?$"), 0, "Flagship · strongest reasoning + JSON", "medium"),
+    (re.compile(r"^gpt-4\.1$"), 0, "Top pick · strong JSON structure", "medium"),
+    (re.compile(r"^gpt-4o(?:-2\d{3}.*)?$"), 0, "Proven default · fast and accurate", "fast"),
+    (re.compile(r"^claude-(?:sonnet|opus)-5"), 0, "Flagship Claude · deep planner", "medium"),
+    (re.compile(r"^claude-sonnet-4(?:[.-]5)?$"), 0, "Deep reasoning · rich rationales", "medium"),
+    (re.compile(r"^claude-opus-4"), 0, "Deep reasoning · rich rationales", "slow"),
+    # Tier 1 — strong alternatives
+    (re.compile(r"^claude-3[.-]7-sonnet"), 1, "Strong planner · rich rationales", "medium"),
+    (re.compile(r"^gemini-2\.5-pro"), 1, "Strong reasoning alternative", "medium"),
+    (re.compile(r"^gemini-3"), 1, "Strong reasoning alternative", "medium"),
+    # Tier 2 — reliable
+    (re.compile(r"^claude-3[.-]5-sonnet"), 2, "Reliable planner", "medium"),
+    (re.compile(r"^gemini-2\.5(?!-pro)"), 2, "Balanced Gemini", "fast"),
+    # Tier 3 — reasoning models
+    (re.compile(r"^o5(?:-mini)?$"), 3, "Reasoning model · highest accuracy", "slow"),
+    (re.compile(r"^o4(?:-mini)?$"), 3, "Reasoning model · high accuracy", "slow"),
+    (re.compile(r"^o3(?:-mini)?$"), 3, "Reasoning model · careful, slower", "slow"),
+    # Tier 4 — fast minis
+    (re.compile(r"^gpt-5(?:\.\d+)?-mini$"), 4, "Fast · good for simple teams", "fast"),
+    (re.compile(r"^gpt-4\.1-mini$"), 4, "Fast · good for simple teams", "fast"),
+    (re.compile(r"^gpt-4o-mini"), 4, "Fastest · good for simple teams", "fast"),
+    (re.compile(r"^claude-haiku"), 4, "Fast Claude · simple teams", "fast"),
+    (re.compile(r"^gemini-(?:2\.5-)?flash"), 4, "Fast Gemini · simple teams", "fast"),
+    # Tier 5 — legacy but functional
+    (re.compile(r"^gpt-4(?:-turbo)?$"), 5, "Legacy GPT-4 · slower", "medium"),
+    (re.compile(r"^gpt-4-\d{4}"), 5, "Legacy GPT-4 · slower", "medium"),
+]
+
+
+def _classify(model_id: str, name: str) -> tuple[int, str | None, str]:
+    """Return (tier, reason, latency) for a model id.
+
+    Falls back to a generic tier (len(_TIER_RULES)) for unknown ids
+    — they still appear in the picker, just at the bottom.
+    """
+    mid = (model_id or "").lower()
+    nm = (name or "").lower()
+    for pattern, tier, reason, latency in _TIER_RULES:
+        if pattern.search(mid) or pattern.search(nm):
+            return tier, reason, latency
+    return len(_TIER_RULES), None, "medium"
+
+
+# ── Dedup helpers ──────────────────────────────────────────────────
+
+# Dated snapshot suffixes like "-2024-08-06" or "-20240610" get
+# collapsed so we don't show four "GPT-4o" entries (Copilot exposes
+# several snapshots of the same family).
+_SNAPSHOT_SUFFIX_RE = re.compile(r"-(?:20)?2\d(?:\d{4}|-\d{2}-\d{2})$")
+_VERSION_SUFFIX_RE = re.compile(r"-v?\d{4,}$")
+
+
+def _family_key(model_id: str, name: str) -> str:
+    """Canonical family key used to collapse duplicates.
+
+    Prefer the display name (case-folded) because Copilot often ships
+    several dated snapshots of the same model with identical names.
+    Fall back to a sanitised id when name is empty.
+    """
+    if name:
+        return name.strip().casefold()
+    mid = (model_id or "").strip().casefold()
+    mid = _SNAPSHOT_SUFFIX_RE.sub("", mid)
+    mid = _VERSION_SUFFIX_RE.sub("", mid)
+    return mid
+
+
+def _prefer_representative(a: str, b: str) -> str:
+    """Pick the "better" id between two duplicates.
+
+    Prefer ids WITHOUT a dated snapshot suffix (they track the latest),
+    breaking ties by taking the lexicographically higher id (later
+    snapshot).
+    """
+    a_dated = bool(_SNAPSHOT_SUFFIX_RE.search(a.lower()) or _VERSION_SUFFIX_RE.search(a.lower()))
+    b_dated = bool(_SNAPSHOT_SUFFIX_RE.search(b.lower()) or _VERSION_SUFFIX_RE.search(b.lower()))
+    if a_dated and not b_dated:
+        return b
+    if b_dated and not a_dated:
+        return a
+    return a if a >= b else b
+
+
+# ── Public API ─────────────────────────────────────────────────────
 
 
 def rank_compose_models(available: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Rank the user's available Copilot models for the compose step.
+    """Filter, dedupe, tier, and sort the user's Copilot catalog.
 
-    ``available`` is the raw ``/api/github/models`` payload entries —
-    each dict has at least an ``id`` and a ``name``. We drop models
-    that are clearly unsuitable (embeddings, TTS, legacy, vision-only),
-    annotate the remaining entries with ``tier``, ``recommended``,
-    ``reason`` and ``latency``, and sort best-first.
-
-    The top entry in the returned list is what the UI should pre-select.
-    Callers that want just the *id* can take ``result[0]["id"]``.
+    Input: raw entries from ``/api/github/models``.
+    Output: best-first list of the user's ACTUAL available models,
+    annotated with recommendation metadata. Duplicates sharing the
+    same display name are collapsed to a single representative.
     """
+    # Step 1: filter obvious non-chat entries.
     filtered: list[dict[str, Any]] = []
     for m in available or []:
         mid = str(m.get("id") or "").strip()
-        if not mid or _is_excluded(mid):
+        nm = str(m.get("name") or "").strip()
+        if not mid:
             continue
-        tier = _tier(mid)
-        entry: dict[str, Any] = {
+        if _is_excluded(mid, nm, m.get("capabilities")):
+            continue
+        filtered.append({
             "id": mid,
-            "name": m.get("name") or mid,
+            "name": nm or mid,
             "publisher": m.get("publisher") or m.get("owned_by") or "",
-            "tier": tier,
-            # Anything in the priority list is "recommended"; the first
-            # few are flagged as top picks so the UI can badge them.
-            "recommended": tier < len(COMPOSE_MODEL_PRIORITY),
-            "top_pick": tier < 2,
-            "reason": _REASONS.get(mid),
-            "latency": _LATENCY_HINT.get(mid, "medium"),
-        }
-        filtered.append(entry)
+        })
 
-    # Sort: tier ascending, then alphabetical by id for stable ordering
-    # within a tier (mostly relevant for the unknown-tier tail).
-    filtered.sort(key=lambda e: (e["tier"], e["id"]))
-    return filtered
+    # Step 2: dedupe by family key, keeping the best representative.
+    by_family: dict[str, dict[str, Any]] = {}
+    for m in filtered:
+        key = _family_key(m["id"], m["name"])
+        cur = by_family.get(key)
+        if cur is None:
+            by_family[key] = m
+        else:
+            chosen_id = _prefer_representative(cur["id"], m["id"])
+            by_family[key] = m if chosen_id == m["id"] else cur
+
+    # Step 3: tier + annotate.
+    ranked: list[dict[str, Any]] = []
+    for m in by_family.values():
+        tier, reason, latency = _classify(m["id"], m["name"])
+        ranked.append({
+            "id": m["id"],
+            "name": m["name"],
+            "publisher": m["publisher"],
+            "tier": tier,
+            "recommended": tier < len(_TIER_RULES),
+            "top_pick": tier == 0,
+            "reason": reason,
+            "latency": latency,
+        })
+
+    # Step 4: sort — tier ascending; within a tier, entries we
+    # classified (have a reason) beat unknown tails; alphabetical by
+    # name breaks final ties for stability.
+    ranked.sort(key=lambda e: (e["tier"], 0 if e["reason"] else 1, e["name"].lower()))
+    return ranked
 
 
 def pick_compose_model(
     requested: str | None,
     available: list[dict[str, Any]] | None,
 ) -> str:
-    """Resolve the actual model id to send to the Copilot chat API.
-
-    * If the caller explicitly requested a model and it's in the user's
-      catalog (or we have no catalog to validate against), honour it.
-    * Otherwise return the first ranked entry from the catalog, or
-      ``COMPOSE_FALLBACK_MODEL`` if the catalog is empty / not provided.
-    """
+    """Resolve the actual model id to send to the Copilot chat API."""
     if requested:
         if not available:
             return requested
         ids = {str(m.get("id") or "") for m in available}
         if requested in ids:
             return requested
-        # Fall through — caller asked for something they don't have.
     if available:
         ranked = rank_compose_models(available)
         if ranked:
