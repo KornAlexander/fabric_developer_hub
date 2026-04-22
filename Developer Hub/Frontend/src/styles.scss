@@ -5387,6 +5387,16 @@ button.select-wrap--trigger {
     align-items: center;
     gap: 12px;
 }
+/* Right-aligned cluster: model picker + primary CTA. Keeping both
+   children inside a single flex container means the outer
+   ``composer-actions`` row always has exactly two children under
+   ``space-between`` — so the primary button never jumps from right to
+   center when the model picker finishes loading. */
+.composer-actions-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
 .composer-link-btn {
     display: inline-flex;
     align-items: center;
@@ -5747,6 +5757,9 @@ button.select-wrap--trigger {
     font-size: 13px !important;
     font-weight: 500 !important;
     color: #424242 !important;
+    /* Stable width: prevents the adjacent "Plan this" button from
+       shifting horizontally when the selected model name changes. */
+    min-width: 160px !important;
     max-width: 220px !important;
     overflow: hidden !important;
     text-overflow: ellipsis !important;
@@ -5760,6 +5773,11 @@ button.select-wrap--trigger {
 .composer-model-menu {
     min-width: 340px !important;
     max-width: 420px !important;
+    /* Cap height so the popover never overflows the viewport. Anything
+       beyond becomes scrollable within the menu instead of getting
+       visually clipped at the top/bottom edge. */
+    max-height: min(560px, 70vh) !important;
+    overflow-y: auto !important;
     padding: 4px !important;
 }
 .composer-model-row {

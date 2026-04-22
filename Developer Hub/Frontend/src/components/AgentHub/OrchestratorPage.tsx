@@ -3267,38 +3267,30 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                                             ), document.body)}
                                         </div>
                                     </div>
-                                    <Button
-                                        appearance="primary"
-                                        icon={<Sparkle24Regular />}
-                                        iconPosition="after"
-                                        className="composer-submit-btn"
-                                        onClick={handleGeneratePlan}
-                                        disabled={
-                                            planning
-                                            || !taskText.trim()
-                                            || !selectedWorkspace
-                                            || (
-                                                branchOut
-                                                && workspaces.find(w => w.id === selectedWorkspace)?.git_connected === false
-                                            )
-                                        }
-                                    >
-                                        {planning ? <Spinner size="tiny" /> : t("Compose_Submit")}
-                                    </Button>
-                                    {/* Compose-model picker: dropdown button
-                                     *  anchored right next to "Plan this".
-                                     *  Hidden while the catalog is loading
-                                     *  (composeModels empty) — the backend
-                                     *  picks the ranked default in that case. */}
-                                    {composeModels.length > 0 && (
-                                        <Menu positioning={{ align: "end" }}>
+                                    {/* Right-aligned action cluster: secondary
+                                     *  meta (model picker) on the LEFT of the
+                                     *  primary CTA ("Plan this") — Slack / ChatGPT
+                                     *  convention. Wrapped in its own flex
+                                     *  container so the outer row stays at two
+                                     *  children (space-between) regardless of
+                                     *  whether the picker has loaded yet — this
+                                     *  is what used to push "Plan this" into the
+                                     *  middle when the catalog arrived. */}
+                                    <div className="composer-actions-right">
+                                        {/* Compose-model picker. Rendered as a
+                                         *  placeholder chip while the catalog
+                                         *  is loading so the primary button
+                                         *  doesn't jump when it arrives. */}
+                                        <Menu
+                                            positioning={{ align: "end", position: "above" }}
+                                        >
                                             <MenuTrigger disableButtonEnhancement>
                                                 <Button
                                                     appearance="subtle"
                                                     size="small"
                                                     className="composer-model-btn"
-                                                    disabled={planning}
-                                                    title={effectiveModel ? `Composer model: ${effectiveModel.name}` : "Composer model"}
+                                                    disabled={planning || composeModels.length === 0}
+                                                    title={effectiveModel ? `Composer model: ${effectiveModel.name}` : "Loading models…"}
                                                     iconPosition="after"
                                                     icon={<ChevronDown16Regular />}
                                                 >
@@ -3334,7 +3326,25 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                                                 </MenuList>
                                             </MenuPopover>
                                         </Menu>
-                                    )}
+                                        <Button
+                                            appearance="primary"
+                                            icon={<Sparkle24Regular />}
+                                            iconPosition="after"
+                                            className="composer-submit-btn"
+                                            onClick={handleGeneratePlan}
+                                            disabled={
+                                                planning
+                                                || !taskText.trim()
+                                                || !selectedWorkspace
+                                                || (
+                                                    branchOut
+                                                    && workspaces.find(w => w.id === selectedWorkspace)?.git_connected === false
+                                                )
+                                            }
+                                        >
+                                            {planning ? <Spinner size="tiny" /> : t("Compose_Submit")}
+                                        </Button>
+                                    </div>
                                 </div>
                             </div>
                         </div>
