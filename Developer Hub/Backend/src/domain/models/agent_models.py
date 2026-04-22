@@ -214,6 +214,10 @@ class CreateJobRequest(BaseModel):
     workspace_id: str = Field(min_length=1, max_length=128)
     context: dict[str, Any] | None = None
     attachments: list[PromptAttachment] | None = Field(default=None, max_length=_MAX_ATTACHMENTS)
+    # Explicit composer model override (e.g. ``gpt-4.1``, ``claude-sonnet-4``).
+    # Validated server-side against the user's Copilot catalog; falls back
+    # to the ranked default when omitted or unavailable.
+    model: str | None = Field(default=None, max_length=64)
 
     @field_validator("workspace_id")
     @classmethod
@@ -256,6 +260,9 @@ class ComposeRequest(BaseModel):
     preferred_architecture: str | None = Field(default=None, max_length=32)
     require_approvals: bool = True
     branch_out: bool = False
+    # Explicit composer model override — same semantics as
+    # ``CreateJobRequest.model``. Used by preview flows.
+    model: str | None = Field(default=None, max_length=64)
 
     @field_validator("workspace_id")
     @classmethod

@@ -47,6 +47,7 @@ export async function createSession(
     context: Record<string, unknown> | null, opts: FetchOpts,
     attachments?: PromptAttachment[],
     signal?: AbortSignal,
+    model?: string | null,
 ) {
     const res = await fetch(`${BE}/api/sessions`, {
         method: 'POST',
@@ -56,10 +57,40 @@ export async function createSession(
             workspace_id: workspaceId,
             context,
             attachments: attachments && attachments.length ? attachments : undefined,
+            model: model || undefined,
         }),
         signal,
     });
     if (!res.ok) throw new Error(await res.text());
+    return res.json();
+}
+
+/** Entry in the ranked compose-model list returned by
+ *  ``GET /api/orchestrate/compose-models``. */
+export interface ComposeModelEntry {
+    id: string;
+    name: string;
+    publisher?: string;
+    tier: number;
+    recommended: boolean;
+    top_pick: boolean;
+    reason?: string | null;
+    latency: "fast" | "medium" | "slow";
+}
+
+export interface ComposeModelsResponse {
+    models: ComposeModelEntry[];
+    default: string | null;
+}
+
+/** Fetch the caller's Copilot catalog filtered + ranked for the
+ *  compose step. Safe to call unauthenticated-ish: on failure the
+ *  backend returns an empty list rather than 500. */
+export async function listComposeModels(opts: FetchOpts): Promise<ComposeModelsResponse> {
+    const res = await fetch(`${BE}/api/orchestrate/compose-models`, {
+        headers: headers(opts),
+    });
+    if (!res.ok) return { models: [], default: null };
     return res.json();
 }
 

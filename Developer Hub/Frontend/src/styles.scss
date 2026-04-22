@@ -5737,6 +5737,79 @@ button.select-wrap--trigger {
     }
 }
 
+/* Compose-model picker — a subtle dropdown anchored right next to the
+   "Plan this" primary button. Displays the user's ranked Copilot
+   catalog with recommendation badges and latency hints. */
+.composer-model-btn {
+    height: 36px !important;
+    min-height: 36px !important;
+    border-radius: 8px !important;
+    font-size: 13px !important;
+    font-weight: 500 !important;
+    color: #424242 !important;
+    max-width: 220px !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+
+    &:hover:not(:disabled) {
+        background: rgba(0, 95, 170, 0.06) !important;
+    }
+    svg { width: 14px !important; height: 14px !important; opacity: 0.6; }
+}
+.composer-model-menu {
+    min-width: 340px !important;
+    max-width: 420px !important;
+    padding: 4px !important;
+}
+.composer-model-row {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    flex: 1;
+}
+.composer-model-name {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    color: #242424;
+}
+.composer-model-reason {
+    font-size: 11px;
+    color: #605e5c;
+    line-height: 1.3;
+}
+.composer-model-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 6px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    background: #eff6fc;
+    color: #005a9e;
+}
+.composer-model-badge-top {
+    background: #dff6dd;
+    color: #107c10;
+}
+.composer-model-latency {
+    margin-left: auto;
+    font-size: 10px;
+    font-weight: 600;
+    color: #605e5c;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+.composer-model-latency-fast { color: #107c10; }
+.composer-model-latency-medium { color: #8a8886; }
+.composer-model-latency-slow { color: #b4680f; }
+
 /* Prompt starters */
 .prompt-starters {
     margin-top: 20px;

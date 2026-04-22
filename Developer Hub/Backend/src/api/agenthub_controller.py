@@ -34,6 +34,7 @@ from domain.catalogs.architectures import ARCHITECTURES
 from services.agenthub import session_store, workspaces_cache
 from services.agenthub.agent_registry import get_template, list_templates
 from services.agenthub.attachments import classify_attachments
+from services.agenthub.compose_models import rank_compose_models
 from services.agenthub.download_tokens import consume_token, issue_token
 from services.agenthub.orchestrator_engine import get_orchestrator_engine
 from services.agenthub.rate_limit import RateLimitExceeded
@@ -989,6 +990,7 @@ async def create_session(
             workspace_id=req.workspace_id,
             copilot_token=copilot_token,
             attachments=req.attachments,
+            model=req.model,
         )
     except CompositionError as e:
         # Spec: surface as structured 422 so the UI can render a
@@ -1204,6 +1206,33 @@ async def debug_session_snapshot(
 
 # ── Orchestration endpoints ──────────────────────────────────────────
 
+@router.get("/orchestrate/compose-models")
+async def list_compose_models(
+    request: Request,
+    ctx: AuthorizationContext | None = Depends(require_user),
+):
+    """Return the user's Copilot catalog ranked for the Compose step.
+
+    Wraps ``/api/github/models`` with a task-fit ranking so the UI can
+    render the "Plan this" model picker pre-sorted best-first, with
+    short reasons and latency hints. Entries unsuitable for composition
+    (embeddings, TTS, legacy) are filtered out.
+    """
+    try:
+        catalog = await github_chat_controller.list_models(request)
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[COMPOSE-MODELS] catalog fetch failed: %s", e)
+        # Don't 500 the UI — return an empty catalog and let the
+        # frontend fall back to "default" without a picker.
+        return {"models": [], "default": None}
+    raw_models = catalog.get("models", []) if isinstance(catalog, dict) else []
+    ranked = rank_compose_models(raw_models)
+    default_id = ranked[0]["id"] if ranked else None
+    return {"models": ranked, "default": default_id}
+
+
 @router.post("/orchestrate/compose")
 async def compose_endpoint(
     req: ComposeRequest,
@@ -1228,6 +1257,7 @@ async def compose_endpoint(
             preferred_architecture=req.preferred_architecture,
             require_approvals=req.require_approvals,
             branch_out=req.branch_out,
+            model=req.model,
         )
     except CompositionError as e:
         raise HTTPException(

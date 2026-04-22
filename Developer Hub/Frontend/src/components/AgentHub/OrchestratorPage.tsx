@@ -279,6 +279,50 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
     const [runningSessionId, setRunningSessionId] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
 
+    // ── Composer model picker ───────────────────────────────────────
+    // The user's Copilot catalog, ranked for the compose step. Loaded
+    // once on mount; persists across re-renders. Empty list ⇒ hide the
+    // picker and let the backend pick the default.
+    const [composeModels, setComposeModels] = useState<api.ComposeModelEntry[]>([]);
+    // User's current selection. When null we send no ``model`` to the
+    // backend and it picks the top-ranked option from the catalog.
+    const [selectedModel, setSelectedModel] = useState<string | null>(
+        () => sessionStorage.getItem("compose_model") || null,
+    );
+    useEffect(() => {
+        let cancelled = false;
+        (async () => {
+            try {
+                const ghToken = sessionStorage.getItem("github_token") || "";
+                const resp = await api.listComposeModels({ githubToken: ghToken });
+                if (cancelled) return;
+                setComposeModels(resp.models || []);
+                // If the persisted selection isn't in the catalog any
+                // more, drop it so we fall back to the ranked default.
+                if (selectedModel && !resp.models.some(m => m.id === selectedModel)) {
+                    setSelectedModel(null);
+                    sessionStorage.removeItem("compose_model");
+                }
+            } catch {
+                if (!cancelled) setComposeModels([]);
+            }
+        })();
+        return () => { cancelled = true; };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+    const effectiveModel = useMemo<api.ComposeModelEntry | null>(() => {
+        if (!composeModels.length) return null;
+        if (selectedModel) {
+            const hit = composeModels.find(m => m.id === selectedModel);
+            if (hit) return hit;
+        }
+        return composeModels[0];
+    }, [composeModels, selectedModel]);
+    const chooseModel = useCallback((id: string) => {
+        setSelectedModel(id);
+        try { sessionStorage.setItem("compose_model", id); } catch { /* private mode */ }
+    }, []);
+
     // Attached files. Sent to the backend as a structured `attachments`
     // array alongside the prompt so multimodal models (GPT-4o via Copilot
     // Chat API) can see images directly, and the server can extract text
@@ -1383,6 +1427,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                 { githubToken, fabricToken },
                 apiAttachments,
                 ctrl.signal,
+                selectedModel,
             );
             // Aborted after a late-arriving response — ignore it.
             if (ctrl.signal.aborted) return;
@@ -3240,6 +3285,56 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                                     >
                                         {planning ? <Spinner size="tiny" /> : t("Compose_Submit")}
                                     </Button>
+                                    {/* Compose-model picker: dropdown button
+                                     *  anchored right next to "Plan this".
+                                     *  Hidden while the catalog is loading
+                                     *  (composeModels empty) — the backend
+                                     *  picks the ranked default in that case. */}
+                                    {composeModels.length > 0 && (
+                                        <Menu positioning={{ align: "end" }}>
+                                            <MenuTrigger disableButtonEnhancement>
+                                                <Button
+                                                    appearance="subtle"
+                                                    size="small"
+                                                    className="composer-model-btn"
+                                                    disabled={planning}
+                                                    title={effectiveModel ? `Composer model: ${effectiveModel.name}` : "Composer model"}
+                                                    iconPosition="after"
+                                                    icon={<ChevronDown16Regular />}
+                                                >
+                                                    {effectiveModel?.name || "Default model"}
+                                                </Button>
+                                            </MenuTrigger>
+                                            <MenuPopover className="composer-model-menu">
+                                                <MenuList>
+                                                    {composeModels.map(m => {
+                                                        const isActive = m.id === (selectedModel || composeModels[0]?.id);
+                                                        return (
+                                                            <MenuItem
+                                                                key={m.id}
+                                                                onClick={() => chooseModel(m.id)}
+                                                                icon={isActive ? <Checkmark16Filled /> : undefined}
+                                                            >
+                                                                <div className="composer-model-row">
+                                                                    <div className="composer-model-name">
+                                                                        <span>{m.name}</span>
+                                                                        {m.top_pick && <span className="composer-model-badge composer-model-badge-top">Recommended</span>}
+                                                                        {!m.top_pick && m.recommended && <span className="composer-model-badge">Good fit</span>}
+                                                                        <span className={`composer-model-latency composer-model-latency-${m.latency}`}>
+                                                                            {m.latency}
+                                                                        </span>
+                                                                    </div>
+                                                                    {m.reason && (
+                                                                        <div className="composer-model-reason">{m.reason}</div>
+                                                                    )}
+                                                                </div>
+                                                            </MenuItem>
+                                                        );
+                                                    })}
+                                                </MenuList>
+                                            </MenuPopover>
+                                        </Menu>
+                                    )}
                                 </div>
                             </div>
                         </div>
