@@ -294,6 +294,16 @@ export function Step2View({
     const pattern = (team?.pattern || "supervisor") as TeamPattern;
     const meta = PATTERN_META[pattern] || PATTERN_META.supervisor;
     const agentCount = team?.nodes.length || 0;
+    // Count unique unordered endpoint pairs rather than raw edges, so
+    // a delegate (A→B) + report (B→A) round-trip reports as ONE
+    // connection — matching what the canvas actually renders after
+    // OrchCanvas merges round-trip edges into a single curve.
+    const connectionCount = useMemo(() => {
+        if (!team) return 0;
+        const seen = new Set<string>();
+        for (const e of team.edges) seen.add([e.from, e.to].sort().join("↔"));
+        return seen.size;
+    }, [team]);
     const naturalSize = useMemo(
         () => team ? naturalCanvasSize(team) : { width: CANVAS_NATURAL_FLOOR, height: 420 },
         [team],
@@ -328,9 +338,45 @@ export function Step2View({
     const [userZoom, setUserZoom] = useState(1);
     const [pan, setPan] = useState<{ x: number; y: number } | null>(null);
     const canvasScrollRef = useRef<HTMLDivElement | null>(null);
+    const canvasInnerRef = useRef<HTMLDivElement | null>(null);
+    // Actual rendered content height (pre-transform). Measured after
+    // mount because nodes with many selected skills, long roles, or
+    // wrapped summaries render much taller than the static
+    // ``NODE_CONTENT_H`` budget baked into ``naturalCanvasSize``. We
+    // use this true height so the initial fit-to-view centers on the
+    // real bounding box instead of clipping rows.
+    const [measuredH, setMeasuredH] = useState<number>(naturalSize.height);
+    useLayoutEffect(() => {
+        const el = canvasInnerRef.current;
+        if (!el) return undefined;
+        // The ``.mc-canvas`` box inside carries an explicit height from
+        // the layout math (based on static ``NODE_CONTENT_H``), but
+        // absolutely-positioned node children can render well past
+        // that — long roles, many highlighted skill chips, or wrapped
+        // summaries commonly push nodes from the 188px budget to
+        // 260–360px. We scan the node children and take the max
+        // bottom edge so fit-to-view is based on what the user can
+        // actually see, not what the layout thinks it drew.
+        const read = () => {
+            let maxBottom = el.offsetHeight;
+            const nodes = el.querySelectorAll<HTMLElement>(".mc-node");
+            nodes.forEach((n) => {
+                const bottom = n.offsetTop + n.offsetHeight;
+                if (bottom > maxBottom) maxBottom = bottom;
+            });
+            // Add a small bottom gutter so the last row doesn't butt
+            // the viewport edge on initial fit.
+            setMeasuredH(Math.max(naturalSize.height, maxBottom + 24));
+        };
+        read();
+        const ro = new ResizeObserver(read);
+        ro.observe(el);
+        el.querySelectorAll<HTMLElement>(".mc-node").forEach((n) => ro.observe(n));
+        return () => ro.disconnect();
+    }, [naturalSize.height, team]);
     const effectiveScale = scale * userZoom;
     const effectiveDisplayW = canvasWidth * effectiveScale;
-    const effectiveDisplayH = naturalSize.height * effectiveScale;
+    const effectiveDisplayH = measuredH * effectiveScale;
     const isInteractive = userZoom !== 1 || scrolls;
 
     // Initial/recenter pan — whenever the viewport size, the natural
@@ -347,7 +393,7 @@ export function Step2View({
         const cy = (vh - effectiveDisplayH) / 2;
         setPan({ x: cx, y: cy });
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [canvasWidth, naturalSize.height, scale]);
+    }, [canvasWidth, measuredH, scale]);
     // (effectiveDisplayW/H are derived from the above — no need to add.)
 
     /** Zoom while keeping ``focal`` (in viewport-local px) stationary
@@ -384,7 +430,7 @@ export function Step2View({
         const el = canvasScrollRef.current;
         if (el) {
             const fitW = canvasWidth * scale;
-            const fitH = naturalSize.height * scale;
+            const fitH = measuredH * scale;
             setPan({
                 x: (el.clientWidth - fitW) / 2,
                 y: (el.clientHeight - fitH) / 2,
@@ -573,7 +619,7 @@ export function Step2View({
                             )}
                             <span className="mc-section-meta">
                                 {team
-                                    ? `${agentCount} agent${agentCount === 1 ? "" : "s"} · ${team.edges.length} connection${team.edges.length === 1 ? "" : "s"}`
+                                    ? `${agentCount} agent${agentCount === 1 ? "" : "s"} · ${connectionCount} connection${connectionCount === 1 ? "" : "s"}`
                                     : null}
                             </span>
                         </div>
@@ -635,9 +681,12 @@ export function Step2View({
                         {team ? (
                             <div
                                 className="mc-canvas-fit__inner"
+                                ref={canvasInnerRef}
                                 style={{
                                     width: canvasWidth,
-                                    height: naturalSize.height,
+                                    /* No explicit height — let the
+                                       stage size to its real content
+                                       so offsetHeight reads true. */
                                     transform: `translate(${pan?.x || 0}px, ${pan?.y || 0}px) scale(${effectiveScale})`,
                                     transformOrigin: "0 0",
                                 }}
@@ -733,6 +782,7 @@ export function Step2View({
                     team={team}
                     meta={meta}
                     agentCount={agentCount}
+                    connectionCount={connectionCount}
                     onClose={() => setFullscreenOpen(false)}
                 />
             )}
@@ -864,16 +914,19 @@ function TeamCompositionFullscreen({
     team,
     meta,
     agentCount,
+    connectionCount,
     onClose,
 }: {
     team: Team;
     meta: { label: string };
     agentCount: number;
+    connectionCount: number;
     onClose: () => void;
 }) {
     const { t } = useTranslation();
     const natural = useMemo(() => naturalCanvasSize(team), [team]);
     const wrapRef = useRef<HTMLDivElement | null>(null);
+    const innerRef = useRef<HTMLDivElement | null>(null);
     // Auto-fit on open; then the user can zoom freely.
     const [containerSize, setContainerSize] = useState({ w: natural.width, h: natural.height });
     useLayoutEffect(() => {
@@ -885,9 +938,40 @@ function TeamCompositionFullscreen({
         ro.observe(el);
         return () => ro.disconnect();
     }, []);
+    // Measured content bounds — nodes can render significantly taller
+    // than the static ``NODE_CONTENT_H`` budget because of multi-line
+    // roles, multiple selected skill chips, and wrapped descriptions.
+    // Using the max ``offsetTop + offsetHeight`` of any rendered node
+    // gives us the true content bottom so fit-to-view centers on
+    // what the user sees (not on the layout's internal guess).
+    const [contentSize, setContentSize] = useState({ w: natural.width, h: natural.height });
+    useLayoutEffect(() => {
+        const el = innerRef.current;
+        if (!el) return undefined;
+        const read = () => {
+            let maxBottom = el.offsetHeight;
+            let maxRight = el.offsetWidth;
+            const nodes = el.querySelectorAll<HTMLElement>(".mc-node");
+            nodes.forEach((n) => {
+                const bottom = n.offsetTop + n.offsetHeight;
+                const right = n.offsetLeft + n.offsetWidth;
+                if (bottom > maxBottom) maxBottom = bottom;
+                if (right > maxRight) maxRight = right;
+            });
+            setContentSize({
+                w: Math.max(natural.width, maxRight + 24),
+                h: Math.max(natural.height, maxBottom + 24),
+            });
+        };
+        read();
+        const ro = new ResizeObserver(read);
+        ro.observe(el);
+        el.querySelectorAll<HTMLElement>(".mc-node").forEach((n) => ro.observe(n));
+        return () => ro.disconnect();
+    }, [natural.width, natural.height, team]);
     const fitScale = useMemo(() => {
-        const sW = containerSize.w / natural.width;
-        const sH = containerSize.h / natural.height;
+        const sW = containerSize.w / contentSize.w;
+        const sH = containerSize.h / contentSize.h;
         // Never upscale past natural in the fullscreen view — the
         // purpose is to *fit* the graph, not stretch it onto a 4K
         // monitor. Users who want zoom-in can still push the
@@ -896,7 +980,7 @@ function TeamCompositionFullscreen({
         // butting against the stage edges (the user wants a
         // "image-1-style" centered look by default).
         return Math.min(0.9, Math.max(0.3, Math.min(sW, sH)));
-    }, [containerSize, natural]);
+    }, [containerSize, contentSize]);
     const [userZoom, setUserZoom] = useState(1);
     const [pan, setPan] = useState<{ x: number; y: number } | null>(null);
     const effective = fitScale * userZoom;
@@ -905,14 +989,14 @@ function TeamCompositionFullscreen({
     // pan/zoom is preserved (deps list intentionally excludes userZoom).
     useLayoutEffect(() => {
         if (!containerSize.w || !containerSize.h) return;
-        const w = natural.width * fitScale;
-        const h = natural.height * fitScale;
+        const w = contentSize.w * fitScale;
+        const h = contentSize.h * fitScale;
         setPan({
             x: (containerSize.w - w) / 2,
             y: (containerSize.h - h) / 2,
         });
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [containerSize.w, containerSize.h, natural.width, natural.height, fitScale]);
+    }, [containerSize.w, containerSize.h, contentSize.w, contentSize.h, fitScale]);
 
     /** Cursor-anchored zoom via single transform. */
     const zoomAt = (delta: number, focal: { x: number; y: number } | null) => {
@@ -935,8 +1019,8 @@ function TeamCompositionFullscreen({
     const resetZoom = () => {
         setUserZoom(1);
         setPan({
-            x: (containerSize.w - natural.width * fitScale) / 2,
-            y: (containerSize.h - natural.height * fitScale) / 2,
+            x: (containerSize.w - contentSize.w * fitScale) / 2,
+            y: (containerSize.h - contentSize.h * fitScale) / 2,
         });
     };
 
@@ -1021,7 +1105,7 @@ function TeamCompositionFullscreen({
                         <span>{t("Review_TeamComposition") || "Team composition"}</span>
                         <span className="mc-pill mc-pill--planned" style={{ marginLeft: 8 }}>{meta.label}</span>
                         <span className="mc-section-meta" style={{ marginLeft: 8 }}>
-                            {`${agentCount} agent${agentCount === 1 ? "" : "s"} · ${team.edges.length} connection${team.edges.length === 1 ? "" : "s"}`}
+                            {`${agentCount} agent${agentCount === 1 ? "" : "s"} · ${connectionCount} connection${connectionCount === 1 ? "" : "s"}`}
                         </span>
                     </span>
                     <div className="workspace-preview-head-actions">
@@ -1074,9 +1158,12 @@ function TeamCompositionFullscreen({
                 >
                     <div
                         className="mc-canvas-fit__inner"
+                        ref={innerRef}
                         style={{
                             width: natural.width,
-                            height: natural.height,
+                            /* No explicit height — measuredH picks up
+                               the real rendered bottom so fit-to-view
+                               centers on the true bounding box. */
                             transform: `translate(${pan?.x || 0}px, ${pan?.y || 0}px) scale(${effective})`,
                             transformOrigin: "0 0",
                         }}

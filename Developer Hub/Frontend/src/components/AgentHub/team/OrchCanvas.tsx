@@ -601,31 +601,81 @@ export function OrchCanvas({
                     preserveAspectRatio="none"
                     aria-hidden="true"
                 >
-                    {team.edges.map((e: TeamEdge, i: number) => {
-                        const from = positions.get(e.from);
-                        const to = positions.get(e.to);
-                        if (!from || !to) return null;
-                        let d: string;
-                        if (team.pattern === "sequential") {
-                            d = pathHorizontal(from, to);
-                        } else if (e.kind === "peer" || team.pattern === "network") {
-                            d = pathPeer(from, to);
-                        } else {
-                            d = pathSmooth(from, to);
+                    {(() => {
+                        // Collapse unordered endpoint pairs so a
+                        // delegate (A→B) + report (B→A) round-trip
+                        // renders as ONE curve instead of two nearly
+                        // identical paths that just bow slightly
+                        // differently (because pathSmooth anchors at
+                        // bottom→top relative to each edge's direction).
+                        // Direction preference: delegate first (parent
+                        // on top anchors curve naturally), then peer,
+                        // then report (swapped so it still draws
+                        // top→bottom). Rendering dedupe mirrors the
+                        // label dedupe performed in edgeLabels above.
+                        type Merged = {
+                            key: string;
+                            kinds: Set<string>;
+                            from: string;
+                            to: string;
+                            primary: TeamEdge;
+                        };
+                        const byPair = new Map<string, Merged>();
+                        for (const e of team.edges) {
+                            const pair = [e.from, e.to].sort().join("↔");
+                            const existing = byPair.get(pair);
+                            if (!existing) {
+                                byPair.set(pair, {
+                                    key: pair,
+                                    kinds: new Set([e.kind]),
+                                    from: e.from,
+                                    to: e.to,
+                                    primary: e,
+                                });
+                                continue;
+                            }
+                            existing.kinds.add(e.kind);
+                            // Prefer a delegate-direction path so the
+                            // smooth curve flows top-down.
+                            if (e.kind === "delegate" && existing.primary.kind !== "delegate") {
+                                existing.from = e.from;
+                                existing.to = e.to;
+                                existing.primary = e;
+                            }
                         }
-                        const active =
-                            !!activeAgentId &&
-                            (e.from === activeAgentId || e.to === activeAgentId);
-                        return (
-                            <path
-                                key={`e-${i}`}
-                                className="mc-edge"
-                                data-kind={e.kind}
-                                data-active={active ? "true" : undefined}
-                                d={d}
-                            />
-                        );
-                    })}
+                        return [...byPair.values()].map((m, i) => {
+                            const from = positions.get(m.from);
+                            const to = positions.get(m.to);
+                            if (!from || !to) return null;
+                            let d: string;
+                            if (team.pattern === "sequential") {
+                                d = pathHorizontal(from, to);
+                            } else if (m.kinds.has("peer") && !m.kinds.has("delegate") || team.pattern === "network") {
+                                d = pathPeer(from, to);
+                            } else {
+                                // If only ``report`` is present (no
+                                // matching delegate), swap direction so
+                                // the curve still anchors parent→child.
+                                const srcIsFrom = from.y <= to.y;
+                                d = srcIsFrom ? pathSmooth(from, to) : pathSmooth(to, from);
+                            }
+                            const kindAttr = m.kinds.has("delegate") && m.kinds.has("report")
+                                ? "delegate"
+                                : m.primary.kind;
+                            const active =
+                                !!activeAgentId &&
+                                (m.from === activeAgentId || m.to === activeAgentId);
+                            return (
+                                <path
+                                    key={`e-${i}-${m.key}`}
+                                    className="mc-edge"
+                                    data-kind={kindAttr}
+                                    data-active={active ? "true" : undefined}
+                                    d={d}
+                                />
+                            );
+                        });
+                    })()}
                 </svg>
 
                 {team.nodes.map((n) => {
