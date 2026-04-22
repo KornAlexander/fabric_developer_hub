@@ -255,6 +255,7 @@ class OrchestratorEngine:
         preferred_architecture: str | None = None,
         require_approvals: bool = True,
         branch_out: bool = False,
+        model: str | None = None,
     ) -> Composition:
         """Delegate to ``ComposeService``. Present here so callers have a
         single engine-level entrypoint rather than reaching into the
@@ -269,6 +270,7 @@ class OrchestratorEngine:
             preferred_architecture=preferred_architecture,
             require_approvals=require_approvals,
             branch_out=branch_out,
+            model=model,
         )
 
     # ── Execution ───────────────────────────────────────────────────

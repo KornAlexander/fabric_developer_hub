@@ -33,12 +33,18 @@ from domain.models.composition import (
 )
 from services.agenthub.agent_registry import AGENT_TEMPLATES, list_templates
 from services.agenthub.attachments import ATTACHMENT_SHIELD_PROMPT, process_attachments
+from services.agenthub.compose_models import COMPOSE_FALLBACK_MODEL
 
 logger = logging.getLogger(__name__)
 
 
 COPILOT_API_BASE = "https://api.githubcopilot.com"
-COMPOSE_MODEL = "gpt-4o"
+# Default model when the caller doesn't specify one. The runtime picks
+# the actual model from the user's available catalog via
+# ``compose_models.pick_compose_model`` — this constant is only used as
+# the last-resort fallback. Kept here for backwards compatibility with
+# tests that monkeypatch ``COMPOSE_MODEL``.
+COMPOSE_MODEL = COMPOSE_FALLBACK_MODEL
 COMPOSE_TIMEOUT_S = 60
 
 # Module-level HTTP client reused across all compose calls. Opening a
@@ -174,13 +180,17 @@ class ComposeService:
         preferred_architecture: str | None = None,
         require_approvals: bool = True,
         branch_out: bool = False,
+        model: str | None = None,
     ) -> Composition:
         """Make the single compose call and return a Composition.
 
         ``preferred_architecture`` is the "Regenerate as …" override.
+        ``model`` overrides the default composer model; validated against
+        the user's catalog by the caller.
         """
         correlation_id = uuid.uuid4().hex[:12]
         session_id = session_id or str(uuid.uuid4())
+        chosen_model = model or COMPOSE_MODEL
 
         att_dicts: list[dict] = []
         for a in attachments or []:
@@ -224,13 +234,13 @@ class ComposeService:
 
         logger.info(
             "[COMPOSE][%s] calling LLM (model=%s, sys_chars=%d, user_chars=%d, images=%d)",
-            correlation_id, COMPOSE_MODEL,
+            correlation_id, chosen_model,
             len(system_prompt), len(user_msg), len(image_parts),
         )
         t0 = time.monotonic()
         raw = await self._call_llm(
             messages=messages, copilot_token=copilot_token,
-            correlation_id=correlation_id,
+            correlation_id=correlation_id, model=chosen_model,
         )
         logger.info(
             "[COMPOSE][%s] LLM responded in %.2fs (%d chars)",
@@ -256,7 +266,7 @@ class ComposeService:
             })
             raw2 = await self._call_llm(
                 messages=messages, copilot_token=copilot_token,
-                correlation_id=correlation_id,
+                correlation_id=correlation_id, model=chosen_model,
             )
             return self._parse(
                 raw2, session_id=session_id, task=task_description,
@@ -295,9 +305,10 @@ class ComposeService:
 
     async def _call_llm(
         self, *, messages: list[dict], copilot_token: str, correlation_id: str,
+        model: str | None = None,
     ) -> str:
         body = {
-            "model": COMPOSE_MODEL,
+            "model": model or COMPOSE_MODEL,
             "messages": messages,
             "temperature": 0.3,
             "max_tokens": 2_000,
