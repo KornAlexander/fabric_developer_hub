@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useRef, useMemo } from "react";
+import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { useHistory, useRouteMatch } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import {
     Button,
     Text,
     Spinner,
-    Divider,
     Menu,
     MenuTrigger,
     MenuPopover,
@@ -14,6 +15,7 @@ import {
 import {
     Sparkle24Regular,
     Checkmark24Regular,
+    Checkmark16Filled,
     Dismiss24Regular,
     Add20Regular,
     Database20Regular,
@@ -43,12 +45,18 @@ import { WorkloadClientAPI } from "@ms-fabric/workload-client";
 import { callAuthAcquireAccessToken, callDatahubOpen } from "../../controller/AgentHubController";
 import * as api from "../../controller/AgentHubApi";
 import type { Workspace } from "../../controller/AgentHubApi";
-import { PlanView } from "./plan";
 import type { Plan } from "./plan";
 import { PdfPreview } from "./PdfPreview";
 import { useSearch } from "./SearchContext";
 import { fuzzyFilter } from "./fuzzySearch";
 import { WorkspacePreviewModal } from "./WorkspacePreviewModal";
+import { MissionControlPage } from "./mission/MissionControlPage";
+import { Step2View } from "./Step2View";
+import { MentionPicker, type MentionSuggestion } from "./MentionPicker";
+import {
+    RichComposer, plainTextToTokens,
+    type RichComposerHandle, type RichComposerValue, type RichTrigger,
+} from "./RichComposer";
 
 const BE = process.env.WORKLOAD_BE_URL || "http://127.0.0.1:5000";
 
@@ -230,16 +238,45 @@ function recentStatusInfo(status?: string): { variant: RecentStatusVariant; labe
 /* ── Component ────────────────────────────────────────────────── */
 
 export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
+    const { t } = useTranslation();
+    // taskText is the plain-text projection of the rich composer (see
+    // RichComposer). Every upstream consumer — planner payload, drafts,
+    // recent prompts, change-signature — still reads this string, so the
+    // structural mention tokens are additive rather than invasive.
     const [taskText, setTaskText] = useState("");
+    // Token representation of the composer content. Mentions are real
+    // tokens here (not prose "@Name" strings), which is how the inline
+    // chips survive edits around them.
+    const [composerValue, setComposerValue] = useState<RichComposerValue>({ tokens: [] });
+
+    /** Seed the composer from a plain string (drafts, recents, starter
+     *  prompts). The string has no structural mention info, so every
+     *  "@Name" in it renders as literal text. New mentions added via the
+     *  picker thereafter become real chips. */
+    function loadPlainPrompt(text: string) {
+        setTaskText(text);
+        setComposerValue({ tokens: plainTextToTokens(text) });
+    }
     const [planning, setPlanning] = useState(false);
     // Serialized snapshot of every input that feeds plan generation, taken
     // the instant planning starts. Used to tell whether the user has changed
     // anything while a plan is in flight — if so we show the "won't be
     // reflected" warning; if nothing changed, we stay quiet.
     const [planningSnapshot, setPlanningSnapshot] = useState<string | null>(null);
+    // Exact prompt text at the instant the user clicked "Plan this". The Step2
+    // view uses this to typewriter-render the prompt back while waiting on the
+    // LLM — independent of any edits the user may make to ``taskText`` later.
+    const [planningTaskSnapshot, setPlanningTaskSnapshot] = useState<string | null>(null);
+    // Abort controller for the in-flight plan generation. Clicking "Edit
+    // task" on the Step 2 loading view aborts the fetch so the user gets
+    // back to Step 1 immediately instead of waiting for the LLM to finish.
+    const planningAbortRef = useRef<AbortController | null>(null);
     const [plan, setPlan] = useState<any | null>(null);
     const [sessionId, setSessionId] = useState<string | null>(null);
     const [approving, setApproving] = useState(false);
+    // P5 · When non-null, we render the in-place run view (SessionDetailPage)
+    // instead of the composer + plan. Keeps the user on the same route.
+    const [runningSessionId, setRunningSessionId] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
 
     // Attached files. Sent to the backend as a structured `attachments`
@@ -253,16 +290,41 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
     // Anchor for the generated-plan section. We auto-scroll to this once a
     // plan arrives so the user isn't left staring at the prompt form.
     const planSectionRef = useRef<HTMLDivElement | null>(null);
-    // Focus the compose textarea when the New Session page first mounts so
+    // Focus the rich composer when the New Session page first mounts so
     // users can start typing immediately. One-shot — subsequent re-renders
     // don't steal focus from whatever the user is doing.
-    const composerRef = useRef<HTMLTextAreaElement | null>(null);
+    const composerRef = useRef<RichComposerHandle | null>(null);
+    // Raw DOM ref used for outside-click detection (the Handle doesn't
+    // expose a Node reference).
+    const composerElRef = useRef<HTMLDivElement | null>(null);
     useEffect(() => {
         const id = window.requestAnimationFrame(() => {
             composerRef.current?.focus();
         });
         return () => window.cancelAnimationFrame(id);
     }, []);
+
+    // ── @-mention picker state ────────────────────────────────────────
+    // The RichComposer detects "@query" tokens itself and notifies us via
+    // `onTriggerChange`. We track that trigger + anchor rect and pass it
+    // to MentionPicker. Accepting a row calls `composerRef.acceptMention`
+    // which replaces the trigger text with a real inline chip.
+    const [mention, setMention] = useState<RichTrigger | null>(null);
+
+    // Close picker when clicking outside composer + picker.
+    useEffect(() => {
+        if (!mention) return undefined;
+        function onDocMouseDown(e: MouseEvent) {
+            const target = e.target as Node | null;
+            if (!target) return;
+            if ((target as Element).closest?.(".mention-pop")) return;
+            if (composerElRef.current && composerElRef.current.contains(target)) return;
+            setMention(null);
+        }
+        document.addEventListener("mousedown", onDocMouseDown);
+        return () => document.removeEventListener("mousedown", onDocMouseDown);
+    }, [mention]);
+
     type AttachmentKind = "text" | "image" | "pdf";
     interface UiAttachment {
         name: string;
@@ -409,6 +471,28 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
     const [selectedWorkspace, setSelectedWorkspace] = useState("");
     const [destinationWorkspace, setDestinationWorkspace] = useState("");
     const [loadingWorkspaces, setLoadingWorkspaces] = useState(false);
+    // The workspace-picker Menu popover must match the trigger width.
+    // Fluent's ``matchTargetSize: 'width'`` is flaky once custom CSS
+    // enters the picture, so we observe the trigger's size ourselves
+    // and expose it through a ``--ws-trigger-width`` CSS variable
+    // consumed by ``.workspace-menu-popover``. A ref callback is used
+    // so the observer re-attaches whenever the trigger remounts (e.g.
+    // when toggling the loading spinner branch).
+    const [workspaceTriggerWidth, setWorkspaceTriggerWidth] = useState<number>(0);
+    const workspaceTriggerResizeObs = useRef<ResizeObserver | null>(null);
+    const setWorkspaceTriggerRef = React.useCallback((el: HTMLButtonElement | null) => {
+        if (workspaceTriggerResizeObs.current) {
+            workspaceTriggerResizeObs.current.disconnect();
+            workspaceTriggerResizeObs.current = null;
+        }
+        if (el && typeof ResizeObserver !== "undefined") {
+            const update = () => setWorkspaceTriggerWidth(el.getBoundingClientRect().width);
+            update();
+            const ro = new ResizeObserver(update);
+            ro.observe(el);
+            workspaceTriggerResizeObs.current = ro;
+        }
+    }, []);
     const [workspacesCachedAt, setWorkspacesCachedAt] = useState<string | null>(null);
     const [workspacesError, setWorkspacesError] = useState<string | null>(null);
     // Inline "create new workspace" form — only available when branch-out
@@ -469,6 +553,35 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
     }
 
     useEffect(() => { loadWorkspaces(false); }, []);
+
+    // Background-preload the Recent prompts list on page mount so the
+    // popover shows the real content instantly the first time the user
+    // opens it. Deferred by one rAF + idle callback so it doesn't
+    // compete with the critical initial paint (workspace list, plan
+    // area, hero). The skeleton popover remains as a fallback in the
+    // unlikely case the preload is still in flight when the user clicks.
+    useEffect(() => {
+        if (!githubToken) return undefined;
+        const kick = () => { loadRecentSessions(true); };
+        const ric: ((cb: () => void, opts?: { timeout: number }) => number) | undefined =
+            (window as any).requestIdleCallback;
+        let idleId: number | null = null;
+        let rafId = window.requestAnimationFrame(() => {
+            if (ric) {
+                idleId = ric(kick, { timeout: 1500 });
+            } else {
+                idleId = window.setTimeout(kick, 300) as unknown as number;
+            }
+        });
+        return () => {
+            window.cancelAnimationFrame(rafId);
+            if (idleId != null) {
+                const cic: ((id: number) => void) | undefined = (window as any).cancelIdleCallback;
+                if (cic) cic(idleId); else window.clearTimeout(idleId);
+            }
+        };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [githubToken]);
 
     // --- LLM-generated suggestions (debounced) ----------------------
     // Both ``branchName`` and ``childWsName`` start empty. 700 ms after
@@ -778,7 +891,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
         // The draft entry holds an in-memory snapshot with full attachment
         // bytes, so we can restore without any API call.
         if (session.id === DRAFT_ID && draftEntry) {
-            setTaskText(draftEntry.prompt === "(no prompt text)" ? "" : draftEntry.prompt);
+            loadPlainPrompt(draftEntry.prompt === "(no prompt text)" ? "" : draftEntry.prompt);
             if (draftEntry.workspaceId && workspaces.some(w => w.id === draftEntry.workspaceId)) {
                 setSelectedWorkspace(draftEntry.workspaceId);
                 setDestinationWorkspace(draftEntry.workspaceId);
@@ -827,7 +940,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
         // Populate text + metadata immediately from the lite row so the UI
         // feels snappy, then fetch the full session to pull back attachment
         // bytes (stripped from the list response to keep it cheap).
-        setTaskText(session.prompt);
+        loadPlainPrompt(session.prompt);
         if (session.workspaceId && workspaces.some(w => w.id === session.workspaceId)) {
             setSelectedWorkspace(session.workspaceId);
             setDestinationWorkspace(session.workspaceId);
@@ -1236,8 +1349,14 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
         }
         setPlanning(true);
         setPlanningSnapshot(computePlanInputSignature());
+        setPlanningTaskSnapshot(taskText);
         setError(null);
         setPlan(null);
+        // Fresh abort controller for this plan request; Edit-task in the
+        // Step 2 loading view can cancel it.
+        planningAbortRef.current?.abort();
+        const ctrl = new AbortController();
+        planningAbortRef.current = ctrl;
         try {
             const fabricToken = await getFabricToken();
             const wsName = workspaces.find(w => w.id === selectedWorkspace)?.name || selectedWorkspace;
@@ -1263,7 +1382,10 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                 },
                 { githubToken, fabricToken },
                 apiAttachments,
+                ctrl.signal,
             );
+            // Aborted after a late-arriving response — ignore it.
+            if (ctrl.signal.aborted) return;
             setSessionId(job.id);
             setPlan(job.plan);
             // Surface the just-created prompt in the Recent-prompts popover
@@ -1283,11 +1405,39 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
             setDraftEntry(null);
             setLastRecentPickId(null);
         } catch (e: any) {
+            // User clicked "Edit task" while the plan was being generated —
+            // swallow the abort; cancel handler already reset UI state.
+            if (e?.name === "AbortError" || ctrl.signal.aborted) return;
             setError(e.message || "Plan generation failed");
         } finally {
+            if (planningAbortRef.current === ctrl) planningAbortRef.current = null;
             setPlanning(false);
             setPlanningSnapshot(null);
+            setPlanningTaskSnapshot(null);
         }
+    }
+
+    /**
+     * Cancel Step 2 and return to Step 1 immediately. Works in every
+     * state: while the LLM is still generating the plan (aborts the
+     * fetch), and after the plan has arrived (rejects the session). The
+     * user does not have to wait for the in-flight request to finish.
+     */
+    function handleCancelPlanning() {
+        // Abort any in-flight plan request.
+        planningAbortRef.current?.abort();
+        planningAbortRef.current = null;
+        // Reject the session on the backend (best-effort, fire-and-forget)
+        // if one was already created.
+        if (sessionId) {
+            api.rejectPlan(sessionId, { githubToken }).catch(() => { /* ok */ });
+        }
+        setPlanning(false);
+        setPlanningSnapshot(null);
+        setPlanningTaskSnapshot(null);
+        setPlan(null);
+        setSessionId(null);
+        setError(null);
     }
 
     async function handleApprove() {
@@ -1296,7 +1446,13 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
         try {
             const fabricToken = await getFabricToken();
             await api.approvePlan(sessionId, { githubToken, fabricToken });
-            history.push(match.url.replace(/\/orchestrator$/, `/session/${sessionId}`));
+            // P5 · Mission Control — single-surface run evolution. Rather
+            // than navigating to the session detail route, flip a local
+            // flag so the same page re-renders the run view in place.
+            // Deep-link permalink at /session/:id still works (via
+            // route rendering), which keeps refresh and bookmarking
+            // behaviour intact.
+            setRunningSessionId(sessionId);
         } catch (e: any) {
             setError(e.message || "Failed to start job");
         } finally {
@@ -1304,15 +1460,362 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
         }
     }
 
-    async function handleReject() {
-        if (!sessionId) return;
-        try { await api.rejectPlan(sessionId, { githubToken }); } catch { /* ok */ }
-        setPlan(null);
-        setSessionId(null);
+    function removeContext(name: string) {
+        setContextItems(prev => {
+            const target = prev.find(c => c.name === name);
+            // Mirror removal into the composer: detach any inline chips
+            // for this resource so we don't end up with a dangling
+            // reference in the prose.
+            if (target) {
+                const chipId = target.type === "workspace"
+                    ? `ws:${target.id}`
+                    : `it:${target.id || target.name}`;
+                composerRef.current?.removeMentionsById(chipId);
+            }
+            return prev.filter(c => c.name !== name);
+        });
     }
 
-    function removeContext(name: string) {
-        setContextItems(prev => prev.filter(c => c.name !== name));
+    // ── @-mention: fetch items across all accessible workspaces so the
+    //    picker can surface anything the user could reach via "+ Add item"
+    //    (the datahub modal), not just items from the currently selected
+    //    workspace. We keep a per-workspace map; each entry is fetched
+    //    lazily — either because the user focused that workspace in the
+    //    dropdown, or because the mention picker opened (which triggers
+    //    prefetch for every workspace that hasn't been loaded yet). The
+    //    backend caches for ~60s so repeat fetches are cheap.
+    const [mentionItemsByWs, setMentionItemsByWs] = useState<Record<string, api.WorkspaceItem[]>>({});
+    const mentionFetchInFlight = useRef<Set<string>>(new Set());
+
+    /** True while we're still fanning out workspace-item fetches in the
+     *  background. MentionPicker shows a subtle spinner + "+" on the
+     *  result count so the total doesn't silently jump as new items
+     *  stream in. */
+    const mentionLoading = useMemo(
+        () => workspaces.some(w => mentionItemsByWs[w.id] === undefined),
+        [workspaces, mentionItemsByWs],
+    );
+    /** Progress counters for the inline loading pill. */
+    const mentionProgress = useMemo(() => {
+        const total = workspaces.length;
+        let indexed = 0;
+        for (const w of workspaces) {
+            if (mentionItemsByWs[w.id] !== undefined) indexed++;
+        }
+        return { indexed, total };
+    }, [workspaces, mentionItemsByWs]);
+
+    const fetchWorkspaceItemsForMention = useCallback(async (wsId: string) => {
+        if (!wsId) return;
+        if (mentionFetchInFlight.current.has(wsId)) return;
+        mentionFetchInFlight.current.add(wsId);
+        try {
+            const githubToken = sessionStorage.getItem("github_token") || "";
+            const fabricToken = await getFabricToken();
+            // Bound each fetch with a hard timeout so one hung/slow
+            // workspace can't permanently stall a pool worker. On
+            // timeout we record an empty list (rather than leaving the
+            // slot ``undefined``) so the progress counter advances and
+            // the picker stops claiming "Indexing…" forever. The
+            // underlying request may still resolve later; that's fine
+            // — the next ``setMentionItemsByWs`` call will overwrite.
+            const PER_FETCH_TIMEOUT_MS = 12000;
+            const result = await Promise.race<
+                { items: api.WorkspaceItem[] } | { timeout: true }
+            >([
+                api.listWorkspaceItems(wsId, { githubToken, fabricToken })
+                    .then(r => ({ items: r.items || [] })),
+                new Promise(resolve =>
+                    setTimeout(() => resolve({ timeout: true } as const), PER_FETCH_TIMEOUT_MS),
+                ),
+            ]);
+            if ("timeout" in result) {
+                setMentionItemsByWs(prev =>
+                    prev[wsId] !== undefined ? prev : { ...prev, [wsId]: [] },
+                );
+            } else {
+                setMentionItemsByWs(prev => ({ ...prev, [wsId]: result.items }));
+            }
+        } catch {
+            // swallow — best-effort; record empty so progress advances.
+            setMentionItemsByWs(prev =>
+                prev[wsId] !== undefined ? prev : { ...prev, [wsId]: [] },
+            );
+        } finally {
+            mentionFetchInFlight.current.delete(wsId);
+        }
+    }, []);
+
+    // Prefetch the selected workspace eagerly — it's the most likely
+    // source of mentions and was already doing this historically.
+    useEffect(() => {
+        if (!selectedWorkspace) return;
+        if (mentionItemsByWs[selectedWorkspace] !== undefined) return;
+        void fetchWorkspaceItemsForMention(selectedWorkspace);
+    }, [selectedWorkspace, mentionItemsByWs, fetchWorkspaceItemsForMention]);
+
+    // Fan out to every accessible workspace as soon as the list is
+    // known — even before the user opens the picker. Runs in the
+    // background with a small concurrency cap (``MAX_INFLIGHT``) so we
+    // don't overwhelm the backend / Fabric with hundreds of parallel
+    // ``listItems`` requests when the user has access to many
+    // workspaces. Each completed fetch drains the queue, so wall-clock
+    // is bounded by ``ceil(N / MAX_INFLIGHT) * per-request latency``
+    // instead of unbounded parallelism which actually queues on the
+    // server and takes much longer end-to-end.
+    //
+    // The backend caches listings for ~60s, so repeat fetches are
+    // cheap. Priority goes to:
+    //   1. The currently selected workspace (user will reference it most).
+    //   2. Any workspace attached to the prompt via pills.
+    //   3. Everything else, in the order Fabric returned them.
+    useEffect(() => {
+        if (!workspaces.length) return;
+        const MAX_INFLIGHT = 6;
+        let cancelled = false;
+
+        // Build the priority-ordered queue of unfetched workspaces.
+        const attachedIds = new Set(
+            contextItems.filter(c => c.type === "workspace").map(c => c.id),
+        );
+        const queue: string[] = [];
+        if (selectedWorkspace && mentionItemsByWs[selectedWorkspace] === undefined) {
+            queue.push(selectedWorkspace);
+        }
+        for (const id of attachedIds) {
+            if (!queue.includes(id) && mentionItemsByWs[id] === undefined) {
+                queue.push(id);
+            }
+        }
+        for (const w of workspaces) {
+            if (!queue.includes(w.id) && mentionItemsByWs[w.id] === undefined) {
+                queue.push(w.id);
+            }
+        }
+        if (queue.length === 0) return;
+
+        // Pump the queue with a small pool of workers. Each worker takes
+        // the next id and calls ``fetchWorkspaceItemsForMention`` (which
+        // dedupes via its own in-flight set) — so double-triggers from
+        // rapid state changes are harmless.
+        let idx = 0;
+        async function worker() {
+            while (!cancelled && idx < queue.length) {
+                const next = queue[idx++];
+                await fetchWorkspaceItemsForMention(next);
+            }
+        }
+        const workerCount = Math.min(MAX_INFLIGHT, queue.length);
+        for (let i = 0; i < workerCount; i++) void worker();
+
+        return () => { cancelled = true; };
+    }, [
+        workspaces,
+        selectedWorkspace,
+        // We intentionally don't depend on ``mentionItemsByWs`` here —
+        // each successful fetch mutates it, which would retrigger this
+        // effect and re-enqueue everything. The in-flight set inside
+        // ``fetchWorkspaceItemsForMention`` makes the retriggers
+        // no-ops, but it's wasteful. The workers already drain the
+        // snapshot queue they started with.
+        contextItems,
+        fetchWorkspaceItemsForMention,
+    ]);
+
+    /** Map a Fabric item type string to the MentionPicker's kind enum.
+     *
+     *  The raw ``type`` arrives from Fabric's ``/items`` API in PascalCase
+     *  like ``Lakehouse`` / ``SQLDatabase`` / ``KQLDatabase`` /
+     *  ``SemanticModel`` / ``DataPipeline`` / ``DataflowGen2``. We do
+     *  case-insensitive substring matching so synonyms (``SqlDb``,
+     *  ``KustoDatabase``, ``DataFlow``) all land on the right bucket
+     *  without requiring an exhaustive enum.
+     *
+     *  Mirrors the shape of ``iconFor`` in ``WorkspacePreviewModal.tsx``
+     *  so the picker and the explorer use the same taxonomy. */
+    function itemTypeToKind(type: string): MentionSuggestion["kind"] {
+        const t = (type || "").toLowerCase();
+        // Data stores
+        if (t.includes("lakehouse"))       return "lakehouse";
+        if (t.includes("warehouse"))       return "warehouse";
+        if (t === "sqlendpoint" || t === "sqlanalyticsendpoint" || t.includes("sqlanalytics"))
+            return "sqlendpoint";
+        if (t.includes("sqldb") || t.includes("sqldatabase") || t.includes("pgsql"))
+            return "sqldb";
+        if (t.includes("mirrored") || t.includes("dataversemirror"))
+            return "mirrored";
+        if (t.includes("schemamodel"))     return "schemamodel";
+        // Real-time
+        if (t.includes("kqlqueryset"))     return "kqlqueryset";
+        if (t.includes("kqlscript"))       return "kqlscript";
+        if (t.includes("kustodatabase") || t.includes("kqldatabase"))
+            return "kqldatabase";
+        if (t.includes("kustoeventhouse") || t.includes("eventhouse"))
+            return "eventhouse";
+        if (t.includes("eventstream"))     return "eventstream";
+        if (t.includes("realtimedashboard"))
+            return "rtdashboard";
+        if (t.includes("reflex") || t.includes("dataactivator"))
+            return "reflex";
+        // Compute / code
+        if (t.includes("sparkjob"))        return "sparkjob";
+        if (t.includes("environment"))     return "environment";
+        if (t.includes("notebook"))        return "notebook";
+        // Data factory
+        if (t.includes("copyjob"))         return "copyjob";
+        if (t.includes("datafactory"))     return "datafactory";
+        if (t.includes("dataflowgen2"))    return "dataflowgen2";
+        if (t.includes("dataflow"))        return "dataflow";
+        if (t.includes("datamart"))        return "datamart";
+        if (t.includes("pipeline"))        return "pipeline";
+        // Functions / variables / explorations
+        if (t.includes("userdatafunction") || t.includes("datafunction"))
+            return "userfunction";
+        if (t.includes("functionset"))     return "functionset";
+        if (t.includes("variable"))        return "variables";
+        if (t.includes("dataexploration") || t.includes("exploration"))
+            return "exploration";
+        // Agents (explicit Fabric types — don't swallow bare "agent")
+        if (t.includes("dataagent"))       return "dataagent";
+        if (t.includes("operationsagent")) return "opsagent";
+        // Reporting
+        if (t.includes("paginatedreport")) return "paginated";
+        if (t.includes("rdlreport"))       return "rdlreport";
+        if (t.includes("mobilereport"))    return "mobilereport";
+        if (t.includes("report"))          return "report";
+        if (t.includes("dashboard"))       return "dashboard";
+        if (t.includes("scorecard") || t.includes("goal"))
+            return "scorecard";
+        if (t.includes("metricset") || t === "metric" || t.includes("metrics"))
+            return "metric";
+        // Semantic / ML
+        if (t.includes("semanticmodel") || t === "dataset")
+            return "semantic";
+        if (t.includes("mlmodel"))         return "mlmodel";
+        if (t.includes("mlexperiment"))    return "mlexperiment";
+        // Apps + Maps
+        if (t.includes("orgapp") || t === "app")
+            return "app";
+        if (t === "map" || t.includes("map"))
+            return "map";
+        return "item";
+    }
+
+    /** Build the full pool of mention suggestions from current state.
+     *
+     *  Composition (in order):
+     *    1. "Attached" — every pill in `contextItems` and every file in
+     *       `attachedFiles`. This is built from the pill state directly
+     *       so it covers items from *any* workspace, not just the one
+     *       currently selected in the dropdown.
+     *    2. The global catalog — all accessible workspaces + items of
+     *       the selected workspace + attached files — minus anything
+     *       already emitted as "Attached" so rows don't appear twice. */
+    const mentionSuggestions = useMemo<MentionSuggestion[]>(() => {
+        const emitted = new Set<string>();
+        const out: MentionSuggestion[] = [];
+
+        // ── 1. Attached (pills + files) ───────────────────────────────
+        for (const c of contextItems) {
+            const isWorkspace = c.type === "workspace";
+            const key = isWorkspace ? `ws:${c.id}` : `it:${c.id || c.name}`;
+            if (emitted.has(key)) continue;
+            emitted.add(key);
+            out.push({
+                id: key,
+                name: c.name,
+                meta: isWorkspace ? "Workspace · attached" : `${c.type} · attached`,
+                kind: isWorkspace ? "workspace" : itemTypeToKind(c.type),
+                group: "Attached",
+                payload: isWorkspace
+                    ? { kind: "workspace", id: c.id, name: c.name }
+                    : { kind: "item", id: c.id, name: c.name, type: c.type, workspaceId: c.workspaceId },
+            });
+        }
+        for (const f of attachedFiles) {
+            const key = `file:${f.name}`;
+            if (emitted.has(key)) continue;
+            emitted.add(key);
+            out.push({
+                id: key,
+                name: f.name,
+                meta: f.kind === "pdf" ? "PDF · attached"
+                    : f.kind === "image" ? "Image · attached"
+                    : "File · attached",
+                kind: f.kind === "pdf" ? "pdf" : f.kind === "image" ? "image" : "file",
+                group: "Attached",
+                payload: { kind: "file", name: f.name },
+            });
+        }
+
+        // ── 2. Catalog (dedup against "Attached") ─────────────────────
+        for (const w of workspaces) {
+            const key = `ws:${w.id}`;
+            if (emitted.has(key)) continue;
+            emitted.add(key);
+            out.push({
+                id: key,
+                name: w.name,
+                meta: "Workspace",
+                kind: "workspace",
+                payload: { kind: "workspace", id: w.id, name: w.name },
+            });
+        }
+        // Items from every workspace we've fetched so far. Covers the
+        // user's full "+ Add item" reach, not just the selected ws.
+        const wsNameById = new Map(workspaces.map(w => [w.id, w.name]));
+        for (const w of workspaces) {
+            const items = mentionItemsByWs[w.id];
+            if (!items || items.length === 0) continue;
+            const wsLabel = wsNameById.get(w.id) || w.name || "workspace";
+            for (const it of items) {
+                const key = `it:${it.id}`;
+                if (emitted.has(key)) continue;
+                emitted.add(key);
+                out.push({
+                    id: key,
+                    name: it.name,
+                    meta: `${it.type} · ${wsLabel}`,
+                    kind: itemTypeToKind(it.type),
+                    payload: {
+                        kind: "item", id: it.id, name: it.name, type: it.type,
+                        workspaceId: w.id,
+                    },
+                });
+            }
+        }
+        return out;
+    }, [contextItems, attachedFiles, workspaces, mentionItemsByWs]);
+
+    /** Accept a mention suggestion: insert a real inline chip in the
+     *  composer and add the resource to the context pill rail. */
+    function acceptMention(s: MentionSuggestion) {
+        const handle = composerRef.current;
+        if (!handle) { setMention(null); return; }
+        handle.acceptMention({
+            id: s.id,
+            name: s.name,
+            kind: s.kind,
+            payload: s.payload,
+        });
+        setMention(null);
+        // Side-effect: attach the referenced resource to context /
+        // attachment state so it ends up in the plan payload.
+        const p = s.payload as any;
+        if (p?.kind === "workspace") {
+            addWorkspaceContext({ id: p.id, name: p.name });
+        } else if (p?.kind === "item") {
+            setContextItems(prev => {
+                if (prev.some(c => c.id === p.id && c.type !== "workspace")) return prev;
+                return [...prev, {
+                    name: p.name,
+                    type: String(p.type || "item"),
+                    id: p.id,
+                    workspaceId: p.workspaceId,
+                }];
+            });
+        }
+        // Files are already in `attachedFiles`; nothing to do.
     }
 
     async function addFabricItem() {
@@ -1499,6 +2002,25 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
 
     return (
         <div className="compose-page">
+            {/* P5 · Mission Control — single-surface run evolution. After
+                "Approve & run", we render SessionDetailPage inline on the
+                same route so the user never navigates. Deep-linking via
+                /session/:id still renders SessionDetailPage standalone. */}
+            {runningSessionId ? (
+                <MissionControlPage
+                    workloadClient={workloadClient}
+                    sessionId={runningSessionId}
+                    initialJob={{
+                        task_description: taskText,
+                        workspace_id: selectedWorkspace || undefined,
+                        workspace_name: workspaces.find(w => w.id === selectedWorkspace)?.name || null,
+                        started_at: new Date().toISOString(),
+                        status: "running",
+                        context: { context_items: contextItems },
+                    }}
+                />
+            ) : null}
+            {!runningSessionId && (<>
             {/* ── Global search quick-results (topbar-driven, floating dropdown) ── */}
             {quickResults && searchPos && (
                 <div
@@ -1604,7 +2126,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
             <div className="compose-container">
 
                 {/* ── HERO ── */}
-                <section className="compose-hero">
+                <section className="compose-hero" style={{ display: (planning || plan) ? "none" : undefined }}>
                     <div className="compose-hero-icon">
                         <Sparkle24Regular />
                     </div>
@@ -1616,7 +2138,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                 </section>
 
                 {/* ── COMPOSER ── */}
-                <section className="composer-wrap">
+                <section className="composer-wrap" style={{ display: (planning || plan) ? "none" : undefined }}>
                     <div className="composer-card">
                         <div className="composer-glow" />
                         <div className="composer-inner">
@@ -1625,7 +2147,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                                 // We intentionally leave the composer editable so the user can
                                 // keep refining their task while they wait — but any edits made
                                 // here won't reach the in-flight plan generator. They'll take
-                                // effect on the next "Generate Plan" click.
+                                // effect on the next "Propose team" click.
                                 <div
                                     className="composer-planning-warn"
                                     role="status"
@@ -1639,16 +2161,51 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                                     </span>
                                 </div>
                             )}
-                            <label className="composer-label" htmlFor="composer-task-text">NEW TASK DESCRIPTION</label>
-                            <textarea
-                                ref={composerRef}
+                            <label className="composer-label" htmlFor="composer-task-text">
+                                NEW TASK DESCRIPTION
+                            </label>
+                            <RichComposer
                                 id="composer-task-text"
-                                name="taskText"
-                                className="composer-textarea"
-                                value={taskText}
-                                onChange={(e) => { setTaskText(e.target.value); setLastRecentPickId(null); }}
-                                placeholder="Automate the weekly ingestion of regional sales data from our OneLake raw zone, normalize the schema for Gold-layer reporting, and generate SQL-based views for the Finance dashboard."
+                                ref={(h) => {
+                                    composerRef.current = h;
+                                    composerElRef.current = h ? h.getElement() : null;
+                                }}
+                                className="composer-textarea composer-textarea--rich"
+                                value={composerValue}
+                                onChange={(next, plain) => {
+                                    setComposerValue(next);
+                                    setTaskText(plain);
+                                    setLastRecentPickId(null);
+                                }}
+                                onTriggerChange={setMention}
+                                placeholder="Describe what you need done — the orchestrator will plan the steps."
                             />
+                            {/* Floating @-mention popover (fixed position, anchored to caret). */}
+                            <MentionPicker
+                                open={!!mention}
+                                query={mention?.query || ""}
+                                anchor={mention?.anchor || null}
+                                suggestions={mentionSuggestions}
+                                loading={mentionLoading}
+                                progress={mentionProgress}
+                                onAccept={acceptMention}
+                                onDismiss={() => setMention(null)}
+                            />
+                            {/* Subtle helper row — single source of truth for
+                                @-mention discoverability. Fades out once the
+                                user has typed so it doesn't nag experienced
+                                users. GitHub uses this same "helper under the
+                                input" pattern for Markdown hints. */}
+                            <div
+                                className="composer-helper"
+                                data-empty={taskText.trim() ? "false" : "true"}
+                                aria-hidden="true"
+                            >
+                                <span>
+                                    Type <kbd>@</kbd> to reference a workspace,
+                                    Fabric item, or file
+                                </span>
+                            </div>
 
                             {/* Context pills */}
                             <div className="composer-pills">
@@ -1890,90 +2447,152 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                                             <ArrowClockwise16Regular className={loadingWorkspaces ? "spin" : undefined} />
                                         </button>
                                     </label>
-                                    <div className="select-wrap">
-                                        <PeopleTeam20Regular className="select-leadicon" />
-                                        {loadingWorkspaces ? (
+                                    {loadingWorkspaces ? (
+                                        <div className="select-wrap">
+                                            <PeopleTeam20Regular className="select-leadicon" />
                                             <Spinner size="tiny" />
-                                        ) : (
-                                            <select
-                                                id="composer-workspace-select"
-                                                name="workspace"
-                                                value={selectedWorkspace}
-                                                onChange={(e) => {
-                                                    const v = e.target.value;
-                                                    if (v === "__create__") {
-                                                        // Sentinel — open the inline form instead
-                                                        // of selecting a non-existent workspace.
-                                                        setCreateWsOpen(true);
-                                                        setCreateWsError(null);
-                                                        return;
-                                                    }
-                                                    setSelectedWorkspace(v);
-                                                }}
-                                            >
-                                                {workspaces
-                                                    // When branch-out is on we filter to git-connected
-                                                    // workspaces (Fabric branch-out requires git
-                                                    // integration on the source). Off: show everything.
-                                                    // Always keep the currently-selected workspace in
-                                                    // the list, even if it wouldn't otherwise pass the
-                                                    // filter — a native <select value={id}> whose
-                                                    // value isn't among its <option>s silently falls
-                                                    // back to the first option WITHOUT firing
-                                                    // ``onChange``, which would drift the state from
-                                                    // the display. Keeping the selected option
-                                                    // rendered (but ``disabled``) lets the user see
-                                                    // exactly which workspace is selected + why it
-                                                    // isn't actionable.
-                                                    .filter(w =>
-                                                        !branchOut
-                                                        || w.git_connected === true
-                                                        || w.git_connected === null
-                                                        || showUnsupportedSources
-                                                        || w.id === selectedWorkspace,
-                                                    )
-                                                    .map(w => {
-                                                        const notGit = w.git_connected === false;
-                                                        const label = branchOut && w.git_branch
-                                                            ? `${w.name} — ${w.git_branch}`
-                                                            : branchOut && notGit
-                                                                ? `${w.name} (no git integration)`
-                                                                : w.name;
-                                                        // Don't ``disabled`` the currently-selected
-                                                        // option — browsers silently fall back to the
-                                                        // first non-disabled <option> as the visible
-                                                        // value when the selected one is disabled,
-                                                        // which desynchronises the dropdown from React
-                                                        // state. Picking is still blocked for other
-                                                        // non-git options; the selected row carries
-                                                        // the visual warning in the tree below.
-                                                        const isSelected = w.id === selectedWorkspace;
-                                                        return (
-                                                            <option
-                                                                key={w.id}
-                                                                value={w.id}
-                                                                disabled={branchOut && notGit && !isSelected}
-                                                            >
-                                                                {label}
-                                                            </option>
-                                                        );
-                                                    })}
-                                                {/* Sentinel option — acts like a dropdown command
-                                                    “Create new workspace…”. Branch-out mode has its
-                                                    own child-workspace flow so the sentinel is hidden
-                                                    there. */}
-                                                {!branchOut && (
-                                                    <>
-                                                        <option disabled>───────────</option>
-                                                        <option value="__create__">
-                                                            + Create new workspace…
-                                                        </option>
-                                                    </>
-                                                )}
-                                            </select>
-                                        )}
-                                        <ChevronDown16Regular className="select-trailicon" />
-                                    </div>
+                                            <ChevronDown16Regular className="select-trailicon" />
+                                        </div>
+                                    ) : (() => {
+                                            /*
+                                             * The native <select> popup is rendered by the
+                                             * operating system (not the browser / React), so
+                                             * it honors the OS color-scheme. Inside VS Code
+                                             * webviews and dark-mode OSes this produces a
+                                             * jarring black popup on first click before the
+                                             * JS-driven list can take over. Fluent UI's Menu
+                                             * renders its own popover inside React so it
+                                             * always matches the app theme.
+                                             *
+                                             * The entire `.select-wrap` acts as the Menu
+                                             * trigger so the popover (which uses
+                                             * ``matchTargetSize: "width"``) aligns to the
+                                             * full field width — clicking anywhere on the
+                                             * field drops a list of the same width, no
+                                             * cross-screen mouse movement required. */
+                                            const visibleWorkspaces = workspaces.filter(w =>
+                                                !branchOut
+                                                || w.git_connected === true
+                                                || w.git_connected === null
+                                                || showUnsupportedSources
+                                                || w.id === selectedWorkspace,
+                                            );
+                                            const current = workspaces.find(w => w.id === selectedWorkspace);
+                                            const currentLabel = current
+                                                ? (branchOut && current.git_branch
+                                                    ? `${current.name} — ${current.git_branch}`
+                                                    : current.name)
+                                                : "Select a workspace…";
+                                            return (
+                                                <Menu
+                                                    positioning={{ position: "below", align: "start", matchTargetSize: "width" }}
+                                                    onOpenChange={(_, data) => {
+                                                        // UX: Fluent menus use "focus-follows-mouse",
+                                                        // so hovering a partially-visible MenuItem
+                                                        // calls ``focus()`` on it and the browser
+                                                        // auto-scrolls the list — that's the "jump"
+                                                        // on hover. We patch ``focus`` on each item
+                                                        // to pass ``preventScroll: true`` so hover
+                                                        // can never steal scroll position. We also
+                                                        // reset scrollTop to 0 on open (after
+                                                        // Fluent's initial selected-item focus) so
+                                                        // the list always starts at the top — the
+                                                        // selected row is still obvious via its
+                                                        // blue label + checkmark.
+                                                        if (!data.open) return;
+                                                        requestAnimationFrame(() => {
+                                                            requestAnimationFrame(() => {
+                                                                const list = document.querySelector<HTMLElement>(".workspace-menu-list");
+                                                                if (!list) return;
+                                                                list.scrollTop = 0;
+                                                                const items = list.querySelectorAll<HTMLElement>('[role="menuitem"]');
+                                                                items.forEach(item => {
+                                                                    if ((item as any).__wsFocusPatched) return;
+                                                                    const origFocus = item.focus.bind(item);
+                                                                    item.focus = (opts?: FocusOptions) => origFocus({ ...(opts || {}), preventScroll: true });
+                                                                    (item as any).__wsFocusPatched = true;
+                                                                });
+                                                            });
+                                                        });
+                                                    }}
+                                                >
+                                                    <MenuTrigger disableButtonEnhancement>
+                                                        <button
+                                                            ref={setWorkspaceTriggerRef}
+                                                            type="button"
+                                                            id="composer-workspace-select"
+                                                            className="select-wrap select-wrap--trigger"
+                                                            aria-haspopup="menu"
+                                                        >
+                                                            <PeopleTeam20Regular className="select-leadicon" />
+                                                            <span className="select-trigger__label">{currentLabel}</span>
+                                                            <ChevronDown16Regular className="select-trailicon" />
+                                                        </button>
+                                                    </MenuTrigger>
+                                                    <MenuPopover
+                                                        className="workspace-menu-popover"
+                                                        style={workspaceTriggerWidth
+                                                            ? { width: workspaceTriggerWidth, minWidth: workspaceTriggerWidth, maxWidth: workspaceTriggerWidth }
+                                                            : undefined}
+                                                    >
+                                                        <MenuList className="workspace-menu-list">
+                                                            {visibleWorkspaces.length === 0 && (
+                                                                <div className="workspace-menu-empty">
+                                                                    No workspaces available
+                                                                </div>
+                                                            )}
+                                                            {visibleWorkspaces.map(w => {
+                                                                const notGit = w.git_connected === false;
+                                                                const isSelected = w.id === selectedWorkspace;
+                                                                return (
+                                                                    <MenuItem
+                                                                        key={w.id}
+                                                                        disabled={branchOut && notGit && !isSelected}
+                                                                        onClick={() => setSelectedWorkspace(w.id)}
+                                                                        className={`workspace-menu-item${isSelected ? " workspace-menu-item--selected" : ""}`}
+                                                                        icon={<PeopleTeam20Regular />}
+                                                                    >
+                                                                        <div className="workspace-menu-item__row">
+                                                                            <span className="workspace-menu-item__main">
+                                                                                <span className="workspace-menu-item__name">{w.name}</span>
+                                                                                {branchOut && w.git_branch && (
+                                                                                    <span className="workspace-menu-item__meta">
+                                                                                        <BranchFork20Regular />
+                                                                                        {w.git_branch}
+                                                                                    </span>
+                                                                                )}
+                                                                                {branchOut && notGit && (
+                                                                                    <span className="workspace-menu-item__meta workspace-menu-item__meta--muted">
+                                                                                        No git integration
+                                                                                    </span>
+                                                                                )}
+                                                                            </span>
+                                                                            {isSelected && (
+                                                                                <Checkmark16Filled className="workspace-menu-item__check" />
+                                                                            )}
+                                                                        </div>
+                                                                    </MenuItem>
+                                                                );
+                                                            })}
+                                                            {!branchOut && (
+                                                                <div className="workspace-menu-footer">
+                                                                    <MenuItem
+                                                                        className="workspace-menu-item workspace-menu-item--create"
+                                                                        onClick={() => {
+                                                                            setCreateWsOpen(true);
+                                                                            setCreateWsError(null);
+                                                                        }}
+                                                                        icon={<Add20Regular />}
+                                                                    >
+                                                                        <span className="workspace-menu-item__name">Create new workspace…</span>
+                                                                    </MenuItem>
+                                                                </div>
+                                                            )}
+                                                        </MenuList>
+                                                    </MenuPopover>
+                                                </Menu>
+                                            );
+                                        })()}
                                     {branchOut && (() => {
                                         const hiddenCount = workspaces.filter(w => w.git_connected === false).length;
                                         if (hiddenCount === 0) return null;
@@ -2273,7 +2892,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                                             >
                                                 <History20Regular /> Recent prompts
                                             </button>
-                                            {recentOpen && (
+                                            {recentOpen && createPortal((
                                                 <div
                                                     id="recent-prompts-popover"
                                                     className={`recent-prompts-popover recent-prompts-popover--${recentPos?.placement ?? "above"}`}
@@ -2286,9 +2905,51 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                                                     } : undefined}
                                                 >
                                                     {recentLoading && (
-                                                        <div className="recent-prompts-empty">
-                                                            <Spinner size="tiny" /> <span>Loading…</span>
-                                                        </div>
+                                                        // Pattern from Linear, GitHub, Raycast, Slack: instead of a
+                                                        // jarring centered spinner that flashes for a few hundred ms
+                                                        // and then collapses into a list, we render the full popover
+                                                        // chrome (disabled search + 4 skeleton rows that mirror the
+                                                        // real item layout) so the visual swap is invisible on a fast
+                                                        // network and the skeletons shimmer as a progress signal on
+                                                        // a slow one. After the first successful load the result is
+                                                        // cached (recentSessions !== null), so this only runs once.
+                                                        <>
+                                                            <div className="recent-prompts-search recent-prompts-search--skeleton" aria-hidden="true">
+                                                                <Search20Regular className="recent-prompts-search-icon" />
+                                                                <input
+                                                                    type="text"
+                                                                    className="recent-prompts-search-input"
+                                                                    placeholder="Search your prompts, workspaces, attachments…"
+                                                                    disabled
+                                                                    tabIndex={-1}
+                                                                />
+                                                            </div>
+                                                            <div className="recent-prompts-scroll">
+                                                                <ul className="recent-prompts-list" aria-busy="true" aria-label="Loading recent prompts">
+                                                                    {[
+                                                                        { lineW: 78, metaW: 46, chips: [72, 96] },
+                                                                        { lineW: 66, metaW: 52, chips: [88] },
+                                                                        { lineW: 72, metaW: 40, chips: [80, 72, 92] },
+                                                                        { lineW: 54, metaW: 48, chips: [92, 76] },
+                                                                    ].map((row, i) => (
+                                                                        <li
+                                                                            key={i}
+                                                                            className="recent-prompts-item recent-prompts-item--skeleton"
+                                                                            style={{ animationDelay: `${i * 50}ms` }}
+                                                                            aria-hidden="true"
+                                                                        >
+                                                                            <span className="mc-skeleton mc-skeleton--line" style={{ width: `${row.lineW}%`, height: 9 }} />
+                                                                            <span className="mc-skeleton mc-skeleton--line" style={{ width: `${row.metaW}%`, height: 8, marginTop: 5 }} />
+                                                                            <div className="recent-prompts-chips" style={{ marginTop: 6 }}>
+                                                                                {row.chips.map((w, ci) => (
+                                                                                    <span key={ci} className="mc-skeleton" style={{ width: w, height: 16, borderRadius: 999 }} />
+                                                                                ))}
+                                                                            </div>
+                                                                        </li>
+                                                                    ))}
+                                                                </ul>
+                                                            </div>
+                                                        </>
                                                     )}
                                                     {!recentLoading && recentError && (
                                                         <div className="recent-prompts-empty recent-prompts-error">
@@ -2558,14 +3219,13 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                                                         </>
                                                     )}
                                                 </div>
-                                            )}
+                                            ), document.body)}
                                         </div>
                                     </div>
                                     <Button
                                         appearance="primary"
                                         icon={<Sparkle24Regular />}
                                         iconPosition="after"
-                                        size="large"
                                         className="composer-submit-btn"
                                         onClick={handleGeneratePlan}
                                         disabled={
@@ -2578,7 +3238,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                                             )
                                         }
                                     >
-                                        {planning ? <Spinner size="tiny" /> : "Generate Plan"}
+                                        {planning ? <Spinner size="tiny" /> : t("Compose_Submit")}
                                     </Button>
                                 </div>
                             </div>
@@ -2592,25 +3252,61 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                     </div>
                 )}
 
-                {/* ── PLAN V2 REVIEW ── */}
-                {plan && (
+                {/* ── S2 · PROPOSED TEAM & ORCHESTRATION ──
+                   Step2View renders immediately on "Plan this" (before the
+                   LLM responds) with skeletons, typewriter prompt, and
+                   rotating status labels; once ``plan`` arrives it smoothly
+                   swaps to the real team graph + role cards. */}
+                {(planning || plan) && (
                     <>
-                        <Divider />
                         <div ref={planSectionRef}>
-                            <PlanView
-                                plan={plan as Plan}
-                                workspaceName={wsName}
-                                approving={approving}
+                            <Step2View
+                                task={planningTaskSnapshot || taskText}
+                                plan={plan as Plan | null}
+                                loading={planning && !plan}
+                                running={approving}
+                                workspaceName={branchOut ? (childWsName || wsName) : wsName}
+                                workspaceId={branchOut ? null : (selectedWorkspace || null)}
+                                workspaceItems={contextItems as any}
+                                attachments={attachedFiles as any}
                                 requireApprovals={requireApprovals}
-                                onApprove={handleApprove}
-                                onReject={handleReject}
+                                branchOut={branchOut}
+                                branchName={branchOut ? (branchName || null) : null}
+                                sourceWorkspaceName={branchOut ? (wsName || null) : null}
+                                onRun={handleApprove}
+                                onBack={handleCancelPlanning}
+                                error={error}
+                                onRetry={handleGeneratePlan}
+                                onWorkspaceClick={(ws) => {
+                                    if (!ws.id) return;
+                                    setPreviewHighlightItemId(null);
+                                    setPreviewWorkspace({ id: ws.id, name: ws.name });
+                                }}
+                                onItemClick={(item: any) => {
+                                    const typeLower = String(item?.type || "").toLowerCase();
+                                    if (typeLower === "workspace" && item.id) {
+                                        setPreviewHighlightItemId(null);
+                                        setPreviewWorkspace({ id: item.id, name: item.name });
+                                        return;
+                                    }
+                                    if (item?.workspaceId) {
+                                        const wsCtx = contextItems.find(c => c.type === "workspace" && c.id === item.workspaceId);
+                                        const wsMeta = workspaces.find(w => w.id === item.workspaceId);
+                                        setPreviewHighlightItemId(item.id || null);
+                                        setPreviewWorkspace({
+                                            id: item.workspaceId,
+                                            name: wsCtx?.name || wsMeta?.name || "Workspace",
+                                        });
+                                    }
+                                }}
+                                onAttachmentClick={(att: any) => setPreviewAttachment(att)}
                             />
                         </div>
                     </>
                 )}
 
                 {/* ── DISCOVERY & RECOMMENDATIONS ── */}
-                {!plan && (
+                {!plan && !planning && (
                     <section className="discovery-section">
                         <div className="discovery-header">
                             <div className="discovery-title">
@@ -2625,7 +3321,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                                     key={card.title}
                                     type="button"
                                     className={`discovery-card ${card.accent ? "discovery-card--accent" : ""}`}
-                                    onClick={() => setTaskText(card.description)}
+                                    onClick={() => loadPlainPrompt(card.description)}
                                 >
                                     <div
                                         className="discovery-card-icon"
@@ -2786,6 +3482,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                     </div>
                 </div>
             )}
+            </>)}
         </div>
     );
 }

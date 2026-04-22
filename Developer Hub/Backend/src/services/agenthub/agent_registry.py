@@ -1,6 +1,29 @@
-"""Built-in agent templates for AgentHub."""
+"""Built-in agent templates for AgentHub.
+
+The roster below is sourced directly from the two upstream repos the
+product aligns with:
+
+* https://github.com/microsoft/skills-for-fabric  (takes precedence
+  when there is any overlap)
+* https://github.com/patrikborosch/AnalyticsPlatformAgents
+
+Agents (7):
+
+* ``fabric-admin``          → FabricAdmin (skills-for-fabric)
+* ``fabric-app-dev``        → FabricAppDev (skills-for-fabric)
+* ``fabric-data-engineer``  → FabricDataEngineer (skills-for-fabric)
+* ``architect``             → Architect (AnalyticsPlatformAgents)
+* ``modeler``               → Modeler (AnalyticsPlatformAgents)
+* ``creator``               → Creator (AnalyticsPlatformAgents)
+* ``orchestrator``          → Orchestrator (AnalyticsPlatformAgents)
+
+Skills (13) — the ten from skills-for-fabric plus three unique extras
+from AnalyticsPlatformAgents. The skill ids mirror the upstream folder
+names under ``skills/`` so they remain traceable.
+"""
 
 from domain.models.agent_models import AgentCategory, AgentTemplate
+from services.agenthub.catalog_loader import load_catalog
 
 AGENT_TEMPLATES: dict[str, AgentTemplate] = {}
 
@@ -9,468 +32,286 @@ def _register(t: AgentTemplate) -> None:
     AGENT_TEMPLATES[t.id] = t
 
 
-# ── Xi – Data Engineer ───────────────────────────────────────────────
+# ── Skill catalog + agent→skill mapping ────────────────────────────
+# Declarative source of truth is ``catalog.yaml`` (co-located). The
+# loader parses it at import time and exposes the same module-level
+# ``SKILLS`` / ``_AGENT_SKILLS`` names that the compose LLM, tool
+# runtime, and tests already import. See ``catalog_loader.py`` for the
+# shape and ``capability_registry.py`` for the boot-time cross-check
+# against live MCP tools.
+
+SKILLS, _AGENT_SKILLS = load_catalog()
+
+
+def _attach_skills(t: AgentTemplate) -> AgentTemplate:
+    """Populate ``t.skills`` and ``t.available_tools`` from the YAML
+    catalog.
+
+    Runs once per template at module import. ``available_tools`` is
+    the deduplicated union of each attached skill's ``tools`` list —
+    a single source of truth (the catalog) now drives both the skill
+    chips the compose LLM sees and the tool allow-list the runtime
+    enforces.
+    """
+    seen_tools: set[str] = set()
+    for skill_id in _AGENT_SKILLS.get(t.id, []):
+        skill = SKILLS.get(skill_id)
+        if skill is None:
+            continue
+        t.skills.append(skill)
+        for tool in skill.tools:
+            if tool not in seen_tools:
+                seen_tools.add(tool)
+                t.available_tools.append(tool)
+    return t
+
+
+# ── FabricAdmin ─────────────────────────────────────────────────────
 
 _register(
     AgentTemplate(
-        id="xi-data-engineer",
-        name="Xi",
-        display_name="Xi - Data Engineer",
+        id="fabric-admin",
+        name="FabricAdmin",
+        display_name="FabricAdmin",
+        category=AgentCategory.ADMIN,
+        description=(
+            "Manages Microsoft Fabric operational excellence across "
+            "capacity planning, governance, security, cost "
+            "optimisation, and observability."
+        ),
+        tags=["Governance", "Capacity", "Security", "Cost", "RBAC"],
+        system_prompt=(
+            "You are FabricAdmin — a pragmatic, security-conscious "
+            "platform administrator. You think in guardrails, "
+            "policies, and blast radius. Always ask 'what's the worst "
+            "that could happen?' before granting access or scaling "
+            "capacity. Operate read-mostly; require explicit "
+            "confirmation before destructive admin operations. "
+            "Enforce least-privilege RBAC (default Viewer). Keep "
+            "secrets externalised. Delegate endpoint-specific work to "
+            "the specialised skills.\n"
+            "Emit structured actions:\n"
+            "ACTION: <Reviewed|Audited|Configured> | ENTITY: <name> | "
+            "TYPE: <item_type>\n"
+            "Always use GUIDs for workspace_id and item_id parameters."
+        ),
+        default_access_level="read",
+        icon="AdminIcon",
+        version="1.0.0",
+    )
+)
+
+
+# ── FabricAppDev ────────────────────────────────────────────────────
+
+_register(
+    AgentTemplate(
+        id="fabric-app-dev",
+        name="FabricAppDev",
+        display_name="FabricAppDev",
         category=AgentCategory.ENGINEERING,
         description=(
-            "Senior data engineer specialising in schema design, pipeline "
-            "optimisation, SQL transformations, and Lakehouse management "
-            "within Microsoft Fabric."
+            "Builds full-stack applications on top of Microsoft Fabric "
+            "using Python, ODBC, XMLA, and REST APIs. Delegates "
+            "endpoint-specific implementation to specialised skills."
         ),
-        tags=["SQL expert", "Pipeline Pro", "T-SQL", "Lakehouse"],
+        tags=["Python", "ODBC", "XMLA", "REST", "pyodbc"],
         system_prompt=(
-            "You are Xi, a senior data engineer working inside Microsoft Fabric. "
-            "You specialise in schema design, pipeline optimisation, and SQL "
-            "transformations. When given a task you:\n"
-            "1. Discover the current workspace inventory (workspaces, items, files).\n"
-            "2. Analyse relevant data assets.\n"
-            "3. Create or modify Fabric items (Pipelines, Lakehouses, SQL Scripts) as needed.\n"
-            "4. Report back with structured phases and any items you created.\n"
-            "Always use GUIDs for workspace_id and item_id parameters.\n"
-            "When you create or modify something, emit a structured action line:\n"
-            "ACTION: <Created|Modified|Deleted> | ENTITY: <name> | TYPE: <item_type>"
+            "You are FabricAppDev — a pragmatic, full-stack developer "
+            "who sees Fabric as a backend for data-driven apps. Think "
+            "in connection strings, query performance, and clean API "
+            "boundaries. Prefer Python, `az login` / "
+            "DefaultAzureCredential, parameterised queries, and "
+            "context-managed connections. Externalise server / "
+            "database names. Delegate SQL authoring to "
+            "sqldw-authoring-cli and DAX queries to "
+            "powerbi-consumption-cli.\n"
+            "Emit structured actions:\n"
+            "ACTION: <Created|Modified|Queried> | ENTITY: <name> | "
+            "TYPE: <item_type>\n"
+            "Always use GUIDs for workspace_id and item_id parameters."
         ),
-        available_tools=[
-            "fabric_list_workspaces",
-            "fabric_list_items",
-            "fabric_create_item",
-            "fabric_delete_item",
-            "fabric_list_files",
-            "fabric_read_file",
-            "fabric_write_file",
-            "fabric_delete_file",
-            "fabric_create_directory",
-            # Semantic Link — lakehouse, pipelines, warehouses, refresh
-            "sl_list_lakehouses",
-            "sl_get_lakehouse_tables",
-            "sl_run_table_maintenance",
-            "sl_list_shortcuts",
-            "sl_create_shortcut",
-            "sl_list_data_pipelines",
-            "sl_run_data_pipeline",
-            "sl_list_warehouses",
-            "sl_list_sql_endpoints",
-            "sl_list_mirrored_databases",
-            "sl_get_mirroring_status",
-            "sl_refresh_semantic_model",
-            "sl_get_refresh_history",
-            "sl_cancel_refresh",
-            "sl_run_item_job",
-            "sl_list_item_schedules",
-            "sl_get_git_connection",
-            "sl_get_git_status",
-            "sl_commit_to_git",
-            "sl_update_from_git",
-            "sl_get_notebook_definition",
-            # pbir-tools — download/publish for CI/CD
-            "pbir_download",
-            "pbir_publish",
-            "pbir_validate",
-            "pbir_backup",
-            "pbir_restore",
-        ],
+        default_access_level="write",
+        icon="AppDevIcon",
+        version="1.0.0",
+    )
+)
+
+
+# ── FabricDataEngineer ──────────────────────────────────────────────
+
+_register(
+    AgentTemplate(
+        id="fabric-data-engineer",
+        name="FabricDataEngineer",
+        display_name="FabricDataEngineer",
+        category=AgentCategory.ENGINEERING,
+        description=(
+            "Orchestrates end-to-end Fabric data engineering workflows "
+            "spanning Spark, Warehouse, Pipelines, and Lakehouse "
+            "architecture. Delegates deep single-endpoint "
+            "implementation to specialised skills."
+        ),
+        tags=["Medallion", "Spark", "T-SQL", "Pipelines", "ETL"],
+        system_prompt=(
+            "You are FabricDataEngineer — methodical, detail-oriented, "
+            "and obsessive about end-to-end flow. Always understand "
+            "raw → transformed → analytics-ready before coding. "
+            "Decompose cross-workload requests into clean steps and "
+            "delegate to the right skill: spark-authoring-cli for "
+            "notebooks, sqldw-authoring-cli for T-SQL, "
+            "eventhouse-authoring-cli for KQL schema, "
+            "powerbi-authoring-cli for semantic models, "
+            "e2e-medallion-architecture for Bronze / Silver / Gold. "
+            "Require environment parameterisation (dev/test/prod) and "
+            "validation gates between stages.\n"
+            "Emit structured actions:\n"
+            "ACTION: <Created|Modified|Deleted> | ENTITY: <name> | "
+            "TYPE: <item_type>\n"
+            "Always use GUIDs for workspace_id and item_id parameters."
+        ),
         default_access_level="write",
         icon="EngineeringIcon",
         version="1.0.0",
     )
 )
 
-# ── Jay – Validation Lead ────────────────────────────────────────────
+
+# ── Architect ───────────────────────────────────────────────────────
 
 _register(
     AgentTemplate(
-        id="jay-validation-lead",
-        name="Jay",
-        display_name="Jay - Validation Lead",
+        id="architect",
+        name="Architect",
+        display_name="Architect",
         category=AgentCategory.ENGINEERING,
         description=(
-            "Data quality specialist who reviews schemas, checks data integrity "
-            "constraints, and validates transformations before they go live."
+            "Senior analytics architect. Designs technology-agnostic "
+            "platform architectures — layered stacks, dimensional "
+            "models (Star / Snowflake / Data Vault), SCD patterns, and "
+            "metadata-driven ETL frameworks. Hands off to the Modeler."
         ),
-        tags=["Data Quality", "Schema Validation", "Testing"],
+        tags=["Architecture", "Layers", "SCD", "Data Vault", "Metadata"],
         system_prompt=(
-            "You are Jay, a data quality specialist in Microsoft Fabric. "
-            "Your role is to review schemas, check data integrity constraints, "
-            "and validate that transformations are correct. You work read-only — "
-            "you inspect items, read files, and list structures but never create "
-            "or delete anything. Report your findings with clear pass/fail verdicts.\n"
-            "When you find an issue, emit:\n"
-            "ACTION: Reviewed | ENTITY: <name> | TYPE: <item_type>\n"
-            "Always use GUIDs for parameters."
+            "You are the Analytics Architect — you think in layers, "
+            "patterns, and contracts, never in product-specific "
+            "syntax. Run a discovery phase (business questions, "
+            "sources, latency, schema style, SCD needs). Produce "
+            "technology-agnostic specs: Architecture Decision "
+            "Records, Layer Architecture (L0/L1/L2 minimum), Object "
+            "Catalogue, Column Specs, Pipeline Specs, Transformation "
+            "Rule Library, Quality Rules, and Mermaid diagrams. "
+            "Default to SCD2 unless the user opts out. Every "
+            "structural decision gets a diagram. Final output is a "
+            "handoff document ready for the Modeler."
         ),
-        available_tools=[
-            "fabric_list_workspaces",
-            "fabric_list_items",
-            "fabric_list_files",
-            "fabric_read_file",
-            # Semantic Link — read-only inspection
-            "sl_evaluate_dax",
-            "sl_get_semantic_model_tables",
-            "sl_list_semantic_models",
-            "sl_get_semantic_model_definition",
-            "sl_get_refresh_history",
-            "sl_get_lakehouse_tables",
-            "sl_list_lakehouses",
-            "sl_list_warehouses",
-            "sl_list_sql_endpoints",
-            # PBI Fixer — scan-only for validation
-            "scan_report",
-            "scan_semantic_model",
-            "fix_report_bpa",
-            "fix_model_bpa",
-            # pbir-tools — read-only inspection + validation
-            "pbir_ls",
-            "pbir_tree",
-            "pbir_find",
-            "pbir_cat",
-            "pbir_get",
-            "pbir_model",
-            "pbir_validate",
-        ],
         default_access_level="read",
-        icon="ValidationIcon",
+        icon="ArchitectIcon",
         version="1.0.0",
     )
 )
 
-# ── Claire – Communication Coordinator ───────────────────────────────
+
+# ── Modeler ─────────────────────────────────────────────────────────
 
 _register(
     AgentTemplate(
-        id="claire-communication",
-        name="Claire",
-        display_name="Claire - Communication",
+        id="modeler",
+        name="Modeler",
+        display_name="Modeler",
+        category=AgentCategory.ENGINEERING,
+        description=(
+            "Translates a technology-agnostic architecture spec into a "
+            "concrete Microsoft Fabric blueprint: Lakehouses, "
+            "Warehouses, Eventhouses, Pipelines, Notebooks, Stored "
+            "Procedures, Eventstreams, plus full DDL and layer-"
+            "transition logic."
+        ),
+        tags=["Fabric Blueprint", "Lakehouse", "Warehouse", "Eventhouse", "DDL"],
+        system_prompt=(
+            "You are the Fabric Modeler. You receive an architecture "
+            "spec from the Architect and produce a Fabric-specific "
+            "implementation blueprint. Map each logical layer to the "
+            "right storage (Lakehouse for L0/L1, Warehouse for L2, "
+            "Eventhouse for real-time). Produce full table DDL "
+            "(Spark/Delta types for Lakehouse, T-SQL for Warehouse, "
+            "KQL for Eventhouse), Notebook / Stored Procedure / "
+            "Pipeline specs, naming conventions, and cross-workspace "
+            "access patterns. Use Delta Time Travel for rollback, "
+            "Shortcuts over copies. Tag each output section with the "
+            "responsible Fabric agent (FabricAdmin, "
+            "FabricDataEngineer, FabricAppDev) so the Creator can "
+            "dispatch."
+        ),
+        default_access_level="read",
+        icon="ModelerIcon",
+        version="1.0.0",
+    )
+)
+
+
+# ── Creator ─────────────────────────────────────────────────────────
+
+_register(
+    AgentTemplate(
+        id="creator",
+        name="Creator",
+        display_name="Creator",
         category=AgentCategory.ADMIN,
         description=(
-            "Coordination agent that synthesises progress from other agents "
-            "and prepares summaries for stakeholders."
+            "Dispatcher for the Creation phase. Reads the Fabric "
+            "blueprint, decomposes it into agent-scoped task packages, "
+            "and dispatches to FabricAdmin → FabricDataEngineer → "
+            "FabricAppDev in the correct order."
         ),
-        tags=["Coordination", "Reporting", "Summaries"],
+        tags=["Dispatcher", "Blueprint", "Handoff"],
         system_prompt=(
-            "You are Claire, a communication and coordination agent. "
-            "Your job is to synthesise what other agents are doing, "
-            "prepare human-readable progress summaries, and help the "
-            "user understand the overall status of the job. You only read "
-            "workspace data to build context — you never create or modify items."
+            "You are the Creator — a calm, methodical dispatcher. You "
+            "do not build anything yourself. You read the Fabric "
+            "blueprint, validate the Fabric Agent Handoff Checklist, "
+            "decompose the work into packages for each Fabric agent, "
+            "and dispatch in strict order: FabricAdmin first "
+            "(workspaces, capacity, RBAC) → FabricDataEngineer "
+            "(artefacts, pipelines) → FabricAppDev (apps, only if in "
+            "scope). Stop and report if any required blueprint "
+            "section is missing. Track completion and surface gaps."
         ),
-        available_tools=[
-            "fabric_list_workspaces",
-            "fabric_list_items",
-            # Semantic Link — context
-            "sl_list_semantic_models",
-            "sl_list_reports",
-            "sl_list_lakehouses",
-        ],
         default_access_level="read",
-        icon="CommunicationIcon",
+        icon="CreatorIcon",
         version="1.0.0",
     )
 )
 
-# ── Atlas – Analyst ──────────────────────────────────────────────────
+
+# ── Orchestrator ────────────────────────────────────────────────────
 
 _register(
     AgentTemplate(
-        id="atlas-analyst",
-        name="Atlas",
-        display_name="Atlas - Analyst",
-        category=AgentCategory.ANALYTICS,
-        description=(
-            "Business analyst who interfaces with datasets, creates reports "
-            "and semantic models, and generates natural language insights."
-        ),
-        tags=["PowerBI pro", "DAX master", "Analytics"],
-        system_prompt=(
-            "You are Atlas, a business analyst in Microsoft Fabric. "
-            "You create reports, analyse datasets, build semantic models, "
-            "and generate natural language insights. You can create new "
-            "analytics items and read existing data.\n"
-            "Emit structured actions when creating items:\n"
-            "ACTION: <Created|Modified> | ENTITY: <name> | TYPE: <item_type>\n"
-            "Always use GUIDs for parameters."
-        ),
-        available_tools=[
-            "fabric_list_workspaces",
-            "fabric_list_items",
-            "fabric_create_item",
-            "fabric_delete_item",
-            "fabric_list_files",
-            "fabric_read_file",
-            # Semantic Link — DAX, reports, semantic models
-            "sl_evaluate_dax",
-            "sl_get_semantic_model_tables",
-            "sl_list_semantic_models",
-            "sl_get_semantic_model_definition",
-            "sl_list_reports",
-            "sl_get_report_definition",
-            "sl_clone_report",
-            "sl_rebind_report",
-            "sl_export_report",
-            "sl_refresh_semantic_model",
-            "sl_get_refresh_history",
-            "sl_deploy_semantic_model",
-            "sl_set_endorsement",
-            "sl_list_capacities",
-            # PBI Fixer — report & SM scan + fix
-            "scan_report",
-            "fix_report_bpa",
-            "fix_piecharts",
-            "fix_barcharts",
-            "fix_columncharts",
-            "fix_linecharts",
-            "fix_column_to_bar",
-            "fix_bar_to_column",
-            "fix_column_to_line",
-            "fix_page_size",
-            "fix_hide_visual_filters",
-            "fix_disable_show_items_no_data",
-            "fix_ibcs_variance",
-            "fix_remove_unused_custom_visuals",
-            "fix_visual_alignment",
-            "fix_migrate_report_level_measures",
-            "fix_migrate_slicers",
-            "fix_upgrade_to_pbir",
-            "scan_semantic_model",
-            "fix_model_bpa",
-            "fix_do_not_summarize",
-            "fix_hide_foreign_keys",
-            "fix_measure_format",
-            "fix_percentage_format",
-            "fix_whole_number_format",
-            "fix_capitalize_object_names",
-            "fix_trim_object_names",
-            "fix_use_divide_function",
-            "fix_data_category",
-            "fix_date_column_format",
-            "add_measures_from_columns",
-            "add_py_measures",
-            "add_calc_group_time_intelligence",
-            "add_calc_group_units",
-            "add_calculated_calendar",
-            "add_measure_table",
-            "add_incremental_refresh",
-            "add_cache_warming",
-            "add_prep_for_ai",
-            "add_last_refresh_table",
-            # pbir-tools — local PBIR report automation
-            "pbir_run",
-            "pbir_help",
-            "pbir_ls",
-            "pbir_tree",
-            "pbir_find",
-            "pbir_cat",
-            "pbir_get",
-            "pbir_model",
-            "pbir_new_report",
-            "pbir_add",
-            "pbir_cp",
-            "pbir_mv",
-            "pbir_set",
-            "pbir_rm",
-            "pbir_visuals",
-            "pbir_pages",
-            "pbir_fields",
-            "pbir_filters",
-            "pbir_dax",
-            "pbir_bookmarks",
-            "pbir_annotations",
-            "pbir_theme",
-            "pbir_schema",
-            "pbir_validate",
-            "pbir_backup",
-            "pbir_restore",
-            "pbir_download",
-            "pbir_publish",
-            "pbir_report",
-            "pbir_batch",
-        ],
-        default_access_level="write",
-        icon="AnalyticsIcon",
-        version="1.0.0",
-    )
-)
-
-# ── Sentinel – Security Auditor ──────────────────────────────────────
-
-_register(
-    AgentTemplate(
-        id="sentinel-security",
-        name="Sentinel",
-        display_name="Sentinel - Security",
+        id="orchestrator",
+        name="Orchestrator",
+        display_name="Orchestrator",
         category=AgentCategory.ADMIN,
         description=(
-            "Security auditor that scans configurations, audits access "
-            "patterns, detects PII, and flags compliance issues across "
-            "OneLake datasets."
+            "Master coordinator for the full analytics-platform "
+            "workflow: Architect → Modeler → Creator → Fabric agents. "
+            "Validates handoff completeness between phases and tracks "
+            "overall progress."
         ),
-        tags=["PII Masking", "Privacy First", "Compliance"],
+        tags=["Coordination", "Workflow", "Handoff Validation"],
         system_prompt=(
-            "You are Sentinel, a security auditor in Microsoft Fabric. "
-            "You scan workspace configurations, audit file contents for PII "
-            "or sensitive data, and flag compliance issues. You operate "
-            "read-only and never modify items.\n"
-            "Report findings as:\n"
-            "ACTION: Audited | ENTITY: <name> | TYPE: <item_type>\n"
-            "Always use GUIDs for parameters."
+            "You are the Orchestrator — the master coordinator. Route "
+            "work through the correct phase sequence: Architecture "
+            "(Architect) → Modelling (Modeler) → Creation (Creator "
+            "dispatches to FabricAdmin / FabricDataEngineer / "
+            "FabricAppDev). Never skip a phase. Validate handoff "
+            "completeness before advancing: the architecture spec "
+            "must include the Modeler Handoff Instructions and the "
+            "Fabric blueprint must include the Fabric Agent Handoff "
+            "Checklist. Report the current phase when asked 'where "
+            "are we?'."
         ),
-        available_tools=[
-            "fabric_list_workspaces",
-            "fabric_list_items",
-            "fabric_list_files",
-            "fabric_read_file",
-            # Semantic Link — admin audit & governance
-            "sl_admin_list_workspaces",
-            "sl_admin_list_datasets",
-            "sl_admin_get_activity_events",
-            "sl_admin_list_workspace_users",
-            "sl_admin_list_dataset_users",
-            "sl_list_workspace_users",
-            "sl_list_connections",
-            "sl_list_gateways",
-            "sl_get_git_connection",
-        ],
         default_access_level="read",
-        icon="SecurityIcon",
-        version="1.0.0",
-    )
-)
-
-# ── Dash – Power BI Expert ───────────────────────────────────────────
-
-_register(
-    AgentTemplate(
-        id="dash-powerbi-expert",
-        name="Dash",
-        display_name="Dash - Power BI Expert",
-        category=AgentCategory.ANALYTICS,
-        description=(
-            "Power BI specialist who builds, reviews, and fixes reports and "
-            "semantic models end-to-end — from DAX optimisation and best-practice "
-            "enforcement to visual layout, page structure, and PBIR authoring."
-        ),
-        tags=["Power BI", "DAX", "Reports", "Semantic Model", "PBIR"],
-        system_prompt=(
-            "You are Dash, a Power BI expert working inside Microsoft Fabric. "
-            "You combine deep DAX knowledge, report design best practices, and "
-            "automated fixers to build and maintain world-class Power BI assets.\n\n"
-            "Your workflow:\n"
-            "1. Scan the report and semantic model for issues (BPA, formatting, "
-            "   unused visuals, slicer mess, missing measure tables).\n"
-            "2. Propose a fix plan with prioritised actions.\n"
-            "3. Execute fixes using the PBI Fixer tools and pbir-tools.\n"
-            "4. Validate the result and report a summary.\n\n"
-            "Rules:\n"
-            "- Always scan before fixing — never apply blind fixes.\n"
-            "- Use pbir-tools for structural report changes (pages, visuals, layout).\n"
-            "- Use PBI Fixer for semantic model changes (measures, calc groups, BPA).\n"
-            "- Use Semantic Link for DAX evaluation and refresh management.\n"
-            "- Emit structured actions:\n"
-            "  ACTION: <Scanned|Fixed|Created|Modified> | ENTITY: <name> | TYPE: <item_type>\n"
-            "- Always use GUIDs for workspace_id and item_id parameters."
-        ),
-        available_tools=[
-            # Fabric core — workspace + file access
-            "fabric_list_workspaces",
-            "fabric_list_items",
-            "fabric_list_files",
-            "fabric_read_file",
-            "fabric_write_file",
-            # Semantic Link — DAX, semantic models, reports, refresh
-            "sl_evaluate_dax",
-            "sl_get_semantic_model_tables",
-            "sl_list_semantic_models",
-            "sl_get_semantic_model_definition",
-            "sl_list_reports",
-            "sl_get_report_definition",
-            "sl_clone_report",
-            "sl_rebind_report",
-            "sl_export_report",
-            "sl_refresh_semantic_model",
-            "sl_get_refresh_history",
-            "sl_cancel_refresh",
-            "sl_deploy_semantic_model",
-            "sl_set_endorsement",
-            # PBI Fixer — report scan + fix
-            "scan_report",
-            "fix_report_bpa",
-            "fix_piecharts",
-            "fix_barcharts",
-            "fix_columncharts",
-            "fix_linecharts",
-            "fix_column_to_bar",
-            "fix_bar_to_column",
-            "fix_column_to_line",
-            "fix_page_size",
-            "fix_hide_visual_filters",
-            "fix_disable_show_items_no_data",
-            "fix_ibcs_variance",
-            "fix_remove_unused_custom_visuals",
-            "fix_visual_alignment",
-            "fix_migrate_report_level_measures",
-            "fix_migrate_slicers",
-            "fix_upgrade_to_pbir",
-            # PBI Fixer — semantic model scan + fix
-            "scan_semantic_model",
-            "fix_model_bpa",
-            "fix_do_not_summarize",
-            "fix_hide_foreign_keys",
-            "fix_measure_format",
-            "fix_percentage_format",
-            "fix_whole_number_format",
-            "fix_capitalize_object_names",
-            "fix_trim_object_names",
-            "fix_use_divide_function",
-            "fix_data_category",
-            "fix_date_column_format",
-            # PBI Fixer — add / enrich
-            "add_measures_from_columns",
-            "add_py_measures",
-            "add_calc_group_time_intelligence",
-            "add_calc_group_units",
-            "add_calculated_calendar",
-            "add_measure_table",
-            "add_incremental_refresh",
-            "add_cache_warming",
-            "add_prep_for_ai",
-            "add_last_refresh_table",
-            # pbir-tools — PBIR report authoring & inspection
-            "pbir_run",
-            "pbir_ls",
-            "pbir_tree",
-            "pbir_find",
-            "pbir_cat",
-            "pbir_get",
-            "pbir_set",
-            "pbir_model",
-            "pbir_new_report",
-            "pbir_add",
-            "pbir_cp",
-            "pbir_mv",
-            "pbir_rm",
-            "pbir_visuals",
-            "pbir_pages",
-            "pbir_fields",
-            "pbir_filters",
-            "pbir_dax",
-            "pbir_bookmarks",
-            "pbir_annotations",
-            "pbir_theme",
-            "pbir_schema",
-            "pbir_validate",
-            "pbir_download",
-            "pbir_publish",
-            "pbir_report",
-            "pbir_batch",
-            "pbir_backup",
-            "pbir_restore",
-        ],
-        default_access_level="write",
-        icon="PowerBIIcon",
+        icon="OrchestratorIcon",
         version="1.0.0",
     )
 )
@@ -482,3 +323,9 @@ def get_template(template_id: str) -> AgentTemplate | None:
 
 def list_templates() -> list[AgentTemplate]:
     return list(AGENT_TEMPLATES.values())
+
+
+# Attach first-class skills to each template now that every _register
+# call has run. Done once at module import — not per-lookup.
+for _t in AGENT_TEMPLATES.values():
+    _attach_skills(_t)

@@ -16,6 +16,13 @@ import {
 import { Save24Regular } from "@fluentui/react-icons";
 import { WorkloadClientAPI } from "@ms-fabric/workload-client";
 import { useItemContext } from "./ItemContext";
+import {
+    useNavPreferences,
+    BEHAVIOUR_LABEL,
+    NAV_ITEM_LABEL,
+    type NavBehaviour,
+    type NavItemId,
+} from "./EditorTabs/navPreferences";
 
 declare const process: { env: Record<string, string | undefined> };
 const BE = process.env.WORKLOAD_BE_URL || 'http://127.0.0.1:5000';
@@ -156,6 +163,8 @@ export function SettingsPage({ workloadClient }: SettingsPageProps) {
                 </div>
             </Card>
 
+            <NavigationPreferencesCard />
+
             <div className="settings-actions">
                 <Button
                     appearance="primary"
@@ -176,5 +185,85 @@ export function SettingsPage({ workloadClient }: SettingsPageProps) {
                 </Badge>
             </div>
         </div>
+    );
+}
+
+/**
+ * Navigation Preferences card — lets the user configure what happens
+ * when they click a sidebar item. Mirrors VS Code's "Workbench ›
+ * Editor › Opening: Mouse Back Forward To Navigate" family of
+ * settings. Changes persist to ``localStorage`` immediately (no save
+ * button) and apply to every click going forward; a right-click on
+ * any nav item also exposes a one-shot override.
+ */
+const NAV_ITEMS: NavItemId[] = ["newsession", "sessions", "agents", "pbifixer", "settings"];
+const BEHAVIOURS: NavBehaviour[] = ["smart", "new-tab", "replace", "new-group"];
+
+function NavigationPreferencesCard() {
+    const { prefs, setPrefs } = useNavPreferences();
+
+    return (
+        <Card className="settings-card">
+            <Subtitle1>Navigation &amp; Tabs</Subtitle1>
+            <Body1 style={{ color: "#605e5c", fontSize: 12 }}>
+                Choose what happens when you click a sidebar item. Right-click any nav
+                item for a one-off override. Tabs can be reordered by dragging, split
+                across editor groups by dropping on a side edge, and closed with the ×
+                or middle-click — just like VS Code.
+            </Body1>
+
+            <Field label="Default for all items">
+                <Dropdown
+                    value={BEHAVIOUR_LABEL[prefs.default]}
+                    selectedOptions={[prefs.default]}
+                    onOptionSelect={(_, d) => {
+                        const v = (d.optionValue as NavBehaviour) || "smart";
+                        setPrefs({ ...prefs, default: v });
+                    }}
+                >
+                    {BEHAVIOURS.map((b) => (
+                        <Option key={b} value={b} text={BEHAVIOUR_LABEL[b]}>
+                            {BEHAVIOUR_LABEL[b]}
+                        </Option>
+                    ))}
+                </Dropdown>
+            </Field>
+
+            <Body1 style={{ fontWeight: 600, marginTop: 12 }}>Per-item overrides</Body1>
+            {NAV_ITEMS.map((item) => {
+                const explicit = prefs.perItem[item];
+                const effective = explicit ?? prefs.default;
+                return (
+                    <Field key={item} label={NAV_ITEM_LABEL[item]}>
+                        <Dropdown
+                            value={BEHAVIOUR_LABEL[effective] + (explicit ? "" : "  (inherits default)")}
+                            selectedOptions={explicit ? [explicit] : ["__default__"]}
+                            onOptionSelect={(_, d) => {
+                                const v = d.optionValue;
+                                if (v === "__default__") {
+                                    const { [item]: _removed, ...rest } = prefs.perItem;
+                                    void _removed;
+                                    setPrefs({ ...prefs, perItem: rest });
+                                } else {
+                                    setPrefs({
+                                        ...prefs,
+                                        perItem: { ...prefs.perItem, [item]: v as NavBehaviour },
+                                    });
+                                }
+                            }}
+                        >
+                            <Option value="__default__" text={`Inherit default (${BEHAVIOUR_LABEL[prefs.default]})`}>
+                                Inherit default ({BEHAVIOUR_LABEL[prefs.default]})
+                            </Option>
+                            {BEHAVIOURS.map((b) => (
+                                <Option key={b} value={b} text={BEHAVIOUR_LABEL[b]}>
+                                    {BEHAVIOUR_LABEL[b]}
+                                </Option>
+                            ))}
+                        </Dropdown>
+                    </Field>
+                );
+            })}
+        </Card>
     );
 }

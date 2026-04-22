@@ -84,5 +84,5 @@ def test_default_limits_cover_expensive_endpoints() -> None:
     """Regression guard: the four endpoints we protect must each have a
     named budget. If a future refactor renames an action without updating
     ``DEFAULT_LIMITS``, this test catches the drift."""
-    for action in ("create_session", "generate_plan", "approve_plan", "send_message"):
+    for action in ("create_session", "compose", "run_session", "send_message"):
         assert action in DEFAULT_LIMITS, f"Missing rate-limit budget for {action}"

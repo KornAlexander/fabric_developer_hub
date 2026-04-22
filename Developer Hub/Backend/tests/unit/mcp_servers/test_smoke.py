@@ -28,7 +28,7 @@ def test_fabric_tool_count() -> None:
     """Lock the public tool surface so accidental removals are caught."""
 
     tool_names = sorted(n for n in dir(fabric) if n.startswith("fabric_"))
-    assert len(tool_names) == 10, f"expected 10 fabric_* tools, got {tool_names}"
+    assert len(tool_names) == 11, f"expected 11 fabric_* tools, got {tool_names}"
     assert "fabric_list_workspaces" in tool_names
     assert "fabric_list_files" in tool_names
     assert "fabric_read_file" in tool_names

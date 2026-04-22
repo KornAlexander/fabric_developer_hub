@@ -1,0 +1,380 @@
+# AgentHub capability catalog — declarative source of truth.
+#
+# This file replaces the hardcoded `SKILLS` and `_AGENT_SKILLS` dicts that
+# used to live in `agent_registry.py`. The loader in
+# `services/agenthub/catalog_loader.py` parses this file at import time and
+# exposes the same module-level names, so all downstream code (compose
+# LLM, tool runtime, tests) continues to work unchanged.
+#
+# Structure:
+#   skills:       map of skill-id → Skill fields (matches domain.models.skill.Skill)
+#   agent_skills: map of agent-id → list of skill-ids
+#
+# Validation runs at startup via `services.agenthub.capability_registry`:
+#   * every tool a skill declares must be provided by a running MCP server
+#   * every skill an agent declares must exist in the `skills:` map
+# Both are logged (non-fatal) so a typo surfaces in boot output without
+# taking the backend down.
+
+skills:
+
+  # ── From skills-for-fabric (10) ──────────────────────────────────
+  # SfF takes precedence on overlap with AnalyticsPlatformAgents.
+
+  spark-authoring-cli:
+    name: Spark authoring
+    description: >-
+      Build Fabric Spark / data engineering workflows: notebook development,
+      Lakehouse management, PySpark engineering, Livy sessions, Delta Lake
+      patterns.
+    tools:
+      - fabric_list_workspaces
+      - fabric_list_items
+      - fabric_create_item
+      - fabric_delete_item
+      - fabric_list_files
+      - fabric_read_file
+      - fabric_write_file
+      - fabric_delete_file
+      - fabric_create_directory
+      - sl_list_lakehouses
+      - sl_get_lakehouse_tables
+      - sl_run_table_maintenance
+      - sl_list_shortcuts
+      - sl_create_shortcut
+      - sl_list_data_pipelines
+      - sl_run_data_pipeline
+      - sl_get_notebook_definition
+    applicable_when: >-
+      Develop notebooks, design data pipelines, organise Lakehouse tables,
+      or provision Spark data-engineering artefacts.
+
+  spark-consumption-cli:
+    name: Spark consumption
+    description: >-
+      Analyse Lakehouse data interactively with PySpark / Spark SQL —
+      DataFrames, cross-lakehouse joins, Delta time-travel, JSON
+      exploration.
+    tools:
+      - fabric_list_workspaces
+      - fabric_list_items
+      - fabric_list_files
+      - fabric_read_file
+      - sl_list_lakehouses
+      - sl_get_lakehouse_tables
+    applicable_when: >-
+      User explicitly wants PySpark, Spark DataFrames, or a Livy session
+      to explore lakehouse data.
+
+  sqldw-authoring-cli:
+    name: Warehouse / SQL authoring
+    description: >-
+      Author T-SQL against Fabric Warehouse and Lakehouse SQL endpoints:
+      DDL, DML, COPY INTO, stored procedures, schema evolution, ETL/ELT
+      scripting.
+    tools:
+      - fabric_list_workspaces
+      - fabric_list_items
+      - fabric_create_item
+      - fabric_delete_item
+      - sl_list_warehouses
+      - sl_list_sql_endpoints
+    applicable_when: >-
+      Create / alter / drop warehouse tables, load data via T-SQL, or
+      stand up stored procedures.
+
+  sqldw-consumption-cli:
+    name: Warehouse / SQL consumption
+    description: >-
+      Run read-only T-SQL against Warehouse, Lakehouse SQL endpoints and
+      Mirrored Databases. Default for any lakehouse data query that isn't
+      explicitly PySpark.
+    tools:
+      - fabric_list_workspaces
+      - fabric_list_items
+      - sl_list_warehouses
+      - sl_list_sql_endpoints
+      - sl_list_mirrored_databases
+      - sl_get_mirroring_status
+    applicable_when: >-
+      Query warehouse / lakehouse data, count rows, explore tables, or
+      monitor SQL performance.
+
+  eventhouse-authoring-cli:
+    name: Eventhouse authoring
+    description: >-
+      Execute KQL management commands against Eventhouse / KQL Databases:
+      table management, ingestion, policies, functions, materialised views.
+    tools:
+      - fabric_list_workspaces
+      - fabric_list_items
+      - fabric_create_item
+      - fabric_delete_item
+    applicable_when: >-
+      Create or alter KQL tables, ingest into Eventhouse, or configure
+      retention / materialised views.
+
+  eventhouse-consumption-cli:
+    name: Eventhouse consumption
+    description: >-
+      Run read-only KQL queries against Eventhouse / KQL Databases for
+      real-time intelligence and time-series analytics.
+    tools:
+      - fabric_list_workspaces
+      - fabric_list_items
+    applicable_when: >-
+      Query real-time / time-series KQL data or explore Eventhouse schema.
+
+  powerbi-authoring-cli:
+    name: Power BI authoring
+    description: >-
+      Create and deploy Power BI semantic models (TMDL), manage refresh
+      and permissions, author reports, and run the PBIR tool surface for
+      CI/CD.
+    tools:
+      - fabric_list_items
+      - fabric_create_item
+      - fabric_delete_item
+      - sl_list_semantic_models
+      - sl_get_semantic_model_definition
+      - sl_get_semantic_model_tables
+      - sl_deploy_semantic_model
+      - sl_refresh_semantic_model
+      - sl_get_refresh_history
+      - sl_cancel_refresh
+      - sl_set_endorsement
+      - sl_list_reports
+      - sl_get_report_definition
+      - sl_clone_report
+      - sl_rebind_report
+      - sl_export_report
+      - pbir_new_report
+      - pbir_add
+      - pbir_cp
+      - pbir_mv
+      - pbir_set
+      - pbir_rm
+      - pbir_visuals
+      - pbir_pages
+      - pbir_fields
+      - pbir_filters
+      - pbir_dax
+      - pbir_bookmarks
+      - pbir_annotations
+      - pbir_theme
+      - pbir_schema
+      - pbir_validate
+      - pbir_download
+      - pbir_publish
+      - pbir_report
+      - pbir_batch
+      - pbir_backup
+      - pbir_restore
+    applicable_when: >-
+      Create semantic models, deploy TMDL, trigger refresh, or author /
+      modify Power BI reports programmatically.
+
+  powerbi-consumption-cli:
+    name: Power BI consumption
+    description: >-
+      Query semantic models with DAX (EVALUATE) and discover metadata —
+      tables, columns, measures, relationships.
+    tools:
+      - fabric_list_items
+      - sl_evaluate_dax
+      - sl_list_semantic_models
+      - sl_get_semantic_model_tables
+      - sl_get_semantic_model_definition
+      - sl_list_reports
+      - sl_get_report_definition
+      - sl_get_refresh_history
+    applicable_when: >-
+      Run a DAX query, inspect a semantic model, or list measures /
+      tables.
+
+  e2e-medallion-architecture:
+    name: End-to-end Medallion
+    description: >-
+      Implement Bronze / Silver / Gold lakehouse patterns with PySpark,
+      Delta Lake, and Fabric Pipelines — multi-layer workspace setup,
+      data-quality enforcement, orchestration.
+    tools:
+      - fabric_list_workspaces
+      - fabric_list_items
+      - fabric_create_item
+      - fabric_list_files
+      - fabric_read_file
+      - fabric_write_file
+      - sl_list_lakehouses
+      - sl_get_lakehouse_tables
+      - sl_run_table_maintenance
+      - sl_list_shortcuts
+      - sl_create_shortcut
+      - sl_list_data_pipelines
+      - sl_run_data_pipeline
+      - sl_list_warehouses
+    applicable_when: >-
+      Design or build a Bronze / Silver / Gold lakehouse, a multi-layer
+      data platform, or an end-to-end ingestion pipeline.
+
+  check-updates:
+    name: Check updates
+    description: >-
+      Check the Skills for Fabric marketplace for updates. Informational —
+      compares local skill versions against upstream releases.
+    tools: []
+    applicable_when: >-
+      User asks whether skills are up-to-date or wants the changelog for
+      Skills for Fabric.
+
+  # ── Unique additions from AnalyticsPlatformAgents (3) ────────────
+
+  paginated-report-authoring:
+    name: Paginated report authoring
+    description: >-
+      Author Power BI paginated reports (RDL) — page layout, parameters,
+      datasets, deployment to a workspace.
+    tools:
+      - fabric_list_items
+      - fabric_create_item
+      - sl_list_reports
+      - sl_get_report_definition
+      - sl_clone_report
+      - sl_deploy_semantic_model
+    applicable_when: >-
+      Create or modify a paginated (RDL) report, not an interactive Power
+      BI report.
+
+  paginated-report-ops:
+    name: Paginated report ops
+    description: >-
+      Operate paginated reports at scale: list, export, refresh, schedule
+      delivery.
+    tools:
+      - fabric_list_items
+      - sl_list_reports
+      - sl_export_report
+      - sl_refresh_semantic_model
+      - sl_get_refresh_history
+    applicable_when: >-
+      Export, refresh, or manage the lifecycle of paginated reports.
+
+  powerbi-ibcs:
+    name: Power BI IBCS
+    description: >-
+      Apply International Business Communication Standards (IBCS)
+      patterns to Power BI reports — consistent variance visuals, colour
+      semantics, chart hygiene.
+    tools:
+      - scan_report
+      - fix_report_bpa
+      - fix_ibcs_variance
+      - fix_visual_alignment
+      - fix_hide_visual_filters
+      - fix_remove_unused_custom_visuals
+      - pbir_visuals
+      - pbir_pages
+      - pbir_set
+      - pbir_validate
+    applicable_when: >-
+      User asks for IBCS-compliant reports, variance visualisations, or
+      strict chart-style hygiene.
+
+  # ── Grounding from the Fabric Local MCP (docs tool only) ─────────
+  # Pulled in via the `fabric-docs` server in `mcp_servers.json` with a
+  # tool allowlist so the redundant `onelake` / `core` tools (which
+  # would clash with our OBO-aware `fabric_*` tools) are not exposed.
+  # @microsoft/fabric-mcp exposes `docs` as a single umbrella tool;
+  # the actual operation (API spec / workloads / best-practices / etc.)
+  # is selected via a parameter on the tool call.
+
+  fabric-api-docs:
+    name: Fabric API grounding
+    description: >-
+      Ground Fabric code generation in the live OpenAPI specs, item
+      definitions, and best-practice guidance surfaced by the Microsoft
+      Fabric Local MCP `docs` tool.
+    tools:
+      - docs
+    applicable_when: >-
+      Before generating code against Fabric REST APIs, designing item
+      schemas, or recommending pagination / retry / error-handling
+      patterns.
+
+
+# ── Agent → skill-id mapping ───────────────────────────────────────
+# Taken verbatim from each upstream agent's ``delegates_to`` list, with
+# the three unique AnalyticsPlatformAgents skills attached to the
+# Power BI-heavy agents and ``fabric-api-docs`` added to every
+# code-generating agent.
+
+agent_skills:
+
+  # skills-for-fabric — full cross-workload roster
+  fabric-data-engineer:
+    - spark-authoring-cli
+    - spark-consumption-cli
+    - sqldw-authoring-cli
+    - sqldw-consumption-cli
+    - eventhouse-authoring-cli
+    - eventhouse-consumption-cli
+    - powerbi-authoring-cli
+    - powerbi-consumption-cli
+    - e2e-medallion-architecture
+    - paginated-report-authoring
+    - paginated-report-ops
+    - fabric-api-docs
+
+  fabric-admin:
+    - spark-authoring-cli
+    - spark-consumption-cli
+    - sqldw-authoring-cli
+    - sqldw-consumption-cli
+    - eventhouse-authoring-cli
+    - eventhouse-consumption-cli
+    - powerbi-authoring-cli
+    - powerbi-consumption-cli
+    - e2e-medallion-architecture
+    - check-updates
+
+  fabric-app-dev:
+    - sqldw-authoring-cli
+    - sqldw-consumption-cli
+    - powerbi-consumption-cli
+    - paginated-report-ops
+    - fabric-api-docs
+
+  # AnalyticsPlatformAgents — architect / modeler / creator / orchestrator
+
+  # Architect is technology-agnostic but needs awareness of what the
+  # downstream modeller / engineers can build, so we expose the
+  # authoring skill set read-only.
+  architect:
+    - spark-authoring-cli
+    - sqldw-authoring-cli
+    - eventhouse-authoring-cli
+    - powerbi-authoring-cli
+    - e2e-medallion-architecture
+    - fabric-api-docs
+
+  # Modeler translates the architecture into a Fabric blueprint and
+  # needs the full authoring surface.
+  modeler:
+    - spark-authoring-cli
+    - sqldw-authoring-cli
+    - eventhouse-authoring-cli
+    - powerbi-authoring-cli
+    - e2e-medallion-architecture
+    - paginated-report-authoring
+    - powerbi-ibcs
+    - fabric-api-docs
+
+  # Creator dispatches work to the Fabric agents — it doesn't build
+  # itself. Keep the skill set narrow (pattern-awareness only).
+  creator:
+    - e2e-medallion-architecture
+
+  # Orchestrator coordinates the team. Its only direct concern is
+  # version hygiene across the marketplace.
+  orchestrator:
+    - check-updates

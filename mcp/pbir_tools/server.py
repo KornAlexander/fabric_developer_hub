@@ -25,7 +25,12 @@ from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
 
-mcp = FastMCP("pbir-tools")
+# ``log_level="WARNING"`` prevents FastMCP from calling
+# ``logging.basicConfig(level=INFO, format="%(message)s")`` inside this
+# subprocess. The default would emit bare ``Processing request of type
+# ListToolsRequest`` lines on stderr, which Docker surfaces under
+# ``backend-1 |`` and bypasses the backend's structured formatter.
+mcp = FastMCP("pbir-tools", log_level="WARNING")
 
 # ---------------------------------------------------------------------------
 # Helpers

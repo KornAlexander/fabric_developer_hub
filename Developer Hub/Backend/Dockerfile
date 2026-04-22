@@ -35,6 +35,16 @@ FROM python:3.13-slim AS production
 
 WORKDIR /app
 
+# Node.js + npm are needed so the backend can spawn the ``fabric-docs``
+# MCP server via ``npx -y @microsoft/fabric-mcp`` (see
+# ``src/mcp_servers.json``). Without them the server fails to start
+# with ``No such file or directory: 'npx'`` and the 6 ``docs_*`` tools
+# are unavailable (the capability validator logs this as a WARNING).
+# Debian's ``nodejs`` package ships a current-enough Node for npx.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends nodejs npm \
+    && rm -rf /var/lib/apt/lists/*
+
 # Copy the resolved venv.
 COPY --from=builder /app/.venv /app/.venv
 

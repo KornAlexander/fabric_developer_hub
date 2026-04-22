@@ -18,7 +18,7 @@ from domain.models.agent_models import (
     JobStatus,
     UserAgentConfig,
 )
-from domain.models.plan import Plan, PlanStep, PlanTarget
+from domain.models.composition import AgentSlot, Composition, SkillRef
 from services.agenthub import _db, session_store
 
 
@@ -50,23 +50,23 @@ def _make_job(job_id: str = "j-1", user_id: str = "u-1",
 
 def test_create_and_get_job_roundtrip() -> None:
     job = _make_job()
-    job.plan = Plan(
-        job_id=job.id,
-        summary="plan summary",
-        steps=[
-            PlanStep(
-                id="s1",
-                order=1,
-                title="Create Bronze lakehouse",
-                action="create",
-                target=PlanTarget(
-                    item_type="Lakehouse",
-                    display_name="lh_bronze",
-                    workspace_id=job.workspace_id,
-                ),
-                rationale="Bronze layer is missing in destination workspace.",
+    job.composition = Composition(
+        session_id=job.id,
+        task=job.task_description,
+        architecture="solo",
+        rationale="one agent is enough",
+        headline="Solo engineer creates Bronze lakehouse",
+        subtitle="direct execution",
+        slots=[
+            AgentSlot(
+                id="slot-1",
+                agent_id="fabric-data-engineer",
+                role="Data engineer",
+                skills=[SkillRef(id="create_lakehouse", name="Create Lakehouse")],
             )
         ],
+        handoffs=[],
+        entrypoint_slot_id="slot-1",
     )
     session_store.create_session(job)
 
@@ -76,10 +76,10 @@ def test_create_and_get_job_roundtrip() -> None:
     assert fetched.user_id == job.user_id
     assert fetched.context == {"k": "v"}
     assert fetched.status == JobStatus.PLANNED
-    assert fetched.plan is not None
-    assert fetched.plan.summary == "plan summary"
-    assert len(fetched.plan.steps) == 1
-    assert fetched.plan.steps[0].target.display_name == "lh_bronze"
+    assert fetched.composition is not None
+    assert fetched.composition.architecture == "solo"
+    assert len(fetched.composition.slots) == 1
+    assert fetched.composition.slots[0].agent_id == "fabric-data-engineer"
 
 
 def test_get_job_returns_none_for_missing_id() -> None:

@@ -25,14 +25,18 @@ from mcp.server.fastmcp import FastMCP
 # Server
 # ---------------------------------------------------------------------------
 
-mcp = FastMCP(
-    "pbi-fixer",
-    version="0.2.0",
-    description=(
-        "Scan, fix, and enhance Power BI reports & semantic models "
-        "in Microsoft Fabric â€” 80+ tools"
-    ),
-)
+# Note: newer versions of the ``mcp`` SDK (>=1.x) dropped the
+# ``version`` / ``description`` kwargs from ``FastMCP.__init__`` — only the
+# server name is accepted. Passing the extras causes a TypeError at import
+# time, which in turn makes ``MCPClientManager`` log
+# "Connection closed" during discovery. Keep this call minimal.
+#
+# ``log_level="WARNING"`` stops FastMCP from calling
+# ``logging.basicConfig(level=INFO, format="%(message)s")`` at import time.
+# That default spams bare ``Processing request of type ListToolsRequest``
+# lines on stderr of the subprocess, which Docker surfaces under
+# ``backend-1 |`` without our timestamp/level/request-id formatter.
+mcp = FastMCP("pbi-fixer", log_level="WARNING")
 
 log = logging.getLogger("pbi-fixer")
 

@@ -29,6 +29,11 @@ import {
     Play16Regular,
     ArrowClockwise16Regular,
     Dismiss16Regular,
+    Search16Regular,
+    ChevronDown16Regular,
+    Flash16Regular,
+    Timer16Regular,
+    History24Regular,
 } from "@fluentui/react-icons";
 import { WorkloadClientAPI } from "@ms-fabric/workload-client";
 import * as api from "../../controller/AgentHubApi";
@@ -183,6 +188,43 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
     const visibleActiveJobs = activeJobs.filter(matchesSearch);
     const visibleCompletedJobs = completedJobs.filter(matchesSearch);
 
+    // ── Active-section status filter chips ─────────────────────────────
+    // A modern dashboards pattern: allow the user to narrow the active
+    // grid by status without leaving the page. "All" is the default.
+    type ActiveFilter = "all" | "running" | "waiting" | "error";
+    const [activeFilter, setActiveFilter] = useState<ActiveFilter>("all");
+    const filteredActiveJobs = visibleActiveJobs.filter((j) => {
+        if (activeFilter === "all") return true;
+        const v = statusPillVariant(j.status);
+        return v === activeFilter;
+    });
+
+    // ── Recent-sessions local search ──────────────────────────────────
+    // The topbar search is workspace-wide; on a dense history table a
+    // local filter is faster and more discoverable.
+    const [recentQuery, setRecentQuery] = useState("");
+    const recentFilteredJobs = !recentQuery.trim()
+        ? visibleCompletedJobs
+        : visibleCompletedJobs.filter((j) =>
+              fuzzyMatches(recentQuery, j.task_description, j.id, j.status, j.plan?.summary),
+          );
+
+    // ── Active Sessions paging ────────────────────────────────────────
+    // The grid renders a compact first page (16 cards) with a "Show
+    // more" button rather than an infinite horizontal scroller. This
+    // keeps the DOM bounded and restores a predictable top-to-bottom
+    // reading order on large screens.
+    const ACTIVE_PAGE_SIZE = 16;
+    const [activePageCount, setActivePageCount] = useState(1);
+    useEffect(() => {
+        // Reset paging whenever the filtered set changes materially —
+        // otherwise "Show more" would keep growing across filter flips.
+        setActivePageCount(1);
+    }, [searchQuery, activeFilter, filteredActiveJobs.length]);
+    const activeRenderLimit = activePageCount * ACTIVE_PAGE_SIZE;
+    const renderedActiveJobs = filteredActiveJobs.slice(0, activeRenderLimit);
+    const activeRemaining = Math.max(0, filteredActiveJobs.length - activeRenderLimit);
+
     function gotoSession(sessionId: string) {
         history.push(match.url.replace(/\/home$/, `/session/${sessionId}`));
     }
@@ -246,18 +288,59 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
 
     return (
         <div className="sessions-page">
-            {/* Page header */}
-            <div className="sessions-header">
-                <div>
+            {/* ── Hero header ─────────────────────────────────────── */}
+            <div className="sessions-hero">
+                <div className="sessions-hero-copy">
+                    <div className="sessions-eyebrow">Agent Operations</div>
                     <h1 className="sessions-title">Sessions</h1>
                     <p className="sessions-subtitle">
                         Monitor, orchestrate, and deploy enterprise-grade AI agents across your Fabric ecosystem.
                     </p>
                 </div>
-                <button className="sessions-cta" onClick={gotoNew}>
-                    <Add20Regular />
-                    <span>Create New Job</span>
-                </button>
+                <div className="sessions-hero-actions">
+                    <button
+                        className="sessions-icon-btn sessions-icon-btn--ghost"
+                        onClick={loadJobs}
+                        title="Refresh"
+                        aria-label="Refresh sessions"
+                        disabled={loading}
+                    >
+                        <ArrowSync24Regular />
+                    </button>
+                    <button className="sessions-cta" onClick={gotoNew}>
+                        <Add20Regular />
+                        <span>Create New Job</span>
+                    </button>
+                </div>
+            </div>
+
+            {/* ── KPI strip — instant system state at a glance ─── */}
+            <div className="sessions-kpis" role="group" aria-label="Session summary">
+                <div className="sessions-kpi">
+                    <div className="sessions-kpi-label">Total</div>
+                    <div className="sessions-kpi-value">{loading ? "—" : jobs.length}</div>
+                </div>
+                <div className={`sessions-kpi sessions-kpi--running${runningCount > 0 ? " is-active" : ""}`}>
+                    <div className="sessions-kpi-label">
+                        <span className="sessions-kpi-dot sessions-kpi-dot--running" aria-hidden="true" />
+                        Running
+                    </div>
+                    <div className="sessions-kpi-value">{loading ? "—" : runningCount}</div>
+                </div>
+                <div className={`sessions-kpi sessions-kpi--waiting${waitingCount > 0 ? " is-active" : ""}`}>
+                    <div className="sessions-kpi-label">
+                        <Timer16Regular aria-hidden="true" />
+                        Waiting
+                    </div>
+                    <div className="sessions-kpi-value">{loading ? "—" : waitingCount}</div>
+                </div>
+                <div className={`sessions-kpi sessions-kpi--error${errorCount > 0 ? " is-active" : ""}`}>
+                    <div className="sessions-kpi-label">
+                        <Warning20Regular aria-hidden="true" />
+                        Errors
+                    </div>
+                    <div className="sessions-kpi-value">{loading ? "—" : errorCount}</div>
+                </div>
             </div>
 
             {/* Fabric persistence banner */}
@@ -301,44 +384,64 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
             {/* ── Active Sessions ── */}
             <section className="sessions-section">
                 <div className="sessions-section-head">
-                    <h2 className="sessions-h2">Active Sessions</h2>
-                    <div className="sessions-status-pills">
-                        {runningCount > 0 && <span className="status-count status-count--neutral">{runningCount} Running</span>}
-                        {waitingCount > 0 && <span className="status-count status-count--neutral">{waitingCount} Waiting</span>}
-                        {errorCount > 0 && <span className="status-count status-count--error">{errorCount} Error</span>}
+                    <div className="sessions-section-title">
+                        <Flash16Regular aria-hidden="true" />
+                        <h2 className="sessions-h2">Active Sessions</h2>
+                        {!loading && !loadError && (
+                            <span className="sessions-section-count">{visibleActiveJobs.length}</span>
+                        )}
                     </div>
-                    <button className="sessions-icon-btn" onClick={loadJobs} title="Refresh">
-                        <ArrowSync24Regular />
-                    </button>
+                    {!loading && !loadError && activeJobs.length > 0 && (
+                        <div className="sessions-filter-chips" role="tablist" aria-label="Filter active sessions by status">
+                            {([
+                                { key: "all" as const, label: "All", count: visibleActiveJobs.length },
+                                { key: "running" as const, label: "Running", count: runningCount },
+                                { key: "waiting" as const, label: "Waiting", count: waitingCount },
+                                { key: "error" as const, label: "Errors", count: errorCount },
+                            ]).map((chip) => (
+                                <button
+                                    key={chip.key}
+                                    type="button"
+                                    role="tab"
+                                    aria-selected={activeFilter === chip.key}
+                                    className={`sessions-chip sessions-chip--${chip.key}${activeFilter === chip.key ? " is-active" : ""}`}
+                                    onClick={() => setActiveFilter(chip.key)}
+                                    disabled={chip.key !== "all" && chip.count === 0}
+                                >
+                                    {chip.key === "running" && <span className="sessions-chip-dot sessions-chip-dot--running" aria-hidden="true" />}
+                                    <span>{chip.label}</span>
+                                    <span className="sessions-chip-count" aria-hidden="true">{chip.count}</span>
+                                </button>
+                            ))}
+                        </div>
+                    )}
                 </div>
 
                 {loading ? (
-                    <div className="agent-cards-scroller" aria-busy="true" aria-label="Loading active sessions">
-                        <div className="agent-cards-row">
-                            {[0, 1, 2].map(i => (
-                                <article key={i} className="session-card session-card--skeleton" aria-hidden="true">
-                                    <header className="session-card-head">
-                                        <div className="session-card-identity">
-                                            <div className="skeleton skeleton-icon" />
-                                            <div className="skeleton-lines">
-                                                <div className="skeleton skeleton-line skeleton-line--title" />
-                                                <div className="skeleton skeleton-line skeleton-line--sub" />
-                                            </div>
+                    <div className="sessions-grid" aria-busy="true" aria-label="Loading active sessions">
+                        {[0, 1, 2, 3].map(i => (
+                            <article key={i} className="session-card session-card--skeleton" aria-hidden="true">
+                                <header className="session-card-head">
+                                    <div className="session-card-identity">
+                                        <div className="skeleton skeleton-icon" />
+                                        <div className="skeleton-lines">
+                                            <div className="skeleton skeleton-line skeleton-line--title" />
+                                            <div className="skeleton skeleton-line skeleton-line--sub" />
                                         </div>
-                                        <div className="skeleton skeleton-pill" />
-                                    </header>
-                                    <div className="session-card-body">
-                                        <div className="skeleton skeleton-line skeleton-line--eyebrow" />
-                                        <div className="skeleton skeleton-line skeleton-line--goal" />
-                                        <div className="skeleton skeleton-line skeleton-line--goal-short" />
                                     </div>
-                                    <footer className="session-card-foot">
-                                        <div className="skeleton skeleton-line skeleton-line--meta" />
-                                        <div className="skeleton skeleton-line skeleton-line--action" />
-                                    </footer>
-                                </article>
-                            ))}
-                        </div>
+                                    <div className="skeleton skeleton-pill" />
+                                </header>
+                                <div className="session-card-body">
+                                    <div className="skeleton skeleton-line skeleton-line--eyebrow" />
+                                    <div className="skeleton skeleton-line skeleton-line--goal" />
+                                    <div className="skeleton skeleton-line skeleton-line--goal-short" />
+                                </div>
+                                <footer className="session-card-foot">
+                                    <div className="skeleton skeleton-line skeleton-line--meta" />
+                                    <div className="skeleton skeleton-line skeleton-line--action" />
+                                </footer>
+                            </article>
+                        ))}
                         {slowLoading && (
                             <div className="agents-slow-hint" role="status">
                                 <Spinner size="tiny" />
@@ -358,17 +461,30 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
                         </Button>
                     </div>
                 ) : activeJobs.length === 0 ? (
-                    <div className="sessions-empty">
-                        <Body1>No active sessions. Submit a task to get started.</Body1>
+                    <div className="sessions-empty sessions-empty--illustrated">
+                        <div className="sessions-empty-icon" aria-hidden="true">
+                            <Bot24Regular />
+                        </div>
+                        <div className="sessions-empty-title">No active sessions yet</div>
+                        <div className="sessions-empty-body">
+                            Kick things off by creating a new job — your active agents will appear here.
+                        </div>
+                        <Button appearance="primary" icon={<Add20Regular />} onClick={gotoNew}>
+                            Create New Job
+                        </Button>
                     </div>
-                ) : visibleActiveJobs.length === 0 ? (
+                ) : filteredActiveJobs.length === 0 ? (
                     <div className="sessions-empty">
-                        <Body1>No active sessions match “{searchQuery}”.</Body1>
+                        <Body1>
+                            {searchQuery.trim()
+                                ? <>No active sessions match “{searchQuery}”.</>
+                                : <>No {activeFilter === "all" ? "" : activeFilter} sessions.</>}
+                        </Body1>
                     </div>
                 ) : (
-                    <div className="agent-cards-scroller">
-                        <div className="agent-cards-row">
-                            {visibleActiveJobs.map((job, idx) => {
+                    <>
+                        <div className="sessions-grid">
+                            {renderedActiveJobs.map((job, idx) => {
                                 const agent = job.agents?.[0];
                                 const agentName = agent?.role || agent?.agent_id || "Orchestrator";
                                 const agentSubtitle = agent?.specialty || agent?.role_description || "Workload";
@@ -380,7 +496,16 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
                                         key={job.id}
                                         className={`session-card session-card--${variant}`}
                                         onClick={() => gotoSession(job.id)}
+                                        tabIndex={0}
+                                        role="button"
+                                        onKeyDown={(e) => {
+                                            if (e.key === "Enter" || e.key === " ") {
+                                                e.preventDefault();
+                                                gotoSession(job.id);
+                                            }
+                                        }}
                                     >
+                                        <span className={`session-card-accent session-card-accent--${variant}`} aria-hidden="true" />
                                         <header className="session-card-head">
                                             <div className="session-card-identity">
                                                 <div className={`session-card-icon session-card-icon--${visual.tone}`}>
@@ -411,19 +536,19 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
                                         </header>
 
                                         <div className="session-card-body">
-                                            <div className="session-card-label">CURRENT GOAL</div>
+                                            <div className="session-card-label">Current goal</div>
                                             <p className="session-card-goal">
                                                 {job.task_description?.slice(0, 120) || "—"}
                                             </p>
                                             {variant !== "error" && agent?.current_step && (
                                                 <div className="session-card-step">
-                                                    <div className="session-card-label session-card-label--muted">CURRENT STEP</div>
+                                                    <div className="session-card-label session-card-label--muted">Current step</div>
                                                     <p>{agent.current_step}</p>
                                                 </div>
                                             )}
                                             {variant === "error" && (agent?.last_error || job.error_message) && (
                                                 <div className="session-card-error">
-                                                    <div className="session-card-label session-card-label--error">EXCEPTION</div>
+                                                    <div className="session-card-label session-card-label--error">Exception</div>
                                                     <code>{(agent?.last_error || job.error_message).slice(0, 140)}</code>
                                                 </div>
                                             )}
@@ -448,17 +573,62 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
                                 );
                             })}
                         </div>
-                    </div>
+                        {activeRemaining > 0 && (
+                            <div className="sessions-grid-more">
+                                <button
+                                    type="button"
+                                    className="sessions-showmore"
+                                    onClick={() => setActivePageCount((n) => n + 1)}
+                                >
+                                    <ChevronDown16Regular />
+                                    <span>Show {Math.min(activeRemaining, ACTIVE_PAGE_SIZE)} more</span>
+                                    <span className="sessions-showmore-hint">
+                                        {activeRenderLimit} of {filteredActiveJobs.length}
+                                    </span>
+                                </button>
+                            </div>
+                        )}
+                    </>
                 )}
             </section>
 
             {/* ── Recent Jobs ── (hidden while loading so layout doesn't shift) */}
             {!loading && !loadError && (
             <section className="sessions-section">
-                <h2 className="sessions-h2">Recent Sessions</h2>
+                <div className="sessions-section-head">
+                    <div className="sessions-section-title">
+                        <History24Regular aria-hidden="true" />
+                        <h2 className="sessions-h2">Recent Sessions</h2>
+                        {completedJobs.length > 0 && (
+                            <span className="sessions-section-count">{recentFilteredJobs.length}</span>
+                        )}
+                    </div>
+                    {completedJobs.length > 0 && (
+                        <div className="sessions-search">
+                            <Search16Regular aria-hidden="true" />
+                            <input
+                                type="search"
+                                placeholder="Search recent sessions…"
+                                value={recentQuery}
+                                onChange={(e) => setRecentQuery(e.target.value)}
+                                aria-label="Search recent sessions"
+                            />
+                        </div>
+                    )}
+                </div>
                 {completedJobs.length === 0 ? (
+                    <div className="sessions-empty sessions-empty--illustrated">
+                        <div className="sessions-empty-icon" aria-hidden="true">
+                            <History24Regular />
+                        </div>
+                        <div className="sessions-empty-title">No completed sessions yet</div>
+                        <div className="sessions-empty-body">
+                            Once an agent finishes a task, it will show up here with its status and duration.
+                        </div>
+                    </div>
+                ) : recentFilteredJobs.length === 0 ? (
                     <div className="sessions-empty">
-                        <Body1>No completed tasks yet.</Body1>
+                        <Body1>No sessions match “{recentQuery || searchQuery}”.</Body1>
                     </div>
                 ) : (
                     <div className="recent-jobs-card">
@@ -473,7 +643,7 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
                                 </tr>
                             </thead>
                             <tbody>
-                                {(showAllHistory ? visibleCompletedJobs : visibleCompletedJobs.slice(0, 10)).map((job) => {
+                                {(showAllHistory ? recentFilteredJobs : recentFilteredJobs.slice(0, 10)).map((job) => {
                                     const dur = job.started_at && job.completed_at
                                         ? formatDuration(job.started_at, job.completed_at)
                                         : "—";
@@ -544,19 +714,19 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
                             </tbody>
                         </table>
                         <div className="recent-jobs-foot">
-                            {visibleCompletedJobs.length > 10 ? (
+                            {recentFilteredJobs.length > 10 ? (
                                 <button
                                     className="recent-jobs-viewall"
                                     onClick={() => setShowAllHistory((v) => !v)}
                                 >
                                     {showAllHistory
-                                        ? `Show Less (showing all ${visibleCompletedJobs.length})`
-                                        : `View All History (${visibleCompletedJobs.length})`}
+                                        ? `Show Less (showing all ${recentFilteredJobs.length})`
+                                        : `View All History (${recentFilteredJobs.length})`}
                                 </button>
                             ) : (
                                 <span className="recent-jobs-viewall-note">
-                                    Showing all {visibleCompletedJobs.length}{" "}
-                                    {visibleCompletedJobs.length === 1 ? "session" : "sessions"}
+                                    Showing all {recentFilteredJobs.length}{" "}
+                                    {recentFilteredJobs.length === 1 ? "session" : "sessions"}
                                 </span>
                             )}
                         </div>

@@ -33,6 +33,13 @@ Everything else — the Developer Hub header, the expanded sidebar, the cards,
 the pills, the agent chips, the graph, the log, the approval panel — is
 intended to become real.
 
+> **Implementing against the live React workload?** See the sibling
+> [`IMPLEMENTATION.md`](./IMPLEMENTATION.md) — it turns the deltas in this
+> README into a phased, file-by-file checklist with acceptance criteria,
+> data-contract additions, a copy deck, and an explicit do-not-touch list.
+> That file is the agent-actionable companion; this README is the design
+> rationale.
+
 ## End-to-end flow (what actually happens)
 
 The prototype is organized around a single mental model: **a user describes
@@ -106,8 +113,8 @@ visual language.
 
 | # | Screen | What's on-screen |
 |---|---|---|
-| 1 | **Submit task** | Mirrors `new_session_step1_compose.html`: centered hero ("Orchestrate your vision."), rich prompt composer card with decorative glow, three-group context pill row (Fabric items · workspace · file), settings toggles (Require approvals ON, Branch out OFF), action footer with **"Propose team" → `auto_awesome`** primary CTA (not "Generate plan" — the next screen is a team proposal, not an executable plan), plus a 3-card "Start from a playbook" strip. Nothing runs here. |
-| 2 | **Propose team (orchestration graph)** | The suggested architecture (supervisor pattern) with four nodes (Orchestrator, FabricDataEngineer, FabricAdmin, SalesReporter), their roles, skills, and interaction edges (delegate / peer handoff). Right rail lists the role each agent plays in *this* task. Enters with a `slide-up` animation. Actions: **Regenerate**, **Edit agents**, **Compare architectures** (opens `architectures.html`), **Run**. |
+| 1 | **Submit task** | Mirrors `new_session_step1_compose.html`: centered hero ("Orchestrate your vision."), rich prompt composer card with decorative glow, three-group context pill row (Fabric items · workspace · file), settings toggles (Require approvals ON, Branch out OFF), action footer with **"Plan this" → `auto_awesome`** primary CTA (not "Generate plan" — the next screen is a reviewable plan, not an executable one), plus a 3-card "Start from a playbook" strip. Nothing runs here. |
+| 2 | **Plan this (orchestration graph)** | The suggested architecture (supervisor pattern) with four nodes (Orchestrator, FabricDataEngineer, FabricAdmin, SalesReporter), their roles, skills, and interaction edges (delegate / peer handoff). Right rail lists the role each agent plays in *this* task. Enters with a `slide-up` animation. Actions: **Regenerate**, **Edit agents**, **Compare architectures** (opens `architectures.html`), **Run**. |
 | 3 | **Run begins** | Persistent **task-prompt recap** strip at the top (collapsed; click to expand). Below it, a **collapsible team panel** showing either the compact team strip (default) or the full orchestration graph (when expanded), followed by the two-pane live-log + inspector area. Orchestrator green, FabricDataEngineer pulsing active, others planned. Active edges animate. The expanded panel is height-capped (`min(520px, 42vh)`) with internal scroll so the log area stays visible. |
 | 4 | **Handoff + approval** | FDE done (green), FabricAdmin in "waiting on you" state, peer-edge FDE→Admin animated. Right pane is a full approval panel with plain-language summary, reversibility, blast radius, tool-call preview, and four recovery actions. Primary CTA "Approve & certify" in the live `rounded-xl shadow-lg shadow-primary/15` style. |
 | 5 | **Later stage** | FDE + Admin green, SalesReporter now active. Same surface, same team panel, same log pane — just with newer state. |
@@ -123,7 +130,7 @@ real product.
 
 | Area | Live workload today | Mission Control prototype | Why we want the change |
 |---|---|---|---|
-| **CTA on compose** | "Generate plan" (implies the next screen will execute). | **"Propose team"** (screen 2 is a team/plan *proposal* you review before anything runs). | Removes the rug-pull between "I hit a button" and "tools are running." Nothing runs until the user explicitly approves the proposed team. |
+| **CTA on compose** | "Generate plan" (implies the next screen will execute). | **"Plan this"** (screen 2 is a reviewable plan you approve before anything runs). | Removes the rug-pull between "I hit a button" and "tools are running." Nothing runs until the user explicitly approves the proposed team. |
 | **Between compose and run** | Plan is textual / listy; the run screen is where agents "appear." | A dedicated **orchestration-graph screen** showing the proposed team (nodes + edges + roles) *before* the run starts. User can **Regenerate**, **Edit agents**, or **Compare architectures**. | Makes the team visible and editable *before* spending tokens/tool calls. The graph is the contract between user and system. |
 | **Run surface** | Multiple pages (plan → live → result). | **One surface** that evolves through phases (run → approval → later stage → complete). Screens 3–6 in the prototype are snapshots of the same page at different moments. | Users shouldn't have to re-orient every time the phase changes. The graph is the anchor; everything else fills in around it. |
 | **"Who is working right now?"** | Implicit — you have to read the log. | **Triple-surfaced**: graph node ring + team-strip chip + log header pill, all in lockstep. | "Which agent?" should never require a scan. |
@@ -146,7 +153,7 @@ same hero pattern (10×10 tinted icon + `dh-h1` + centered `dh-subtitle`),
 same `max-w-3xl` composer card with `shadow-[0_2px_12px_rgba(0,0,0,0.04)]`
 and decorative `bg-primary/5 blur-3xl` glow, same `fabric-badge-*` pill
 colors, same three-group separator dividers, same toggle-track visuals, same
-"Propose team" primary button with `auto_awesome` icon. The top header
+"Plan this" primary button with `auto_awesome` icon. The top header
 carries the centered search bar and the sidebar renders expanded via
 `renderAgentHubSidebar('new-session')` — exactly like the live page.
 
@@ -190,8 +197,9 @@ simultaneously:
 
 | File | Purpose |
 |---|---|
-| `index.html` | The 6-screen mainline clickthrough (compose → propose team → run → approval → later → complete). |
+| `index.html` | The 6-screen mainline clickthrough (compose → plan this → run → approval → later → complete). |
 | `architectures.html` | Illustrative side-by-side of the five multi-agent patterns Developer Hub can propose (Supervisor, Network, Hierarchical, Sequential, Mixed/composite). Linked from the "Compare architectures" button on screen 2. Not a shipping page. |
+| `IMPLEMENTATION.md` | Agent-actionable checklist for rolling these changes into the live React workload. Maps each delta to target files, acceptance criteria, and data-contract additions. |
 | `styles.css` | Prototype-only additions on top of `_shared/styles.css` — orchestration-graph nodes/edges/legend, team-panel chrome (incl. height-capped expanded view and chevron connector), topology variants for the team strip, run log filters, approval card, node-state colors. |
 | `nav.js` | Prev/Next, numbered crumbs, arrow-key navigation, `data-goto="N"` jumps. Review-mode only — *not* part of the product. |
 | `team-panel.js` | Drives the collapsible team panel (expand/collapse, overflow chip). |

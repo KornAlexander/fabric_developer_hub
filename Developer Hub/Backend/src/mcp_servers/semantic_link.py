@@ -37,7 +37,10 @@ FABRIC_API = "https://api.fabric.microsoft.com/v1"
 PBI_API = "https://api.powerbi.com/v1.0/myorg"
 XMLA_ENDPOINT = "https://analysis.windows.net/powerbi/api"
 
-mcp = FastMCP("semantic-link")
+# See pbi_fixer/server.py for the full rationale — suppresses FastMCP's
+# default ``basicConfig(level=INFO, format="%(message)s")`` in this
+# subprocess so stderr doesn't bypass the backend's log formatter.
+mcp = FastMCP("semantic-link", log_level="WARNING")
 
 
 def _headers() -> dict:

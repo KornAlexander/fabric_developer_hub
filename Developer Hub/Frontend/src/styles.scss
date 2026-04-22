@@ -3,6 +3,13 @@ html, body, #root {
     height: 100%;
     margin: 0;
     padding: 0;
+    /* Lock UA-rendered widgets (native <select> dropdowns, form
+       controls, scrollbars) to the light palette. Without this,
+       Chromium mirrors the OS color scheme and opens native picker
+       popups with a black background / white text on dark-mode OSes,
+       producing a jarring flash on first click before the JS-driven
+       list is shown. */
+    color-scheme: light;
 }
 
 .editor {
@@ -724,6 +731,13 @@ html, body, #root {
     background: #f4f3f2;             /* surface-container-low */
     border-right: none;
     padding: 0;
+    // Smooth width animation when collapsing/expanding. Fluent 2 motion
+    // curve (cubic-bezier(0.33, 0, 0.67, 1)) + ~200ms duration — matches
+    // the feel of VS Code's primary sidebar and Fluent's own nav drawer.
+    transition: width 200ms cubic-bezier(0.33, 0, 0.67, 1),
+                min-width 200ms cubic-bezier(0.33, 0, 0.67, 1);
+    will-change: width;
+    overflow: hidden;                // clip labels during the collapse
 }
 
 .agenthub-sidebar-toolbar {
@@ -756,38 +770,89 @@ html, body, #root {
     position: relative;
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 10px 12px;
+    gap: 12px;
+    padding: 8px 12px;
     margin: 2px 10px;
     border-radius: 8px;
     cursor: pointer;
     color: #404752;                  /* on-surface-variant */
-    transition: background 0.12s;
+    font-size: 14px;
+    line-height: 20px;
+    user-select: none;
+    // Animate color + bg together. Keep it short so tile-to-tile focus
+    // feels responsive.
+    transition: background-color 120ms ease,
+                color 120ms ease,
+                box-shadow 160ms ease;
+
+    // Subtle grab-cursor when the item is draggable — mirrors VS Code's
+    // file-tree rows where the cursor hints that DnD is available.
+    &[draggable="true"] {
+        cursor: grab;
+        &:active { cursor: grabbing; }
+    }
+
+    svg {
+        flex: 0 0 auto;
+        color: #605e5c;
+        transition: color 120ms ease, transform 200ms cubic-bezier(0.33, 0, 0.67, 1);
+    }
 
     &:hover {
-        background: rgba(233, 232, 231, 0.5); /* surface-container-high/50 */
+        background: rgba(233, 232, 231, 0.6); /* surface-container-high/60 */
         color: #1a1c1c;
+        svg { color: #1a1c1c; }
+    }
+    &:focus-visible {
+        outline: none;
+        box-shadow: 0 0 0 2px rgba(0, 95, 170, 0.55);
+    }
+    &:active {
+        background: rgba(218, 216, 214, 0.7);
     }
 
     &--active {
         background: #ffffff;          /* surface-container-lowest */
         color: #1a1c1c;               /* on-surface */
-        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
-        font-weight: 500;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05),
+                    0 0 0 1px rgba(0, 95, 170, 0.08);
+        font-weight: 600;
 
         &::before {
             content: "";
             position: absolute;
-            left: 0;
-            top: 25%;
-            bottom: 25%;
+            left: -4px;
+            top: 8px;
+            bottom: 8px;
             width: 3px;
             background: #005faa;       /* primary */
             border-radius: 999px;
+            // Animate the accent bar in when the active item changes
+            // (subtle but makes navigation feel alive).
+            transform-origin: center;
+            animation: sidenavAccentIn 200ms cubic-bezier(0.33, 0, 0.67, 1);
         }
 
         svg { color: #005faa; }
     }
+}
+
+@keyframes sidenavAccentIn {
+    from { transform: scaleY(0.3); opacity: 0; }
+    to   { transform: scaleY(1);   opacity: 1; }
+}
+
+// Label sits inside the item so we can fade it cleanly when the sidebar
+// collapses, rather than snapping the whole row to display:none.
+.sidenav-item__label {
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    opacity: 1;
+    transform: translateX(0);
+    transition: opacity 140ms ease, transform 180ms cubic-bezier(0.33, 0, 0.67, 1);
 }
 
 .agenthub-sidebar-footer {
@@ -845,7 +910,7 @@ html, body, #root {
 /* ── Dashboard ───────────────────────────────────────────────── */
 
 /* ═══════════════════════════════════════════════════════════════════
-   Sessions Page (formerly Dashboard) — matches Design/sessions_overview
+   Sessions Page (formerly Dashboard) — modernized 2026 redesign
    Container padding comes from .agenthub-main (28px 32px); the page
    itself should not re-add horizontal padding or cap its width, so
    content lines up horizontally with the Agents & Skills page.
@@ -854,60 +919,166 @@ html, body, #root {
     color: #1a1c1c;                  /* on-surface */
 }
 
-.sessions-header {
+/* ── Hero header ─────────────────────────────────────────────── */
+.sessions-hero {
     display: flex;
     justify-content: space-between;
     align-items: flex-end;
     gap: 24px;
-    margin-bottom: 32px;
+    margin-bottom: 20px;
     flex-wrap: wrap;
 }
+.sessions-hero-copy {
+    min-width: 0;
+    flex: 1 1 360px;
+}
+.sessions-hero-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+.sessions-eyebrow {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: #0078d4;
+    margin-bottom: 6px;
+}
 .sessions-title {
-    font-size: clamp(20px, 1.8vw, 24px);
+    font-size: clamp(26px, 2.4vw, 34px);
     font-weight: 300;
-    line-height: 1.2;
-    letter-spacing: -0.01em;
-    margin: 0 0 4px;
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+    margin: 0 0 6px;
     color: #1a1c1c;
+    background: linear-gradient(95deg, #1a1c1c 0%, #004883 72%, #0078d4 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
 }
 .sessions-subtitle {
     color: #404752;                  /* on-surface-variant */
     margin: 0;
-    max-width: 60ch;
+    max-width: 64ch;
     font-size: 13px;
-    line-height: 1.5;
+    line-height: 1.55;
 }
+
+/* Legacy wrapper kept for any external consumers — maps onto hero. */
+.sessions-header { @extend .sessions-hero; }
+
 /* Canonical primary CTA — keep in sync with .agents-btn-primary. */
 .sessions-cta {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    padding: 8px 16px;
+    gap: 8px;
+    padding: 9px 18px;
     border: none;
-    border-radius: 8px;
+    border-radius: 10px;
     background: linear-gradient(135deg, #005faa 0%, #0078d4 100%);
     color: #ffffff;
     font-weight: 700;
     font-size: 13px;
     cursor: pointer;
-    box-shadow: 0 1px 2px rgba(0, 95, 170, 0.18);
-    transition: transform 0.15s;
+    box-shadow:
+        0 1px 2px rgba(0, 95, 170, 0.24),
+        0 6px 16px -6px rgba(0, 120, 212, 0.45);
+    transition: transform 0.15s ease, box-shadow 0.2s ease;
 
-    &:hover:not(:disabled) { transform: scale(1.02); }
-    &:active:not(:disabled) { transform: scale(0.98); }
+    &:hover:not(:disabled) {
+        transform: translateY(-1px);
+        box-shadow:
+            0 2px 4px rgba(0, 95, 170, 0.28),
+            0 10px 22px -8px rgba(0, 120, 212, 0.55);
+    }
+    &:active:not(:disabled) { transform: translateY(0) scale(0.98); }
     &:disabled { opacity: 0.6; cursor: not-allowed; }
     svg { width: 16px; height: 16px; }
 }
 
+/* ── KPI strip ──────────────────────────────────────────────── */
+.sessions-kpis {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+    margin-bottom: 28px;
+
+    @media (max-width: 680px) {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+.sessions-kpi {
+    background: #ffffff;
+    border: 1px solid rgba(192, 199, 212, 0.24);
+    border-radius: 12px;
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.15s ease, transform 0.15s ease;
+
+    &::before {
+        content: "";
+        position: absolute;
+        inset: 0 auto 0 0;
+        width: 3px;
+        background: #c8c6c5;
+        opacity: 0;
+        transition: opacity 0.15s ease;
+    }
+    &.is-active::before { opacity: 1; }
+    &--running.is-active::before { background: #16a34a; }
+    &--waiting.is-active::before { background: #0078d4; }
+    &--error.is-active::before   { background: #ba1a1a; }
+}
+.sessions-kpi-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: #5f5e5e;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    letter-spacing: 0.02em;
+    svg { width: 14px; height: 14px; opacity: 0.7; }
+}
+.sessions-kpi-value {
+    font-size: 26px;
+    font-weight: 600;
+    color: #1a1c1c;
+    line-height: 1.1;
+    font-variant-numeric: tabular-nums;
+}
+.sessions-kpi-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #c8c6c5;
+    &--running { background: #22c55e; box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.18); animation: pulse 1.8s ease-in-out infinite; }
+}
+.sessions-kpi--error.is-active  { .sessions-kpi-value { color: #ba1a1a; } }
+
+/* ── Section header ─────────────────────────────────────────── */
 .sessions-section {
     margin-bottom: 32px;
 }
-
 .sessions-section-head {
     display: flex;
     align-items: center;
     gap: 12px;
-    margin-bottom: 16px;
+    margin-bottom: 14px;
+    flex-wrap: wrap;
+}
+.sessions-section-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    color: #1a1c1c;
+
+    svg { width: 18px; height: 18px; color: #0078d4; opacity: 0.9; }
 }
 .sessions-h2 {
     font-size: clamp(15px, 1.3vw, 18px);
@@ -916,11 +1087,23 @@ html, body, #root {
     margin: 0;
     color: #1a1c1c;
 }
-.sessions-status-pills {
-    display: flex;
-    gap: 8px;
-    flex: 1;
+.sessions-section-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 22px;
+    height: 20px;
+    padding: 0 7px;
+    border-radius: 999px;
+    background: #eef3f9;
+    color: #004883;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1;
 }
+
+/* Legacy compatibility — unused now but kept for any callers. */
+.sessions-status-pills { display: none; }
 .status-count {
     display: inline-flex;
     align-items: center;
@@ -931,28 +1114,116 @@ html, body, #root {
     letter-spacing: 0.06em;
     text-transform: uppercase;
 
-    &--neutral {
-        background: #e9e8e7;          /* surface-container-high */
-        color: #404752;
-    }
-    &--error {
-        background: #ffdad6;          /* error-container */
-        color: #93000a;               /* on-error-container */
+    &--neutral { background: #e9e8e7; color: #404752; }
+    &--error   { background: #ffdad6; color: #93000a; }
+}
+
+/* Filter chips for active-sessions status */
+.sessions-filter-chips {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px;
+    border-radius: 10px;
+    background: #f4f3f2;
+    margin-left: auto;
+    flex-wrap: wrap;
+}
+.sessions-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 11px;
+    border: none;
+    border-radius: 7px;
+    background: transparent;
+    color: #404752;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.12s ease, color 0.12s ease, box-shadow 0.12s ease;
+
+    &:hover:not(:disabled):not(.is-active) { background: rgba(255, 255, 255, 0.7); color: #1a1c1c; }
+    &:disabled { opacity: 0.45; cursor: not-allowed; }
+    &.is-active {
+        background: #ffffff;
+        color: #1a1c1c;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
     }
 }
+.sessions-chip-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 16px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.06);
+    font-size: 10px;
+    font-weight: 700;
+    color: inherit;
+
+    .sessions-chip.is-active & { background: #eef3f9; color: #004883; }
+}
+.sessions-chip-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    &--running { background: #22c55e; animation: pulse 1.8s ease-in-out infinite; }
+}
+
 .sessions-icon-btn {
     background: transparent;
     border: none;
-    padding: 6px;
-    border-radius: 8px;
+    padding: 8px;
+    border-radius: 10px;
     cursor: pointer;
     color: #404752;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    transition: background 0.12s, color 0.12s;
+    transition: background 0.12s, color 0.12s, transform 0.2s;
 
-    &:hover { background: rgba(233, 232, 231, 0.5); color: #1a1c1c; }
+    svg { width: 18px; height: 18px; }
+    &:hover { background: rgba(233, 232, 231, 0.7); color: #1a1c1c; }
+    &[aria-busy="true"] svg, &:disabled svg { opacity: 0.5; }
+    &--ghost {
+        border: 1px solid rgba(192, 199, 212, 0.35);
+        background: #ffffff;
+    }
+}
+
+/* Recent-sessions local search */
+.sessions-search {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    background: #ffffff;
+    border: 1px solid rgba(192, 199, 212, 0.35);
+    border-radius: 10px;
+    width: 280px;
+    max-width: 100%;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+
+    svg { color: #717783; flex-shrink: 0; }
+    input {
+        flex: 1;
+        border: none;
+        outline: none;
+        background: transparent;
+        font-size: 13px;
+        color: #1a1c1c;
+        font-family: inherit;
+
+        &::placeholder { color: #9aa0aa; }
+    }
+    &:focus-within {
+        border-color: #0078d4;
+        box-shadow: 0 0 0 3px rgba(0, 120, 212, 0.15);
+    }
 }
 
 .sessions-loading,
@@ -961,9 +1232,45 @@ html, body, #root {
     color: #404752;
 }
 
-/* Error banner shown when a page-level fetch fails (e.g. backend down).
-   Distinct from an empty state — makes it obvious the user isn't seeing
-   "no sessions" because there are none, but because we couldn't load. */
+/* Illustrated empty state — used for "no data yet" scenarios. */
+.sessions-empty--illustrated {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 48px 24px;
+    background: #ffffff;
+    border: 1px dashed rgba(192, 199, 212, 0.5);
+    border-radius: 16px;
+    text-align: center;
+
+    .sessions-empty-icon {
+        width: 56px;
+        height: 56px;
+        border-radius: 16px;
+        background: linear-gradient(135deg, #eef3f9 0%, #d3e3ff 100%);
+        color: #005faa;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        margin-bottom: 4px;
+        svg { width: 28px; height: 28px; }
+    }
+    .sessions-empty-title {
+        font-size: 15px;
+        font-weight: 600;
+        color: #1a1c1c;
+    }
+    .sessions-empty-body {
+        font-size: 13px;
+        color: #5f5e5e;
+        max-width: 42ch;
+        line-height: 1.5;
+        margin-bottom: 4px;
+    }
+}
+
+/* Error banner shown when a page-level fetch fails (e.g. backend down). */
 .sessions-error {
     display: flex;
     align-items: center;
@@ -972,24 +1279,12 @@ html, body, #root {
     margin: 16px 0;
     background: #fff4ce;
     border: 1px solid #f1c21b;
-    border-radius: 8px;
+    border-radius: 12px;
     color: #3d3114;
-    svg {
-        width: 22px;
-        height: 22px;
-        color: #8a6100;
-        flex: 0 0 auto;
-    }
+    svg { width: 22px; height: 22px; color: #8a6100; flex: 0 0 auto; }
 }
-.sessions-error-body {
-    flex: 1;
-    min-width: 0;
-}
-.sessions-error-title {
-    font-weight: 600;
-    font-size: 14px;
-    margin-bottom: 2px;
-}
+.sessions-error-body { flex: 1; min-width: 0; }
+.sessions-error-title { font-weight: 600; font-size: 14px; margin-bottom: 2px; }
 .sessions-error-msg {
     font-size: 13px;
     line-height: 1.4;
@@ -997,8 +1292,7 @@ html, body, #root {
     word-break: break-word;
 }
 
-/* ── Skeleton placeholders (match .session-card footprint to avoid
-   layout shift when data loads). ── */
+/* ── Skeleton placeholders ── */
 @keyframes sessions-skeleton-pulse {
     0%, 100% { opacity: 1; }
     50%      { opacity: 0.55; }
@@ -1007,8 +1301,9 @@ html, body, #root {
     cursor: default;
     pointer-events: none;
     &:hover {
-        border-color: rgba(192, 199, 212, 0.1);
+        border-color: rgba(192, 199, 212, 0.24);
         box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+        transform: none;
     }
 }
 .skeleton {
@@ -1017,17 +1312,8 @@ html, body, #root {
     border-radius: 6px;
     animation: sessions-skeleton-pulse 1.4s ease-in-out infinite;
 }
-.skeleton-icon {
-    width: 40px;
-    height: 40px;
-    border-radius: 8px;
-    flex-shrink: 0;
-}
-.skeleton-icon--lg {
-    width: 44px;
-    height: 44px;
-    border-radius: 12px;
-}
+.skeleton-icon { width: 40px; height: 40px; border-radius: 8px; flex-shrink: 0; }
+.skeleton-icon--lg { width: 44px; height: 44px; border-radius: 12px; }
 .skeleton-lines {
     display: flex;
     flex-direction: column;
@@ -1055,17 +1341,11 @@ html, body, #root {
     &--wide  { width: 84px; height: 18px; border-radius: 999px; }
 }
 
-/* Shared skeleton variant for .agent-card. */
 .agent-card--skeleton {
     cursor: default;
     pointer-events: none;
-    &:hover {
-        border-color: rgba(192, 199, 212, 0.18);
-        box-shadow: none;
-    }
+    &:hover { border-color: rgba(192, 199, 212, 0.18); box-shadow: none; }
 }
-
-/* Shown only if loading exceeds ~800ms. */
 .agents-slow-hint {
     display: flex;
     align-items: center;
@@ -1077,9 +1357,52 @@ html, body, #root {
     font-size: 12px;
     border-radius: 8px;
     border: 1px solid rgba(192, 199, 212, 0.3);
+    grid-column: 1 / -1;
 }
 
-/* ── Active agent cards (horizontal scroller) ── */
+/* ── Active session grid ───────────────────────────────────── */
+.sessions-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+    gap: 16px;
+}
+.sessions-grid-more {
+    display: flex;
+    justify-content: center;
+    margin-top: 16px;
+}
+.sessions-showmore {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 18px;
+    border: 1px solid rgba(192, 199, 212, 0.4);
+    background: #ffffff;
+    border-radius: 10px;
+    color: #004883;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.12s, border-color 0.12s, transform 0.1s;
+
+    svg { width: 14px; height: 14px; }
+    &:hover {
+        background: #eef3f9;
+        border-color: rgba(0, 120, 212, 0.4);
+    }
+    &:active { transform: scale(0.98); }
+}
+.sessions-showmore-hint {
+    padding-left: 8px;
+    margin-left: 4px;
+    border-left: 1px solid rgba(192, 199, 212, 0.5);
+    font-size: 11px;
+    font-weight: 500;
+    color: #717783;
+}
+
+/* Legacy horizontal scroller — retained as graceful fallback for any
+   consumer that still uses it. New markup uses .sessions-grid. */
 .agent-cards-scroller {
     overflow-x: auto;
     padding-bottom: 8px;
@@ -1092,31 +1415,85 @@ html, body, #root {
 }
 .agent-cards-row {
     display: flex;
-    gap: 24px;
+    gap: 16px;
     min-width: max-content;
 }
+.agent-cards-more {
+    flex: 0 0 auto;
+    align-self: center;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    font-size: 12px;
+    color: #6b7380;
+    border: 1px dashed rgba(192, 199, 212, 0.5);
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.6);
+}
+
+/* ── Session card ─────────────────────────────────────────── */
+@keyframes sessions-card-in {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
 .session-card {
-    flex: 0 0 360px;
-    width: 360px;
-    background: #ffffff;              /* surface-container-lowest */
-    border: 1px solid rgba(192, 199, 212, 0.1);
-    border-radius: 12px;
-    padding: 24px;
+    position: relative;
+    flex: 0 0 auto;
+    width: auto;
+    background: #ffffff;
+    border: 1px solid rgba(192, 199, 212, 0.28);
+    border-radius: 14px;
+    padding: 20px 22px 18px;
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: 14px;
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
     cursor: pointer;
-    transition: border-color 0.15s, box-shadow 0.15s, transform 0.1s;
+    overflow: hidden;
+    transition:
+        border-color 0.18s ease,
+        box-shadow 0.2s ease,
+        transform 0.15s ease;
+    animation: sessions-card-in 0.22s ease-out both;
 
     &:hover {
-        border-color: rgba(0, 95, 170, 0.3);     /* primary/30 */
-        box-shadow: 0 6px 16px rgba(0, 0, 0, 0.06);
+        border-color: rgba(0, 120, 212, 0.38);
+        box-shadow:
+            0 1px 2px rgba(0, 0, 0, 0.04),
+            0 12px 28px -14px rgba(0, 95, 170, 0.25);
+        transform: translateY(-1px);
     }
     &--error:hover {
-        border-color: rgba(186, 26, 26, 0.3);    /* error/30 */
+        border-color: rgba(186, 26, 26, 0.38);
+        box-shadow:
+            0 1px 2px rgba(0, 0, 0, 0.04),
+            0 12px 28px -14px rgba(186, 26, 26, 0.25);
     }
+    &:focus-visible {
+        outline: none;
+        border-color: #0078d4;
+        box-shadow: 0 0 0 3px rgba(0, 120, 212, 0.2);
+    }
+    /* Horizontal-scroller fallback width — only applies inside the
+       legacy .agent-cards-row. Grid layout overrides with `width: auto`. */
+    .agent-cards-row & { flex: 0 0 340px; width: 340px; }
 }
+
+/* Colored top accent bar per status — gives at-a-glance scanning. */
+.session-card-accent {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    background: #c8c6c5;
+    &--running   { background: linear-gradient(90deg, #22c55e, #16a34a); }
+    &--waiting   { background: linear-gradient(90deg, #a3c9ff, #0078d4); }
+    &--error     { background: linear-gradient(90deg, #ff8f87, #ba1a1a); }
+    &--completed { background: linear-gradient(90deg, #a3c9ff, #005faa); }
+}
+
 .session-card-head {
     display: flex;
     justify-content: space-between;
@@ -1128,26 +1505,22 @@ html, body, #root {
     border: none;
     padding: 4px;
     border-radius: 6px;
-    color: #656464;
+    color: #9aa0aa;
     cursor: pointer;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
-    transition: background 0.12s ease, color 0.12s ease;
+    opacity: 0;
+    transition: background 0.12s ease, color 0.12s ease, opacity 0.12s ease;
 
-    &:hover {
-        background: #f4f3f2;
-        color: #ba1a1a;
-    }
-    &:focus-visible {
-        outline: 2px solid #005faa;
-        outline-offset: 1px;
-    }
+    .session-card:hover &,
+    &:focus-visible { opacity: 1; }
+    &:hover { background: #ffe9e6; color: #ba1a1a; }
+    &:focus-visible { outline: 2px solid #005faa; outline-offset: 1px; }
 }
 
-/* In-app cancel-session confirmation dialog. window.confirm() is blocked
-   inside Fabric's cross-origin iframe, so we render a proper modal. */
+/* In-app cancel-session confirmation dialog. */
 .cancel-dialog-backdrop {
     position: fixed;
     inset: 0;
@@ -1161,11 +1534,11 @@ html, body, #root {
 }
 @keyframes cancel-dialog-fade {
     from { opacity: 0; }
-    to { opacity: 1; }
+    to   { opacity: 1; }
 }
 .cancel-dialog {
     background: #ffffff;
-    border-radius: 12px;
+    border-radius: 14px;
     box-shadow: 0 24px 56px rgba(0, 0, 0, 0.28);
     width: 100%;
     max-width: 440px;
@@ -1182,10 +1555,8 @@ html, body, #root {
     to   { transform: translateY(0)   scale(1);    opacity: 1; }
 }
 .cancel-dialog-icon {
-    grid-column: 1;
-    grid-row: 1;
-    width: 40px;
-    height: 40px;
+    grid-column: 1; grid-row: 1;
+    width: 40px; height: 40px;
     border-radius: 10px;
     background: rgba(186, 26, 26, 0.1);
     color: #ba1a1a;
@@ -1194,11 +1565,7 @@ html, body, #root {
     justify-content: center;
     svg { width: 22px; height: 22px; }
 }
-.cancel-dialog-body {
-    grid-column: 2;
-    grid-row: 1;
-    min-width: 0;
-}
+.cancel-dialog-body { grid-column: 2; grid-row: 1; min-width: 0; }
 .cancel-dialog-title {
     margin: 0 0 6px 0;
     font-size: 18px;
@@ -1236,6 +1603,7 @@ html, body, #root {
     gap: 8px;
     margin-top: 4px;
 }
+
 .session-card-head-right {
     display: flex;
     align-items: center;
@@ -1251,32 +1619,31 @@ html, body, #root {
 .session-card-icon {
     width: 40px;
     height: 40px;
-    border-radius: 8px;
+    border-radius: 10px;
     display: flex;
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
 
-    &--primary   { background: #d3e3ff; color: #005faa; }   /* primary-fixed / primary */
-    &--secondary { background: #e4e2e1; color: #5f5e5e; }   /* secondary-container / secondary */
-    &--error     { background: #ffdad6; color: #ba1a1a; }   /* error-container / error */
+    &--primary   { background: #d3e3ff; color: #005faa; }
+    &--secondary { background: #e4e2e1; color: #5f5e5e; }
+    &--error     { background: #ffdad6; color: #ba1a1a; }
 }
 .session-card-name {
-    font-weight: 700;
+    font-weight: 600;
     font-size: 14px;
     color: #1a1c1c;
     line-height: 1.2;
 }
 .session-card-role {
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 500;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: #404752;
+    letter-spacing: 0.02em;
+    color: #717783;
     margin-top: 2px;
 }
 
-/* Status pills (per design palette) */
+/* Status pills */
 .status-pill {
     display: inline-flex;
     align-items: center;
@@ -1284,13 +1651,14 @@ html, body, #root {
     padding: 4px 10px;
     border-radius: 999px;
     font-size: 11px;
-    font-weight: 700;
+    font-weight: 600;
     flex-shrink: 0;
+    letter-spacing: 0.01em;
 
-    &--running   { background: #dcfce7; color: #15803d; }   /* green-100 / green-700 */
-    &--waiting   { background: #e4e2e1; color: #656464; }   /* secondary-container / on-secondary-container */
-    &--error     { background: #ffdad6; color: #93000a; }   /* error-container / on-error-container */
-    &--completed { background: #d3e3ff; color: #005faa; }   /* primary-fixed / primary */
+    &--running   { background: #dcfce7; color: #15803d; }
+    &--waiting   { background: #eef3f9; color: #004883; }
+    &--error     { background: #ffdad6; color: #93000a; }
+    &--completed { background: #d3e3ff; color: #005faa; }
 
     > svg { width: 14px; height: 14px; }
 }
@@ -1300,11 +1668,11 @@ html, body, #root {
     border-radius: 50%;
 
     &--running { background: #22c55e; animation: pulse 1.6s ease-in-out infinite; }
-    &--waiting { background: #5f5e5e; }
+    &--waiting { background: #0078d4; }
 }
 @keyframes pulse {
     0%, 100% { opacity: 1; }
-    50% { opacity: 0.4; }
+    50%      { opacity: 0.4; }
 }
 
 .session-card-body {
@@ -1316,12 +1684,12 @@ html, body, #root {
 .session-card-label {
     font-size: 10px;
     font-weight: 700;
-    letter-spacing: 0.12em;
+    letter-spacing: 0.1em;
     text-transform: uppercase;
-    color: #404752;
+    color: #717783;
     margin-bottom: 4px;
 
-    &--muted { color: #5f5e5e; font-size: 9px; }
+    &--muted { color: #9aa0aa; font-size: 9px; }
     &--error { color: #ba1a1a; }
 }
 .session-card-goal {
@@ -1329,15 +1697,20 @@ html, body, #root {
     font-weight: 500;
     color: #1a1c1c;
     margin: 0;
-    line-height: 1.4;
+    line-height: 1.45;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
 }
 .session-card-step {
-    background: #f4f3f2;              /* surface-container-low */
+    background: linear-gradient(180deg, #f8f9fb 0%, #f4f3f2 100%);
     padding: 10px 12px;
     border-radius: 8px;
+    border: 1px solid rgba(192, 199, 212, 0.28);
 
     p {
-        font-size: 13px;
+        font-size: 12.5px;
         color: #1a1c1c;
         margin: 0;
         line-height: 1.4;
@@ -1361,37 +1734,42 @@ html, body, #root {
     justify-content: space-between;
     align-items: center;
     padding-top: 12px;
-    border-top: 1px solid rgba(192, 199, 212, 0.1);
+    border-top: 1px solid rgba(192, 199, 212, 0.28);
 }
 .session-card-meta {
     font-size: 11px;
-    color: #5f5e5e;
+    color: #717783;
     font-weight: 500;
+    font-variant-numeric: tabular-nums;
 
     .session-card--error & { color: #ba1a1a; }
 }
 .session-card-action {
     background: transparent;
     border: none;
-    padding: 0;
+    padding: 4px 2px;
     font-size: 12px;
-    font-weight: 700;
-    color: #005faa;                   /* primary */
+    font-weight: 600;
+    color: #005faa;
     cursor: pointer;
     display: inline-flex;
     align-items: center;
     gap: 4px;
+    border-radius: 6px;
+    transition: background 0.12s ease, color 0.12s ease;
 
-    &:hover { text-decoration: underline; }
-    &--error { color: #ba1a1a; }
+    svg { width: 14px; height: 14px; transition: transform 0.15s ease; }
+    &:hover { color: #004883; }
+    &:hover svg { transform: translateX(2px); }
+    &--error { color: #ba1a1a; &:hover { color: #7f0810; } }
 }
 
-/* ── Recent Jobs table ── */
+/* ── Recent Jobs table ───────────────────────────────────── */
 .recent-jobs-card {
     background: #ffffff;
-    border: 1px solid rgba(192, 199, 212, 0.1);
-    border-radius: 12px;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+    border: 1px solid rgba(192, 199, 212, 0.28);
+    border-radius: 14px;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
     overflow: hidden;
 }
 .recent-jobs-table {
@@ -1400,33 +1778,33 @@ html, body, #root {
     text-align: left;
 
     thead tr {
-        background: #f4f3f2;          /* surface-container-low */
-        border-bottom: 1px solid rgba(192, 199, 212, 0.1);
+        background: #faf9f8;
+        border-bottom: 1px solid rgba(192, 199, 212, 0.28);
     }
     th {
-        padding: 16px 24px;
+        padding: 12px 22px;
         font-size: 10px;
         font-weight: 700;
-        letter-spacing: 0.12em;
+        letter-spacing: 0.1em;
         text-transform: uppercase;
-        color: #404752;
+        color: #717783;
     }
     tbody tr {
-        border-bottom: 1px solid rgba(192, 199, 212, 0.05);
-
+        border-bottom: 1px solid rgba(192, 199, 212, 0.18);
         &:last-child { border-bottom: none; }
     }
     td {
-        padding: 16px 24px;
-        font-size: 14px;
+        padding: 14px 22px;
+        font-size: 13.5px;
         color: #1a1c1c;
         vertical-align: middle;
     }
 }
 .recent-jobs-row {
     cursor: pointer;
-    transition: background 0.12s;
-    &:hover { background: rgba(244, 243, 242, 0.5); }
+    transition: background 0.12s ease;
+    &:hover { background: #faf9f8; }
+    &:focus-visible { background: #eef3f9; outline: none; }
 }
 .recent-jobs-agent {
     display: inline-flex;
@@ -1435,9 +1813,9 @@ html, body, #root {
     font-weight: 600;
     font-size: 14px;
 }
-.recent-jobs-check       { color: #005faa; }
-.recent-jobs-check--ok   { color: #107c10; }
-.recent-jobs-check--cancelled { color: #8a8886; }
+.recent-jobs-check       { color: #005faa; flex-shrink: 0; }
+.recent-jobs-check--ok   { color: #16a34a; }
+.recent-jobs-check--cancelled { color: #9aa0aa; }
 .recent-jobs-check--err  { color: #ba1a1a; }
 .recent-jobs-task {
     color: #1a1c1c;
@@ -1451,18 +1829,22 @@ html, body, #root {
         margin-top: 2px;
         margin-left: 26px;
         font-size: 11px;
-        color: #6b7280;
-        b { font-weight: 600; color: #4b5563; }
+        color: #717783;
+        b { font-weight: 600; color: #5f5e5e; }
     }
 }
 .recent-jobs-created {
-    color: #6b7280;
+    color: #717783;
     font-size: 12px;
     white-space: nowrap;
+    font-variant-numeric: tabular-nums;
 }
-.recent-jobs-dur  { color: #404752; }
+.recent-jobs-dur {
+    color: #404752;
+    font-variant-numeric: tabular-nums;
+}
 .recent-jobs-status {
-    padding: 2px 8px;
+    padding: 3px 10px;
     border-radius: 999px;
     font-size: 10px;
     font-weight: 700;
@@ -1470,8 +1852,8 @@ html, body, #root {
     background: #e4e2e1;
     color: #656464;
 
-    &--ok        { background: #dff6dd; color: #0e6e0e; }
-    &--cancelled { background: #edebe9; color: #605e5c; }
+    &--ok        { background: #dcfce7; color: #15803d; }
+    &--cancelled { background: #eef3f9; color: #717783; }
     &--err       { background: #ffdad6; color: #93000a; }
 }
 .recent-jobs-more {
@@ -1483,19 +1865,23 @@ html, body, #root {
         border: none;
         padding: 4px;
         border-radius: 999px;
-        color: #0078d4;
+        color: #9aa0aa;
         cursor: pointer;
         display: inline-flex;
         align-items: center;
         justify-content: center;
+        opacity: 0;
+        transition: background 0.12s ease, opacity 0.12s ease, color 0.12s ease;
 
-        &:hover { background: #d3e3ff; }
+        .recent-jobs-row:hover &,
+        &:focus-visible { opacity: 1; color: #005faa; }
+        &:hover { background: #eef3f9; }
     }
 }
 .recent-jobs-foot {
-    background: rgba(244, 243, 242, 0.3);
-    border-top: 1px solid rgba(192, 199, 212, 0.1);
-    padding: 12px 24px;
+    background: #faf9f8;
+    border-top: 1px solid rgba(192, 199, 212, 0.22);
+    padding: 12px 22px;
     text-align: center;
 }
 .recent-jobs-viewall {
@@ -1504,19 +1890,32 @@ html, body, #root {
     color: #005faa;
     font-size: 11px;
     font-weight: 700;
-    letter-spacing: 0.12em;
+    letter-spacing: 0.1em;
     text-transform: uppercase;
     cursor: pointer;
 
     &:hover { text-decoration: underline; }
 }
 .recent-jobs-viewall-note {
-    color: #707070;
+    color: #9aa0aa;
     font-size: 11px;
     font-weight: 600;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.06em;
     text-transform: uppercase;
 }
+
+@media (prefers-reduced-motion: reduce) {
+    .session-card,
+    .sessions-cta,
+    .sessions-icon-btn,
+    .status-dot--running,
+    .sessions-kpi-dot--running,
+    .sessions-chip-dot--running {
+        animation: none !important;
+        transition: none !important;
+    }
+}
+
 
 /* ── Orchestrator ────────────────────────────────────────────── */
 
@@ -2750,18 +3149,47 @@ html, body, #root {
 .sidebar-collapse-btn {
     background: transparent;
     border: none;
-    padding: 4px;
-    border-radius: 6px;
-    color: #404752;             /* on-surface-variant */
+    padding: 6px;
+    border-radius: 8px;
+    color: #605e5c;             /* on-surface-variant */
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: background 0.12s, color 0.12s;
+    transition: background-color 140ms ease, color 140ms ease;
 
-    &:hover { background: rgba(233, 232, 231, 0.5); color: #1a1c1c; }
+    &:hover  { background: rgba(233, 232, 231, 0.7); color: #1a1c1c; }
+    &:active { background: rgba(218, 216, 214, 0.8); }
+    &:focus-visible {
+        outline: none;
+        box-shadow: 0 0 0 2px rgba(0, 95, 170, 0.55);
+    }
 
-    svg { width: 20px; height: 20px; }
+    // Single glyph that rotates 180° when the sidebar is collapsed so
+    // the direction-of-action reads correctly in both states. Matches
+    // VS Code's primary-sidebar toggle and Fluent's own nav drawer.
+    svg {
+        width: 20px;
+        height: 20px;
+        transition: transform 240ms cubic-bezier(0.33, 0, 0.67, 1);
+    }
+}
+.agenthub-sidebar--collapsed .sidebar-collapse-btn svg {
+    transform: rotate(180deg);
+}
+
+// Respect OS-level reduced-motion preferences — strip the width /
+// rotation / label-fade animations so the sidebar snaps between states
+// instantly for users who need it.
+@media (prefers-reduced-motion: reduce) {
+    .agenthub-sidebar,
+    .sidebar-collapse-btn svg,
+    .sidenav-item,
+    .sidenav-item__label,
+    .sidenav-item svg {
+        transition: none !important;
+        animation: none !important;
+    }
 }
 
 /* ── Collapsed sidebar (icon rail) ──
@@ -2772,8 +3200,8 @@ html, body, #root {
    • hairline divider between sections
    • footer boxed to 32px (`w-8`) with a top border */
 .agenthub-sidebar--collapsed {
-    width: 48px;
-    min-width: 48px;
+    width: 52px;
+    min-width: 52px;
 
     .agenthub-sidebar-toolbar {
         justify-content: center;
@@ -2792,30 +3220,43 @@ html, body, #root {
 
     .sidenav-rail-divider {
         display: block;
-        width: 24px;
+        width: 28px;
         height: 1px;
         background: rgba(192, 199, 212, 0.4);  /* outline-variant/40 */
-        margin: 4px 0;
+        margin: 6px 0;
     }
 
     .sidenav-item {
-        width: 32px;
-        height: 32px;
+        width: 36px;
+        height: 36px;
         padding: 0;
         margin: 0;
         justify-content: center;
-        border-radius: 8px;
+        border-radius: 10px;
         gap: 0;
 
-        > :not(svg) { display: none; }   /* hide the <Text> label */
+        // Fade + slide the label out instead of snapping to display:none.
+        // The label is still rendered for screen readers; `aria-hidden`
+        // isn't needed because the Fluent Tooltip provides the
+        // accessible name.
+        .sidenav-item__label {
+            opacity: 0;
+            transform: translateX(-8px);
+            width: 0;
+            margin: 0;
+            padding: 0;
+            pointer-events: none;
+        }
 
         &--active {
             background: #ffffff;
-            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06),
+                        0 0 0 1px rgba(0, 95, 170, 0.10);
             &::before {
-                left: 0;
-                top: 25%;
-                bottom: 25%;
+                // Center the accent bar on the tile edge when collapsed.
+                left: -6px;
+                top: 8px;
+                bottom: 8px;
                 width: 3px;
             }
         }
@@ -2827,14 +3268,14 @@ html, body, #root {
         flex-direction: column;
         align-items: center;
         gap: 4px;
-        width: 32px;
+        width: 36px;
         margin: auto 8px 8px;
         padding: 12px 0 0;
         border-top: 1px solid rgba(192, 199, 212, 0.2); /* outline-variant/20 */
     }
     .sidenav-footer-item {
-        width: 32px;
-        height: 32px;
+        width: 36px;
+        height: 36px;
         padding: 0;
         margin: 0;
         justify-content: center;
@@ -3060,7 +3501,37 @@ html, body, #root {
     color: #005faa;
     letter-spacing: 0.14em;
     text-transform: uppercase;
-    margin-bottom: 8px;
+    margin-bottom: 6px;
+}
+/* Subtle helper row directly below the textarea — single source of
+   truth for @-mention discoverability (placeholder is intentionally
+   neutral so it reads as prompt guidance, not a tutorial).
+   Collapses once the user starts typing so it stops nagging. */
+.composer-helper {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 2px;
+    margin-bottom: 2px;
+    font-size: 11px;
+    color: rgba(95, 94, 94, 0.7);
+    // Reserve exactly one line of height so the layout doesn't jitter
+    // when the helper fades away on first keystroke.
+    min-height: 16px;
+    transition: opacity 0.18s ease;
+    &[data-empty="false"] { opacity: 0; pointer-events: none; }
+    kbd {
+        font-family: inherit;
+        font-weight: 600;
+        background: #f4f3f2;
+        border: 1px solid #e3e2e1;
+        border-bottom-width: 2px;
+        border-radius: 4px;
+        padding: 0 5px;
+        font-size: 10px;
+        color: #1a1c1c;
+        margin: 0 1px;
+    }
 }
 .composer-textarea {
     width: 100%;
@@ -3072,13 +3543,259 @@ html, body, #root {
     color: #1a1c1c;
     line-height: 1.5;
     resize: none;
-    // Scale height with viewport height: ~60px on short laptop screens,
-    // up to 96px on tall desktop monitors. Keeps the composer compact
-    // on 720p laptops while still roomy on desktops.
-    height: clamp(60px, 9vh, 96px);
-    min-height: 60px;
+    // Compact empty state — one line of placeholder + the helper row
+    // sits comfortably below, no dead whitespace. JS auto-grows as
+    // the user types, up to the max cap.
+    min-height: 44px;
+    max-height: 260px;
+    height: 44px;
+    overflow-y: auto;
     font-family: inherit;
     &::placeholder { color: rgba(95, 94, 94, 0.4); }
+}
+
+/* ─── contenteditable rich composer (inline chip mentions) ─── */
+.composer-textarea--rich {
+    // contenteditable does not honor `resize`; remove the textarea-ism
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    cursor: text;
+    &:empty::before {
+        content: attr(data-placeholder);
+        color: rgba(95, 94, 94, 0.4);
+        pointer-events: none;
+    }
+}
+.rc-mention {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 3px;
+    /* Slightly taller padding + a real horizontal margin so chips sit
+       on a visible pill surface inside the prose instead of colliding
+       with the surrounding words. Baseline alignment keeps the chip
+       optically centered on the text line. */
+    padding: 2px 8px 2px 6px;
+    margin: 0 3px;
+    border-radius: 8px;
+    background: rgba(0, 95, 170, 0.08);
+    color: #004578;
+    border: 1px solid rgba(0, 95, 170, 0.18);
+    font-size: 13px;
+    line-height: 1.45;
+    white-space: nowrap;
+    user-select: all;
+    cursor: default;
+    vertical-align: baseline;
+    .rc-mention__at {
+        font-weight: 600;
+        opacity: 0.7;
+        margin-right: 1px;
+    }
+    // Per-kind accents — keep palette aligned with MentionPicker icons
+    &--workspace    { background: rgba(0, 95, 170, 0.10); color: #004578; border-color: rgba(0, 95, 170, 0.22); }
+    &--lakehouse    { background: rgba(16, 124, 16, 0.10); color: #0b5a0b; border-color: rgba(16, 124, 16, 0.22); }
+    &--warehouse    { background: rgba(138, 56, 217, 0.10); color: #5c2d91; border-color: rgba(138, 56, 217, 0.22); }
+    &--sqldb,
+    &--sqlendpoint  { background: rgba(0, 102, 153, 0.10); color: #063b66; border-color: rgba(0, 102, 153, 0.22); }
+    &--kqldatabase,
+    &--eventhouse   { background: rgba(0, 132, 167, 0.10); color: #0a5a7a; border-color: rgba(0, 132, 167, 0.22); }
+    &--mirrored     { background: rgba(90, 90, 90, 0.10); color: #3b3a39; border-color: rgba(90, 90, 90, 0.22); }
+    &--semantic     { background: rgba(123, 31, 162, 0.10); color: #5a178e; border-color: rgba(123, 31, 162, 0.22); }
+    &--datamart     { background: rgba(0, 120, 170, 0.10); color: #0a5a7a; border-color: rgba(0, 120, 170, 0.22); }
+    &--notebook     { background: rgba(202, 80, 16, 0.10); color: #8a3b09; border-color: rgba(202, 80, 16, 0.22); }
+    &--sparkjob     { background: rgba(220, 110, 26, 0.10); color: #8a3b09; border-color: rgba(220, 110, 26, 0.22); }
+    &--environment  { background: rgba(72, 143, 68, 0.10); color: #255f22; border-color: rgba(72, 143, 68, 0.22); }
+    &--pipeline     { background: rgba(0, 120, 212, 0.10); color: #045a96; border-color: rgba(0, 120, 212, 0.22); }
+    &--dataflow,
+    &--dataflowgen2 { background: rgba(0, 145, 200, 0.10); color: #045a7a; border-color: rgba(0, 145, 200, 0.22); }
+    &--copyjob,
+    &--datafactory  { background: rgba(52, 112, 187, 0.10); color: #1e3f73; border-color: rgba(52, 112, 187, 0.22); }
+    &--eventstream  { background: rgba(240, 122, 45, 0.10); color: #8a4010; border-color: rgba(240, 122, 45, 0.22); }
+    &--reflex       { background: rgba(230, 48, 48, 0.10); color: #8a1a1a; border-color: rgba(230, 48, 48, 0.22); }
+    &--mlmodel,
+    &--mlexperiment { background: rgba(36, 155, 135, 0.10); color: #0f5e59; border-color: rgba(36, 155, 135, 0.22); }
+    &--report,
+    &--paginated,
+    &--dashboard    { background: rgba(196, 145, 20, 0.10); color: #6b4e08; border-color: rgba(196, 145, 20, 0.22); }
+    &--item         { background: rgba(95, 94, 94, 0.08); color: #3b3a39; border-color: rgba(95, 94, 94, 0.18); }
+    &--pdf          { background: rgba(196, 49, 75, 0.10); color: #8a2238; border-color: rgba(196, 49, 75, 0.22); }
+    &--image        { background: rgba(23, 131, 123, 0.10); color: #0f5e59; border-color: rgba(23, 131, 123, 0.22); }
+    &--file         { background: rgba(95, 94, 94, 0.10); color: #3b3a39; border-color: rgba(95, 94, 94, 0.22); }
+}
+
+/* ─── @-mention picker popover ─── */
+.mention-pop {
+    z-index: 2000;
+    background: #ffffff;
+    border: 1px solid rgba(192, 199, 212, 0.5);
+    border-radius: 12px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.05);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    font-size: 13px;
+    color: #1a1c1c;
+    animation: mentionPopIn 0.12s ease-out;
+}
+@keyframes mentionPopIn {
+    from { opacity: 0; transform: translateY(4px) scale(0.98); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.mention-pop__header {
+    padding: 8px 12px 6px;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    color: #5f5e5e;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid rgba(192, 199, 212, 0.25);
+    text-transform: none;
+    strong { color: #005faa; }
+}
+.mention-pop__count {
+    font-weight: 500;
+    font-size: 10px;
+    color: #8a8987;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-variant-numeric: tabular-nums;
+    transition: color 120ms ease;
+
+    &.is-loading { color: #005faa; }
+}
+.mention-pop__spinner {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    border: 1.5px solid rgba(0, 120, 212, 0.25);
+    border-top-color: #005faa;
+    animation: mention-pop-spin 0.8s linear infinite;
+    flex: 0 0 auto;
+}
+@keyframes mention-pop-spin { to { transform: rotate(360deg); } }
+.mention-pop__list {
+    overflow-y: auto;
+    padding: 4px;
+    flex: 1;
+    min-height: 0;
+    &::-webkit-scrollbar { width: 6px; }
+    &::-webkit-scrollbar-thumb { background: #e3e2e1; border-radius: 4px; }
+}
+.mention-pop__group-label {
+    padding: 6px 10px 2px;
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: #8a8987;
+}
+.mention-pop__item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.08s ease;
+    &.is-active {
+        background: rgba(0, 95, 170, 0.08);
+    }
+}
+.mention-pop__icon {
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    background: #eceff1;
+    color: #455a64;
+    svg { width: 14px; height: 14px; }
+}
+// Per-kind icon colors mirror the existing context-pill palette so
+// mention results and the resulting pills feel visually consistent.
+.mention-pop__item--workspace .mention-pop__icon { background: #ede7f6; color: #5e35b1; }
+.mention-pop__item--lakehouse .mention-pop__icon { background: #e8f5e9; color: #2e7d32; }
+.mention-pop__item--warehouse .mention-pop__icon { background: #e3f2fd; color: #1565c0; }
+.mention-pop__item--notebook  .mention-pop__icon { background: #f3e5f5; color: #7b1fa2; }
+.mention-pop__item--pipeline  .mention-pop__icon { background: #fff3e0; color: #e65100; }
+.mention-pop__item--pdf       .mention-pop__icon { background: #ffebee; color: #c62828; }
+.mention-pop__item--image     .mention-pop__icon { background: #e0f7fa; color: #00838f; }
+.mention-pop__main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+.mention-pop__name {
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.mention-pop__mark {
+    background: rgba(0, 95, 170, 0.14);
+    color: #005faa;
+    font-weight: 700;
+    padding: 0 1px;
+    border-radius: 2px;
+}
+.mention-pop__meta {
+    font-size: 10.5px;
+    color: #8a8987;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.mention-pop__kbd {
+    font-size: 10.5px;
+    color: #8a8987;
+}
+.mention-pop__empty {
+    padding: 24px 12px;
+    text-align: center;
+    font-size: 12.5px;
+    color: #8a8987;
+    em { color: #1a1c1c; font-style: normal; font-weight: 600; }
+}
+// Lazy-render sentinel shown when more items remain below the fold.
+// IntersectionObserver uses this element as the trigger for revealing
+// the next chunk — the copy just gives the user a hint that more is
+// being fetched into the viewport.
+.mention-pop__more {
+    padding: 8px 12px 10px;
+    font-size: 11px;
+    color: #8a8987;
+    text-align: center;
+    font-style: italic;
+    opacity: 0.85;
+}
+.mention-pop__footer {
+    padding: 6px 12px;
+    font-size: 10.5px;
+    color: #8a8987;
+    border-top: 1px solid rgba(192, 199, 212, 0.25);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: #faf9f8;
+    kbd {
+        font-family: inherit;
+        font-weight: 600;
+        background: #ffffff;
+        border: 1px solid #e3e2e1;
+        border-bottom-width: 2px;
+        border-radius: 3px;
+        padding: 0 4px;
+        font-size: 10px;
+        color: #1a1c1c;
+        margin: 0 1px;
+    }
 }
 
 /* Context pills */
@@ -3087,9 +3804,15 @@ html, body, #root {
     flex-wrap: wrap;
     align-items: center;
     gap: 8px;
-    margin-top: 12px;
-    margin-bottom: 8px;
-    &:empty { display: none; }
+    // Compact margins — when pills are present we still want a clear
+    // break from the textarea above, but the larger gap below pills
+    // comes from `.composer-add-actions { margin-top }` which is
+    // applied unconditionally so the empty-state rhythm stays stable.
+    margin-top: 6px;
+    margin-bottom: 0;
+    &:empty {
+        display: none;
+    }
 }
 /* Dedicated row for the Add item / Add workspace / Attach files
    buttons. Kept on its own line so it stays put as the user piles
@@ -3099,13 +3822,22 @@ html, body, #root {
     flex-wrap: wrap;
     align-items: center;
     gap: 8px;
+    // Fixed top gap regardless of whether the pill row above collapsed.
+    // Because `.composer-pills:empty { display: none; }` removes the
+    // row (and its margins), this top margin is what produces the
+    // breathing room between the textarea and the +Add buttons in
+    // the empty state. When pills ARE present it provides the gap
+    // between the last pill row and the +Add buttons.
+    margin-top: 14px;
     margin-bottom: 16px;
 }
 .ctx-pill {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 4px 10px;
+    // Slightly taller pills so file chips with thumbnails/close buttons
+    // don't feel cramped against their neighbours in the chip row.
+    padding: 5px 10px;
     border-radius: 999px;
     font-size: 11px;
     font-weight: 500;
@@ -3205,6 +3937,30 @@ html, body, #root {
     align-items: center;
     svg { width: 11px; height: 11px; }
     &:hover { color: #ba1a1a; }
+}
+
+/* Inline classification badge next to a flagged attachment file name.
+ * Only suspicious files render a badge — documentation classification is
+ * tracked server-side for log/audit triage but intentionally not surfaced
+ * to the user. The absence of a badge means "fine, treated as data". */
+.ctx-pill__badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    margin-left: 4px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    line-height: 1;
+    svg { width: 12px; height: 12px; }
+}
+.ctx-pill__badge--warn {
+    background: rgba(196, 49, 75, 0.12);
+    color: #ba1a1a;
+    border: 1px solid rgba(196, 49, 75, 0.35);
 }
 
 /* Attachment preview overlay */
@@ -4402,8 +5158,202 @@ html, body, #root {
         appearance: none;
         cursor: pointer;
         font-family: inherit;
+        color-scheme: light;
+    }
+    select option {
+        background: #ffffff;
+        color: #1a1c1c;
     }
     input { cursor: text; }
+}
+/* When the wrap IS the Menu trigger button, reset native button
+   defaults and reserve space so the leadicon + trailicon stay
+   correctly positioned. Clicking anywhere in the field opens the
+   menu; no need to hit a narrow inner element. */
+button.select-wrap--trigger {
+    all: unset;
+    box-sizing: border-box;
+    width: 100%;
+    cursor: pointer;
+    position: relative;
+    display: flex;
+    align-items: center;
+    background: #ffffff;
+    border: 1px solid rgba(192, 199, 212, 0.3);
+    border-radius: 8px;
+    padding: 6px 24px 6px 32px;
+    transition: border-color 0.15s, background 0.15s;
+    &:hover { background: #fafbfc; }
+    &:focus-visible {
+        outline: none;
+        border-color: rgba(0, 95, 170, 0.6);
+        box-shadow: 0 0 0 2px rgba(0, 95, 170, 0.18);
+    }
+}
+.select-trigger__label {
+    flex: 1;
+    min-width: 0;
+    font-size: 12px;
+    font-weight: 500;
+    color: #1a1c1c;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: left;
+}
+/* ── Workspace picker popover ─────────────────────────────────────
+   Width is driven by an inline style set from a ResizeObserver on
+   the trigger button so the list always spans the exact field
+   width (Fluent's ``matchTargetSize`` kept as a fallback).
+   Design goals:
+     · Rows fill the full popover width on hover (Fluent's default
+       ``MenuItem`` inset margin is overridden).
+     · Two-line rows when branch metadata is present: bold name on
+       top, muted branch pill below.
+     · A sticky footer groups the "Create new workspace" action so
+       it never scrolls with the list and always looks like an
+       action, not an entry.
+     · Inherits the app's light theme (no OS-driven dark popup). */
+.workspace-menu-popover {
+    box-sizing: border-box;
+    max-height: min(360px, 52vh);
+    padding: 4px 0;
+    border: 1px solid rgba(192, 199, 212, 0.35);
+    border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12),
+                0 2px 6px rgba(15, 23, 42, 0.06);
+    background: #ffffff;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.workspace-menu-list {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0;
+    width: 100%;
+    max-width: none;
+    /* Disable native scroll-anchoring so a programmatic scrollTop=0
+       reset (done on popover open) isn't re-undone when Fluent
+       focuses a MenuItem mid-list. */
+    overflow-anchor: none;
+}
+
+.workspace-menu-empty {
+    padding: 18px 14px;
+    font-size: 12px;
+    color: #6b7380;
+    text-align: center;
+}
+
+/* Fluent UI's default ``MenuItem`` caps itself at ``max-width: 290px``
+   (baked into its base styles) which is what was clipping the hover
+   rectangle before the popover's right edge. We lift that cap, reset
+   the margin, retune padding, and let Fluent's internal flex slots
+   (icon + content) handle horizontal layout so content never wraps
+   onto its own line under the icon. */
+.workspace-menu-item.fui-MenuItem,
+.workspace-menu-item {
+    max-width: none !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 8px 12px !important;
+    border-radius: 0 !important;
+    min-height: 36px;
+    font-size: 13px;
+    color: #1a1c1c;
+    cursor: pointer;
+    column-gap: 10px;
+    align-items: center !important;
+    transition: background 0.12s ease;
+
+    &:hover:not([aria-disabled="true"]),
+    &:focus-visible {
+        background: rgba(0, 95, 170, 0.08);
+        outline: none;
+    }
+    &[aria-disabled="true"] {
+        color: #9aa2ae;
+        cursor: not-allowed;
+    }
+
+    /* Fluent icon slot — keep a fixed size and our brand color. */
+    & .fui-MenuItem__icon,
+    & > span[class*="__icon"] {
+        color: #5f6470;
+        width: 20px;
+        height: 20px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        & > svg { width: 18px; height: 18px; }
+    }
+
+    /* The single content row sits inside Fluent's content slot and
+       uses its own flex layout to keep the name + optional meta on
+       the left and the check on the right. */
+    &__row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        min-width: 0;
+        width: 100%;
+    }
+    &__main {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        line-height: 1.25;
+        flex: 1 1 auto;
+    }
+    &__name {
+        font-weight: 500;
+        color: #1a1c1c;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    &__meta {
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        margin-top: 2px;
+        font-size: 11px;
+        color: #6b7380;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        & > svg { width: 12px; height: 12px; flex-shrink: 0; }
+        &--muted { color: #9aa2ae; font-style: italic; }
+    }
+    &__check {
+        width: 14px;
+        height: 14px;
+        color: #005faa;
+        flex-shrink: 0;
+    }
+}
+
+.workspace-menu-item--selected {
+    background: rgba(0, 95, 170, 0.06);
+    & .workspace-menu-item__name { color: #005faa; font-weight: 600; }
+    & .fui-MenuItem__icon { color: #005faa; }
+}
+
+/* Sticky footer for the "Create new workspace" action — separated
+   with a hairline divider so it reads as an action, not an entry. */
+.workspace-menu-footer {
+    flex-shrink: 0;
+    border-top: 1px solid rgba(192, 199, 212, 0.35);
+    background: #fafbfc;
+}
+.workspace-menu-item--create {
+    & .fui-MenuItem__icon { color: #005faa; }
+    & .workspace-menu-item__name { color: #005faa; font-weight: 600; }
+    &:hover { background: rgba(0, 95, 170, 0.10) !important; }
 }
 .select-leadicon {
     position: absolute;
@@ -4758,17 +5708,32 @@ html, body, #root {
     border-radius: 4px;
     &:hover { background: rgba(0, 95, 170, 0.08); }
 }
+/* Compose page submit ("Plan this"). Fluent 2 medium Button gets a
+   subtle brand-toned shadow and slightly larger horizontal padding to
+   read as primary — without the oversized pill + heavy drop-shadow
+   that previously dominated the composer card. */
 .composer-submit-btn {
-    background: #005faa !important;
-    color: #ffffff !important;
-    padding: 10px 24px !important;
-    border-radius: 12px !important;
-    font-weight: 700 !important;
-    box-shadow: 0 8px 16px rgba(0, 95, 170, 0.15) !important;
-    transition: all 0.2s !important;
-    &:hover {
-        background: rgba(0, 95, 170, 0.9) !important;
-        transform: translateY(-1px);
+    padding: 0 18px !important;
+    height: 36px !important;
+    min-height: 36px !important;
+    border-radius: 8px !important;
+    font-weight: 600 !important;
+    font-size: 14px !important;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08),
+                0 0 0 1px rgba(0, 95, 170, 0.10) !important;
+    transition: background-color 140ms ease, box-shadow 140ms ease !important;
+
+    // Keep the trailing sparkle icon scaled to the button height.
+    svg { width: 16px !important; height: 16px !important; }
+
+    &:hover:not(:disabled) {
+        box-shadow: 0 2px 6px rgba(0, 95, 170, 0.22),
+                    0 0 0 1px rgba(0, 95, 170, 0.18) !important;
+    }
+    &:focus-visible {
+        outline: none !important;
+        box-shadow: 0 0 0 2px #ffffff,
+                    0 0 0 4px rgba(0, 95, 170, 0.55) !important;
     }
 }
 
@@ -5534,7 +6499,7 @@ html, body, #root {
     }
     .composer-wrap  { max-width: 100%; }
     .composer-card  { padding: 14px 16px; }
-    .composer-textarea { height: 72px; }
+    .composer-textarea { min-height: 48px; height: 48px; max-height: 220px; }
 
     /* Sessions page header wraps earlier so the CTA keeps its full
        width and doesn't get squeezed. */
@@ -5556,13 +6521,13 @@ html, body, #root {
 
     .compose-container { padding: 14px 14px 28px; gap: 16px; }
     .composer-card     { padding: 12px; border-radius: 12px; }
-    .composer-textarea { height: 64px; font-size: 13.5px; }
+    .composer-textarea { min-height: 44px; height: 44px; max-height: 200px; font-size: 13.5px; }
     .composer-label    { font-size: 9.5px; margin-bottom: 6px; }
 
     /* Stack composer action buttons and context pills cleanly on narrow
        viewports — they already wrap, this just trims extra space. */
-    .composer-pills,
-    .composer-add-actions { gap: 6px; margin-top: 8px; margin-bottom: 8px; }
+    .composer-pills       { gap: 6px; margin-top: 4px; margin-bottom: 0; }
+    .composer-add-actions { gap: 6px; margin-top: 10px; margin-bottom: 8px; }
 
     /* Hero: drop the icon below the heading weight class so the title
        dominates on small screens. */
@@ -5613,3 +6578,2490 @@ html, body, #root {
     .plan-card__btn:not(:disabled):hover,
     .session-card:hover { transform: none !important; }
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+   MISSION CONTROL — P2 Task-prompt recap
+   ═══════════════════════════════════════════════════════════════════ */
+
+.task-prompt-recap {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    background: #fff;
+    border: 1px solid rgba(192, 199, 212, 0.35);
+    border-radius: 10px;
+    margin: 8px 0 4px;
+    overflow: hidden;
+
+    &__bar {
+        all: unset;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        width: 100%;
+        padding: 10px 14px;
+        min-height: 44px;
+        max-height: 44px;
+        box-sizing: border-box;
+
+        &:hover  { background: #f7f9fc; }
+        &:focus-visible {
+            outline: 2px solid #005faa;
+            outline-offset: -2px;
+        }
+    }
+
+    &__eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        flex-shrink: 0;
+        color: #005faa;
+    }
+
+    &__label {
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.14em;
+        color: #005faa;
+    }
+
+    &__summary {
+        flex: 1;
+        min-width: 0;
+        font-size: 12px;
+        color: #1a1c1c;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    &__badges {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        flex-shrink: 0;
+    }
+
+    &__badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 11px;
+        font-weight: 600;
+        color: #404752;
+        padding: 2px 8px;
+        background: #f4f3f2;
+        border: 1px solid rgba(192, 199, 212, 0.35);
+        border-radius: 999px;
+    }
+
+    &__chevron {
+        color: #6b7380;
+        display: inline-flex;
+        align-items: center;
+    }
+
+    &--open {
+        max-height: none;
+    }
+
+    &--open &__bar {
+        max-height: none;
+        border-bottom: 1px solid rgba(192, 199, 212, 0.2);
+    }
+
+    &__body {
+        padding: 14px;
+        background: linear-gradient(to bottom right, rgba(0, 95, 170, 0.03), transparent);
+    }
+
+    &__prompt {
+        font-size: 13px;
+        color: #1a1c1c;
+        line-height: 1.55;
+        white-space: pre-wrap;
+    }
+
+    &__meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 12px;
+    }
+
+    &__chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 11px;
+        font-weight: 600;
+        color: #404752;
+        padding: 3px 9px;
+        background: #f4f3f2;
+        border: 1px solid rgba(192, 199, 212, 0.35);
+        border-radius: 999px;
+    }
+
+    &__chip-type {
+        opacity: 0.65;
+        font-weight: 500;
+        margin-left: 4px;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .task-prompt-recap { transition: none !important; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   MISSION CONTROL — P3 Team panel, strip, and orchestration canvas
+   ═══════════════════════════════════════════════════════════════════ */
+
+.team-panel {
+    background: #fff;
+    border: 1px solid rgba(192, 199, 212, 0.35);
+    border-radius: 10px;
+    margin: 8px 0;
+    overflow: hidden;
+
+    &__bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 8px 12px;
+        min-height: 44px;
+        border-bottom: 1px solid rgba(192, 199, 212, 0.2);
+    }
+
+    &__title {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: #1a1c1c;
+    }
+
+    &__title-text {
+        font-weight: 700;
+        font-size: 12px;
+        letter-spacing: 0.04em;
+    }
+
+    &__meta {
+        color: #6b7380;
+        font-size: 11px;
+    }
+
+    &__actions {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    &__body {
+        padding: 10px 14px;
+    }
+
+    &--open &__body {
+        max-height: min(520px, 42vh);
+        overflow-y: auto;
+        padding: 14px;
+    }
+}
+
+/* Compact strip */
+.team-strip {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+
+    &--network,
+    &--sequential {
+        flex-wrap: wrap;
+    }
+
+    &__chevron {
+        color: #8aa8c7;
+        font-size: 16px;
+        font-weight: 700;
+        padding: 0 2px;
+    }
+
+    &__arrow {
+        color: #8aa8c7;
+        font-size: 13px;
+        font-weight: 600;
+    }
+
+    &__workers {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+
+    &__chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 10px;
+        border-radius: 999px;
+        font-size: 11px;
+        font-weight: 600;
+        background: #f4f3f2;
+        color: #1a1c1c;
+        border: 1px solid rgba(192, 199, 212, 0.45);
+        max-width: 260px;
+
+        &--planned { border-style: dashed; color: #404752; background: #fafbfc; }
+        &--done    { background: #e7f4ea; border-color: #2e7d32; color: #1b5e20; }
+        &--waiting { background: #fff4e0; border-color: #e65100; color: #6a2c00; }
+        &--active  { background: #ebf3fc; border-color: #005faa; color: #003d70;
+                     box-shadow: 0 0 0 2px rgba(0, 120, 212, 0.18); }
+    }
+
+    &__chip-agent { font-weight: 700; }
+    &__chip-role {
+        font-weight: 500;
+        opacity: 0.75;
+        font-size: 10px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 160px;
+    }
+}
+
+/* SVG canvas */
+.orch-canvas {
+    width: 100%;
+    overflow-x: auto;
+    background: linear-gradient(to bottom right, rgba(0, 95, 170, 0.02), transparent);
+    border-radius: 8px;
+
+    svg { display: block; min-width: 720px; }
+
+    .orch-node {
+        outline: none;
+
+        &:focus-visible rect {
+            stroke: #005faa;
+            stroke-width: 2.5;
+        }
+
+        &--active {
+            animation: team-node-pulse 2s ease-in-out infinite;
+        }
+    }
+}
+
+@keyframes team-node-pulse {
+    0%, 100% { filter: drop-shadow(0 0 0 rgba(0, 120, 212, 0)); }
+    50%      { filter: drop-shadow(0 0 6px rgba(0, 120, 212, 0.45)); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .orch-canvas .orch-node--active { animation: none !important; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   MISSION CONTROL — P4 Inline approval card
+   ═══════════════════════════════════════════════════════════════════ */
+
+.approval-card {
+    padding: 16px;
+    gap: 12px;
+    border: 1px solid rgba(230, 81, 0, 0.35);
+    background: linear-gradient(to bottom right, rgba(230, 81, 0, 0.04), transparent);
+
+    &__header {
+        display: flex; align-items: center; gap: 8px;
+        color: #b23c00;
+    }
+
+    &__summary {
+        color: #1a1c1c;
+        line-height: 1.55;
+    }
+
+    &__meta {
+        display: flex; flex-wrap: wrap; gap: 8px;
+        margin-top: 4px;
+    }
+
+    &__preview {
+        border: 1px solid rgba(192, 199, 212, 0.35);
+        border-radius: 8px;
+        padding: 8px 10px;
+        background: #fafbfc;
+    }
+
+    &__preview-toggle {
+        all: unset;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 11px;
+
+        code {
+            font-family: ui-monospace, SFMono-Regular, monospace;
+            font-size: 10px;
+            padding: 1px 5px;
+            border-radius: 4px;
+            background: #eef2f7;
+            color: #005faa;
+        }
+    }
+
+    &__preview-body {
+        margin: 8px 0 0;
+        padding: 10px;
+        font-family: ui-monospace, SFMono-Regular, monospace;
+        font-size: 10px;
+        line-height: 1.4;
+        background: #1f2328;
+        color: #f1f3f5;
+        border-radius: 6px;
+        max-height: 180px;
+        overflow: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
+    }
+
+    &__actions {
+        display: flex; flex-wrap: wrap; gap: 8px;
+        margin-top: 8px;
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   MISSION CONTROL — P6 Per-agent filter tabs on completed run log
+   ═══════════════════════════════════════════════════════════════════ */
+
+.reasoning-agent-filter {
+    padding: 8px 16px;
+    border-bottom: 1px solid rgba(192, 199, 212, 0.2);
+    background: #fafbfc;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   MISSION CONTROL — S2 Proposed Team & Orchestration (pixel-faithful)
+   Ported 1:1 from Design/agent-ux/prototypes/03-mission-control/styles.css
+   These classes define the plan-review orchestration graph. They
+   coexist with the older .team-panel / .team-strip used on live
+   sessions (which stay for the compact in-run strip).
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* Smooth modern entrance animation fired whenever the S2 view mounts. */
+@keyframes mc-slide-up {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+.mc-slide-up { animation: mc-slide-up 0.36s cubic-bezier(.2,.8,.2,1) forwards; }
+.mc-slide-up--delay-1 { animation-delay: 0.08s; opacity: 0; }
+.mc-slide-up--delay-2 { animation-delay: 0.16s; opacity: 0; }
+.mc-slide-up--delay-3 { animation-delay: 0.24s; opacity: 0; }
+@media (prefers-reduced-motion: reduce) {
+    .mc-slide-up, .mc-slide-up--delay-1, .mc-slide-up--delay-2, .mc-slide-up--delay-3 {
+        animation: none !important; opacity: 1 !important; transform: none !important;
+    }
+}
+
+/* ── S2 root layout ────────────────────────────────────────────── */
+.mc-review {
+    max-width: 1240px;
+    margin: 0 auto;
+    width: 100%;
+    padding: 28px 32px 48px;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+}
+
+.mc-review__header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+.mc-review__eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: #005faa;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+    svg, .mc-review__eyebrow-icon { width: 18px; height: 18px; }
+}
+.mc-review__h1 {
+    font-size: 28px;
+    line-height: 1.15;
+    font-weight: 700;
+    color: #1a1c1c;
+    margin: 0;
+}
+.mc-review__subtitle {
+    font-size: 13.5px;
+    color: #404752;
+    line-height: 1.5;
+    margin: 4px 0 0;
+    max-width: 42rem;
+}
+.mc-review__actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+    flex-wrap: wrap;
+}
+.mc-review__action {
+    all: unset;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #404752;
+    background: #f4f3f2;
+    border: 1px solid rgba(192, 199, 212, 0.35);
+    transition: background .15s ease, color .15s ease, border-color .15s ease;
+    &:hover { background: #e9e8e7; color: #005faa; }
+    &:disabled { opacity: .5; cursor: not-allowed; }
+    &--primary {
+        color: #005faa;
+        background: rgba(0, 95, 170, .08);
+        border-color: rgba(0, 95, 170, .22);
+        &:hover { background: rgba(0, 95, 170, .14); color: #005faa; }
+    }
+}
+
+/* ── mc-prompt-recap (native details) ─────────────────────────── */
+/* Smooth modern open/close animation for <details>. Uses the newer
+   ``::details-content`` pseudo + ``interpolate-size`` so height can
+   transition from/to ``auto`` without JS. Gracefully degrades to an
+   instant toggle in browsers that haven't shipped the feature yet
+   (as of 2025: Chrome 131+, Edge, Safari 18.2+). */
+@supports (interpolate-size: allow-keywords) {
+    .mc-prompt-recap {
+        interpolate-size: allow-keywords;
+    }
+    .mc-prompt-recap::details-content {
+        opacity: 0;
+        height: 0;
+        overflow: clip;
+        transition:
+            height .28s cubic-bezier(.4, 0, .2, 1),
+            opacity .22s ease,
+            content-visibility .28s allow-discrete;
+    }
+    .mc-prompt-recap[open]::details-content {
+        opacity: 1;
+        height: auto;
+    }
+}
+
+.mc-prompt-recap {
+    background: #ffffff;
+    border: 1px solid rgba(192, 199, 212, 0.22);
+    border-radius: 12px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.04);
+    overflow: hidden;
+
+    > summary {
+        list-style: none;
+        cursor: pointer;
+        user-select: none;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 16px;
+        &::-webkit-details-marker { display: none; }
+        &::marker { display: none; }
+    }
+
+    &__eyebrow-icon {
+        color: #005faa;
+        flex-shrink: 0;
+    }
+
+    &__main {
+        flex: 1 1 auto;
+        min-width: 0;
+    }
+    &__kicker {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 10px;
+        color: #6b7380;
+        letter-spacing: .04em;
+        line-height: 1;
+        flex-wrap: wrap;
+        & > strong {
+            color: #005faa;
+            font-weight: 700;
+            letter-spacing: .14em;
+            text-transform: uppercase;
+        }
+    }
+    /* Destination workspace pill shown in the kicker. Distinct
+       treatment (green play-triangle + filled chip) so the user sees
+       at a glance where the run will execute, separate from any
+       additional context workspaces they may have added. */
+    &__destination {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0;
+        text-transform: none;
+        background: #e6f4ea;
+        color: #1b5e20;
+        border: 1px solid rgba(46, 125, 50, 0.22);
+        & svg { width: 12px; height: 12px; color: #2e7d32; }
+    }
+    &__count {
+        color: #6b7380;
+        font-size: 11px;
+        letter-spacing: 0;
+        text-transform: none;
+    }
+    &__summary-text {
+        font-size: 13px;
+        color: #1a1c1c;
+        line-height: 1.4;
+        margin-top: 4px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    /* Hide the one-line preview once the details is open — the body
+       renders the full prompt so showing it here would duplicate. */
+    &[open] &__summary-text {
+        display: none;
+    }
+
+    &__inline-badges {
+        display: none;
+        gap: 4px;
+        align-items: center;
+        flex-shrink: 0;
+
+        @media (min-width: 860px) {
+            display: inline-flex;
+        }
+    }
+    /* Category badges are only useful as a scope preview when the
+       recap is collapsed. When open, the user can already see the
+       full chip groups below, so the badges become visual noise. */
+    &[open] &__inline-badges {
+        display: none;
+    }
+
+    &__edit {
+        all: unset;
+        cursor: pointer;
+        position: absolute;
+        top: 10px;
+        right: 12px;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 11px;
+        color: #6b7380;
+        padding: 4px 8px;
+        border-radius: 6px;
+        border: 1px solid transparent;
+        transition: background .15s ease, color .15s ease, border-color .15s ease;
+        z-index: 2;
+        &:hover {
+            background: rgba(0, 95, 170, .06);
+            color: #005faa;
+            border-color: rgba(0, 95, 170, .18);
+        }
+        &:focus-visible {
+            outline: 2px solid #005faa;
+            outline-offset: 1px;
+        }
+    }
+
+    &__chevron {
+        flex-shrink: 0;
+        color: #6b7380;
+        transition: transform .28s cubic-bezier(.4, 0, .2, 1);
+    }
+    &[open] &__chevron { transform: rotate(180deg); }
+
+    &__body {
+        position: relative;
+        padding: 12px 16px 16px;
+        border-top: 1px solid rgba(192, 199, 212, 0.15);
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+    }
+    /* "Runs in" row — shares the same 110px label column as the
+       WORKSPACE/ITEM/FILES chip groups below so everything in the
+       body lines up on a single vertical grid. */
+    &__destination-row {
+        display: grid;
+        grid-template-columns: 110px 1fr;
+        gap: 10px;
+        align-items: center;
+
+        @media (max-width: 720px) {
+            grid-template-columns: 1fr;
+            gap: 4px;
+        }
+    }
+    &__destination-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 11px;
+        font-weight: 600;
+        color: #6b7380;
+        letter-spacing: .04em;
+        text-transform: uppercase;
+        & > svg { color: #2e7d32; width: 12px; height: 12px; }
+    }
+    &__destination-chips {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        min-width: 0;
+    }
+    /* Visual separator between the destination workspace and its
+       branch on the same "Runs in" row — keeps branch inline so no
+       extra row is ever introduced. */
+    &__destination-sep {
+        color: #b7bdca;
+        font-weight: 500;
+        user-select: none;
+    }
+    /* Muted provenance hint ("from <source>") for a branch — shows
+       where the branch was forked from without giving the source
+       workspace its own row. Intentionally lighter weight than the
+       destination pill so it reads as secondary metadata. */
+    &__destination-source {
+        font-size: 12px;
+        color: #6b7380;
+        & > em {
+            font-style: normal;
+            font-weight: 600;
+            color: #4a5260;
+        }
+    }
+    &__prompt-text {
+        /* Full-width headline — the prompt is the primary content
+           the user authored, so it breaks out of the 110px grid and
+           sits flush with the left edge of the body for maximum
+           read-first emphasis. Subtle divider separates it from the
+           aligned metadata grid below. Right padding reserves space
+           for the floating Edit button. */
+        font-size: 14px;
+        color: #1a1c1c;
+        line-height: 1.55;
+        white-space: pre-wrap;
+        padding-right: 72px;
+        padding-bottom: 12px;
+        border-bottom: 1px solid rgba(192, 199, 212, 0.2);
+    }
+    /* Grouped chip lists — one group per category so the user can
+       parse what's in scope at a glance. Each group has its own
+       label ("Workspaces", "Items", "Files") aligned above the chips. */
+    &__chip-groups {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+    &__chip-group {
+        display: grid;
+        grid-template-columns: 110px 1fr;
+        gap: 10px;
+        align-items: start;
+
+        @media (max-width: 720px) {
+            grid-template-columns: 1fr;
+            gap: 4px;
+        }
+    }
+    &__chip-group-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 11px;
+        font-weight: 600;
+        color: #6b7380;
+        letter-spacing: .04em;
+        text-transform: uppercase;
+        padding-top: 4px;
+        & > svg { width: 12px; height: 12px; }
+    }
+    &__chip-group-chips {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+    }
+    /* Legacy single chip row — retained but no longer used by the
+       rewritten recap body. */
+    &__chips-row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+    }
+    &__divider {
+        width: 1px;
+        height: 14px;
+        background: rgba(192, 199, 212, 0.25);
+    }
+    &__flags {
+        display: flex;
+        gap: 16px;
+        margin-top: 4px;
+        padding-left: 120px;
+        font-size: 11px;
+        color: #6b7380;
+        & strong { color: #005faa; font-weight: 700; }
+
+        @media (max-width: 720px) {
+            padding-left: 0;
+        }
+    }
+    &__flag {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        &[data-state="on"] strong { color: #2e7d32; }
+        &[data-state="off"] strong { color: #8a8886; }
+    }
+}
+
+/* Compact count pills shown inline on the recap summary */
+.fabric-badge-lakehouse {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 700;
+    background: #e1f5fe;
+    color: #01579b;
+}
+.fabric-badge-warehouse {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 700;
+    background: #e8f5e9;
+    color: #1b5e20;
+}
+.fabric-badge-workspace {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 700;
+    background: #ede7f6;
+    color: #5e35b1;
+}
+.fabric-badge-file {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 700;
+    background: #fff4e5;
+    color: #8a4a00;
+}
+
+/* Expanded-body scope chips */
+.mc-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 500;
+    background: #f4f3f2;
+    color: #1a1c1c;
+    border: 1px solid rgba(192, 199, 212, 0.3);
+
+    &--lakehouse { background: #e1f5fe; color: #01579b; }
+    &--warehouse { background: #e8f5e9; color: #1b5e20; }
+    &--workspace { background: #ede7f6; color: #5e35b1; }
+    &--file      { background: #ffebee; color: #b71c1c; }
+}
+
+/* ── Split panel & canvas card ─────────────────────────────────── */
+.mc-split-panel {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 20px;
+
+    @media (min-width: 1024px) {
+        grid-template-columns: 1fr 320px;
+    }
+}
+
+.mc-canvas-card {
+    background: #ffffff;
+    border-radius: 12px;
+    border: 1px solid rgba(192, 199, 212, 0.22);
+    padding: 20px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.04);
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-feature-settings: "cv11", "ss01", "ss03";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    /* Flex column so the canvas stage can stretch to fill the card.
+       The grid parent (.mc-split-panel) stretches both columns to
+       match the taller of the two, and we want the canvas stage —
+       not the card's whitespace — to soak up the extra height. */
+    display: flex;
+    flex-direction: column;
+}
+.mc-canvas-card__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+.mc-canvas-card__head-left { display: flex; align-items: center; gap: 10px; }
+.mc-canvas-card__hint {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    color: #6b7380;
+}
+.mc-canvas-card__zoom {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 999px;
+    background: #f4f3f2;
+    color: #6b7380;
+    border: 1px solid rgba(192, 199, 212, 0.35);
+    cursor: help;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Interactive zoom + fit toolbar on the canvas card header. Three
+   segmented buttons: zoom out · fit-to-view (also shows current %) ·
+   zoom in. Sits on the right side of the header so it doesn't crowd
+   the title + pattern pill on narrow viewports. */
+.mc-canvas-card__tools {
+    display: inline-flex;
+    align-items: stretch;
+    border-radius: 8px;
+    border: 1px solid rgba(192, 199, 212, 0.35);
+    background: #ffffff;
+    overflow: hidden;
+    flex: 0 0 auto;
+
+    &__tool, .mc-canvas-card__tool {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 5px 8px;
+        background: transparent;
+        border: 0;
+        color: #404752;
+        cursor: pointer;
+        font: inherit;
+        font-size: 11px;
+        font-weight: 600;
+        line-height: 1;
+
+        svg { width: 16px; height: 16px; }
+
+        & + & { border-left: 1px solid rgba(192, 199, 212, 0.35); }
+
+        &:hover:not(:disabled) { background: #f4f3f2; color: #1a1c1c; }
+        &:focus-visible { outline: 2px solid #0078d4; outline-offset: -2px; }
+        &:disabled { opacity: 0.4; cursor: not-allowed; }
+    }
+}
+.mc-canvas-card__tool + .mc-canvas-card__tool { border-left: 1px solid rgba(192, 199, 212, 0.35); }
+.mc-canvas-card__tool-label {
+    font-variant-numeric: tabular-nums;
+    min-width: 32px;
+    text-align: center;
+}
+
+/* ── mc-pill (pattern label + status pills) ───────────────────── */
+.mc-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 3px 9px;
+    border-radius: 999px;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+
+    &--planned { background: #ebf3fc; color: #005faa; }
+    &--running { background: #e8f5e9; color: #2e7d32; }
+    &--running::before {
+        content: ""; width: 6px; height: 6px; border-radius: 50%;
+        background: #2e7d32;
+        animation: mc-pulse 1.2s ease-in-out infinite;
+    }
+    &--done { background: #e8f5e9; color: #2e7d32; }
+    &--waiting { background: #fff3e0; color: #e65100; }
+}
+@keyframes mc-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(0, 120, 212, .45); }
+    50%      { box-shadow: 0 0 0 6px rgba(0, 120, 212, 0); }
+}
+
+/* ── Orchestration canvas (design-faithful, HTML nodes + SVG edges) ── */
+.mc-canvas {
+    position: relative;
+    background:
+        radial-gradient(circle at 1px 1px, rgba(64,71,82,0.08) 1px, transparent 0);
+    background-size: 24px 24px;
+    background-color: #ffffff;
+    border-radius: 12px;
+    border: 1px solid rgba(192, 199, 212, 0.25);
+    /* Visible overflow so node popovers ("+N" skill list) can escape
+       the canvas bounds. The dotted-grid background is driven by a CSS
+       gradient, not a child element, so no visual bleed.*/
+    overflow: visible;
+    /* width + height are set inline by OrchCanvas against the measured
+       container so the graph lays out to the card's actual inner width
+       rather than a fixed virtual canvas — no more squashed spacing on
+       standard laptop breakpoints. */
+    max-width: 100%;
+
+    svg.mc-canvas__edges {
+        position: absolute; inset: 0;
+        width: 100%; height: 100%;
+        pointer-events: none;
+    }
+}
+.mc-edge {
+    fill: none;
+    stroke: #c0c7d4;
+    stroke-width: 1.5;
+    &[data-kind="delegate"] { stroke: #a3c9ff; stroke-dasharray: 5 4; }
+    &[data-kind="report"]   { stroke: #c8e6c9; }
+    &[data-kind="peer"]     { stroke: #ffb689; stroke-dasharray: 2 4; }
+    &[data-active="true"] {
+        stroke: #0078d4;
+        stroke-width: 2.25;
+        stroke-dasharray: 6 3;
+        animation: mc-dash 1.2s linear infinite;
+    }
+}
+@keyframes mc-dash { to { stroke-dashoffset: -18; } }
+
+/* Edge midpoint labels — airy text-only captions that sit above each
+   connection. We intentionally avoid a pill/button look: the graph
+   reads cleanest when the lines themselves are the dominant visual,
+   so labels are pure colored microtype with a white halo so they
+   stay legible where they cross the line they describe. The label
+   only becomes opaque on canvas hover — at-rest it's near-invisible
+   so your eyes flow along the line, and on hover it "lights up" the
+   whole graph's relationships at once (Lucidchart / Figma approach). */
+.mc-edge-label {
+    position: absolute;
+    /* Sit the label a hair ABOVE the midpoint so the line underneath
+       stays visible and readable. translate handles the centering
+       around the computed midpoint. */
+    transform: translate(-50%, calc(-50% - 14px));
+    padding: 0;
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    line-height: 1;
+    white-space: nowrap;
+    color: #8a94a3;
+    pointer-events: none;
+    z-index: 2;
+    user-select: none;
+    opacity: 0.55;
+    transition: opacity 150ms ease, color 150ms ease;
+    /* A subtle white halo so the text stays legible wherever it
+       crosses an edge line or a dotted-grid background tile. Using
+       multi-layer text-shadow is cheaper than SVG <text> paint-order
+       tricks and scales cleanly with the canvas transform. */
+    text-shadow:
+        0 0 4px #ffffff,
+        0 0 2px #ffffff,
+        0 1px 0 #ffffff,
+        0 -1px 0 #ffffff,
+        1px 0 0 #ffffff,
+        -1px 0 0 #ffffff;
+
+    &--delegate { color: #5b82ad; }
+    &--peer     { color: #b37a52; }
+}
+/* Reveal the relationships clearly when the user's attention is on
+   the canvas — labels brighten to their full-contrast color without
+   ever becoming a pill/button. */
+.mc-canvas:hover .mc-edge-label {
+    opacity: 1;
+    &.mc-edge-label--delegate { color: #045a96; }
+    &.mc-edge-label--peer     { color: #8a4010; }
+}
+
+.mc-node {
+    position: absolute;
+    width: 200px;
+    background: #ffffff;
+    border: 1.5px solid #c0c7d4;
+    border-radius: 12px;
+    padding: 12px 14px;
+    box-shadow: 0 1px 2px rgba(0,0,0,.04), 0 1px 3px rgba(0,0,0,.06);
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-feature-settings: "cv11", "ss01", "ss03";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    transition: box-shadow .15s ease, transform .15s ease, border-color .15s ease;
+
+    &:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 14px rgba(0,0,0,.06), 0 2px 4px rgba(0,0,0,.05);
+    }
+    /* When the "+N" button is focused (i.e. the skills popover is open)
+       lift the whole node above its later DOM siblings so the popover
+       isn't covered by the next agent card to the right. Sibling nodes
+       are ``position: absolute`` with no z-index, so without this they
+       paint on top of the popover strictly by source order. */
+    &:focus-within { z-index: 30; }
+    &[data-state="planned"] { border-style: dashed; border-color: #a3c9ff; }
+    &[data-state="active"]  { border-color: #0078d4; border-width: 2px; box-shadow: 0 0 0 4px rgba(0, 120, 212, .10); }
+    &[data-state="done"]    { border-color: #a7d3a7; background: #f4faf4; }
+    &[data-state="waiting"] { border-color: #ffb689; background: #fff8f1; }
+
+    &__head { display: flex; align-items: center; gap: 10px; }
+    &__icon {
+        width: 32px; height: 32px; border-radius: 8px; flex: 0 0 auto;
+        display: inline-flex; align-items: center; justify-content: center;
+
+        svg { width: 18px; height: 18px; }
+
+        &[data-agent="orch"]     { background: #ebf3fc; color: #005faa; }
+        &[data-agent="fde"]      { background: #e3f2fd; color: #1565c0; }
+        &[data-agent="admin"]    { background: #f3e5f5; color: #7b1fa2; }
+        &[data-agent="reporter"] { background: #fff3e0; color: #e65100; }
+        &[data-agent="rt"]       { background: #e0f2f1; color: #00796b; }
+        &[data-agent="generic"]  { background: #eceff1; color: #455a64; }
+    }
+    &__title {
+        font-size: 13.5px;
+        font-weight: 600;
+        color: #1a1c1c;
+        line-height: 1.25;
+        letter-spacing: -0.005em;
+    }
+    &__role {
+        /* Role is a full-sentence description from the backend (e.g.
+           "Handles data ingestion and initial staging.") — treat it as
+           readable body copy, NOT a pill label. Earlier iterations
+           force-uppercased it at 10px with a 2-line clamp which turned
+           every role into "HANDLES DATA INGESTION AND INITI..." and
+           hid the actual "why this agent?" payload behind a
+           truncation. Sentence-case + normal weight at 11.5px reads
+           cleanly and the node grows vertically to fit. If an agent's
+           role label is already SHORT ENOUGH to look like a tag
+           (e.g. "Data engineer"), we accept the minor aesthetic loss
+           in exchange for never clipping long explanations. */
+        font-size: 11.5px;
+        color: #404752;
+        font-weight: 500;
+        margin-top: 4px;
+        line-height: 1.45;
+        letter-spacing: 0;
+        /* Wrap long words / URLs gracefully instead of creating a
+           horizontal scroll inside the node. */
+        overflow-wrap: anywhere;
+        word-break: normal;
+    }
+    &__desc { font-size: 11px; color: #6b7380; line-height: 1.4; margin-top: 6px; }
+    &__skills { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+    &__skill {
+        font-size: 10px; line-height: 1;
+        padding: 3px 7px; border-radius: 999px;
+        background: #f4f3f2; color: #404752;
+        border: 1px solid rgba(192, 199, 212, 0.35);
+        font-family: inherit;
+        font-weight: 500;
+        max-width: 100%;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    /* Selected = "probably useful for this task". Rendered for every
+       skill the orchestrator chose (no truncation) so the reviewer
+       can see the full reasoning at a glance. Blue tint matches the
+       ``--more`` chip + popover's ``data-selected`` item for visual
+       consistency across the three places selected skills appear. */
+    &__skill--selected {
+        background: #ebf3fc;
+        color: #005faa;
+        border-color: rgba(0, 120, 212, 0.28);
+        font-weight: 600;
+    }
+    /* Available = declared by the agent template but NOT chosen for
+       this task. Muted so the visual weight of the node lands on the
+       selected skills; still legible + hover-legible so reviewers
+       can skim "what else could this agent do". */
+    &__skill--available {
+        background: transparent;
+        color: #8993a3;
+        border-color: rgba(147, 156, 172, 0.35);
+        border-style: dashed;
+        font-weight: 500;
+        opacity: 0.9;
+
+        &:hover { color: #404752; opacity: 1; border-style: solid; }
+    }
+    &__skill--more {
+        all: unset;
+        cursor: pointer;
+        font-size: 10px; line-height: 1;
+        padding: 3px 7px; border-radius: 999px;
+        background: #ebf3fc; color: #005faa;
+        border: 1px solid rgba(0, 120, 212, 0.25);
+        font-weight: 600;
+        position: relative;
+        transition: background 120ms ease;
+
+        &:hover, &:focus-visible { background: #dbe8f7; outline: none; }
+    }
+    &__skill-pop {
+        position: absolute;
+        /* Open upward from the +N chip so long skill lists on nodes
+           in the bottom row of the canvas don't get clipped by the
+           card boundary. */
+        bottom: calc(100% + 6px);
+        left: 0;
+        z-index: 20;
+        min-width: 220px;
+        max-width: 280px;
+        background: #ffffff;
+        border: 1px solid rgba(192, 199, 212, 0.5);
+        border-radius: 10px;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.06);
+        padding: 10px 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        cursor: default;
+        text-align: left;
+        white-space: normal;
+    }
+    &__skill-pop-title {
+        font-size: 11px;
+        font-weight: 700;
+        color: #1a1c1c;
+        letter-spacing: .02em;
+    }
+    &__skill-pop-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+    }
+    &__skill-pop-item {
+        font-size: 10px; line-height: 1;
+        padding: 3px 7px; border-radius: 999px;
+        background: #f4f3f2; color: #404752;
+        border: 1px solid rgba(192, 199, 212, 0.35);
+        font-weight: 500;
+
+        &[data-selected="true"] {
+            background: #ebf3fc;
+            color: #005faa;
+            border-color: rgba(0, 120, 212, 0.3);
+            font-weight: 600;
+        }
+    }
+    &__skill-pop-hint {
+        font-size: 10px;
+        color: #6b7380;
+        font-style: italic;
+    }
+    &__state {
+        margin-top: 8px; padding-top: 8px;
+        border-top: 1px dashed rgba(192,199,212,0.5);
+        display: flex; align-items: center; gap: 6px;
+        font-size: 10px; color: #404752;
+    }
+    &__state-dot {
+        width: 6px; height: 6px; border-radius: 50%;
+        background: #c0c7d4;
+    }
+    &[data-state="active"]  &__state-dot { background: #0078d4; animation: mc-dot-pulse 1.2s ease-in-out infinite; }
+    &[data-state="done"]    &__state-dot { background: #2e7d32; }
+    &[data-state="waiting"] &__state-dot { background: #e65100; }
+}
+@keyframes mc-dot-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(0, 120, 212, .45); }
+    50%      { box-shadow: 0 0 0 6px rgba(0, 120, 212, 0); }
+}
+
+.mc-legend {
+    display: flex; flex-wrap: wrap; gap: 14px; align-items: center;
+    font-size: 11px; color: #6b7380;
+    margin-top: 14px;
+}
+.mc-legend__item { display: inline-flex; align-items: center; gap: 6px; }
+.mc-legend__swatch {
+    width: 22px; height: 2px; border-radius: 2px; background: #c0c7d4;
+
+    &[data-kind="delegate"] { background: repeating-linear-gradient(90deg, #a3c9ff 0 5px, transparent 5px 9px); }
+    &[data-kind="report"]   { background: #c8e6c9; }
+    &[data-kind="peer"]     { background: repeating-linear-gradient(90deg, #ffb689 0 2px, transparent 2px 6px); }
+}
+.mc-legend__hint { color: #6b7380; }
+
+/* ── Sidebar: Agents in this run ──────────────────────────────── */
+.mc-sidebar {
+    background: #ffffff;
+    border-radius: 12px;
+    border: 1px solid rgba(192, 199, 212, 0.22);
+    padding: 20px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.04);
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-width: 0;
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-feature-settings: "cv11", "ss01", "ss03";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+.mc-sidebar__eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 10px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: #005faa;
+}
+.mc-sidebar__h2 {
+    font-size: 17px;
+    font-weight: 700;
+    color: #1a1c1c;
+    margin: 4px 0 0;
+}
+/* Shared section header used by both the Architecture canvas and the
+   Roles & handoffs sidebar so they read as symmetric peers under the
+   step's top header. Avoids redundant supertitles and "AGENTS IN THIS
+   RUN" misnomers. */
+.mc-section-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: #1a1c1c;
+    margin: 0;
+    line-height: 1.3;
+}
+.mc-section-meta {
+    display: inline-block;
+    margin-top: 2px;
+    font-size: 11px;
+    color: #6b7380;
+}
+.mc-sidebar__roles {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    /* Grow to fill the sidebar between the header and the CTA buttons,
+       and scroll internally if there are many agents — we'd rather
+       clip the list into a scrollable zone than let the sidebar (and
+       therefore the matched canvas card) grow to an uncomfortable
+       height. Cap at 520px so the sidebar caps out at ~640px total,
+       keeping the canvas stage in the 420–640px sweet spot. */
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: 520px;
+    overflow-y: auto;
+    /* Small right-padding so the scrollbar never sits flush against
+       the role cards. */
+    padding-right: 4px;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(14, 22, 40, 0.2) transparent;
+    &::-webkit-scrollbar { width: 8px; }
+    &::-webkit-scrollbar-track { background: transparent; }
+    &::-webkit-scrollbar-thumb {
+        background: rgba(14, 22, 40, 0.18);
+        border: 2px solid transparent;
+        background-clip: padding-box;
+        border-radius: 8px;
+    }
+    &:hover::-webkit-scrollbar-thumb { background: rgba(14, 22, 40, 0.28); background-clip: padding-box; }
+}
+.mc-role-card {
+    border: 1px solid rgba(192, 199, 212, 0.22);
+    border-radius: 10px;
+    padding: 12px 14px;
+    background: #ffffff;
+    transition: border-color .15s ease, box-shadow .15s ease;
+
+    &:hover {
+        border-color: rgba(0, 120, 212, 0.3);
+        box-shadow: 0 2px 8px rgba(0,0,0,.04);
+    }
+
+    &__head {
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+    }
+    &__icon {
+        width: 32px; height: 32px;
+        border-radius: 8px;
+        flex: 0 0 auto;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+
+        svg { width: 18px; height: 18px; }
+
+        &[data-agent="orch"]     { background: #ebf3fc; color: #005faa; }
+        &[data-agent="fde"]      { background: #e3f2fd; color: #1565c0; }
+        &[data-agent="admin"]    { background: #f3e5f5; color: #7b1fa2; }
+        &[data-agent="reporter"] { background: #fff3e0; color: #e65100; }
+        &[data-agent="rt"]       { background: #e0f2f1; color: #00796b; }
+        &[data-agent="generic"]  { background: #eceff1; color: #455a64; }
+    }
+    &__name {
+        font-size: 13.5px;
+        font-weight: 600;
+        color: #1a1c1c;
+        line-height: 1.25;
+        letter-spacing: -0.005em;
+    }
+    &__role {
+        /* Full-sentence role description (e.g. "Handles data
+           ingestion and initial staging."). Rendered as readable
+           body copy — sentence-case, normal weight, never clamped —
+           because truncating the secondary line destroys the
+           "why this agent?" answer we want the reviewer to read. */
+        font-size: 11.5px;
+        color: #6b7380;
+        font-weight: 500;
+        margin-top: 4px;
+        line-height: 1.5;
+        letter-spacing: 0;
+        overflow-wrap: anywhere;
+        word-break: normal;
+    }
+    &__desc {
+        font-size: 12px;
+        color: #404752;
+        line-height: 1.5;
+        margin: 8px 0 0;
+    }
+}
+
+/* Primary + secondary CTAs
+   Sized against Fluent 2's `size="medium"` Button (height ≈ 32px,
+   font 14px/600). Keep full-width so it aligns with the role cards
+   above, but pull padding + weight down so the button doesn't read
+   as "shouting" — a sidebar action shouldn't dominate its own card. */
+.mc-review__cta-primary {
+    all: unset;
+    box-sizing: border-box;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+    max-width: 100%;
+    height: 36px;                 /* Fluent "medium" + a hair for icon clarity */
+    padding: 0 16px;
+    background: #005faa;
+    color: #ffffff;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+    transition: background 140ms ease, box-shadow 140ms ease, transform 100ms ease;
+    margin-top: auto;
+
+    svg { width: 16px; height: 16px; flex: 0 0 auto; }
+
+    &:hover  { background: #004a87; box-shadow: 0 2px 6px rgba(0, 95, 170, 0.20); }
+    &:active { background: #003c6e; transform: translateY(0.5px); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08); }
+    &:focus-visible {
+        outline: none;
+        box-shadow: 0 0 0 2px #ffffff, 0 0 0 4px rgba(0, 95, 170, 0.55);
+    }
+    &:disabled {
+        background: #d6e5f3;
+        color: #7a98b8;
+        cursor: not-allowed;
+        box-shadow: none;
+        transform: none;
+    }
+}
+.mc-review__cta-secondary {
+    all: unset;
+    box-sizing: border-box;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    width: 100%;
+    max-width: 100%;
+    height: 30px;
+    padding: 0 12px;
+    color: #6b7380;
+    font-size: 12.5px;
+    border-radius: 6px;
+    transition: color 140ms ease, background 140ms ease;
+
+    svg { width: 14px; height: 14px; }
+
+    &:hover       { color: #1a1c1c; background: rgba(0, 0, 0, 0.04); }
+    &:focus-visible {
+        outline: none;
+        box-shadow: 0 0 0 2px rgba(0, 95, 170, 0.55);
+    }
+    &:disabled    { opacity: .5; cursor: not-allowed; }
+}
+
+/* Responsive canvas for small screens — the OrchCanvas component now
+   handles narrow layouts via the scroll-pan wrapper, so we just bump
+   the legend onto its own line here. */
+@media (max-width: 960px) {
+    .mc-canvas { max-width: 100%; }
+}
+
+/* ────────────────────────────────────────────────────────────
+   MISSION CONTROL — S2 · Step2View enhancements
+   Skeletons, typewriter, scale-to-fit canvas, morph transition.
+   Appended for the "responsive Plan this" iteration.
+   ──────────────────────────────────────────────────────────── */
+
+@keyframes mc-shimmer {
+    0%   { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+}
+@keyframes mc-caret-blink {
+    0%, 50% { opacity: 1; }
+    51%, 100% { opacity: 0; }
+}
+@keyframes mc-status-rotate {
+    0%   { opacity: 0; transform: translateY(4px); }
+    15%  { opacity: 1; transform: translateY(0); }
+    85%  { opacity: 1; transform: translateY(0); }
+    100% { opacity: 0; transform: translateY(-4px); }
+}
+@keyframes mc-headline-dot {
+    0%, 80%, 100% { transform: translateY(0); opacity: 0.3; }
+    40%           { transform: translateY(-3px); opacity: 1; }
+}
+@keyframes mc-fade-in-up {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+.mc-skeleton {
+    display: inline-block;
+    background: linear-gradient(90deg, #eef2f7 0%, #f8fafc 50%, #eef2f7 100%);
+    background-size: 200% 100%;
+    animation: mc-shimmer 1.4s ease-in-out infinite;
+    border-radius: 6px;
+
+    &--pill     { height: 20px; width: 120px; border-radius: 999px; }
+    &--avatar   { width: 32px; height: 32px; border-radius: 8px; flex: 0 0 auto; }
+    &--line     { height: 10px; display: block; }
+    &--line-40  { width: 40%; }
+    &--line-60  { width: 60%; }
+    &--line-70  { width: 70%; }
+}
+
+/* Step2: canvas viewport for transform-based pan+zoom. The inner
+   stage is positioned absolutely at (0,0) and moved via inline
+   ``transform: translate(tx,ty) scale(S)`` so the cursor-anchor math
+   is exact — no scroll clamping, no margin:auto edge cases. Loading
+   skeleton uses a sibling ``&__skeleton`` class that stays flex-
+   centered because it has no inline transform. */
+.mc-canvas-fit {
+    position: relative;
+    width: 100%;
+    /* ``overflow: hidden`` clips the transformed world to the
+       viewport. Google-Maps style: content can be translated anywhere
+       but only what intersects the viewport is visible. */
+    overflow: hidden;
+    /* Stage floor so a short pipeline doesn't collapse below the
+       sidebar. Matches the skeleton height so preview→real graph
+       feels size-stable. */
+    min-height: 420px;
+    /* Grow vertically with the sidebar column inside the 2-col grid. */
+    flex: 1 1 auto;
+    container-type: inline-size;
+    /* Center the skeleton (no transform) via flex. The pan+zoom
+       inner ignores these because it's absolutely positioned. */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    &__inner {
+        /* Pan+zoom stage: absolute at top-left, all positioning via
+           the inline transform. Kept out of flex flow so the flex
+           centering above only affects the skeleton. */
+        position: absolute;
+        top: 0;
+        left: 0;
+        transform-origin: 0 0;
+        /* Disables the browser's scroll-anchoring so our pan updates
+           don't get fought. */
+        overflow: visible;
+        /* Nodes may pop menus that briefly exceed the stage — allow
+           them to render via z-index bumps; we only clip at the
+           outer ``.mc-canvas-fit`` so those child popovers can still
+           show inside that viewport. */
+        will-change: transform;
+    }
+
+    &__skeleton {
+        /* Loading-state stand-in — flex-centered by the parent. */
+        flex: 0 0 auto;
+        position: relative;
+    }
+
+    &--scrolls {
+        /* Legacy interactive class — retained so the grabbing cursor
+           + CSS toggles still work. Transform-based pan does NOT use
+           native scroll, so overflow stays hidden. */
+        cursor: grab;
+    }
+    &--grabbing {
+        cursor: grabbing !important;
+        user-select: none;
+    }
+}
+
+/* Skeleton variant of a node — same footprint as the real thing so the
+   swap is visually stable. */
+.mc-canvas--skeleton {
+    position: relative;
+    width: 740px;
+}
+.mc-node--skeleton {
+    position: absolute;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: #fff;
+    border: 1.5px dashed #dfe4ec;
+    box-shadow: 0 1px 2px rgba(14, 22, 40, 0.04);
+    animation: mc-fade-in-up 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+
+    .mc-node__head {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+}
+
+/* Skeleton variant of the role card. */
+.mc-role-card--skeleton {
+    background: #fff;
+    border: 1px dashed #dfe4ec;
+    animation: mc-fade-in-up 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+}
+
+/* Step2 header — loading state. */
+.mc-step2 {
+    .mc-step2__spark {
+        color: #005faa;
+        flex-shrink: 0;
+        animation: mc-headline-dot 1.6s ease-in-out infinite;
+    }
+    .mc-step2__subtitle {
+        /* Re-animate every time the status label changes so the user
+           feels progressive motion even on slow networks. */
+        animation: mc-fade-in-up 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+    }
+    .mc-step2__headline-loading {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .mc-step2__headline-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 999px;
+        background: #005faa;
+        opacity: 0.3;
+        animation: mc-headline-dot 1.2s ease-in-out infinite;
+        flex: 0 0 auto;
+        &--1 { animation-delay: 0s; }
+        &--2 { animation-delay: 0.15s; }
+        &--3 { animation-delay: 0.3s; }
+    }
+}
+
+/* Step2 inline error card (LLM failure). */
+.mc-step2__error {
+    max-width: 1240px;
+    margin: 0 auto 12px;
+    padding: 12px 18px;
+    background: #fef5f5;
+    border: 1px solid #f4c7c3;
+    border-left: 3px solid #d13438;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+
+    strong { color: #9e2822; }
+    span   { color: #6b7380; font-size: 13px; flex: 1; min-width: 240px; }
+}
+
+/* Morph: fade the composer/discovery out smoothly when they're hidden,
+   and fade Step2 in. Respect reduced motion. */
+@media (prefers-reduced-motion: no-preference) {
+    .mc-step2 { animation: mc-fade-in-up 0.28s cubic-bezier(0.2, 0.8, 0.2, 1); }
+}
+
+/* Responsive tweaks so the scale-to-fit math stays sensible at small
+   viewport widths. The sidebar collapses below the canvas on narrow
+   layouts — already handled by the Phase 2 media queries, but we make
+   sure the canvas wrapper doesn't force a min-width. */
+@media (max-width: 900px) {
+    .mc-canvas-fit { container-type: normal; }
+}
+
+/* ────────────────────────────────────────────────────────────
+   Recent prompts — skeleton loading state
+   Pattern used by Linear, GitHub, Raycast, Slack: render the
+   popover's real chrome (search bar + list rows) in a disabled
+   shimmer state instead of a centered spinner, so the swap to
+   real content is imperceptible on fast networks and the
+   skeletons carry weight on slow ones.
+   ──────────────────────────────────────────────────────────── */
+.recent-prompts-search--skeleton {
+    /* The search field is fully functional after load — disable only
+       during the skeleton frame so keyboard focus goes nowhere and we
+       don't accept input that would be thrown away. */
+    .recent-prompts-search-input {
+        cursor: wait;
+        color: transparent;
+        -webkit-text-fill-color: transparent;
+        &::placeholder { color: rgba(95, 94, 94, 0.25); }
+    }
+}
+.recent-prompts-item--skeleton {
+    cursor: default;
+    border-left-color: transparent !important;
+    /* Match the real row vertical rhythm exactly (10px 12px + ~64px
+       of content) so the popover doesn't change height when skeletons
+       swap to real content. */
+    padding: 10px 12px;
+    animation: mc-fade-in-up 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+    /* No hover affordance — this isn't clickable. */
+    &:hover { background: transparent; }
+    /* Keep the dividers so the list feels "real" rather than empty. */
+    & + & { border-top: 1px solid rgba(0, 0, 0, 0.04); }
+    .recent-prompts-chips {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        /* Skeleton chips are smaller than real Fluent-icon chips —
+           constrain height so overall row height matches real rows. */
+        & > .mc-skeleton { height: 16px; }
+    }
+}
+
+/* Destination workspace chip in the recap body — a regular violet
+   ctx-pill with an added green "runs here" accent dot so the user
+   can instantly tell it apart from any additional context-workspace
+   chips they may have added. */
+.ctx-pill--destination {
+    position: relative;
+    padding-left: 18px;
+    &::before {
+        content: "";
+        position: absolute;
+        left: 8px;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #2e7d32;
+    }
+}
+
+/* Branch chip — shown inline next to the destination workspace on
+   the same "Runs in" row when Branch out is ON. Uses a neutral-green
+   palette so it reads as a scoped-to-branch marker, not another
+   workspace. No extra vertical space is consumed. */
+.ctx-pill--branch {
+    background: #e7f5ec;
+    border: 1px solid #bfe1ca;
+    color: #1e6b34;
+    & > svg { color: #2e7d32; }
+}
+
+/* ── Compare architectures modal ───────────────────────────────────
+   Opens when the user clicks the "Compare architectures" button on
+   Step 2. Shows every architecture the composer can pick from, with a
+   small orchestration graph (rendered by the same ``OrchCanvas`` the
+   real compositions use) plus headline / description / pick-when /
+   watch-for / Fabric examples.
+
+   Layout: a fixed full-viewport overlay with a centred dialog. The
+   dialog scrolls; the overlay does not. Body scroll is locked while
+   the dialog is open (see ``CompareArchitecturesModal``). */
+.mc-compare-overlay {
+    position: fixed; inset: 0;
+    background: rgba(15, 23, 42, 0.45);
+    backdrop-filter: blur(2px);
+    display: flex; align-items: flex-start; justify-content: center;
+    padding: 48px 24px;
+    z-index: 9000;
+    overflow-y: auto;
+    animation: mc-compare-fade-in 140ms ease-out;
+}
+@keyframes mc-compare-fade-in { from { opacity: 0; } to { opacity: 1; } }
+.mc-compare-dialog {
+    width: min(1280px, 100%);
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 20px 60px rgba(15, 23, 42, 0.25);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+}
+.mc-compare-header {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    gap: 16px;
+    padding: 20px 24px 16px;
+    border-bottom: 1px solid #eef1f5;
+}
+.mc-compare-title {
+    margin: 0 0 4px; font-size: 20px; font-weight: 600; color: #1b1f23;
+}
+.mc-compare-subtitle {
+    margin: 0; font-size: 13px; color: #57606a; max-width: 720px;
+}
+.mc-compare-close {
+    background: transparent; border: 1px solid transparent; border-radius: 6px;
+    width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center;
+    color: #57606a; cursor: pointer;
+    &:hover { background: #f3f4f6; color: #1b1f23; }
+}
+.mc-compare-loading, .mc-compare-error {
+    padding: 40px 24px; text-align: center; color: #57606a; font-size: 14px;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+}
+.mc-compare-error { color: #b42318; }
+.mc-compare-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+    gap: 16px;
+    padding: 20px 24px 28px;
+}
+.mc-compare-card {
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 16px;
+    background: #fff;
+    display: flex; flex-direction: column; gap: 12px;
+    transition: border-color 120ms ease, box-shadow 120ms ease;
+    &:hover { border-color: #c5d0de; box-shadow: 0 4px 12px rgba(15, 23, 42, 0.06); }
+    &.is-current {
+        border-color: #0a6bff;
+        box-shadow: 0 0 0 1px #0a6bff inset;
+    }
+    &.is-reserved { opacity: 0.92; }
+}
+.mc-compare-card__head {
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 8px;
+}
+.mc-compare-card__titles { min-width: 0; }
+.mc-compare-card__name {
+    margin: 0; font-size: 15px; font-weight: 600; color: #1b1f23;
+}
+.mc-compare-card__headline {
+    margin: 2px 0 0; font-size: 12.5px; color: #57606a;
+}
+.mc-compare-card__badges { display: flex; gap: 6px; flex-shrink: 0; }
+.mc-compare-badge {
+    font-size: 11px; font-weight: 600;
+    padding: 2px 8px; border-radius: 999px;
+    line-height: 1.6;
+}
+.mc-compare-badge--current {
+    background: #e7f0ff; color: #0a6bff;
+}
+.mc-compare-badge--reserved {
+    background: #fdf2e2; color: #8a5a00;
+}
+.mc-compare-card__canvas {
+    background: linear-gradient(180deg, #fafbfc 0%, #f5f6f8 100%);
+    border: 1px solid #eef1f5;
+    border-radius: 8px;
+    padding: 12px 8px;
+    height: 180px;
+    overflow: hidden;
+    position: relative;
+    display: flex; align-items: center; justify-content: center;
+    /* Scale the fixed-width OrchCanvas (740px virtual) down into the
+       card. ``compact`` hides the legend; ``transform: scale`` does
+       the uniform zoom. transform-origin anchors the canvas top-left
+       so it stays centred by the flex container. */
+    & > * {
+        transform-origin: center center;
+        transform: scale(0.45);
+    }
+}
+.mc-compare-card__desc {
+    margin: 0; font-size: 13px; color: #30363d; line-height: 1.55;
+}
+.mc-compare-card__meta {
+    margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 4px 12px;
+    font-size: 12.5px;
+    dt { color: #6b7280; font-weight: 600; white-space: nowrap; }
+    dd { margin: 0; color: #30363d; line-height: 1.5; }
+}
+.mc-compare-card__usecases {
+    border-top: 1px solid #eef1f5;
+    padding-top: 10px;
+}
+.mc-compare-card__usecases-label {
+    font-size: 11.5px; font-weight: 600; color: #6b7280;
+    text-transform: uppercase; letter-spacing: 0.04em;
+    margin-bottom: 4px;
+}
+.mc-compare-card__usecases ul {
+    margin: 0; padding-left: 18px;
+    font-size: 12.5px; color: #30363d;
+    li { margin: 2px 0; }
+}
+.mc-compare-card__actions {
+    margin-top: auto; padding-top: 6px;
+    display: flex; justify-content: flex-end;
+}
+.mc-compare-card__pick {
+    background: #0a6bff; color: #fff; border: none; border-radius: 6px;
+    font-size: 12.5px; font-weight: 600;
+    padding: 6px 12px; cursor: pointer;
+    &:hover { background: #0956cf; }
+    &:focus-visible { outline: 2px solid #0a6bff; outline-offset: 2px; }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Editor Tabs — VS Code-style persistent tab strip + editor groups
+   ───────────────────────────────────────────────────────────────
+   The tab system lives directly inside ``.agenthub-main``. When the
+   tree contains ``.editor-groups`` we null out the main container's
+   padding/overflow so each group owns its own scroll region and
+   padding — mirroring VS Code's independent editor groups.
+   ═══════════════════════════════════════════════════════════════ */
+
+.agenthub-main:has(.editor-groups) {
+    padding: 0;
+    overflow: hidden;
+}
+
+.editor-groups {
+    display: flex;
+    flex-direction: row;
+    align-items: stretch;
+    height: 100%;
+    width: 100%;
+    min-height: 0;
+}
+
+/* A column holds one or more groups stacked vertically. Columns sit
+   side-by-side within ``.editor-groups`` and flex horizontally via
+   their ``style.flex`` (driven by ``state.columnSizes``). */
+.editor-column {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    min-width: 200px;
+    min-height: 0;
+    height: 100%;
+}
+
+.editor-groups__resizer {
+    background: #d9d8d6;
+    position: relative;
+    transition: background 0.15s ease;
+    z-index: 12;          /* above drop-zones so the resize handle stays grabbable */
+
+    &--col {
+        flex: 0 0 6px;
+        cursor: col-resize;
+    }
+
+    &--row {
+        flex: 0 0 6px;
+        cursor: row-resize;
+    }
+
+    /* Two centered pips — a familiar VS Code / Chrome DevTools
+       grab-handle cue. Hidden until the user hovers. */
+    &::after {
+        content: "";
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        border-radius: 2px;
+        background: transparent;
+        box-shadow: 0 0 0 0 transparent;
+        transition: background 0.15s ease, box-shadow 0.15s ease;
+    }
+
+    &--col::after {
+        width: 2px;
+        height: 28px;
+        box-shadow:
+            -3px 0 0 0 transparent,
+             3px 0 0 0 transparent;
+    }
+
+    &--row::after {
+        width: 28px;
+        height: 2px;
+        box-shadow:
+            0 -3px 0 0 transparent,
+            0  3px 0 0 transparent;
+    }
+
+    &:hover {
+        background: #c6d9f0;
+    }
+    &--col:hover::after {
+        background: #0078d4;
+        box-shadow:
+            -3px 0 0 0 #0078d4,
+             3px 0 0 0 #0078d4;
+    }
+    &--row:hover::after {
+        background: #0078d4;
+        box-shadow:
+            0 -3px 0 0 #0078d4,
+            0  3px 0 0 #0078d4;
+    }
+
+    &:active {
+        background: #0078d4;
+    }
+    &--col:active::after {
+        background: #ffffff;
+        box-shadow:
+            -3px 0 0 0 #ffffff,
+             3px 0 0 0 #ffffff;
+    }
+    &--row:active::after {
+        background: #ffffff;
+        box-shadow:
+            0 -3px 0 0 #ffffff,
+            0  3px 0 0 #ffffff;
+    }
+}
+
+.editor-group {
+    display: flex;
+    flex-direction: column;
+    min-width: 200px;
+    min-height: 0;
+    background: #faf9f8;
+    position: relative;
+    flex: 1 1 0;
+    /* Subtle outer shadow to detach each group from its neighbour —
+       renders even when the user isn't hovering the resizer. Only
+       meaningful when more than one group is on-screen; the
+       single-group case uses ``box-shadow: none`` below. */
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.04);
+}
+
+/* When there's only one editor group the shell IS the chrome — skip
+   the inset border so the single-group view stays clean. */
+.editor-groups:has(.editor-group:only-child) .editor-group {
+    box-shadow: none;
+}
+
+.editor-group--active {
+    /* Focused group gets a brighter top accent bar and a crisper
+       inset outline so it's unambiguous which group will receive
+       keyboard focus / "New tab here" actions. Matches VS Code's
+       active-editor-group emphasis. Background is left untouched so
+       the active group blends with its neighbours — only the accent
+       bar + outline distinguish it. */
+    box-shadow:
+        inset 0 2px 0 0 #0078d4,
+        inset 0 0 0 1px rgba(0, 120, 212, 0.25);
+}
+
+.editor-group--active .editor-group__head {
+    /* Highlight the focused group's tab strip subtly — the active-tab
+       underline also intensifies via .editor-tabs--active below. */
+    background: #f3f2f1;
+}
+
+.editor-group__head {
+    display: flex;
+    align-items: stretch;
+    flex: 0 0 36px;
+    background: #ecebea;
+    border-bottom: 1px solid #edebe9;
+    position: relative;
+    z-index: 2;
+}
+
+.editor-group__close-group {
+    all: unset;
+    box-sizing: border-box;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    flex: 0 0 36px;
+    color: #605e5c;
+    cursor: pointer;
+    border-left: 1px solid #edebe9;
+
+    &:hover {
+        background: rgba(0, 0, 0, 0.05);
+        color: #323130;
+    }
+
+    svg { width: 16px; height: 16px; }
+}
+
+.editor-group__body {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-gutter: stable;
+    /* NOTE: no padding here. Padding is delegated to the inner
+       ``.editor-group__content`` / ``.editor-group__empty`` elements
+       so the drop-zone overlay (sibling positioned with ``inset: 0``)
+       can cover the FULL body area. Otherwise the overlay would sit
+       at the padding edge and the split preview would render narrower
+       than the actual post-split group, which it isn't. */
+    position: relative;
+    min-height: 0;
+}
+
+/* Portal host for a group's tabs. Tab content is projected here via
+   ``createPortal`` so that dragging a tab between groups only
+   re-parents the DOM — React state (scroll, SSE, form drafts,
+   timers) is preserved. The host is a simple block container so its
+   children (the per-tab wrapper divs) flow naturally. Padding lives
+   here (not on ``.editor-group__body``) — see the note above. */
+.editor-group__content {
+    min-height: 100%;
+    padding: clamp(16px, 2.2vw, 28px) clamp(20px, 2.6vw, 32px);
+    box-sizing: border-box;
+}
+
+/* Per-tab content pane inside a group. Inactive tabs stay mounted
+   but hidden via inline ``display: none`` — their state (scroll,
+   form drafts, SSE streams) is preserved so switching tabs is
+   instant. Matches VS Code. */
+.editor-group__pane[hidden] {
+    display: none !important;
+}
+
+/* Compose-page full-bleed — padding now lives on ``__content``,
+   so the override targets that element instead. */
+.editor-group__content:has(.compose-page) {
+    padding: 0;
+}
+
+.editor-group__empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    height: 100%;
+    color: #a19f9d;
+    font-size: 13px;
+    text-align: center;
+    padding: 24px;
+
+    svg { width: 32px; height: 32px; opacity: 0.55; }
+}
+
+/* ── Tab strip ────────────────────────────────────────────── */
+.editor-tabs {
+    display: flex;
+    flex-direction: row;
+    align-items: stretch;
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+    position: relative;
+
+    &::-webkit-scrollbar { display: none; }
+}
+
+.editor-tabs__empty {
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    color: #a19f9d;
+    font-size: 12px;
+    font-style: italic;
+}
+
+.editor-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 8px 0 12px;
+    height: 36px;
+    min-width: 120px;
+    max-width: 240px;
+    background: transparent;
+    border-right: 1px solid #e1dfdd;
+    color: #605e5c;
+    cursor: pointer;
+    user-select: none;
+    position: relative;
+    transition: background 0.12s ease, color 0.12s ease;
+    flex: 0 0 auto;
+
+    &:hover {
+        background: rgba(255, 255, 255, 0.65);
+        color: #323130;
+
+        .editor-tab__close { opacity: 1; }
+    }
+}
+
+.editor-tab--active {
+    background: #faf9f8;
+    color: #1a1c1c;
+
+    &::after {
+        content: "";
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 0;
+        height: 2px;
+        background: #c8c6c4;         /* muted by default; active-group rule below brightens it */
+    }
+
+    .editor-tab__close { opacity: 1; }
+}
+
+.editor-tabs--active .editor-tab--active::after {
+    background: #0078d4;
+}
+
+.editor-tab__icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 16px;
+    width: 16px;
+    height: 16px;
+    color: inherit;
+
+    svg { width: 16px; height: 16px; }
+}
+
+.editor-tab__label {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12.5px;
+}
+
+.editor-tab__close {
+    all: unset;
+    box-sizing: border-box;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 4px;
+    color: inherit;
+    opacity: 0;
+    cursor: pointer;
+    transition: opacity 0.12s ease, background 0.12s ease;
+
+    &:hover {
+        background: rgba(0, 0, 0, 0.08);
+    }
+
+    svg { width: 12px; height: 12px; }
+}
+
+/* Vertical bar rendered between tabs during drag to show the drop
+   insertion point. Lives inline in flex order so it lands at the right
+   slot without any coordinate math. */
+.editor-tabs__drop-indicator {
+    pointer-events: none;
+    flex: 0 0 2px;
+    width: 2px;
+    margin: 4px 0;
+    background: #0078d4;
+    border-radius: 1px;
+    align-self: stretch;
+}
+
+/* ── Tab context menu (right-click on a tab) ────────────────────
+   Rendered via a React portal to ``document.body`` so it escapes any
+   ancestor ``overflow: hidden``. Positioned with viewport-relative
+   ``top`` / ``left`` set inline from JS after measuring the menu,
+   auto-flipping to stay on-screen. Styling mirrors VS Code's own
+   editor-tab menu — compact rows, right-aligned keyboard
+   accelerators, subtle hover fill. */
+.tab-context-menu {
+    position: fixed;
+    min-width: 220px;
+    max-width: 320px;
+    padding: 4px;
+    background: #ffffff;
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    border-radius: 6px;
+    box-shadow:
+        0 8px 24px rgba(0, 0, 0, 0.14),
+        0 2px 6px rgba(0, 0, 0, 0.06);
+    z-index: 2000;
+    font-size: 13px;
+    color: #1f1f1f;
+    /* Gentle pop-in so it feels responsive rather than abrupt. */
+    animation: tab-context-menu-pop 90ms ease-out;
+}
+
+@keyframes tab-context-menu-pop {
+    from { opacity: 0; transform: translateY(-2px) scale(0.985); }
+    to   { opacity: 1; transform: translateY(0)    scale(1); }
+}
+
+.tab-context-menu__item {
+    all: unset;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    width: 100%;
+    padding: 6px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    user-select: none;
+
+    &:hover:not(:disabled) {
+        background: rgba(0, 120, 212, 0.08);
+    }
+    &:focus-visible {
+        outline: 2px solid #0078d4;
+        outline-offset: -2px;
+    }
+    &:disabled {
+        color: #a19f9d;
+        cursor: default;
+    }
+}
+
+.tab-context-menu__label {
+    flex: 1 1 auto;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.tab-context-menu__accel {
+    flex: 0 0 auto;
+    font-size: 11.5px;
+    color: #605e5c;
+    font-variant-numeric: tabular-nums;
+}
+
+.tab-context-menu__sep {
+    height: 1px;
+    margin: 4px 2px;
+    background: rgba(0, 0, 0, 0.08);
+}
+
+/* ── Split drop zones (shown only while a tab is being dragged) ─── */
+.editor-group__drop-zones {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 10;
+}
+
+.editor-group__drop-zone {
+    position: absolute;
+    pointer-events: auto;
+}
+
+/* Single full-size overlay; the JS hit-tests the cursor against the
+   four wedges of the group body and drives the preview. Keeping this
+   as one element (rather than four stacked siblings) avoids the
+   overlapping-siblings bug that made later zones swallow drops for
+   earlier ones. */
+.editor-group__drop-zone--full { inset: 0; }
+
+.editor-group__drop-preview {
+    position: absolute;
+    background: rgba(0, 120, 212, 0.18);
+    border: 2px dashed #0078d4;
+    pointer-events: none;
+    z-index: 11;
+    border-radius: 2px;
+    transition: all 0.1s ease;
+}
+
+.editor-group__drop-preview--left   { left: 0;  top: 0; bottom: 0; width: 50%; }
+.editor-group__drop-preview--right  { right: 0; top: 0; bottom: 0; width: 50%; }
+.editor-group__drop-preview--top    { left: 0;  right: 0; top: 0;    height: 50%; }
+.editor-group__drop-preview--bottom { left: 0;  right: 0; bottom: 0; height: 50%; }
+
+/* Ghost half — shows where the existing group will shrink to after
+   the split. Matching dimensions to the real-preview half so the
+   two tiles fill the entire group body 50/50, leaving no ambiguity
+   about post-drop proportions. */
+.editor-group__drop-preview-ghost {
+    position: absolute;
+    background: rgba(0, 120, 212, 0.05);
+    border: 1px dashed rgba(0, 120, 212, 0.35);
+    pointer-events: none;
+    z-index: 11;
+    border-radius: 2px;
+    transition: all 0.1s ease;
+}
+.editor-group__drop-preview-ghost--left   { top: 0; bottom: 0; right: 0; width: 50%; }
+.editor-group__drop-preview-ghost--right  { top: 0; bottom: 0; left:  0; width: 50%; }
+.editor-group__drop-preview-ghost--top    { left: 0; right: 0; bottom: 0; height: 50%; }
+.editor-group__drop-preview-ghost--bottom { left: 0; right: 0; top:    0; height: 50%; }
+
+/* Centre divider — visual stand-in for the ``editor-groups__resizer``
+   that will appear between the two halves after the drop. Orientation
+   matches the split axis: vertical for left/right, horizontal for
+   top/bottom. */
+.editor-group__drop-preview-divider {
+    position: absolute;
+    background: #0078d4;
+    border-radius: 2px;
+    pointer-events: none;
+    z-index: 12;
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.6);
+}
+
+.editor-group__drop-preview-divider--vertical {
+    top: 0;
+    bottom: 0;
+    left: calc(50% - 2px);
+    width: 4px;
+}
+
+.editor-group__drop-preview-divider--horizontal {
+    left: 0;
+    right: 0;
+    top: calc(50% - 2px);
+    height: 4px;
+}
+
+/* ── Team composition full-screen modal ──────────────────────────
+ * Reuses .attachment-preview-backdrop + .attachment-preview-dialog
+ * so it feels like the workspace/attachment preview modals, but
+ * overrides the dialog to a much roomier viewport so big pipelines
+ * breathe. The canvas inside uses .mc-canvas-fit--scrolls so the
+ * existing zoom + drag-to-pan behaviour applies unchanged. */
+.mc-team-fullscreen {
+    max-width: 96vw !important;
+    width: 96vw;
+    max-height: 94vh !important;
+    height: 94vh;
+
+    &__stage {
+        flex: 1 1 auto;
+        min-height: 0;
+        /* Override .mc-canvas-fit--scrolls defaults that were tuned
+           for the small inline card: the fullscreen stage owns its
+           own height, so we drop the 560px cap + the edge-fade mask
+           (that mask clips the graph at the left/right inside the
+           dialog, which looked broken on wide viewports). We also
+           re-center content both axes so a small graph sits in the
+           middle of a big stage instead of hugging the top-left. */
+        max-height: none !important;
+        -webkit-mask-image: none !important;
+        mask-image: none !important;
+        padding: 20px;
+        background:
+            radial-gradient(circle at 1px 1px, rgba(64,71,82,0.08) 1px, transparent 0);
+        background-size: 24px 24px;
+        background-color: #ffffff;
+        /* Centering is handled by ``margin: auto`` on .mc-canvas-fit__inner
+           (see the base styles). That collapses cleanly when the zoomed
+           canvas overflows, so the cursor-anchored scroll math isn't
+           fighting flexbox. When the graph fits (default 100% zoom), the
+           auto-margins split the remaining space and the graph sits
+           dead-center in the modal. */
+    }
+    &__legend {
+        padding: 10px 20px 14px 20px;
+        border-top: 1px solid rgba(192, 199, 212, 0.4);
+        background: #f8f9fb;
+        margin-top: 0 !important;
+        flex: 0 0 auto;
+    }
+
+    /* The inner .mc-canvas already has its own dotted-grid background
+       and a subtle border — both are now redundant because the stage
+       owns the grid. Flatten the inner canvas so the result reads as
+       one big board instead of a board-within-a-board. */
+    .mc-canvas {
+        background: transparent !important;
+        border: 0 !important;
+    }
+}
+
+

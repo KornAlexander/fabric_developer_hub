@@ -117,6 +117,24 @@ def test_prune_missing_servers_drops_nonexistent_scripts(tmp_path, monkeypatch) 
     mgr = MCPClientManager(str(cfg_path))
     assert "real" in mgr.config["servers"]
     assert "missing" not in mgr.config["servers"]
+    # Pruned server is recorded so the capability validator can classify
+    # missing-tool findings as ops issues (WARNING) rather than catalog
+    # bugs (ERROR).
+    assert "missing" in mgr.pruned_servers
+    assert "/does/not/exist.py" in mgr.pruned_servers["missing"]
+
+
+def test_unavailable_servers_merges_pruned_and_failed(tmp_path) -> None:
+    """``unavailable_servers()`` exposes the combined set of MCP servers
+    that can't serve tools this deploy, used by the capability validator."""
+    mgr = MCPClientManager(str(tmp_path / "nonexistent.json"))
+    mgr.pruned_servers["pbi-fixer"] = "script missing"
+    mgr.failed_servers["fabric-docs"] = "npx not found"
+    unavailable = mgr.unavailable_servers()
+    assert unavailable == {
+        "pbi-fixer": "script missing",
+        "fabric-docs": "npx not found",
+    }
 
 
 def test_clean_schema_removes_title() -> None:
@@ -189,6 +207,55 @@ async def test_call_tool_unknown_raises(tmp_path) -> None:
     mgr = MCPClientManager(str(tmp_path / "missing.json"))
     with pytest.raises(ValueError, match="Unknown tool"):
         await mgr.call_tool("does_not_exist", {})
+
+
+@pytest.mark.asyncio
+async def test_start_server_rejects_unknown_transport(tmp_path) -> None:
+    """Unknown ``transport`` values must fail fast with a clear error
+    rather than silently falling back to stdio."""
+    mgr = MCPClientManager(str(tmp_path / "missing.json"))
+    with pytest.raises(ValueError, match="Unsupported MCP transport"):
+        await mgr._start_server(
+            {"transport": "ftp", "command": "x"},
+            env_override={},
+        )
+
+
+@pytest.mark.asyncio
+async def test_start_http_server_requires_url(tmp_path) -> None:
+    """Streamable-HTTP server config must declare a ``url``."""
+    mgr = MCPClientManager(str(tmp_path / "missing.json"))
+    with pytest.raises(ValueError, match="missing required 'url'"):
+        await mgr._start_server(
+            {"transport": "streamable_http"},
+            env_override={},
+        )
+
+
+@pytest.mark.asyncio
+async def test_start_http_server_is_scaffold_only(tmp_path) -> None:
+    """HTTP transport is scaffolded but not wired. Attempting to use
+    it must raise NotImplementedError with a pointer to the next step
+    (upstream SP auth)."""
+    mgr = MCPClientManager(str(tmp_path / "missing.json"))
+    with pytest.raises(NotImplementedError, match="Service Principal auth"):
+        await mgr._start_server(
+            {"transport": "streamable_http", "url": "https://example.invalid/mcp"},
+            env_override={},
+        )
+
+
+def test_qualified_name_for_known_tool(tmp_path) -> None:
+    """``qualified_name`` renders ``server::tool`` for discovered tools
+    so logs and error messages stay unambiguous."""
+    mgr = MCPClientManager(str(tmp_path / "missing.json"))
+    mgr.tool_server_map = {"t1": "server-a"}
+    assert mgr.qualified_name("t1") == "server-a::t1"
+
+
+def test_qualified_name_for_undiscovered_tool(tmp_path) -> None:
+    mgr = MCPClientManager(str(tmp_path / "missing.json"))
+    assert mgr.qualified_name("nope") == "<undiscovered>::nope"
 
 
 # ── Security: tool policy enforcement ───────────────────────────────

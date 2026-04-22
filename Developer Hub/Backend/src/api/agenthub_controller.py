@@ -20,23 +20,27 @@ from domain.exceptions.exceptions import AuthenticationException
 from domain.models.agent_models import (
     AgentConfigRequest,
     ApprovePlanRequest,
+    ComposeRequest,
     CreateJobRequest,
-    GeneratePlanRequest,
     Job,
     JobStatus,
+    RunSessionRequest,
     SendMessageRequest,
     UserAgentConfig,
 )
 from domain.models.authentication_models import AuthorizationContext
-from domain.models.plan import PlanValidationError
+from domain.models.composition import CompositionError
+from domain.catalogs.architectures import ARCHITECTURES
 from services.agenthub import session_store, workspaces_cache
 from services.agenthub.agent_registry import get_template, list_templates
+from services.agenthub.attachments import classify_attachments
 from services.agenthub.download_tokens import consume_token, issue_token
 from services.agenthub.orchestrator_engine import get_orchestrator_engine
 from services.agenthub.rate_limit import RateLimitExceeded
 from services.agenthub.rate_limit import acquire as rate_limit_acquire
 from services.auth.authentication import get_authentication_service
 from services.configuration_service import get_configuration_service
+from services.correlation import set_session_id, set_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +135,7 @@ async def require_user(request: Request) -> AuthorizationContext | None:
         return None
 
     try:
-        return await auth_service.authenticate_data_plane_call(
+        ctx = await auth_service.authenticate_data_plane_call(
             f"Bearer {fabric_token}",
             allowed_scopes=[
                 WorkloadScopes.AGENTHUB_READ_ALL,
@@ -150,6 +154,28 @@ async def require_user(request: Request) -> AuthorizationContext | None:
             raise HTTPException(401, "Invalid Fabric token") from exc
         logger.debug("Auth validation soft-failed in dev: %s", exc)
         return None
+
+    # Bind the caller's stable identity so every subsequent log line in
+    # this request (and any asyncio-task it spawns — contextvars
+    # propagate through ``create_task`` / ``to_thread``) is tagged with
+    # ``u:<oid8>``. Background orchestrator tasks inherit this.
+    if ctx is not None:
+        oid = ctx.object_id
+        if oid:
+            set_user_id(oid)
+        else:
+            for claim in ctx.claims:
+                if claim.type in ("upn", "preferred_username", "email", "unique_name") and claim.value:
+                    set_user_id(str(claim.value))
+                    break
+    return ctx
+
+
+async def _require_user_with_correlation(
+    request: Request,
+) -> AuthorizationContext | None:
+    """Deprecated — ``require_user`` now binds ``user_id`` itself."""
+    return await require_user(request)
 
 
 def _ensure_owner(job: Job | None, user_key: str) -> Job:
@@ -735,7 +761,25 @@ def _persist_context_with_attachments(
     if not attachments:
         return context
     new_ctx = dict(context) if context else {}
-    new_ctx["prompt_attachments"] = [a.model_dump() for a in attachments]
+    serialised = [a.model_dump() for a in attachments]
+    # Tag each attachment with a user-facing classification (documentation /
+    # suspicious / clean). This is purely for UI presentation — the runtime
+    # defense is the structural fence added by process_attachments.
+    findings = classify_attachments(serialised)
+    finding_by_name = {f["name"]: f for f in findings}
+    for a in serialised:
+        name = str(a.get("name") or a.get("filename") or "attachment")
+        f = finding_by_name.get(name)
+        if f is not None:
+            a["classification"] = {
+                "severity": f["severity"],
+                "category": f["category"],
+                "markerCount": f["markerCount"],
+                "hasHighConfidence": f["hasHighConfidence"],
+                "documentLike": f["documentLike"],
+                "message": f["message"],
+            }
+    new_ctx["prompt_attachments"] = serialised
     return new_ctx
 
 
@@ -761,17 +805,160 @@ def _strip_attachment_content(job_dump: dict) -> dict:
     return new_dump
 
 
+def _composition_to_plan_view(comp) -> dict:
+    """Project a ``Composition`` into the legacy ``plan`` view-model so the
+    existing frontend (OrchestratorPage / DashboardPage / SessionDetailPage /
+    OrchCanvas / TeamPanel) keeps rendering without changes.
+
+    This is a *view* only — the source of truth is the Composition itself,
+    which is serialized alongside the plan in the wire payload. New UI
+    code should read ``job.composition``; legacy code reads ``job.plan``.
+    """
+    # Map Composition architecture → legacy TeamPattern. Non-driver values
+    # fall back to supervisor (which the canvas renders as a hub-and-spoke).
+    _PATTERN_MAP = {
+        "solo": "solo",
+        "supervisor": "supervisor",
+        "sequential": "sequential",
+        "parallel": "supervisor",
+        "router": "supervisor",
+        "hierarchical": "hierarchical",
+        "reflection": "supervisor",
+        "mixed": "mixed",
+        "network": "network",
+        "debate": "network",
+        "magentic": "hierarchical",
+    }
+    pattern = _PATTERN_MAP.get(comp.architecture, "supervisor")
+
+    def _agent_label(agent_id: str) -> str:
+        """Render a human-friendly name for a slot's agent.
+
+        The canvas and team strip both show this directly. Falls back to
+        the raw id only when the template registry doesn't know the agent
+        (e.g. a composition referencing a retired template).
+        """
+        tpl = get_template(agent_id)
+        if tpl is None:
+            return agent_id
+        # Prefer display_name ("FabricDataEngineer") over name
+        # ("fabric-data-engineer"). Both fields exist on AgentTemplate.
+        return tpl.display_name or tpl.name or agent_id
+
+    def _all_skills_for(agent_id: str, selected_ids: set[str]) -> list[str]:
+        """Return every skill the agent declares, ordered with
+        selected skills first. Drives the frontend "+N" overflow chip
+        so users can see the agent's full capability surface without
+        leaving the Review page."""
+        tpl = get_template(agent_id)
+        if tpl is None:
+            return []
+        selected_first: list[str] = []
+        rest: list[str] = []
+        seen: set[str] = set()
+        for sk in tpl.skills:
+            name = getattr(sk, "name", None) or getattr(sk, "id", None)
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            sk_id = getattr(sk, "id", None) or name
+            (selected_first if sk_id in selected_ids else rest).append(name)
+        return selected_first + rest
+
+    nodes = [
+        {
+            "id": slot.id,
+            "agent": _agent_label(slot.agent_id),
+            "role": slot.role,
+            "status": "planned",
+            # Skills selected by the orchestrator for this slot —
+            # rendered as the primary pills on the graph node. Order
+            # is treated as "most useful first" by the frontend.
+            "skills": [s.name for s in slot.skills],
+            # Full list of declared skills for the slot's agent (selected
+            # first) — powers the "+N" overflow popover.
+            "allSkills": _all_skills_for(
+                slot.agent_id,
+                {s.id for s in slot.skills},
+            ),
+        }
+        for slot in comp.slots
+    ]
+    _KIND_MAP = {"delegate": "delegate", "peer": "peer", "report": "report",
+                 "handoff": "peer", "critique": "report"}
+    edges = [
+        {
+            "from": h.from_,
+            "to": h.to,
+            "kind": _KIND_MAP.get(h.kind, "peer"),
+        }
+        for h in comp.handoffs
+    ]
+
+    steps = [
+        {
+            "id": slot.id,
+            "order": idx + 1,
+            "title": slot.role,
+            "description": f"{slot.role} — {', '.join(s.name for s in slot.skills)}"
+                            if slot.skills else slot.role,
+            # Legacy fields the frontend reads defensively; minimal shapes
+            # that won't crash PlanStep-typed code paths.
+            "action": "execute",
+            "target": {
+                "itemType": "session",
+                "displayName": slot.role,
+                "workspaceId": "",
+            },
+            "inputs": [],
+            "dependsOn": [],
+            "rationale": "",
+            "risk": "low",
+            "reversible": True,
+        }
+        for idx, slot in enumerate(comp.slots)
+    ]
+
+    return {
+        "jobId": comp.session_id,
+        "summary": comp.headline,
+        "title": comp.headline,
+        "subtitle": comp.subtitle,
+        "assumptions": [],
+        "prerequisites": [],
+        "steps": steps,
+        "workspaceItems": [],
+        "noAction": [],
+        "conflicts": [],
+        "clarificationsNeeded": [],
+        "footer": {
+            "agentCount": len(comp.slots),
+            "stepCount": len(comp.slots),
+            "approvalPoints": 0,
+            "executionBlocked": False,
+        },
+        "team": {
+            "pattern": pattern,
+            "nodes": nodes,
+            "edges": edges,
+        },
+    }
+
+
 def _serialize_job(job: Job) -> dict:
     """Marshal a :class:`Job` to the UI wire shape.
 
     Job-level fields stay snake_case (the existing frontend reads them as
     ``task_description`` / ``workspace_id`` / etc.), but the nested
-    ``plan`` uses camelCase aliases. We serialize
-    them separately and stitch.
+    ``composition`` uses camelCase aliases. We serialize them separately
+    and stitch.
     """
     data = job.model_dump(mode="json")
-    if job.plan is not None:
-        data["plan"] = job.plan.model_dump(mode="json", by_alias=True)
+    if job.composition is not None:
+        data["composition"] = job.composition.model_dump(mode="json", by_alias=True)
+        # Legacy ``plan`` view-model so the existing frontend components
+        # keep rendering unchanged during the composition cutover.
+        data["plan"] = _composition_to_plan_view(job.composition)
     return data
 
 
@@ -781,64 +968,63 @@ async def create_session(
     request: Request,
     ctx: AuthorizationContext | None = Depends(require_user),
 ):
-    """Create a new session and generate an execution plan."""
+    """Create a new session and compose an execution graph."""
     user_id = _user_key_from_context(ctx)
     user_upn = _user_upn_from_context(ctx)
+    logger.info(
+        "[AGENTHUB] Plan this → composing session (workspace=%s, task_chars=%d, attachments=%d)",
+        req.workspace_id,
+        len(req.task_description or ""),
+        len(req.attachments or []),
+    )
     _rate_limit(user_id, "create_session")
+    # Compose only needs the Copilot token — MCP/Fabric OBO tokens are
+    # not referenced anywhere in this handler and were previously awaited
+    # for no reason (up to ~2s of OBO exchange on the hot path).
     copilot_token = await _copilot_token(request)
-    mcp_tokens = await _mcp_tokens(request)
 
     try:
-        plan = await get_orchestrator_engine().generate_plan(
-            req.task_description, req.workspace_id, copilot_token, req.context,
+        composition = await get_orchestrator_engine().compose(
+            task_description=req.task_description,
+            workspace_id=req.workspace_id,
+            copilot_token=copilot_token,
             attachments=req.attachments,
-            mcp_tokens=mcp_tokens,
         )
-    except PlanValidationError as e:
-        # Spec §3.2: surface as structured 422 so the UI renders the
-        # "Plan could not be generated" empty state rather than a blank
-        # card from a silent fallback.
+    except CompositionError as e:
+        # Spec: surface as structured 422 so the UI can render a
+        # "Composition could not be generated" empty state rather than a
+        # blank card.
         raise HTTPException(
             status_code=422,
-            detail={"error": "plan_validation_failed", "reason": e.reason, **e.details},
+            detail={"error": "composition_failed", "reason": e.reason, **e.details},
         ) from e
 
     persisted_context = _persist_context_with_attachments(req.context, req.attachments)
 
-    # Best-effort workspace snapshot — captures how the workspace looked
-    # at plan creation time so the Session detail view can later show
-    # "as-of HH:MM:SS" even if items have since been added/renamed.
-    # Never fails session creation: any error just leaves the snapshot
-    # out of the persisted context.
-    if req.workspace_id and mcp_tokens:
-        try:
-            snapshot_items, snapshot_captured_at = await _fetch_workspace_snapshot(
-                user_id, req.workspace_id, mcp_tokens,
-            )
-            persisted_context = dict(persisted_context) if persisted_context else {}
-            persisted_context["workspace_snapshot"] = {
-                "workspace_id": req.workspace_id,
-                "captured_at": snapshot_captured_at,
-                "items": snapshot_items,
-            }
-        except Exception as exc:  # pragma: no cover — defensive
-            logger.warning(
-                "workspace snapshot capture failed session=%s ws=%s: %s",
-                plan.job_id, req.workspace_id, exc,
-            )
+    # Note: the legacy code captured a Fabric workspace snapshot here so
+    # the Session Detail page could later show "as-of HH:MM:SS". With
+    # the composition pipeline we don't need it for planning, and it
+    # added an extra Fabric round-trip to the hot path. Drop it — any
+    # Session Detail view that wants a snapshot can fetch it lazily.
 
     job = Job(
-        id=plan.job_id,
+        id=composition.session_id,
         user_id=user_id,
         user_upn=user_upn,
         workspace_id=req.workspace_id,
         task_description=req.task_description,
         context=persisted_context,
         status=JobStatus.PLANNED,
-        plan=plan,
+        composition=composition,
     )
     session_store.create_session(job)
-    logger.info("[AGENTHUB] Session %s created — plan: %s", job.id, plan.summary[:100])
+    # Bind session id so downstream log lines in this handler (and any
+    # asyncio tasks spawned from it) carry the s:<id> tag.
+    set_session_id(job.id)
+    logger.info(
+        "[AGENTHUB] Session %s composed — %s (%d slots)",
+        job.id, composition.architecture, len(composition.slots),
+    )
     return _serialize_job(job)
 
 
@@ -929,17 +1115,46 @@ async def send_message_to_session(
 @router.get("/sessions/{session_id}/events")
 async def session_events_sse(
     session_id: UUID,
+    request: Request,
     ctx: AuthorizationContext | None = Depends(require_user),
 ):
-    """SSE stream of real-time session events."""
+    """SSE stream of real-time session events.
+
+    Supports ``Last-Event-ID`` resume: on reconnect the browser's
+    EventSource replays the last received ``seq`` via the standard
+    header, and we replay any events that landed while the client was
+    disconnected from the per-session ring buffer. If the buffer has
+    already rotated past that point (long disconnect), we emit a fresh
+    ``run_overview`` snapshot and start streaming live from there —
+    the client's reducer is idempotent on ``seq`` so duplicate-safe.
+    """
     _ensure_owner(session_store.get_session(str(session_id)), _user_key_from_context(ctx))
     execution = get_orchestrator_engine().get_job_execution(str(session_id))
     if not execution:
         raise HTTPException(404, "No active execution for this session")
 
+    last_event_id_raw = request.headers.get("last-event-id") or request.query_params.get("lastEventId")
+    last_seq: int | None = None
+    if last_event_id_raw:
+        try:
+            last_seq = int(last_event_id_raw)
+        except ValueError:
+            last_seq = None
+
     async def event_stream():
-        async for ev in execution.events():
-            yield f"data: {json.dumps(ev, default=str)}\n\n"
+        # Always seed a new subscriber with a fresh snapshot so the UI
+        # never renders a blank frame, even when resume replay is
+        # available. The reducer dedupes on ``seq``.
+        snapshot = {
+            "type": "run_overview",
+            "seq": execution._seq,  # noqa: SLF001 — accessor kept internal
+            "sessionId": str(session_id),
+            **execution.snapshot_run_overview(),
+        }
+        yield _format_sse_frame(snapshot)
+
+        async for ev in execution.events(last_seq=last_seq):
+            yield _format_sse_frame(ev)
 
     return StreamingResponse(
         event_stream(),
@@ -948,65 +1163,201 @@ async def session_events_sse(
     )
 
 
+def _format_sse_frame(ev: dict) -> str:
+    """Serialise ``ev`` as an SSE frame, including a monotonic ``id:``
+    field when the event carries a ``seq`` so the browser's native
+    EventSource can use it as ``Last-Event-ID`` on reconnect.
+
+    Heartbeats deliberately omit the ``id:`` line so they don't
+    clobber the resume cursor while the run is idle.
+    """
+    body = json.dumps(ev, default=str)
+    seq = ev.get("seq")
+    if seq is not None:
+        return f"id: {seq}\ndata: {body}\n\n"
+    return f"data: {body}\n\n"
+
+
+# P7 · Mission Control — debug-only endpoint that returns the
+# per-session ring buffer for post-mortem inspection. Gated on
+# ``Application.Debug`` so it never ships enabled in production.
+
+
+@router.post("/sessions/{session_id}/debug/snapshot")
+async def debug_session_snapshot(
+    session_id: UUID,
+    ctx: AuthorizationContext | None = Depends(require_user),
+):
+    config = get_configuration_service()
+    if not config.is_debug():
+        raise HTTPException(404, "Not found")
+    _ensure_owner(session_store.get_session(str(session_id)), _user_key_from_context(ctx))
+    execution = get_orchestrator_engine().get_job_execution(str(session_id))
+    if not execution:
+        raise HTTPException(404, "No active execution for this session")
+    return {
+        "seq": execution._seq,  # noqa: SLF001 — debug-only accessor
+        "events": list(execution._ring),  # noqa: SLF001
+        "runOverview": execution.snapshot_run_overview(),
+    }
+
+
 # ── Orchestration endpoints ──────────────────────────────────────────
 
-@router.post("/orchestrate/plan")
-async def generate_plan_endpoint(
-    req: GeneratePlanRequest,
+@router.post("/orchestrate/compose")
+async def compose_endpoint(
+    req: ComposeRequest,
     request: Request,
     ctx: AuthorizationContext | None = Depends(require_user),
 ):
-    """Generate an execution plan without creating a session."""
-    _rate_limit(_user_key_from_context(ctx), "generate_plan")
+    """Compose an execution graph without creating a session.
+
+    Callers that want to persist the result should instead POST to
+    ``/api/sessions`` which composes-and-stores in a single round-trip.
+    This endpoint exists for preview flows (e.g. a "what would this
+    look like?" affordance in the compose form).
+    """
+    _rate_limit(_user_key_from_context(ctx), "compose")
     copilot_token = await _copilot_token(request)
-    mcp_tokens = await _mcp_tokens(request)
     try:
-        plan = await get_orchestrator_engine().generate_plan(
-            req.task_description, req.workspace_id, copilot_token, req.context,
+        composition = await get_orchestrator_engine().compose(
+            task_description=req.task_description,
+            workspace_id=req.workspace_id,
+            copilot_token=copilot_token,
             attachments=req.attachments,
-            mcp_tokens=mcp_tokens,
+            preferred_architecture=req.preferred_architecture,
+            require_approvals=req.require_approvals,
+            branch_out=req.branch_out,
         )
-    except PlanValidationError as e:
+    except CompositionError as e:
         raise HTTPException(
             status_code=422,
-            detail={"error": "plan_validation_failed", "reason": e.reason, **e.details},
+            detail={"error": "composition_failed", "reason": e.reason, **e.details},
         ) from e
-    return plan.model_dump(mode="json", by_alias=True)
+    return composition.model_dump(mode="json", by_alias=True)
 
 
-@router.post("/orchestrate/approve")
-async def approve_plan(
-    req: ApprovePlanRequest,
+@router.post("/sessions/{session_id}/run")
+async def run_session(
+    session_id: str,
     request: Request,
     ctx: AuthorizationContext | None = Depends(require_user),
 ):
-    """Approve a planned session and start execution."""
+    """Start executing an already-composed session."""
     user_key = _user_key_from_context(ctx)
-    _rate_limit(user_key, "approve_plan")
-    job = _ensure_owner(session_store.get_session(req.session_id), user_key)
+    _rate_limit(user_key, "run_session")
+    job = _ensure_owner(session_store.get_session(session_id), user_key)
     if job.status != JobStatus.PLANNED:
         raise HTTPException(400, f"Session is {job.status.value}, not planned")
+    if job.composition is None:
+        raise HTTPException(400, "Session has no composition")
 
     job.status = JobStatus.APPROVED
     session_store.update_session(job)
 
     copilot_token = await _copilot_token(request)
     mcp_tokens = await _mcp_tokens(request)
-
     await get_orchestrator_engine().start_job(job, copilot_token, mcp_tokens)
     return {"status": "running", "session_id": job.id}
 
 
 @router.post("/orchestrate/reject")
-async def reject_plan(
+async def reject_composition(
     req: ApprovePlanRequest,
     ctx: AuthorizationContext | None = Depends(require_user),
 ):
+    """Mark a composed session as cancelled without running it."""
     job = _ensure_owner(session_store.get_session(req.session_id), _user_key_from_context(ctx))
     job.status = JobStatus.CANCELLED
     job.completed_at = datetime.now(UTC)
     session_store.update_session(job)
     return {"status": "rejected"}
+
+
+# ── Catalog endpoints ────────────────────────────────────────────────
+
+@router.get("/catalogs/architectures")
+async def list_architectures():
+    """Return the architecture catalog the composer chooses from — used
+    by the UI to render the "Regenerate as …" picker and any future
+    user-facing architecture explainer.
+    """
+    return [
+        {
+            "id": a.id,
+            "name": a.name,
+            "headline": a.headline,
+            "description": a.description,
+            "pickWhen": a.pick_when,
+            "watchFor": a.watch_for,
+            "fabricUseCases": a.fabric_use_cases,
+            "hasDriver": a.has_driver,
+        }
+        for a in ARCHITECTURES
+    ]
+
+
+@router.get("/catalogs/agents")
+async def list_agents_with_skills():
+    """Return the agent catalog with attached skills — the surface the
+    composer picks from. Alias of ``/agents`` plus the skills array,
+    exposed under ``/catalogs`` so the UI can fetch "everything the
+    composer sees" in one call.
+    """
+    return [t.model_dump(mode="json") for t in list_templates()]
+
+
+# ── P4 · Mission Control — mid-run approval resolution. Client posts
+# the chosen recovery action; the orchestrator engine consumes it via
+# its user-message queue.
+
+class ResolveApprovalRequest(BaseModel):
+    session_id: str
+    approval_id: str
+    action: str  # "approve" | "decline" | "request_alternative" | "edit_input"
+    reason: str | None = None
+
+
+@router.post("/sessions/{session_id}/approvals/{approval_id}")
+async def resolve_approval(
+    session_id: str,
+    approval_id: str,
+    req: ResolveApprovalRequest,
+    ctx: AuthorizationContext | None = Depends(require_user),
+):
+    user_key = _user_key_from_context(ctx)
+    _rate_limit(user_key, "approve_plan")
+    job = _ensure_owner(session_store.get_session(session_id), user_key)
+    execution = get_orchestrator_engine().get_job_execution(session_id)
+    if not execution:
+        raise HTTPException(404, "No active execution for this session")
+
+    # Record the resolution on the job context for audit.
+    log_ctx = dict(job.context or {})
+    approvals = list(log_ctx.get("approval_log") or [])
+    approvals.append({
+        "approval_id": approval_id,
+        "action": req.action,
+        "reason": req.reason,
+        "resolved_at": datetime.now(UTC).isoformat(),
+        "by": user_key,
+    })
+    log_ctx["approval_log"] = approvals
+    job.context = log_ctx
+    session_store.update_session(job)
+
+    # Emit resolution event — the orchestrator engine listens for these
+    # on its user-message queue to un-pause the corresponding step.
+    try:
+        execution.emit(
+            "approval.resolved",
+            approvalId=approval_id,
+            action=req.action,
+            reason=req.reason,
+        )
+    except Exception:
+        pass
+    return {"status": "ok", "action": req.action}
 
 
 # ── Agent template & config endpoints ────────────────────────────────

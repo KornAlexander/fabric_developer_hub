@@ -66,6 +66,19 @@ COPILOT_API_BASE = "https://api.githubcopilot.com"
 # Bounded to 1000 entries, TTL 25 min (tokens last ~30 min, refresh early)
 _copilot_token_cache: TTLCache = TTLCache(maxsize=1000, ttl=1500)
 
+# Cache for MCP tokens (Fabric API + OneLake) keyed by SHA-256 of the
+# user's Fabric workload token. The underlying Entra tokens live ~1 h so
+# caching for 5 min is safe and massively reduces OBO calls during the
+# workspace preload fan-out (~20 concurrent requests per page load).
+# Bounded to 500 entries to survive many concurrent users without
+# unbounded memory growth.
+_mcp_token_cache: TTLCache = TTLCache(maxsize=500, ttl=300)
+# In-flight dedup: when N parallel callers arrive with the same fabric
+# token and there is no cached entry, only the first one runs the OBO;
+# the rest await the shared future. Avoids the thundering-herd of 20
+# MSAL calls at page load even when the MSAL in-memory cache is cold.
+_mcp_token_inflight: dict[str, asyncio.Future[dict[str, str] | None]] = {}
+
 
 def _shared_client() -> httpx.AsyncClient:
     """Return the process-wide pooled ``httpx.AsyncClient``.
@@ -432,14 +445,59 @@ SYSTEM_PROMPT = (
 async def _acquire_mcp_tokens(fabric_token: str) -> dict[str, str] | None:
     """Exchange the user's workload token for Fabric API + OneLake tokens via OBO.
 
-    MSAL's ``acquire_token_on_behalf_of`` is synchronous and does a network
-    round-trip to AAD. Calling it directly from the async handler blocks the
-    event loop for the entire duration (~300-500 ms per scope), which
-    serializes every other in-flight request on the worker. We run each OBO
-    in a thread via ``asyncio.to_thread`` and fetch both scopes in parallel
-    with ``asyncio.gather``.
+    Wraps ``_do_acquire_mcp_tokens`` with a TTL cache + in-flight dedup
+    so the 20-ish parallel workspace preload requests that fire on page
+    load collapse into a single OBO exchange. MSAL's in-memory cache
+    already makes repeat exchanges cheap at the network layer, but we
+    still paid decode/authority/log overhead and spammed the log
+    ~20×/page. The cache lives 5 min; the underlying Entra tokens live
+    ~1 h, so refresh pressure is minimal.
     """
-    logger.info("[OBO] Starting token exchange for MCP tools")
+    if not fabric_token:
+        return None
+    key = hashlib.sha256(fabric_token.encode("utf-8")).hexdigest()
+
+    # Fast path: fresh cache hit.
+    cached = _mcp_token_cache.get(key)
+    if cached is not None:
+        return cached
+
+    # Another coroutine is already running the OBO — await its result.
+    inflight = _mcp_token_inflight.get(key)
+    if inflight is not None:
+        return await inflight
+
+    # We're the first; register our future and do the work.
+    loop = asyncio.get_running_loop()
+    fut: asyncio.Future[dict[str, str] | None] = loop.create_future()
+    _mcp_token_inflight[key] = fut
+    try:
+        tokens = await _do_acquire_mcp_tokens(fabric_token)
+        if tokens:
+            _mcp_token_cache[key] = tokens
+        fut.set_result(tokens)
+        return tokens
+    except Exception as exc:  # propagate to waiters, then re-raise
+        if not fut.done():
+            fut.set_exception(exc)
+        raise
+    finally:
+        _mcp_token_inflight.pop(key, None)
+
+
+async def _do_acquire_mcp_tokens(fabric_token: str) -> dict[str, str] | None:
+    """Exchange the user's workload token for Fabric API + OneLake tokens via OBO.
+
+    ``AuthenticationService.get_access_token_on_behalf_of`` already offloads
+    the synchronous MSAL call via ``asyncio.to_thread``, so we just fan the
+    two scope exchanges out in parallel with ``asyncio.gather``.
+
+    Logging here is deliberately terse: one DEBUG trace at start, one
+    INFO summary at end. Per-page-load we fire this ~20 times in
+    parallel (workspace preload for ``@`` mention search), so every
+    line here is multiplied by that fan-out.
+    """
+    logger.debug("[OBO] Starting token exchange for MCP tools")
     try:
         auth_service = get_authentication_service()
     except Exception as e:
@@ -452,7 +510,13 @@ async def _acquire_mcp_tokens(fabric_token: str) -> dict[str, str] | None:
         tenant_id = unverified.get("tid")
         user_id = unverified.get("oid", "unknown")
         aud = unverified.get("aud", "unknown")
-        logger.info("[OBO] Token claims: tid=%s, oid=%s, aud=%s", tenant_id, user_id, aud)
+        logger.debug("[OBO] Token claims: tid=%s, oid=%s, aud=%s", tenant_id, user_id, aud)
+        # Bind the user id into the correlation contextvar so every log line
+        # emitted from this request (and threads/tasks derived from it) is
+        # tagged with u:<oid> — these endpoints bypass require_user.
+        if user_id and user_id != "unknown":
+            from services.correlation import set_user_id
+            set_user_id(user_id)
         if not tenant_id:
             logger.warning("[OBO] No 'tid' claim in Fabric token, cannot do OBO")
             return None
@@ -468,13 +532,10 @@ async def _acquire_mcp_tokens(fabric_token: str) -> dict[str, str] | None:
 
     async def _obo(scopes: list[str], label: str) -> tuple[str, str | None]:
         try:
-            # auth_service.get_access_token_on_behalf_of is itself async but
-            # calls synchronous MSAL internally. Offload to a thread so it
-            # does not block the event loop.
-            tok = await asyncio.to_thread(
-                _sync_obo, auth_service, auth_context, scopes
+            tok = await auth_service.get_access_token_on_behalf_of(
+                auth_context, scopes
             )
-            logger.info("[OBO] %s token acquired (%d chars)", label, len(tok))
+            logger.debug("[OBO] %s token acquired (%d chars)", label, len(tok))
             return label, tok
         except Exception as e:
             logger.warning("[OBO] %s OBO failed: %s", label, e)
@@ -490,18 +551,17 @@ async def _acquire_mcp_tokens(fabric_token: str) -> dict[str, str] | None:
         if tok:
             tokens[label_to_key[label]] = tok
 
-    logger.info("[OBO] Token exchange complete: %s", list(tokens.keys()))
+    # One summary line per OBO miss (callers with an unexpired cache
+    # entry skip this entirely). Downgrade to WARNING if neither token
+    # was acquired so failures remain visible.
+    if tokens:
+        logger.info(
+            "[OBO] Token exchange complete (oid=%s): %s",
+            user_id, list(tokens.keys()),
+        )
+    else:
+        logger.warning("[OBO] Token exchange produced no tokens (oid=%s)", user_id)
     return tokens if tokens else None
-
-
-def _sync_obo(auth_service, auth_context, scopes):
-    """Synchronous wrapper for use with ``asyncio.to_thread``.
-
-    ``auth_service.get_access_token_on_behalf_of`` is declared ``async``
-    but its body is CPU-bound/blocking MSAL — we run it in its own loop
-    inside a worker thread.
-    """
-    return asyncio.run(auth_service.get_access_token_on_behalf_of(auth_context, scopes))
 
 
 def _copilot_headers(copilot_token: str) -> dict:

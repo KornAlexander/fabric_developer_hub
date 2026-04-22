@@ -1,10 +1,13 @@
+import asyncio
 import logging
 from typing import Any
 
 import msal
+import requests
 from jose import jwt
 from jose.exceptions import ExpiredSignatureError, JWTClaimsError, JWTError
 from msal.exceptions import MsalServiceError
+from requests.adapters import HTTPAdapter
 
 from app.core.service_registry import get_service_registry
 from domain.constants.environment_constants import EnvironmentConstants
@@ -28,6 +31,34 @@ from services.configuration_service import get_configuration_service
 
 logger = logging.getLogger(__name__)
 
+# Default urllib3 pool size is 10 per host. Every OBO request hits
+# ``login.microsoftonline.com`` and a burst of concurrent user requests
+# saturates the pool — urllib3 then logs "Connection pool is full,
+# discarding connection" and opens a fresh socket per call, which hurts
+# both latency and the TLS cache hit rate. Size chosen to comfortably
+# cover the per-request OBO + UserImpersonation + OneLake triple plus
+# parallel compose sessions.
+_MSAL_POOL_SIZE = 50
+
+
+def _build_msal_http_session() -> requests.Session:
+    """Create a ``requests.Session`` with a large urllib3 pool.
+
+    Shared across every MSAL ``ConfidentialClientApplication`` so
+    tenant-specific apps don't each allocate their own 10-socket pool
+    to the same login endpoint.
+    """
+    session = requests.Session()
+    adapter = HTTPAdapter(
+        pool_connections=_MSAL_POOL_SIZE,
+        pool_maxsize=_MSAL_POOL_SIZE,
+        pool_block=False,
+    )
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
+
 class AuthenticationService:
     def __init__(self, openid_manager: OpenIdConnectConfigurationManager):
         self.logger = logging.getLogger(__name__)
@@ -38,6 +69,9 @@ class AuthenticationService:
         self.client_id = config_service.get_client_id()
         self.client_secret = config_service.get_client_secret()
         self._msal_apps = {}
+        # One shared HTTP session for every MSAL app so the connection
+        # pool is not per-tenant-app.
+        self._msal_http_session = _build_msal_http_session()
 
 
         # Default scopes for SubjectAndApp token authentication
@@ -51,7 +85,8 @@ class AuthenticationService:
             self._msal_apps[default_authority] = msal.ConfidentialClientApplication(
                 client_id=self.client_id,
                 client_credential=self.client_secret,
-                authority=default_authority
+                authority=default_authority,
+                http_client=self._msal_http_session,
             )
             self.logger.info("MSAL Confidential Client Application initialized")
         else:
@@ -65,7 +100,8 @@ class AuthenticationService:
             self._msal_apps[authority] = msal.ConfidentialClientApplication(
                 client_id=self.client_id,
                 authority=authority,
-                client_credential=self.client_secret
+                client_credential=self.client_secret,
+                http_client=self._msal_http_session,
             )
 
         return self._msal_apps[authority]
@@ -84,7 +120,7 @@ class AuthenticationService:
 
         This is called during item create/update/delete/get/Jobs operations.
         """
-        self.logger.info("Authenticating control plane call")
+        self.logger.debug("Authenticating control plane call")
 
         if not auth_header:
             self.logger.error("Missing or invalid Authorization header")
@@ -131,7 +167,7 @@ class AuthenticationService:
         Returns:
             AuthorizationContext with user and tenant information
         """
-        self.logger.info("Authenticating data plane call with scopes: %s", allowed_scopes)
+        self.logger.debug("Authenticating data plane call with scopes: %s", allowed_scopes)
 
         if not auth_header or not auth_header.startswith("Bearer "):
             self.logger.error("Missing or invalid Authorization header")
@@ -147,7 +183,7 @@ class AuthenticationService:
         scopes: list[str]
     ) -> str:
         """Get an access token using OBO flow."""
-        self.logger.info("Getting access token for scopes: %s", ", ".join(scopes))
+        self.logger.debug("Getting access token for scopes: %s", ", ".join(scopes))
 
         if not auth_context.original_subject_token:
             self.logger.error("No original_subject_token in AuthorizationContext for OBO flow.")
@@ -165,9 +201,17 @@ class AuthenticationService:
         self.logger.debug("OBO MSAL app configured with authority: %s", auth_context.tenant_object_id)
 
         try:
-            result = obo_app.acquire_token_on_behalf_of(
+            # MSAL's acquire_token_on_behalf_of is synchronous and does a
+            # network RTT to Entra (~50-300 ms). Offload to a thread so
+            # we do not block the event loop for every other user's
+            # request on this uvicorn worker. MSAL's built-in in-memory
+            # cache makes repeat calls for the same (user, scopes)
+            # essentially free for ~1 h, so this only pays the RTT on
+            # cache misses.
+            result = await asyncio.to_thread(
+                obo_app.acquire_token_on_behalf_of,
                 user_assertion=auth_context.original_subject_token,
-                scopes=scopes
+                scopes=scopes,
             )
 
         except Exception as e:
@@ -199,7 +243,12 @@ class AuthenticationService:
             self.logger.error("Access token not found in OBO result")
             raise AuthenticationException("Access token not found in OBO result")
 
-        self.logger.info("OBO flow successful for user %s.", auth_context.object_id)
+        # One aggregated INFO line per request is emitted by the caller;
+        # keep this at DEBUG so we don't double-log every OBO exchange.
+        # ``auth_context.object_id`` is often None when OBO is invoked
+        # from ad-hoc contexts (e.g. the MCP token acquirer), so log the
+        # scope instead of a misleading "user None".
+        self.logger.debug("OBO flow successful for scopes: %s", ", ".join(scopes))
         return result["access_token"]
 
     async def build_composite_token(
@@ -208,27 +257,32 @@ class AuthenticationService:
         scopes: list[str]
     ) -> str:
         """Build a composite token for making calls to Fabric APIs."""
-        self.logger.info("Building composite token for scopes: %s", ", ".join(scopes))
+        self.logger.debug("Building composite token for scopes: %s", ", ".join(scopes))
 
-        # Get OBO token for Fabric
-        token_obo = await self.get_access_token_on_behalf_of(auth_context, scopes)
-
-        # Get service-to-service token
-        service_principal_token = await self.get_fabric_s2s_token()
+        # OBO and S2S are independent; fetch them in parallel to halve
+        # composite-token latency under load.
+        token_obo, service_principal_token = await asyncio.gather(
+            self.get_access_token_on_behalf_of(auth_context, scopes),
+            self.get_fabric_s2s_token(),
+        )
 
         # Generate SubjectAndAppToken authorization header
         return SubjectAndAppToken.generate_authorization_header_value(token_obo, service_principal_token)
 
     async def get_fabric_s2s_token(self) -> str:
         """Get a service-to-service token for Fabric."""
-        self.logger.info("Acquiring Fabric S2S token")
+        self.logger.debug("Acquiring Fabric S2S token")
         try:
             # Request token with default scope
             scopes = [f"{EnvironmentConstants.FABRIC_BACKEND_RESOURCE_ID}/.default"]
 
             app = self._get_msal_app(self.publisher_tenant_id)
             try:
-                result = app.acquire_token_for_client(scopes=scopes)
+                # Same rationale as OBO above: sync MSAL network call
+                # must not block the event loop.
+                result = await asyncio.to_thread(
+                    app.acquire_token_for_client, scopes=scopes
+                )
             except MsalServiceError as e:
                 self.logger.exception("MSAL exception")
                 raise AuthenticationException(f"MSAL exception: {e!s}") from e
@@ -456,7 +510,7 @@ class AuthenticationService:
             self._validate_claim_exists(claims, app_id_claim, f"access tokens should have {app_id_claim} claim")
 
             self._validate_app_only(claims, is_app_only)
-            self.logger.info("AAD token validation successful")
+            self.logger.debug("AAD token validation successful")
             return claims
 
         except ExpiredSignatureError:

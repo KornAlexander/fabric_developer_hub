@@ -20,6 +20,52 @@ export type PlanRisk = "low" | "medium" | "high";
 
 export type PlanPrereqStatus = "satisfied" | "missing" | "unknown";
 
+// P4 · Mission Control — inline approval card fields
+export type BlastRadius = "workspace" | "item" | "row-level" | "metadata-only";
+export type RecoveryAction = "approve" | "decline" | "request_alternative" | "edit_input";
+
+export interface ToolCallPreview {
+    name: string;
+    args: Record<string, unknown>;
+}
+
+// P3 · Mission Control — orchestration graph
+export type TeamPattern = "supervisor" | "sequential" | "network" | "hierarchical" | "solo" | "mixed";
+export type TeamNodeStatus = "planned" | "active" | "done" | "waiting";
+export type TeamEdgeKind = "delegate" | "peer" | "report";
+
+export interface TeamNode {
+    id: string;
+    agent: string;
+    role: string;
+    status: TeamNodeStatus;
+    /** Skills the orchestrator selected for this slot (rendered as pills
+     *  on the graph node). Ordered by relevance — most useful first. */
+    skills?: string[];
+    /** Full list of skills the agent template declares, ordered with
+     *  selected skills first, then the rest by general usefulness for
+     *  this task. Drives the "+X" overflow chip on the graph node. */
+    allSkills?: string[];
+    /** One-to-two sentence natural-language description of what this
+     *  agent does in the current run. Rendered under the role card on
+     *  the Step 2 review sidebar. Optional — the UI falls back to a
+     *  deterministic blurb generated from role + handoffs + skills
+     *  when the backend doesn't supply one. */
+    summary?: string;
+}
+
+export interface TeamEdge {
+    from: string;
+    to: string;
+    kind: TeamEdgeKind;
+}
+
+export interface Team {
+    pattern: TeamPattern;
+    nodes: TeamNode[];
+    edges: TeamEdge[];
+}
+
 export interface PlanTarget {
     itemType: string;
     displayName: string;
@@ -39,6 +85,10 @@ export interface PlanStep {
     risk: PlanRisk;
     riskNotes?: string | null;
     reversible: boolean;
+    // P4 · Mission Control — inline approval card
+    blastRadius?: BlastRadius | null;
+    toolCallPreview?: ToolCallPreview | null;
+    recoveryActions?: RecoveryAction[];
     // NOTE: estimatedDurationSeconds was removed per spec §1. Do NOT
     // reintroduce it — Fabric operation duration depends too heavily on
     // capacity, data volume, and external latency.
@@ -139,6 +189,9 @@ export interface Plan {
     conflicts: PlanConflict[];
     clarificationsNeeded: PlanClarification[];
     footer: PlanFooter;
+    // P3 · Mission Control — proposed orchestration graph, optional so
+    // legacy cached plans don't break type-narrowing.
+    team?: Team | null;
 }
 
 /** True when the plan has at least one non-clarify step and no blockers. */

@@ -72,6 +72,52 @@ _INJECTION_MARKERS = re.compile(
     r")"
 )
 
+# Filenames that are almost certainly prose / reference documentation rather
+# than adversarial payloads. When a file of this shape contains the generic
+# injection markers above we treat them as discussion (e.g. a README that
+# literally explains prompt-injection defenses will trip the regex). The
+# structural fence defends against misuse regardless — this only changes
+# how the finding is surfaced to the user.
+_DOCUMENTATION_NAME_PATTERNS = (
+    re.compile(r"(?i)(^|/)readme(\.|$)"),
+    re.compile(r"(?i)(^|/)changelog(\.|$)"),
+    re.compile(r"(?i)(^|/)license(\.|$)"),
+    re.compile(r"(?i)(^|/)security(\.|$)"),
+    re.compile(r"(?i)(^|/)contributing(\.|$)"),
+    re.compile(r"(?i)(^|/)code_of_conduct(\.|$)"),
+    re.compile(r"(?i)\.md$"),
+    re.compile(r"(?i)\.mdx$"),
+    re.compile(r"(?i)\.rst$"),
+    re.compile(r"(?i)\.adoc$"),
+    re.compile(r"(?i)(^|/)docs?/"),
+)
+
+# Phrases that in any context indicate an imperative attempt to hijack
+# agent behaviour. Even a documentation file that contains these verbatim
+# (not as quoted examples) gets escalated to ``warn``. We keep the list
+# tight to avoid false positives on defensive writing.
+_HIGH_CONFIDENCE_MARKERS = re.compile(
+    r"(?i)("
+    r"\bjailbreak\b"
+    r"|\bDAN mode\b"
+    r"|\byou are now\b"
+    r"|\boverride\b.{0,20}\bsystem\b"
+    r")"
+)
+
+
+def _looks_like_documentation(name: str) -> bool:
+    """Return True when ``name`` looks like a common documentation file.
+
+    Examples that match: ``README.md``, ``docs/security.md``, ``CHANGELOG``,
+    ``LICENSE.txt``. The goal is *not* to be exhaustive — we err on the
+    side of "probably docs" because misclassifying a prose file as
+    adversarial creates real friction, while misclassifying an adversarial
+    file as docs only downgrades the UI badge (the structural fence
+    still protects the agent runtime).
+    """
+    return any(p.search(name or "") for p in _DOCUMENTATION_NAME_PATTERNS)
+
 
 def _neutralize_fence_collisions(text: str) -> str:
     """Prevent a crafted attachment from closing our shield fence early.
@@ -88,6 +134,154 @@ def _neutralize_fence_collisions(text: str) -> str:
 
 def _count_injection_markers(text: str) -> int:
     return len(_INJECTION_MARKERS.findall(text or ""))
+
+
+def classify_attachment_text(
+    name: str, kind: str, text: str,
+) -> dict[str, Any]:
+    """Return a structured classification for an attachment's text content.
+
+    The fields are designed to drive UI badges without leaking detector
+    internals:
+
+    * ``severity`` — ``"info"`` (safe to show as "treated as documentation"
+      or simply "trusted as text") or ``"warn"`` (flag it; still fenced
+      but the user should know the file tried to influence behaviour).
+    * ``category`` — ``"clean"``, ``"documentation"``, or ``"suspicious"``.
+      The UI uses this to pick the right copy: "Treated as documentation"
+      vs "Flagged — fenced as untrusted".
+    * ``markerCount`` / ``hasHighConfidence`` — exposed so support can
+      reason about why a file was flagged without re-running the regex.
+    * ``message`` — localization-agnostic English sentence suitable for a
+      tooltip. The frontend may also look up its own translated copy keyed
+      off ``category``.
+
+    Security stance: the classification only changes the UI presentation;
+    the structural fence + system-prompt shield still wrap every
+    attachment regardless. A file classified as ``"documentation"`` is
+    never more trusted by the runtime — the agent still sees it between
+    the ``UNTRUSTED_ATTACHMENT`` fences and the shield still applies.
+    """
+    total_markers = _count_injection_markers(text)
+    high_conf = bool(_HIGH_CONFIDENCE_MARKERS.search(text or ""))
+    doc_like = _looks_like_documentation(name)
+
+    if total_markers == 0 and not high_conf:
+        return {
+            "severity": "info",
+            "category": "clean",
+            "markerCount": 0,
+            "hasHighConfidence": False,
+            "documentLike": doc_like,
+            "message": "No injection markers detected.",
+        }
+
+    # Unambiguous adversarial phrasing always warns, even inside a doc.
+    if high_conf:
+        return {
+            "severity": "warn",
+            "category": "suspicious",
+            "markerCount": total_markers,
+            "hasHighConfidence": True,
+            "documentLike": doc_like,
+            "message": (
+                "This attachment contains phrases typical of prompt-injection "
+                "attacks. The content has been fenced and will be treated as "
+                "untrusted data — agents will not follow instructions inside."
+            ),
+        }
+
+    # Documentation-shaped files get the muted "documentation" treatment
+    # for low-density matches. We still flag them at 3+ markers because a
+    # README that spams "ignore instructions" over and over is no longer
+    # plausibly just discussing the concept.
+    if doc_like and total_markers < 3:
+        return {
+            "severity": "info",
+            "category": "documentation",
+            "markerCount": total_markers,
+            "hasHighConfidence": False,
+            "documentLike": True,
+            "message": (
+                "Recognised as documentation. Content is fenced and treated "
+                "as data — agents will not follow any instructions it "
+                "contains."
+            ),
+        }
+
+    # Non-doc text with any markers, OR doc-like text with ≥3 markers.
+    return {
+        "severity": "warn",
+        "category": "suspicious",
+        "markerCount": total_markers,
+        "hasHighConfidence": False,
+        "documentLike": doc_like,
+        "message": (
+            "This attachment contains injection-style phrases. The content "
+            "has been fenced and will be treated as untrusted data — "
+            "agents will not follow instructions inside."
+        ),
+    }
+
+
+def classify_attachments(
+    attachments: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Classify each text-ish attachment for UI badges.
+
+    Mirrors :func:`process_attachments` but only returns per-file findings
+    — it does not build the fenced text block. Cheap to call separately:
+    callers that already invoked ``process_attachments`` get the same
+    result via the ``findings`` list on the returned structure in a
+    future refactor; today we run classification in a separate pass to
+    avoid changing the ``process_attachments`` return contract.
+
+    Image attachments are *not* classified here because we don't extract
+    their text — the vision model reads them at inference time, and the
+    system-prompt shield covers that case.
+    """
+    out: list[dict[str, Any]] = []
+    for att in attachments or []:
+        name = str(att.get("name") or att.get("filename") or "attachment")
+        kind = str(att.get("kind") or "").lower()
+        content = att.get("content")
+        if kind == "text" and isinstance(content, str):
+            finding = classify_attachment_text(name, kind, content)
+        elif kind == "pdf" and isinstance(content, str):
+            # We only know the PDF text once extracted. Classify by name
+            # alone here; process_attachments has already emitted an
+            # extraction-time warning for suspicious PDFs when relevant.
+            finding = {
+                "severity": "info",
+                "category": "documentation" if _looks_like_documentation(name) else "clean",
+                "markerCount": 0,
+                "hasHighConfidence": False,
+                "documentLike": _looks_like_documentation(name),
+                "message": (
+                    "PDF content is fenced as untrusted data before any "
+                    "agent sees it."
+                ),
+            }
+        elif kind == "image":
+            finding = {
+                "severity": "info",
+                "category": "clean",
+                "markerCount": 0,
+                "hasHighConfidence": False,
+                "documentLike": False,
+                "message": (
+                    "Image content is treated as data. Any text inside the "
+                    "image is not followed as an instruction."
+                ),
+            }
+        else:
+            continue
+        out.append({
+            "name": name,
+            "kind": kind or "attachment",
+            **finding,
+        })
+    return out
 
 
 def _decode_data_uri(data_uri: str) -> tuple[str, bytes]:
@@ -210,15 +404,27 @@ def process_attachments(
 
         if kind == "text":
             safe = _neutralize_fence_collisions(content)
-            markers = _count_injection_markers(safe)
-            if markers:
+            finding = classify_attachment_text(name, "text", safe)
+            # We only emit a warning when severity escalates. Documentation
+            # files with incidental mentions stay silent in the logs and in
+            # the user-facing warning list (the UI will still render a subtle
+            # "Documentation" badge via the persisted classification).
+            if finding["severity"] == "warn":
                 warnings.append(
-                    f"{name}: detected {markers} prompt-injection-like phrases "
-                    f"in attachment; content is fenced and flagged as untrusted."
+                    f"{name}: detected {finding['markerCount']} "
+                    f"prompt-injection-like phrases in attachment; content "
+                    f"is fenced and flagged as untrusted."
                 )
                 logger.warning(
-                    "[ATTACHMENTS] %s: %d injection markers inside text content",
-                    name, markers,
+                    "[ATTACHMENTS] %s: %d injection markers inside text "
+                    "content (high_confidence=%s)",
+                    name, finding["markerCount"], finding["hasHighConfidence"],
+                )
+            elif finding["category"] == "documentation" and finding["markerCount"]:
+                logger.info(
+                    "[ATTACHMENTS] %s: %d injection-like marker(s) inside a "
+                    "documentation-shaped file; treated as documentation",
+                    name, finding["markerCount"],
                 )
             text_chunks.append(
                 f"\n\n{_OPEN_FENCE} name={name!r} kind=text\n"
@@ -226,15 +432,17 @@ def process_attachments(
             )
         elif kind == "pdf":
             extracted = _neutralize_fence_collisions(_extract_pdf_text(raw_bytes, name))
-            markers = _count_injection_markers(extracted)
-            if markers:
+            finding = classify_attachment_text(name, "pdf", extracted)
+            if finding["severity"] == "warn":
                 warnings.append(
-                    f"{name}: detected {markers} prompt-injection-like phrases "
-                    f"in PDF text; content is fenced and flagged as untrusted."
+                    f"{name}: detected {finding['markerCount']} "
+                    f"prompt-injection-like phrases in PDF text; content is "
+                    f"fenced and flagged as untrusted."
                 )
                 logger.warning(
-                    "[ATTACHMENTS] %s: %d injection markers inside PDF text",
-                    name, markers,
+                    "[ATTACHMENTS] %s: %d injection markers inside PDF text "
+                    "(high_confidence=%s)",
+                    name, finding["markerCount"], finding["hasHighConfidence"],
                 )
             text_chunks.append(
                 f"\n\n{_OPEN_FENCE} name={name!r} kind=pdf\n"

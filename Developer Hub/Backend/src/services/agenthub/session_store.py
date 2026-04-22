@@ -18,7 +18,7 @@ from domain.models.agent_models import (
     JobStatus,
     UserAgentConfig,
 )
-from domain.models.plan import Plan
+from domain.models.composition import Composition
 from services.agenthub import workspaces_cache
 from services.agenthub._db import connect as _connect
 from services.agenthub._db import db_path as _db_path
@@ -27,12 +27,13 @@ logger = logging.getLogger(__name__)
 
 _SCHEMA_VERSION = 1
 
-# Sessions whose persisted ``plan`` column can't be parsed as the current
-# ``Plan`` model. We log a single DEBUG per session id (not per read) so
-# the log stream isn't spammed every time the user opens the dashboard
-# or clicks a Recent prompt. These rows stay visible in the history list
-# with ``plan=None`` — the user just can't re-approve/execute them.
-_legacy_plan_warned: set[str] = set()
+# Sessions whose persisted ``composition`` column can't be parsed as the
+# current ``Composition`` model (e.g. rows written by a previous build that
+# stored a legacy ``Plan``). We log one DEBUG per session id so the log
+# stream isn't spammed on every dashboard open. These rows stay visible in
+# the history list with ``composition=None`` — they can be viewed/deleted
+# but not re-run.
+_legacy_composition_warned: set[str] = set()
 
 
 def init_db() -> None:
@@ -49,7 +50,7 @@ def init_db() -> None:
                 task_description TEXT NOT NULL,
                 context     TEXT,
                 status      TEXT NOT NULL DEFAULT 'planned',
-                plan        TEXT,
+                composition TEXT,
                 created_at  TEXT NOT NULL,
                 started_at  TEXT,
                 completed_at TEXT,
@@ -95,6 +96,7 @@ def init_db() -> None:
         _migrate_legacy_jobs_table(conn)
         _migrate_add_user_upn(conn)
         _migrate_add_cancellation_columns(conn)
+        _migrate_plan_to_composition(conn)
         # Workspace cache lives in the same DB so all SQLite state is
         # under one bind-mounted file.
         workspaces_cache.init_schema(conn)
@@ -147,9 +149,13 @@ def _migrate_legacy_jobs_table(conn: sqlite3.Connection) -> None:
         "SELECT name FROM sqlite_master WHERE type='table' AND name='jobs'"
     ).fetchone()
     if legacy:
+        # Legacy jobs table pre-dates the plan→composition rename; bring rows
+        # in with their plan column copied into composition (parse will fail
+        # and the row shows composition=None, which is fine — these are
+        # archived sessions the user can still view/delete).
         moved = conn.execute(
             "INSERT OR IGNORE INTO sessions "
-            "(id, user_id, workspace_id, task_description, context, status, plan, "
+            "(id, user_id, workspace_id, task_description, context, status, composition, "
             " created_at, started_at, completed_at, agents) "
             "SELECT id, user_id, workspace_id, task_description, context, status, plan, "
             "       created_at, started_at, completed_at, agents FROM jobs"
@@ -164,13 +170,34 @@ def _migrate_legacy_jobs_table(conn: sqlite3.Connection) -> None:
         logger.info("Renamed audit_log.job_id -> audit_log.session_id")
 
 
+def _migrate_plan_to_composition(conn: sqlite3.Connection) -> None:
+    """Idempotent migration: rename legacy ``plan`` column to ``composition``.
+
+    Old builds stored the planner output under ``plan``; the composition
+    refactor moved to ``composition`` with a different schema. SQLite
+    ``RENAME COLUMN`` is available from 3.25; if a pre-existing DB has
+    ``plan`` but not ``composition``, rename in place. Stored JSON blobs
+    are left untouched — the row reader tolerates unparseable legacy
+    payloads by returning ``composition=None``.
+    """
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+    if "plan" in cols and "composition" not in cols:
+        conn.execute("ALTER TABLE sessions RENAME COLUMN plan TO composition")
+        logger.info("Renamed sessions.plan -> sessions.composition")
+    elif "plan" in cols and "composition" in cols:
+        # Unusual: both columns exist (manual tampering). Drop plan to keep
+        # the schema in sync with the model.
+        conn.execute("ALTER TABLE sessions DROP COLUMN plan")
+        logger.info("Dropped legacy sessions.plan column (composition already present)")
+
+
 # ── Session CRUD ────────────────────────────────────────────
 
 def create_session(job: Job) -> Job:
     conn = _connect()
     try:
         conn.execute(
-            "INSERT INTO sessions (id, user_id, user_upn, workspace_id, task_description, context, status, plan, created_at, started_at, completed_at, cancelled_at, cancelled_by_user_id, cancelled_by_upn, agents) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO sessions (id, user_id, user_upn, workspace_id, task_description, context, status, composition, created_at, started_at, completed_at, cancelled_at, cancelled_by_user_id, cancelled_by_upn, agents) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 job.id,
                 job.user_id,
@@ -179,7 +206,7 @@ def create_session(job: Job) -> Job:
                 job.task_description,
                 json.dumps(job.context) if job.context else None,
                 job.status.value,
-                job.plan.model_dump_json() if job.plan else None,
+                job.composition.model_dump_json(by_alias=True) if job.composition else None,
                 job.created_at.isoformat(),
                 job.started_at.isoformat() if job.started_at else None,
                 job.completed_at.isoformat() if job.completed_at else None,
@@ -242,10 +269,10 @@ def update_session(job: Job) -> Job:
     conn = _connect()
     try:
         conn.execute(
-            "UPDATE sessions SET status=?, plan=?, started_at=?, completed_at=?, cancelled_at=?, cancelled_by_user_id=?, cancelled_by_upn=?, agents=? WHERE id=?",
+            "UPDATE sessions SET status=?, composition=?, started_at=?, completed_at=?, cancelled_at=?, cancelled_by_user_id=?, cancelled_by_upn=?, agents=? WHERE id=?",
             (
                 job.status.value,
-                job.plan.model_dump_json() if job.plan else None,
+                job.composition.model_dump_json(by_alias=True) if job.composition else None,
                 job.started_at.isoformat() if job.started_at else None,
                 job.completed_at.isoformat() if job.completed_at else None,
                 job.cancelled_at.isoformat() if job.cancelled_at else None,
@@ -278,23 +305,25 @@ def _row_to_session(row: sqlite3.Row) -> Job:
         # Ensure datetime fields are strings
         agents.append(AgentAssignment(**a))
 
-    plan: Plan | None = None
-    if row["plan"]:
-        # Try to parse as Plan; legacy rows written by an
-        # older build will not validate — we drop the plan rather than
-        # raising so old sessions remain visible in the history list. They
-        # can still be deleted but not re-approved.
+    composition: Composition | None = None
+    row_keys_early = set(row.keys())
+    comp_raw = row["composition"] if "composition" in row_keys_early else None
+    if comp_raw:
+        # Try to parse as Composition; legacy rows written by an older build
+        # (plan-based schema) won't validate — we drop the payload rather
+        # than raising so old sessions stay visible in the history list.
+        # They can still be deleted but not re-run.
         try:
-            plan = Plan.model_validate_json(row["plan"])
+            composition = Composition.model_validate_json(comp_raw)
         except Exception:
             session_id = row["id"]
-            if session_id not in _legacy_plan_warned:
-                _legacy_plan_warned.add(session_id)
+            if session_id not in _legacy_composition_warned:
+                _legacy_composition_warned.add(session_id)
                 logger.debug(
-                    "Session %s has a legacy plan shape that cannot be parsed as Plan; dropping",
+                    "Session %s has a legacy payload that cannot be parsed as Composition; dropping",
                     session_id,
                 )
-            plan = None
+            composition = None
 
     row_keys = set(row.keys())
     cancelled_at_raw = row["cancelled_at"] if "cancelled_at" in row_keys else None
@@ -306,7 +335,7 @@ def _row_to_session(row: sqlite3.Row) -> Job:
         task_description=row["task_description"],
         context=json.loads(row["context"]) if row["context"] else None,
         status=JobStatus(row["status"]),
-        plan=plan,
+        composition=composition,
         created_at=datetime.fromisoformat(row["created_at"]),
         started_at=datetime.fromisoformat(row["started_at"]) if row["started_at"] else None,
         completed_at=datetime.fromisoformat(row["completed_at"]) if row["completed_at"] else None,

@@ -2,6 +2,7 @@ import asyncio
 import logging
 import logging.config
 import os
+import re
 import sys
 import time
 import uuid
@@ -133,16 +134,16 @@ def setup_logging(config_service=None) -> logging.Logger:
         },
         "formatters": {
             "default": {
-                "format": "%(asctime)s - %(name)s - %(levelname)s - [req %(request_id)s] - %(message)s",
+                "format": "%(asctime)s - %(name)s - %(levelname)s - [req %(request_id)s u:%(user_id)s s:%(session_id)s] - %(message)s",
                 "datefmt": "%Y-%m-%d %H:%M:%S"
             },
             "color": {
                 "()": "main.ColorFormatter",
-                "format": "%(asctime)s - %(name)s - %(levelname)s - [req %(request_id)s] - %(message)s",
+                "format": "%(asctime)s - %(name)s - %(levelname)s - [req %(request_id)s u:%(user_id)s s:%(session_id)s] - %(message)s",
                 "datefmt": "%Y-%m-%d %H:%M:%S"
             },
             "detailed": {
-                "format": "%(asctime)s - %(name)s - %(levelname)s - [req %(request_id)s] - [%(filename)s:%(lineno)d] - %(funcName)s() - %(message)s",
+                "format": "%(asctime)s - %(name)s - %(levelname)s - [req %(request_id)s u:%(user_id)s s:%(session_id)s] - [%(filename)s:%(lineno)d] - %(funcName)s() - %(message)s",
                 "datefmt": "%Y-%m-%d %H:%M:%S"
             }
         },
@@ -214,6 +215,12 @@ class ApplicationState:
 
 app_state = ApplicationState()
 
+# Matches `/api/sessions/{uuid}` (and anything deeper like `/approvals/{aid}`),
+# used by the HTTP middleware to bind the session id into the correlation
+# contextvar so every log line (including background orchestrator tasks) is
+# tagged with it.
+_SESSION_PATH_RE = re.compile(r"^/api/sessions/([0-9a-fA-F-]{36})")
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Handle application lifecycle with proper startup and shutdown."""
@@ -278,6 +285,20 @@ async def lifespan(app: FastAPI):
             from services.agenthub import tool_policies
             tool_policies.register_all()
             tool_policies.warn_about_unregistered(list(mcp_manager.tools.keys()))
+
+            # Cross-validate the capability catalog (skills → tools,
+            # agents → skills) against the just-discovered MCP tool set.
+            # Issues are logged, not fatal — see capability_registry.py.
+            from services.agenthub import capability_registry
+            from services.agenthub.agent_registry import SKILLS, _AGENT_SKILLS
+            capability_issues = capability_registry.validate_catalog(
+                SKILLS, _AGENT_SKILLS, mcp_manager,
+            )
+            capability_registry.log_issues(capability_issues)
+            logger.info(
+                "\u2713 Capability catalog validated: %d skills, %d agents, %d issues",
+                len(SKILLS), len(_AGENT_SKILLS), len(capability_issues),
+            )
         except Exception:
             logger.warning("\u26a0 MCP tool discovery failed (chat will work without tools)", exc_info=True)
             mcp_manager = None
@@ -562,8 +583,42 @@ async def add_process_time_header(request: Request, call_next):
     # Bind to the contextvar so every logger.* call inside this request
     # (including inside libraries that just grab ``logging.getLogger(__name__)``)
     # emits ``[req <id>]`` without threading the ID through call sites.
-    from services.correlation import reset_request_id, set_request_id
+    from services.correlation import (
+        reset_request_id,
+        reset_session_id,
+        reset_user_id,
+        set_request_id,
+        set_session_id,
+        set_user_id,
+    )
     _cid_token = set_request_id(request_id)
+
+    # Decode the Bearer token's oid claim (unverified — just for logging) so
+    # the access log emitted *in this middleware after call_next* also carries
+    # u:<oid>. Starlette's BaseHTTPMiddleware runs the downstream app in a
+    # separate task, so user_id bound by ``require_user`` inside that task
+    # does not propagate back up to our access log. Binding here (parent task,
+    # before call_next) makes it visible to both the endpoint (child task
+    # inherits) and the access log below.
+    _uid_token = None
+    _auth_hdr = request.headers.get("authorization", "")
+    if _auth_hdr[:7].lower() == "bearer ":
+        try:
+            from jose import jwt as _jwt
+            _claims = _jwt.get_unverified_claims(_auth_hdr[7:])
+            _oid = _claims.get("oid")
+            if _oid:
+                _uid_token = set_user_id(_oid)
+        except Exception:
+            pass
+
+    # If the path targets a specific session, bind its id so that every log line
+    # (including background orchestrator tasks spawned from this request via
+    # asyncio.create_task, which inherits contextvars) is tagged with it.
+    _sid_token = None
+    _sid_match = _SESSION_PATH_RE.match(request.url.path)
+    if _sid_match:
+        _sid_token = set_session_id(_sid_match.group(1))
 
     # Track active request
     async with app_state.request_lock:
@@ -601,7 +656,17 @@ async def add_process_time_header(request: Request, call_next):
         # Remove from active requests
         async with app_state.request_lock:
             app_state.active_requests.discard(request_id)
-        # Unbind correlation id (no-op if the token has already been reset)
+        # Unbind correlation ids (no-op if the token has already been reset)
+        if _sid_token is not None:
+            try:
+                reset_session_id(_sid_token)
+            except ValueError:
+                pass
+        if _uid_token is not None:
+            try:
+                reset_user_id(_uid_token)
+            except ValueError:
+                pass
         try:
             reset_request_id(_cid_token)
         except ValueError:

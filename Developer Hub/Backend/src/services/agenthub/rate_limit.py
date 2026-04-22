@@ -2,8 +2,8 @@
 
 Motivation
 ----------
-Every call to ``/api/sessions``, ``/api/orchestrate/plan``, and
-``/api/orchestrate/approve`` triggers downstream work that costs money or
+Every call to ``/api/sessions``, ``/api/orchestrate/compose``, and
+``/api/sessions/{id}/run`` triggers downstream work that costs money or
 resources we care about:
 
 * A Copilot chat completion (billed per token).
@@ -62,13 +62,27 @@ class _Bucket:
 # second. Revisit when we have real usage telemetry.
 DEFAULT_LIMITS: dict[str, tuple[int, float]] = {
     # action          (burst capacity, refill tokens/sec)
-    "create_session":   (5, 0.2),   # 5 planned sessions, refills 1 every 5s
-    "generate_plan":    (10, 0.5),  # planning-only is cheaper
-    "approve_plan":     (5, 0.2),   # starts real work — same as create
+    "create_session":   (5, 0.2),   # 5 composed sessions, refills 1 every 5s
+    "compose":          (10, 0.5),  # compose-only is cheaper (one LLM call)
+    "run_session":      (5, 0.2),   # starts real work — same as create
     "send_message":     (30, 2.0),  # in-session chat, should feel snappy
     # Download-token minting is cheap (just stashes bytes) but we cap it
     # so a misbehaving client can't fill the in-memory token dict.
     "attachment_download": (20, 2.0),
+
+    # ── Cheap read endpoints — bursty on page load, server-side cached ──
+    # Mission Control / session creation fetches items for every
+    # workspace chip in parallel on page load. A user with a dozen
+    # workspaces immediately fires ~12 requests; refreshing the view
+    # doubles that. Results are cached per (user, workspace) so real
+    # downstream cost is near-zero after the first call. Budget
+    # generously so normal UI traffic never gets 429'd.
+    "list_workspace_items": (60, 5.0),
+    # Plan approval is a click — allow a healthy burst so a user
+    # resolving a plan with several steps in rapid succession isn't
+    # blocked. Fell through to the conservative default (10, 1.0)
+    # previously.
+    "approve_plan": (20, 1.0),
 }
 
 

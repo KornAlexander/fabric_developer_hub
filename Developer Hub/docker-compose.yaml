@@ -58,6 +58,12 @@ services:
       # escape codes, which makes ERROR lines pop red in the log stream.
       FORCE_COLOR: "1"
       PYTHONUNBUFFERED: "1"
+      # Tell MCPClientManager where to resolve ``${REPO_DIR}/mcp/...``
+      # references inside the container. We mount the host's repo-root
+      # ``mcp/`` directory at ``/opt/agenthub-mcp/mcp`` (see ``volumes``
+      # below) — we cannot mount it at ``/app/mcp`` because that name
+      # would shadow the installed ``mcp`` Python SDK package.
+      MCP_REPO_DIR: /opt/agenthub-mcp
     volumes:
       # Mount source for hot reload (uvicorn --reload watches these)
       - ./Backend/src:/app/src
@@ -70,6 +76,13 @@ services:
       # are also injected via env_file: above; this mount just makes the
       # file visible inside the container for transparency / debugging).
       - ./.env:/app/.env:ro
+      # Mount the repo-root ``mcp/`` directory (shared Python MCP servers:
+      # pbi_fixer, pbir_tools) at ``/opt/agenthub-mcp/mcp`` so
+      # ``${REPO_DIR}/mcp/...`` references in ``src/mcp_servers.json``
+      # resolve inside the container (see ``MCP_REPO_DIR`` above).
+      # NOTE: must NOT be mounted at ``/app/mcp`` — that path would
+      # shadow the installed ``mcp`` Python SDK package and break imports.
+      - ../mcp:/opt/agenthub-mcp/mcp:ro
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health').read()"]
       interval: 30s

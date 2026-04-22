@@ -26,6 +26,8 @@ dependencies = [
     # Agent tooling
     "mcp>=1.0",
     "cachetools>=5",
+    # Declarative capability catalog (skills + agent → skill mapping)
+    "pyyaml>=6",
     # Attachment parsing (PDF text extraction for prompt attachments)
     "pypdf>=5.0",
 ]

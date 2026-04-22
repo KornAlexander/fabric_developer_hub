@@ -163,9 +163,29 @@ class MCPClientManager:
 
     def __init__(self, config_path: str):
         self.config_path = config_path
+        # Servers that were pruned at config-load time because their
+        # entrypoint script is absent on disk (common in containers that
+        # don't ship the host-side ``${REPO_DIR}/mcp/`` tree). Keyed by
+        # server name, value is a one-line explanation suitable for logs.
+        self.pruned_servers: dict[str, str] = {}
+        # Servers whose discovery step raised. Populated by
+        # ``discover_tools`` and surfaced by the capability validator so
+        # a missing Node.js install or unreachable endpoint doesn't fan
+        # out into dozens of per-tool errors.
+        self.failed_servers: dict[str, str] = {}
         self.config = self._load_config(config_path)
         self.tools: dict[str, dict] = {}           # tool_name → tool metadata dict
         self.tool_server_map: dict[str, str] = {}   # tool_name → server_name
+
+    def unavailable_servers(self) -> dict[str, str]:
+        """Return ``{server_name: reason}`` for every server that was
+        either pruned pre-discovery or raised during discovery.
+
+        The capability validator uses this to decide whether a
+        missing-tool finding is an operator problem (fix the server)
+        or a catalog bug (fix the YAML).
+        """
+        return {**self.pruned_servers, **self.failed_servers}
 
     def _load_config(self, config_path: str) -> dict:
         path = Path(config_path)
@@ -226,56 +246,146 @@ class MCPClientManager:
             if "args" in server_config:
                 server_config["args"] = [_sub(arg) for arg in server_config["args"]]
 
-    @staticmethod
-    def _prune_missing_servers(config: dict) -> None:
+    def _prune_missing_servers(self, config: dict) -> None:
         """Drop servers whose first arg (the script path) does not exist.
 
         Keeps the manager usable when some MCPs are only available in the
         host dev layout (e.g. ``${REPO_DIR}/mcp/...``) but not inside a
         container that only ships ``src/``.
+
+        Only applied when the first arg looks like a local script path
+        (absolute path or ``*.py``). Servers launched through package
+        runners like ``npx`` pass flags (``-y``) as the first arg, which
+        are not paths and must not be pruned here.
         """
         servers = config.get("servers", {})
         for name in list(servers.keys()):
             args = servers[name].get("args") or []
-            if args and not Path(args[0]).exists():
+            if not args:
+                continue
+            first = args[0]
+            looks_like_path = first.startswith("/") or first.endswith(".py")
+            if looks_like_path and not Path(first).exists():
+                reason = f"script {first} not found on disk"
                 logger.warning(
-                    "MCP server %s: script %s not found on disk; skipping",
-                    name, args[0],
+                    "MCP server %s: %s; skipping", name, reason,
                 )
+                self.pruned_servers[name] = reason
                 del servers[name]
 
     def has_tools(self) -> bool:
         return len(self.tools) > 0
 
-    async def discover_tools(self):
-        """Start a temporary instance of each server to discover tool schemas.
+    def qualified_name(self, tool_name: str) -> str:
+        """Render ``server_id::tool_name`` for unambiguous logging.
 
-        Called once at startup. The temporary instances are shut down after discovery.
+        Returns ``"<undiscovered>::<tool_name>"`` when the tool was not
+        seen during discovery — this keeps log lines readable instead
+        of raising from inside error-handling paths.
         """
-        for name, server_config in self.config.get("servers", {}).items():
-            if not server_config.get("command"):
-                logger.warning("Server %s has no command, skipping", name)
-                continue
+        server = self.tool_server_map.get(tool_name)
+        if server is None:
+            return f"<undiscovered>::{tool_name}"
+        return f"{server}::{tool_name}"
+
+    async def _discover_one_server(
+        self,
+        name: str,
+        server_config: dict,
+    ) -> tuple[str, list, str | None]:
+        """Spawn one MCP server, list its tools, shut it down.
+
+        Returns ``(name, tools, error)``. ``tools`` is the raw
+        ``list_tools()`` result (pre-allowlist, pre-collision-check);
+        ``error`` is ``None`` on success or a one-line reason string on
+        failure. Designed to be run concurrently — each call owns its
+        own subprocess and ``AsyncExitStack`` and does NOT mutate any
+        instance state (``self.tools``, etc.). Merging into shared
+        state is done after ``asyncio.gather`` by ``discover_tools``
+        so collision resolution stays deterministic in declared order.
+        """
+        try:
+            logger.info("Discovering tools from MCP server: %s", name)
+            session, stack = await self._start_server(server_config, env_override={})
             try:
-                logger.info("Discovering tools from MCP server: %s", name)
-                session, stack = await self._start_server(server_config, env_override={})
-                try:
-                    result = await session.list_tools()
-                    for tool in result.tools:
-                        self.tools[tool.name] = {
-                            "name": tool.name,
-                            "description": tool.description or "",
-                            "inputSchema": tool.inputSchema or {"type": "object", "properties": {}},
-                        }
-                        self.tool_server_map[tool.name] = name
-                        logger.info("  Discovered tool: %s", tool.name)
-                finally:
-                    await stack.aclose()
-                logger.info("MCP server %s: discovered %d tools", name, len([
-                    t for t, s in self.tool_server_map.items() if s == name
-                ]))
-            except Exception as e:
-                logger.error("Failed to discover tools from MCP server %s: %s", name, e)
+                result = await session.list_tools()
+                return name, list(result.tools), None
+            finally:
+                await stack.aclose()
+        except Exception as e:
+            return name, [], str(e)
+
+    async def discover_tools(self):
+        """Start every declared server in parallel and collect tool schemas.
+
+        Called once at startup. Each server runs in its own subprocess
+        via :meth:`_discover_one_server`; the spawns happen
+        concurrently through :func:`asyncio.gather`, cutting total
+        discovery latency from ``sum(per-server)`` to
+        ``max(per-server)`` — useful when ``fabric-docs`` alone takes
+        ~5 s to warm up ``npx`` while the others are sub-second.
+
+        Merging of results into ``self.tools`` / ``self.tool_server_map``
+        is sequential after the gather and follows the server order
+        from ``mcp_servers.json``, so collision winners remain
+        deterministic regardless of which subprocess returns first.
+        """
+        servers = [
+            (name, cfg)
+            for name, cfg in self.config.get("servers", {}).items()
+            if cfg.get("command")
+        ]
+        for skipped_name, cfg in self.config.get("servers", {}).items():
+            if not cfg.get("command"):
+                logger.warning("Server %s has no command, skipping", skipped_name)
+
+        if not servers:
+            return
+
+        # Run every server's discovery concurrently. ``return_exceptions``
+        # is False because ``_discover_one_server`` already catches and
+        # reports per-server errors via the returned tuple.
+        results = await asyncio.gather(*(
+            self._discover_one_server(name, cfg) for name, cfg in servers
+        ))
+
+        # Index results by name to merge in declared order.
+        by_name = {name: (tools, error) for name, tools, error in results}
+
+        for name, _cfg in servers:
+            tools, error = by_name[name]
+            if error is not None:
+                self.failed_servers[name] = error
+                logger.error("Failed to discover tools from MCP server %s: %s", name, error)
+                continue
+
+            # Optional per-server allowlist — used to narrow the
+            # tool surface of third-party servers (e.g. expose
+            # only the ``docs`` tool from the Microsoft Fabric Local
+            # MCP while skipping ``onelake`` / ``core`` which would
+            # clash with our OBO-aware ``fabric_*`` tools).
+            allowlist = _cfg.get("tool_allowlist") or None
+            added = 0
+            for tool in tools:
+                if allowlist is not None and tool.name not in allowlist:
+                    logger.info("  Filtered tool (not in allowlist): %s", tool.name)
+                    continue
+                if tool.name in self.tool_server_map:
+                    existing = self.tool_server_map[tool.name]
+                    logger.warning(
+                        "  Tool name collision: %s already provided by %s; skipping %s",
+                        tool.name, existing, name,
+                    )
+                    continue
+                self.tools[tool.name] = {
+                    "name": tool.name,
+                    "description": tool.description or "",
+                    "inputSchema": tool.inputSchema or {"type": "object", "properties": {}},
+                }
+                self.tool_server_map[tool.name] = name
+                logger.info("  Discovered tool: %s", tool.name)
+                added += 1
+            logger.info("MCP server %s: discovered %d tools", name, added)
 
     async def call_tool(
         self,
@@ -400,18 +510,51 @@ class MCPClientManager:
         server_config: dict,
         env_override: dict,
     ) -> tuple[ClientSession, AsyncExitStack]:
-        """Start an MCP server process and return (session, stack).
+        """Start an MCP server and return (session, stack).
 
-        Caller is responsible for calling `await stack.aclose()` to shut down the process.
+        Transport is selected by the optional ``transport`` field in
+        the server config:
 
-        Security: the child process receives an **allow-listed** slice of
-        the backend's environment (PATH / locale / TLS-cert / proxy vars
-        only) plus whatever the MCP server config and per-request
-        ``env_override`` explicitly declare. The backend's full ``os.environ``
-        — which includes ClientSecret, DB paths, and other operator config —
-        is never passed to the child. This shrinks the blast radius of any
-        future compromise of an MCP server (first-party or third-party).
+        * ``"stdio"`` (default) — spawn a child process and talk over
+          stdin/stdout. This is the only transport exercised by the
+          existing fleet today.
+        * ``"streamable_http"`` — connect to a remote MCP endpoint
+          over Streamable HTTP. Intended for the Fabric Remote MCP
+          (``https://api.fabric.microsoft.com/v1/mcp/core``). Deferred
+          until Microsoft ships Service Principal auth for the remote
+          server — the current preview uses browser-interactive Entra
+          ID which does not fit our per-request OBO flow. The code
+          path is scaffolded so a future wiring only needs to fill in
+          token acquisition in ``_start_http_server``.
+
+        Caller is responsible for calling ``await stack.aclose()`` to
+        tear down the process / connection.
+
+        Security: the child process receives an **allow-listed** slice
+        of the backend's environment (PATH / locale / TLS-cert / proxy
+        vars only) plus whatever the MCP server config and per-request
+        ``env_override`` explicitly declare. The backend's full
+        ``os.environ`` — which includes ClientSecret, DB paths, and
+        other operator config — is never passed to the child. This
+        shrinks the blast radius of any future compromise of an MCP
+        server (first-party or third-party).
         """
+        transport_kind = server_config.get("transport", "stdio")
+        if transport_kind == "stdio":
+            return await self._start_stdio_server(server_config, env_override)
+        if transport_kind == "streamable_http":
+            return await self._start_http_server(server_config, env_override)
+        raise ValueError(
+            f"Unsupported MCP transport {transport_kind!r}; "
+            f"expected one of ('stdio', 'streamable_http')."
+        )
+
+    async def _start_stdio_server(
+        self,
+        server_config: dict,
+        env_override: dict,
+    ) -> tuple[ClientSession, AsyncExitStack]:
+        """Spawn a stdio MCP server as a child process."""
         # Start from a sanitized base copy of our own env
         merged_env = {
             k: v for k, v in os.environ.items() if k in _BASE_ENV_ALLOWLIST
@@ -437,3 +580,32 @@ class MCPClientManager:
         except Exception:
             await stack.aclose()
             raise
+
+    async def _start_http_server(
+        self,
+        server_config: dict,
+        env_override: dict,  # noqa: ARG002 — reserved for future token injection
+    ) -> tuple[ClientSession, AsyncExitStack]:
+        """Connect to a Streamable-HTTP MCP server.
+
+        Currently raises ``NotImplementedError`` because the only
+        target (Fabric Remote MCP) requires browser-interactive Entra
+        ID auth that our backend cannot perform on behalf of a user.
+        The scaffold exists so that when Microsoft ships Service
+        Principal auth, wiring it up is a single method body change
+        rather than a cross-file refactor.
+        """
+        url = server_config.get("url")
+        if not url:
+            raise ValueError(
+                "Streamable-HTTP MCP server is missing required 'url' field"
+            )
+        raise NotImplementedError(
+            "Streamable-HTTP MCP transport is not wired up yet. "
+            "Target (Fabric Remote MCP at "
+            f"{url}) requires Service Principal auth which is not "
+            "available in the current preview. See "
+            "services/mcp/mcp_client_manager.py::_start_http_server "
+            "to complete this path when upstream auth lands."
+        )
+

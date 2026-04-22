@@ -46,6 +46,7 @@ export async function createSession(
     taskDescription: string, workspaceId: string,
     context: Record<string, unknown> | null, opts: FetchOpts,
     attachments?: PromptAttachment[],
+    signal?: AbortSignal,
 ) {
     const res = await fetch(`${BE}/api/sessions`, {
         method: 'POST',
@@ -56,6 +57,7 @@ export async function createSession(
             context,
             attachments: attachments && attachments.length ? attachments : undefined,
         }),
+        signal,
     });
     if (!res.ok) throw new Error(await res.text());
     return res.json();
@@ -104,18 +106,29 @@ export function subscribeToSessionEvents(sessionId: string): EventSource {
 
 // ── Orchestration ───────────────────────────────────────────────────
 
-export async function generatePlan(taskDescription: string, workspaceId: string, context: Record<string, unknown> | null, opts: FetchOpts) {
-    const res = await fetch(`${BE}/api/orchestrate/plan`, {
+export async function compose(
+    taskDescription: string,
+    workspaceId: string,
+    context: Record<string, unknown> | null,
+    opts: FetchOpts,
+    preferredArchitecture: string | null = null,
+) {
+    const res = await fetch(`${BE}/api/orchestrate/compose`, {
         method: 'POST',
         headers: headers(opts),
-        body: JSON.stringify({ task_description: taskDescription, workspace_id: workspaceId, context }),
+        body: JSON.stringify({
+            task_description: taskDescription,
+            workspace_id: workspaceId,
+            context,
+            preferred_architecture: preferredArchitecture,
+        }),
     });
     if (!res.ok) throw new Error(await res.text());
     return res.json();
 }
 
-export async function approvePlan(sessionId: string, opts: FetchOpts) {
-    const res = await fetch(`${BE}/api/orchestrate/approve`, {
+export async function runSession(sessionId: string, opts: FetchOpts) {
+    const res = await fetch(`${BE}/api/sessions/${sessionId}/run`, {
         method: 'POST',
         headers: headers(opts),
         body: JSON.stringify({ session_id: sessionId }),
@@ -124,12 +137,51 @@ export async function approvePlan(sessionId: string, opts: FetchOpts) {
     return res.json();
 }
 
-export async function rejectPlan(sessionId: string, opts: FetchOpts) {
+export async function rejectComposition(sessionId: string, opts: FetchOpts) {
     const res = await fetch(`${BE}/api/orchestrate/reject`, {
         method: 'POST',
         headers: headers(opts),
         body: JSON.stringify({ session_id: sessionId }),
     });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+}
+
+// Back-compat aliases — retained so component call sites compile during
+// the cutover. New code should use `compose`, `runSession`,
+// `rejectComposition` directly.
+export const generatePlan = (
+    taskDescription: string,
+    workspaceId: string,
+    context: Record<string, unknown> | null,
+    opts: FetchOpts,
+) => compose(taskDescription, workspaceId, context, opts);
+export const approvePlan = runSession;
+export const rejectPlan = rejectComposition;
+
+// P4 · Mission Control — resolve a mid-run approval request with one of
+// the four recovery actions (approve / decline / request_alternative /
+// edit_input).
+export async function resolveApproval(
+    sessionId: string,
+    approvalId: string,
+    action: "approve" | "decline" | "request_alternative" | "edit_input",
+    reason: string | null,
+    opts: FetchOpts,
+) {
+    const res = await fetch(
+        `${BE}/api/sessions/${sessionId}/approvals/${approvalId}`,
+        {
+            method: 'POST',
+            headers: headers(opts),
+            body: JSON.stringify({
+                session_id: sessionId,
+                approval_id: approvalId,
+                action,
+                reason,
+            }),
+        },
+    );
     if (!res.ok) throw new Error(await res.text());
     return res.json();
 }
@@ -170,6 +222,25 @@ export async function deleteMyAgent(configId: string, opts: FetchOpts) {
     return res.json();
 }
 
+// ── Catalogs ────────────────────────────────────────────────────────
+
+export interface ArchitectureEntry {
+    id: string;
+    name: string;
+    headline: string;
+    description: string;
+    pickWhen: string;
+    watchFor: string;
+    fabricUseCases: string[];
+    hasDriver: boolean;
+}
+
+export async function listArchitectures(opts: FetchOpts): Promise<ArchitectureEntry[]> {
+    const res = await fetch(`${BE}/api/catalogs/architectures`, { headers: headers(opts) });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+}
+
 // ── Workspaces (cached, with manual refresh) ────────────────────────
 
 export interface Workspace {
@@ -190,14 +261,65 @@ export interface WorkspacesResponse {
 }
 
 export async function getWorkspaces(opts: FetchOpts, refresh = false): Promise<WorkspacesResponse> {
-    const qs = refresh ? '?refresh=true' : '';
-    const res = await fetch(`${BE}/api/workspaces${qs}`, { headers: headers(opts) });
-    if (!res.ok) {
-        const err: Error & { status?: number } = new Error(await res.text());
-        err.status = res.status;
-        throw err;
+    // Dedupe concurrent requests across editor tabs. Every open "New
+    // Session" tab mounts its own OrchestratorPage and each one calls
+    // this function on init. Without dedupe we'd fan out N identical
+    // requests for the same user's workspace list, which means some
+    // tabs show "Loading…" long after earlier ones have settled —
+    // exactly the flicker the user complained about.
+    //
+    // Strategy:
+    //   1. If a request is in flight, every caller awaits the same
+    //      promise.
+    //   2. After it resolves, keep the result in memory for a short
+    //      TTL so rapid refresh/remount (e.g. closing one tab and
+    //      immediately opening another) reuses the cached list
+    //      instead of hitting the backend again.
+    //
+    // ``refresh=true`` bypasses both layers so the explicit "reload"
+    // button in the UI still forces a round-trip.
+    if (!refresh) {
+        if (_wsCache && Date.now() - _wsCache.at < WS_CACHE_TTL_MS) {
+            return _wsCache.data;
+        }
+        if (_wsInflight) return _wsInflight;
     }
-    return res.json();
+    const qs = refresh ? '?refresh=true' : '';
+    const p = (async () => {
+        const res = await fetch(`${BE}/api/workspaces${qs}`, { headers: headers(opts) });
+        if (!res.ok) {
+            const err: Error & { status?: number } = new Error(await res.text());
+            err.status = res.status;
+            throw err;
+        }
+        const data: WorkspacesResponse = await res.json();
+        _wsCache = { at: Date.now(), data };
+        return data;
+    })();
+    _wsInflight = p;
+    try {
+        return await p;
+    } finally {
+        // Clear the in-flight slot so a subsequent refresh isn't
+        // served stale, but keep _wsCache so tabs opened within the
+        // TTL window hit memory instead of the network.
+        if (_wsInflight === p) _wsInflight = null;
+    }
+}
+
+/** Short TTL — long enough to cover "close this tab, open a new one
+ *  immediately" without being so long that a genuinely new workspace
+ *  the user just created isn't discoverable. Any mutation path in
+ *  this module (create / delete) should call ``invalidateWorkspacesCache``. */
+const WS_CACHE_TTL_MS = 30_000;
+let _wsCache: { at: number; data: WorkspacesResponse } | null = null;
+let _wsInflight: Promise<WorkspacesResponse> | null = null;
+
+/** Drop the cached workspace list — called after create/delete
+ *  operations so the next read reflects the mutation. */
+export function invalidateWorkspacesCache(): void {
+    _wsCache = null;
+    _wsInflight = null;
 }
 
 /** Fire-and-forget background preload after auth. Safe to call without a Fabric token. */
@@ -229,6 +351,10 @@ export async function createWorkspace(
         err.status = res.status;
         throw err;
     }
+    // Any subsequent ``getWorkspaces`` must see the new row, so wipe
+    // the short-lived read cache. The backend already owns its own
+    // cache invalidation; this is purely client-side dedupe hygiene.
+    invalidateWorkspacesCache();
     return res.json();
 }
 

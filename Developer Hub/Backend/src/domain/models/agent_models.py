@@ -9,7 +9,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
-from domain.models.plan import Plan
+from domain.models.composition import Composition
+from domain.models.skill import Skill
 
 # Size caps for user-submitted request payloads. These are defense-in-depth
 # limits that guard against CPU/memory exhaustion on the LLM and embedding
@@ -79,6 +80,11 @@ class AgentTemplate(BaseModel):
     category: AgentCategory
     description: str
     tags: list[str] = Field(default_factory=list)
+    # First-class skills. Replaces ``tags`` as the discoverability
+    # surface the compose LLM uses to pick *which skills from each
+    # agent* to expose for a task. ``tags`` remain as short display
+    # chips but are no longer referenced by compose.
+    skills: list[Skill] = Field(default_factory=list)
     system_prompt: str
     available_tools: list[str] = Field(default_factory=list)
     default_access_level: str = "read"
@@ -119,6 +125,9 @@ class ReasoningPhase(BaseModel):
     completed_at: datetime | None = None
     details: list[str] = Field(default_factory=list)
     decisions: list[AgentDecision] = Field(default_factory=list)
+    # P6 · Mission Control — owner_agent lets the completed-run log filter
+    # entries by agent. Optional because pre-P6 phases won't carry it.
+    owner_agent: str | None = None
 
 
 class AgentAction(BaseModel):
@@ -158,8 +167,10 @@ class Job(BaseModel):
     task_description: str
     context: dict[str, Any] | None = None
     status: JobStatus = JobStatus.PLANNED
-    # ``plan`` carries the grounded Plan shape exposed to the UI.
-    plan: Plan | None = None
+    # Composition artifact produced by ``ComposeService.compose()`` — the
+    # architecture + slot + handoff graph the runtime executes. Replaces
+    # the legacy ``Plan`` object.
+    composition: Composition | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     started_at: datetime | None = None
     completed_at: datetime | None = None
@@ -213,6 +224,10 @@ class CreateJobRequest(BaseModel):
 
 
 class GeneratePlanRequest(BaseModel):
+    """Legacy alias — kept as a type so ``api.agenthub_controller`` can
+    import it without breaking during the compose cutover. The new
+    ``/api/orchestrate/compose`` endpoint uses ``ComposeRequest`` below.
+    """
     task_description: str = Field(min_length=1, max_length=_MAX_TASK_DESCRIPTION_LEN)
     workspace_id: str = Field(min_length=1, max_length=128)
     context: dict[str, Any] | None = None
@@ -226,7 +241,40 @@ class GeneratePlanRequest(BaseModel):
         return v.lower()
 
 
+class ComposeRequest(BaseModel):
+    """Request body for ``POST /api/orchestrate/compose`` — the single
+    analysis step that produces a ``Composition``.
+    """
+
+    task_description: str = Field(min_length=1, max_length=_MAX_TASK_DESCRIPTION_LEN)
+    workspace_id: str = Field(min_length=1, max_length=128)
+    context: dict[str, Any] | None = None
+    attachments: list[PromptAttachment] | None = Field(default=None, max_length=_MAX_ATTACHMENTS)
+    # Optional architecture override (same wire values as
+    # ``Composition.architecture``). If set, the compose LLM is told to
+    # prefer this shape. Used by the "Regenerate as …" UI affordance.
+    preferred_architecture: str | None = Field(default=None, max_length=32)
+    require_approvals: bool = True
+    branch_out: bool = False
+
+    @field_validator("workspace_id")
+    @classmethod
+    def _validate_workspace_id(cls, v: str) -> str:
+        if not _WORKSPACE_ID_RE.match(v):
+            raise ValueError("workspace_id must be a UUID")
+        return v.lower()
+
+
+class RunSessionRequest(BaseModel):
+    """Request body for ``POST /api/sessions/{id}/run`` — starts
+    executing an already-composed session."""
+
+    session_id: str = Field(min_length=1, max_length=128)
+
+
 class ApprovePlanRequest(BaseModel):
+    """Legacy alias kept so the existing approval-card flow doesn't
+    break; routes prefer ``RunSessionRequest`` for the new surface."""
     session_id: str = Field(min_length=1, max_length=128)
 
 

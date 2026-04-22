@@ -1,11 +1,17 @@
 import React, { useMemo, useState, useCallback, useEffect, Suspense, lazy } from "react";
-import { Route, Switch, useHistory, useRouteMatch } from "react-router-dom";
+import { useHistory, useRouteMatch } from "react-router-dom";
 import "../../styles.scss";
+import { EditorTabsProvider, useEditorTabs, type TabDescriptor, descriptorFromPath, makeNewSessionDescriptor, isReloadNavigation } from "./EditorTabs/EditorTabsContext";
+import { EditorGroupsRoot } from "./EditorTabs/EditorGroupsRoot";
+import { DRAG_NAVITEM_MIME } from "./EditorTabs/EditorTabsBar";
+import { SideNavContextMenu } from "./EditorTabs/SideNavContextMenu";
+import { useNavPreferences, resolveBehaviour, type NavItemId, type NavBehaviour } from "./EditorTabs/navPreferences";
 import {
     Button,
     Text,
     Spinner,
     Body1,
+    Tooltip,
 } from "@fluentui/react-components";
 import {
     BrainCircuit24Regular,
@@ -54,7 +60,10 @@ function lazyWithPreload<T extends Record<string, any>>(
 const DashboardPage = lazyWithPreload(() => import("./DashboardPage"), "DashboardPage");
 const AgentsPage = lazyWithPreload(() => import("./AgentsPage"), "AgentsPage");
 const SettingsPage = lazyWithPreload(() => import("./SettingsPage"), "SettingsPage");
-const SessionDetailPage = lazyWithPreload(() => import("./SessionDetailPage"), "SessionDetailPage");
+// Direct prop-driven variant of MissionControlPage used by the tabs
+// system — lets non-active editor groups render a session by id without
+// needing to own the URL via ``useParams``.
+const MissionControlPageLazy = lazyWithPreload(() => import("./mission/MissionControlPage"), "MissionControlPage");
 const PbiFixerPage = lazyWithPreload(
     () => import("../PbiFixer").then(m => ({ PbiFixerPage: m.PbiFixerPage })),
     "PbiFixerPage",
@@ -73,6 +82,28 @@ import {
 
 /** Max time we linger on the current page while prefetching the target. */
 const NAV_PREFETCH_TIMEOUT_MS = 1000;
+
+/** True on macOS — used to render the correct modifier glyph for keyboard
+ *  shortcuts (⌘ on Apple, Ctrl everywhere else). Prefers the modern
+ *  ``navigator.userAgentData`` API and falls back to ``navigator.platform``
+ *  for older browsers. Evaluated once at module load; `navigator` is
+ *  guaranteed in browser bundles. */
+const IS_MAC: boolean = (() => {
+    try {
+        const uaData = (navigator as unknown as { userAgentData?: { platform?: string } }).userAgentData;
+        const platform = uaData?.platform || navigator.platform || "";
+        if (/mac/i.test(platform)) return true;
+        // iPadOS 13+ masquerades as Mac; treat it like mac for shortcut glyphs.
+        return /Mac|iPad|iPhone|iPod/i.test(navigator.userAgent || "");
+    } catch {
+        return false;
+    }
+})();
+
+/** Human-readable "⌘B" / "Ctrl+B" string for the given base key. */
+function modShortcut(key: string): string {
+    return IS_MAC ? `⌘${key.toUpperCase()}` : `Ctrl+${key.toUpperCase()}`;
+}
 
 /** Maps a nav page id to the preload key for its data dependency. */
 function preloadKeyFor(page: string): PreloadKey | null {
@@ -214,8 +245,12 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
     else if (currentPath.includes("/pbifixer")) activePage = "pbifixer";
 
     function nav(page: string) {
+        // Legacy history-based navigator retained for callers that
+        // haven't migrated to the tabs API yet. Kept internal to the
+        // layout — prefer ``handleNavClick`` in ``AgentHubShell``.
         history.push(`${match.url}/${page}`);
     }
+    void nav;
 
     // ── Background workspace preload (fire-and-forget) ────────────
     // Once GitHub auth lands, acquire a Fabric token and ask the backend to
@@ -318,6 +353,23 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
         window.addEventListener("storage", onStorage);
         return () => window.removeEventListener("storage", onStorage);
     }, []);
+    // Ctrl/Cmd+B — standard editor-style shortcut (VS Code, GitHub, Notion
+    // all ship this). Lets power users collapse the rail without leaving
+    // the keyboard. We ignore the shortcut when a text field is focused so
+    // it doesn't fire while someone is typing "b" in the composer.
+    useEffect(() => {
+        function onKey(e: KeyboardEvent) {
+            const mod = e.ctrlKey || e.metaKey;
+            if (!mod || e.key.toLowerCase() !== "b") return;
+            const tgt = e.target as HTMLElement | null;
+            const tag = tgt?.tagName;
+            if (tag === "INPUT" || tag === "TEXTAREA" || tgt?.isContentEditable) return;
+            e.preventDefault();
+            toggleCollapsed();
+        }
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+    }, [toggleCollapsed]);
 
     // When the user clicks a sidebar item, kick off the target page's data
     // fetch *before* we route-change. We wait for it to finish, capped at
@@ -368,11 +420,10 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
     );
 
     async function navTo(page: string) {
+        // Legacy navigator retained for the auth-gate fallback path and
+        // for programmatic redirects that bypass the tabs API.
         const key = preloadKeyFor(page);
         closeSidebar();
-        // Kick off the lazy chunk fetch as early as we know the target — in
-        // parallel with the data prefetch. `preload` is a no-op if the chunk
-        // is already loaded/in-flight.
         preloadChunkFor(page);
         if (!key || !auth.githubToken) {
             nav(page);
@@ -387,6 +438,7 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
         setNavPending(false);
         nav(page);
     }
+    void navTo;
 
     return (
         <ItemProvider
@@ -395,6 +447,274 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
             routeItemObjectId={routeItemObjectId || null}
         >
         <SearchProvider scope={activePage as SearchScope}>
+        {/* EditorTabsProvider wraps *both* sidebar and main so the sidebar
+            click handlers (opening new tabs, replacing active, splitting
+            into groups) can reach the tabs API via ``useEditorTabs``. */}
+        <EditorTabsProvider>
+        <AgentHubShell
+            workloadClient={workloadClient}
+            matchPath={match.path}
+            activePage={activePage}
+            auth={auth}
+            sidebarOpen={sidebarOpen}
+            sidebarCollapsed={sidebarCollapsed}
+            toggleSidebar={toggleSidebar}
+            closeSidebar={closeSidebar}
+            toggleCollapsed={toggleCollapsed}
+            startPreload={startPreload}
+            setNavPending={setNavPending}
+        />
+        </EditorTabsProvider>
+        </SearchProvider>
+        </ItemProvider>
+    );
+}
+
+function SideNavItem({
+    icon, label, active, onClick, onContextMenu, onDragStart, disabled, collapsed, draggable,
+}: {
+    icon: React.ReactNode;
+    label: string;
+    active: boolean;
+    onClick: () => void;
+    onContextMenu?: (e: React.MouseEvent<HTMLDivElement>) => void;
+    onDragStart?: (e: React.DragEvent<HTMLDivElement>) => void;
+    disabled?: boolean;
+    collapsed?: boolean;
+    /** Whether this item supports drag-to-editor. Non-draggable items
+     *  (placeholders, disabled items) omit the native draggable handler. */
+    draggable?: boolean;
+}) {
+    const row = (
+        <div
+            className={`sidenav-item ${active ? "sidenav-item--active" : ""} ${disabled ? "sidenav-item--disabled" : ""}`}
+            onClick={disabled ? undefined : onClick}
+            onContextMenu={disabled ? undefined : onContextMenu}
+            draggable={!!draggable && !disabled}
+            onDragStart={disabled ? undefined : onDragStart}
+            role="button"
+            tabIndex={disabled ? -1 : 0}
+            aria-current={active ? "page" : undefined}
+            aria-disabled={disabled || undefined}
+            onKeyDown={(e) => {
+                if (disabled) return;
+                if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); }
+            }}
+        >
+            {icon}
+            {/* Label is always in the DOM — hidden via CSS opacity in the
+                collapsed rail so the transition is smooth instead of
+                snapping. */}
+            <span className="sidenav-item__label">{label}</span>
+        </div>
+    );
+    // In the collapsed rail we lean on Fluent's themed Tooltip (positioned
+    // to the right, with arrow) so hover discovery feels native rather
+    // than the browser's default yellow chrome tooltip.
+    if (collapsed && !disabled) {
+        return (
+            <Tooltip content={label} relationship="label" positioning="after" withArrow>
+                {row}
+            </Tooltip>
+        );
+    }
+    return row;
+}
+
+/**
+ * Renders the editor-group tree inside `EditorTabsProvider`.
+ *
+ * This component lives inside the provider so it can call
+ * `useEditorTabs()`. Responsibilities:
+ *   1. Redirect bare ``/agent-hub`` → ``/agent-hub/orchestrator`` so the
+ *      default route still lands on New Session (matches prior behaviour).
+ *   2. Provide the `renderTab` factory that maps a ``TabDescriptor``
+ *      to its page component. The factory is memoised so lazy chunks
+ *      are not re-requested on every render.
+ *   3. Render an `emptyFallback` — the OrchestratorPage — when the only
+ *      group has no tabs (e.g. very first visit or after closing the
+ *      last tab).
+ */
+function AgentHubContent({ workloadClient, matchPath }: { workloadClient: WorkloadClientAPI; matchPath: string }) {
+    const history = useHistory();
+    const { state } = useEditorTabs();
+
+    // If we're at the bare base path, land on a fresh New Session draft
+    // (the old default route). We use ``replace`` so it doesn't add a
+    // history entry the back button has to step over. Each first visit
+    // gets a unique draft id — successive New Session clicks then open
+    // additional tabs rather than reusing this one.
+    //
+    // On a *reload* (F5 / Ctrl+Shift+R) we also bounce the URL back to
+    // the base path so the user always lands on the default view. The
+    // persisted tab state in `sessionStorage` has already been cleared
+    // in `EditorTabsContext` at module-load time, so the tab bar starts
+    // fresh to match.
+    useEffect(() => {
+        const p = history.location.pathname;
+        const atBase = p === matchPath || p === matchPath + "/";
+        if (atBase || isReloadNavigation()) {
+            const desc = makeNewSessionDescriptor(`${matchPath}/orchestrator`);
+            history.replace(desc.path);
+        }
+    }, [history, matchPath]);
+
+    const renderTab = useCallback((tab: TabDescriptor): React.ReactNode => {
+        switch (tab.kind) {
+            case "home":     return <DashboardPage workloadClient={workloadClient} />;
+            case "new":      return <OrchestratorPage workloadClient={workloadClient} />;
+            case "agents":   return <AgentsPage workloadClient={workloadClient} />;
+            case "pbifixer": return <PbiFixerPage workloadClient={workloadClient} />;
+            case "settings": return <SettingsPage workloadClient={workloadClient} />;
+            case "session": {
+                const m = tab.path.match(/\/session\/([^/?#]+)/);
+                const sid = m?.[1] ?? "";
+                return <MissionControlPageLazy workloadClient={workloadClient} sessionId={sid} />;
+            }
+            default: return null;
+        }
+    }, [workloadClient]);
+
+    // When nothing is open yet (e.g. sessionStorage was wiped), show the
+    // default landing surface. Once URL-sync opens a tab, this branch
+    // goes away automatically.
+    const nothingOpen = state.groups.length === 1 && state.groups[0].tabs.length === 0;
+    if (nothingOpen) {
+        return <OrchestratorPage workloadClient={workloadClient} />;
+    }
+
+    return (
+        <EditorGroupsRoot
+            renderTab={renderTab}
+            emptyFallback={<OrchestratorPage workloadClient={workloadClient} />}
+        />
+    );
+}
+
+/**
+ * AgentHubShell — the routed body of AgentHubLayout.
+ *
+ * Hoisted out of the outer component so it can live *inside* the
+ * ``EditorTabsProvider`` and therefore call ``useEditorTabs()`` +
+ * ``useNavPreferences()`` directly. The outer layout owns auth,
+ * sidebar state, and workspace preload; the shell owns navigation
+ * semantics (which click does what — activate, new tab, replace,
+ * split) and renders the visual tree.
+ */
+interface AgentHubShellProps {
+    workloadClient: WorkloadClientAPI;
+    matchPath: string;
+    activePage: string;
+    auth: ReturnType<typeof useGitHubAuth>;
+    sidebarOpen: boolean;
+    sidebarCollapsed: boolean;
+    toggleSidebar: () => void;
+    closeSidebar: () => void;
+    toggleCollapsed: () => void;
+    startPreload: (key: PreloadKey) => Promise<unknown>;
+    setNavPending: (v: boolean) => void;
+}
+
+/** Map a nav item id → its sidebar target page slug (used by preload). */
+function pageSlugForNavItem(item: NavItemId): string {
+    switch (item) {
+        case "newsession": return "orchestrator";
+        case "sessions":   return "home";
+        case "agents":     return "agents";
+        case "pbifixer":   return "pbifixer";
+        case "settings":   return "settings";
+    }
+}
+
+/** Build a tab descriptor for a nav item. "New Session" gets a fresh
+ *  draft nonce every call; everything else uses the stable descriptor
+ *  produced by ``descriptorFromPath``. */
+function descriptorForNavItem(item: NavItemId, matchPath: string): TabDescriptor {
+    if (item === "newsession") {
+        return makeNewSessionDescriptor(`${matchPath}/orchestrator`);
+    }
+    const path = `${matchPath}/${pageSlugForNavItem(item)}`;
+    const desc = descriptorFromPath(path);
+    return desc ?? { id: item, kind: "home", path, title: item };
+}
+
+function AgentHubShell({
+    workloadClient,
+    matchPath,
+    activePage,
+    auth,
+    sidebarOpen,
+    sidebarCollapsed,
+    toggleSidebar,
+    closeSidebar,
+    toggleCollapsed,
+    startPreload,
+    setNavPending,
+}: AgentHubShellProps) {
+    const { openTab, openTabInNewGroup, replaceActiveTab } = useEditorTabs();
+    const { prefs, setPrefs } = useNavPreferences();
+
+    // Right-click context menu state — a single instance handles
+    // whichever nav item was last right-clicked. Tracked here rather
+    // than per-item so we only ever mount one popover at a time.
+    const [ctxMenu, setCtxMenu] = useState<{ item: NavItemId; pos: { left: number; top: number } } | null>(null);
+    const dismissCtxMenu = useCallback(() => setCtxMenu(null), []);
+
+    /** Apply a behaviour to a nav item click. Prefetches the target
+     *  chunk + data in parallel, then opens/replaces/splits as requested. */
+    const applyBehaviour = useCallback((item: NavItemId, behaviour: NavBehaviour) => {
+        closeSidebar();
+        const slug = pageSlugForNavItem(item);
+        preloadChunkFor(slug);
+        const key = preloadKeyFor(slug);
+        if (key && auth.githubToken) {
+            // Best-effort prefetch — we don't block on it here since the
+            // tabs model shows a skeleton while the data arrives and the
+            // tab slot is already committed.
+            setNavPending(true);
+            Promise.race([
+                startPreload(key),
+                new Promise((r) => window.setTimeout(r, NAV_PREFETCH_TIMEOUT_MS)),
+            ]).finally(() => setNavPending(false));
+        }
+        const desc = descriptorForNavItem(item, matchPath);
+        switch (behaviour) {
+            case "new-group":
+                openTabInNewGroup(desc, "right");
+                break;
+            case "replace":
+                replaceActiveTab(desc);
+                break;
+            case "new-tab":
+                // For stable-id items (Sessions, Agents, etc.) ``openTab``
+                // still dedups — which is the right behaviour: you can't
+                // have two "Sessions" tabs. For duplicable drafts we get
+                // a fresh tab as intended.
+                openTab(desc);
+                break;
+            case "smart":
+            default:
+                openTab(desc);
+                break;
+        }
+    }, [auth.githubToken, closeSidebar, matchPath, openTab, openTabInNewGroup, replaceActiveTab, setNavPending, startPreload]);
+
+    const handleNavClick = useCallback((item: NavItemId) => {
+        applyBehaviour(item, resolveBehaviour(prefs, item));
+    }, [applyBehaviour, prefs]);
+
+    const handleNavContextMenu = useCallback((item: NavItemId, e: React.MouseEvent<HTMLDivElement>) => {
+        e.preventDefault();
+        setCtxMenu({ item, pos: { left: e.clientX, top: e.clientY } });
+    }, []);
+
+    const handleNavDragStart = useCallback((item: NavItemId, e: React.DragEvent<HTMLDivElement>) => {
+        const desc = descriptorForNavItem(item, matchPath);
+        e.dataTransfer.setData(DRAG_NAVITEM_MIME, JSON.stringify(desc));
+        e.dataTransfer.effectAllowed = "copyMove";
+    }, [matchPath]);
+
+    return (
         <div className="agenthub-root">
             {/* Top bar — matches design: brand text + breadcrumb, search, utility icons */}
             <div className="agenthub-topbar">
@@ -435,31 +755,73 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
 
                 {/* Sidebar */}
                 <aside className={`agenthub-sidebar ${sidebarOpen ? "sidebar--open" : ""} ${sidebarCollapsed ? "agenthub-sidebar--collapsed" : ""}`}>
-                    {/* Collapse toggle (design has no brand block in the sidebar — brand lives only in the topbar). */}
                     <div className="agenthub-sidebar-toolbar">
-                        <button
-                            type="button"
-                            className="sidebar-collapse-btn"
-                            onClick={toggleCollapsed}
-                            aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-                            title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+                        <Tooltip
+                            content={sidebarCollapsed
+                                ? `Expand sidebar (${modShortcut("B")})`
+                                : `Collapse sidebar (${modShortcut("B")})`}
+                            relationship="label"
+                            positioning="after"
+                            withArrow
                         >
-                            {sidebarCollapsed ? <PanelLeftExpand24Regular /> : <PanelLeftContract24Regular />}
-                        </button>
+                            <button
+                                type="button"
+                                className="sidebar-collapse-btn"
+                                onClick={toggleCollapsed}
+                                aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+                                aria-expanded={!sidebarCollapsed}
+                            >
+                                <PanelLeftContract24Regular />
+                            </button>
+                        </Tooltip>
                     </div>
 
                     <nav className="agenthub-sidenav">
                         <div className="sidenav-section-label">Agent Hub</div>
-                        <SideNavItem icon={<AddCircle24Regular />} label="New Session" active={activePage === "newsession"} collapsed={sidebarCollapsed} onClick={() => navTo("orchestrator")} />
-                        <SideNavItem icon={<ChatMultiple24Regular />} label="Sessions" active={activePage === "sessions"} collapsed={sidebarCollapsed} onClick={() => navTo("home")} />
-                        <SideNavItem icon={<Bot24Regular />} label="Agents and Skills" active={activePage === "agents"} collapsed={sidebarCollapsed} onClick={() => navTo("agents")} />
+                        <SideNavItem
+                            icon={<AddCircle24Regular />}
+                            label="New Session"
+                            active={activePage === "newsession"}
+                            collapsed={sidebarCollapsed}
+                            draggable
+                            onClick={() => handleNavClick("newsession")}
+                            onContextMenu={(e) => handleNavContextMenu("newsession", e)}
+                            onDragStart={(e) => handleNavDragStart("newsession", e)}
+                        />
+                        <SideNavItem
+                            icon={<ChatMultiple24Regular />}
+                            label="Sessions"
+                            active={activePage === "sessions"}
+                            collapsed={sidebarCollapsed}
+                            draggable
+                            onClick={() => handleNavClick("sessions")}
+                            onContextMenu={(e) => handleNavContextMenu("sessions", e)}
+                            onDragStart={(e) => handleNavDragStart("sessions", e)}
+                        />
+                        <SideNavItem
+                            icon={<Bot24Regular />}
+                            label="Agents and Skills"
+                            active={activePage === "agents"}
+                            collapsed={sidebarCollapsed}
+                            draggable
+                            onClick={() => handleNavClick("agents")}
+                            onContextMenu={(e) => handleNavContextMenu("agents", e)}
+                            onDragStart={(e) => handleNavDragStart("agents", e)}
+                        />
 
-                        {/* Visible only in collapsed mode — visually separates the two sections
-                            when the text labels are hidden. Matches Design/_shared/sidebar.js. */}
                         <div className="sidenav-rail-divider" aria-hidden="true" />
 
                         <div className="sidenav-section-label sidenav-section-label--spaced">Tools</div>
-                        <SideNavItem icon={<Wrench24Regular />} label="Power BI Fixer" active={activePage === "pbifixer"} collapsed={sidebarCollapsed} onClick={() => navTo("pbifixer")} />
+                        <SideNavItem
+                            icon={<Wrench24Regular />}
+                            label="Power BI Fixer"
+                            active={activePage === "pbifixer"}
+                            collapsed={sidebarCollapsed}
+                            draggable
+                            onClick={() => handleNavClick("pbifixer")}
+                            onContextMenu={(e) => handleNavContextMenu("pbifixer", e)}
+                            onDragStart={(e) => handleNavDragStart("pbifixer", e)}
+                        />
                         <SideNavItem icon={<MoreHorizontal24Regular />} label="…" active={false} collapsed={sidebarCollapsed} onClick={() => { /* placeholder */ }} disabled />
                         <SideNavItem icon={<MoreHorizontal24Regular />} label="…" active={false} collapsed={sidebarCollapsed} onClick={() => { /* placeholder */ }} disabled />
                     </nav>
@@ -484,40 +846,30 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
 
                 {/* Main content */}
                 <main className="agenthub-main">
-                    {/* The prefetch delay (``navPending``) is still enforced
-                        so the target page has its data ready on mount; the
-                        top progress strip that used to visualise it has been
-                        removed per UX preference. */}
                     <Suspense fallback={<div className="page-suspense-fallback"><Spinner size="small" /></div>}>
-                        <Switch>
-                            <Route path={`${match.path}/home`}><DashboardPage workloadClient={workloadClient} /></Route>
-                            <Route path={`${match.path}/orchestrator`}><OrchestratorPage workloadClient={workloadClient} /></Route>
-                            <Route path={`${match.path}/agents`}><AgentsPage workloadClient={workloadClient} /></Route>
-                            <Route path={`${match.path}/pbifixer`}><PbiFixerPage workloadClient={workloadClient} /></Route>
-                            <Route path={`${match.path}/settings`}><SettingsPage workloadClient={workloadClient} /></Route>
-                            <Route path={`${match.path}/session/:sessionId`}><SessionDetailPage workloadClient={workloadClient} /></Route>
-                            <Route path={match.path}><OrchestratorPage workloadClient={workloadClient} /></Route>
-                        </Switch>
+                        <AgentHubContent
+                            workloadClient={workloadClient}
+                            matchPath={matchPath}
+                        />
                     </Suspense>
                 </main>
             </div>
-        </div>
-        </SearchProvider>
-        </ItemProvider>
-    );
-}
 
-function SideNavItem({ icon, label, active, onClick, disabled, collapsed }: {
-    icon: React.ReactNode; label: string; active: boolean; onClick: () => void; disabled?: boolean; collapsed?: boolean;
-}) {
-    return (
-        <div
-            className={`sidenav-item ${active ? "sidenav-item--active" : ""} ${disabled ? "sidenav-item--disabled" : ""}`}
-            onClick={disabled ? undefined : onClick}
-            title={collapsed ? label : undefined}
-        >
-            {icon}
-            <Text size={300} weight={active ? "semibold" : "regular"}>{label}</Text>
+            {/* Single floating context menu instance — positioned at the
+                cursor when any nav item is right-clicked. */}
+            {ctxMenu && (
+                <SideNavContextMenu
+                    position={ctxMenu.pos}
+                    itemId={ctxMenu.item}
+                    currentDefault={resolveBehaviour(prefs, ctxMenu.item)}
+                    onOpenAs={(b) => applyBehaviour(ctxMenu.item, b)}
+                    onSetDefault={(b) => setPrefs({
+                        ...prefs,
+                        perItem: { ...prefs.perItem, [ctxMenu.item]: b },
+                    })}
+                    onDismiss={dismissCtxMenu}
+                />
+            )}
         </div>
     );
 }

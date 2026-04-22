@@ -44,7 +44,11 @@ from mcp_servers._common import format_http_error, shared_client
 FABRIC_API_BASE = "https://api.fabric.microsoft.com/v1"
 ONELAKE_DFS_BASE = "https://onelake.dfs.fabric.microsoft.com"
 
-mcp = FastMCP("fabric")
+# ``log_level="WARNING"`` stops FastMCP from installing a bare
+# ``logging.basicConfig(level=INFO, format="%(message)s")`` handler that
+# would emit unstructured ``Processing request of type ...`` lines on
+# this subprocess's stderr (captured by Docker under ``backend-1 |``).
+mcp = FastMCP("fabric", log_level="WARNING")
 
 
 ITEM_ROUTE_SEGMENTS = {
