@@ -247,19 +247,26 @@ function layoutFor(team: Team, canvasW: number): { positions: Map<string, NodePo
             (n) => n.id !== orchestrator.id && !subleadIds.has(n.id),
         );
 
+        // Rows must be separated by the real visual node height
+        // (``NODE_CONTENT_H`` — head + skills + state footer), NOT by
+        // ``NODE_H`` (the routing anchor height, which excludes the
+        // skills and footer). Using NODE_H caused the third row to
+        // overlap the second row by roughly 48px when the sub-lead
+        // cards rendered skills.
         out.set(orchestrator.id, { x: (canvasW - NODE_W) / 2, y: 30, w: NODE_W });
 
         const subRowW = subleads.length * NODE_W + Math.max(0, subleads.length - 1) * MIN_GAP_X;
         const subStartX = (canvasW - subRowW) / 2;
+        const subleadY = 30 + NODE_CONTENT_H + ROW_GAP_Y;
         subleads.forEach((s, i) => {
             out.set(s.id, {
                 x: subStartX + i * (NODE_W + MIN_GAP_X),
-                y: 30 + NODE_H + ROW_GAP_Y,
+                y: subleadY,
                 w: NODE_W,
             });
         });
 
-        const workerY = 30 + NODE_H + ROW_GAP_Y * 2;
+        const workerY = subleadY + NODE_CONTENT_H + ROW_GAP_Y;
         workers.forEach((w) => {
             const parent = workerParent.get(w.id);
             const parentPos = parent ? out.get(parent) : undefined;
@@ -433,12 +440,23 @@ export function OrchCanvas({
     // pills. Labels are drawn as absolutely positioned HTML inside the
     // canvas so typography stays crisp regardless of the SVG's
     // preserveAspectRatio stretching.
+    //
+    // Fan-out dedupe: when one source has ≥2 children all sharing the
+    // same relationship label (supervisor/hierarchical from orchestrator
+    // to workers), we would otherwise render the same "delegates &
+    // reports" pill on every edge. At 3+ fan-out those pills line up on
+    // a single y-band and visibly overlap. To avoid the clutter we
+    // render the label ONCE per (source, label) group, positioned on
+    // the edge going to the child closest to the source's vertical
+    // axis. The other parallel edges stay label-less — the arrow
+    // direction + single pill communicate the relationship clearly.
     const edgeLabels = useMemo(() => {
         type Entry = {
             key: string;
             kinds: Set<string>;
             from: NodePos;
             to: NodePos;
+            fromId: string;
             primaryKind: string;
         };
         const byPair = new Map<string, Entry>();
@@ -458,6 +476,10 @@ export function OrchCanvas({
                 kinds: new Set([e.kind]),
                 from,
                 to,
+                // Preserve the directional "from" for fan-out grouping;
+                // if either endpoint is the orchestrator/lead, treat
+                // that as the source for dedupe purposes.
+                fromId: e.from,
                 primaryKind: e.kind,
             });
         }
@@ -480,7 +502,35 @@ export function OrchCanvas({
             if (kinds.has("delegate") || kinds.has("report")) return "delegate";
             return "delegate";
         };
-        return [...byPair.values()].map((entry) => {
+        const entries = [...byPair.values()].map((entry) => ({
+            entry,
+            text: labelFor(entry.kinds),
+            klass: classFor(entry.kinds),
+        })).filter((x) => x.text);
+
+        // Group fan-outs with identical label coming from the same
+        // source. A "source" for a delegate/report pair is the node
+        // with the shallower (smaller y) position — typically the
+        // orchestrator/sub-lead sitting on the row above.
+        type Group = { sourceId: string; text: string; picks: typeof entries };
+        const groupKey = (x: typeof entries[number]) => {
+            const { from, to } = x.entry;
+            const src = from.y <= to.y ? x.entry.fromId : (
+                // pair is unordered; recover the "other" id from the key
+                x.entry.key.split("↔").find((id) => id !== x.entry.fromId) || x.entry.fromId
+            );
+            return `${src}::${x.text}`;
+        };
+        const groups = new Map<string, typeof entries>();
+        for (const x of entries) {
+            const k = groupKey(x);
+            const arr = groups.get(k);
+            if (arr) arr.push(x);
+            else groups.set(k, [x]);
+        }
+
+        return entries.map((x) => {
+            const { entry } = x;
             const { from, to } = entry;
             // Midpoint along the same curve the SVG renders.
             let cx: number, cy: number;
@@ -501,9 +551,35 @@ export function OrchCanvas({
                 cx = (x1 + x2) / 2;
                 cy = (y1 + y2) / 2;
             }
+
+            // Fan-out suppression: keep the label only on the edge
+            // whose target is closest to the source's centerline,
+            // drop it on all other siblings in the group.
+            const group = groups.get(groupKey(x)) || [];
+            if (group.length > 1) {
+                const srcIsFrom = from.y <= to.y;
+                const srcCenter = (srcIsFrom ? from : to).x + NODE_W / 2;
+                const distFor = (e: typeof x) => {
+                    const t = srcIsFrom ? e.entry.to : e.entry.from;
+                    return Math.abs(t.x + NODE_W / 2 - srcCenter);
+                };
+                const winner = group.reduce((best, curr) =>
+                    distFor(curr) < distFor(best) ? curr : best,
+                );
+                if (winner !== x) {
+                    return {
+                        key: entry.key,
+                        text: "",
+                        cx,
+                        cy,
+                        kind: x.klass,
+                    };
+                }
+            }
+
             return {
                 key: entry.key,
-                text: labelFor(entry.kinds),
+                text: x.text,
                 cx,
                 cy,
                 kind: classFor(entry.kinds),
