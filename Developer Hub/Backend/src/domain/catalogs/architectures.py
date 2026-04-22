@@ -24,6 +24,14 @@ class ArchitectureCatalogEntry:
     pick_when: str        # guidance to the compose LLM + to the user
     watch_for: str        # failure modes / anti-patterns
     fabric_use_cases: list[str] = field(default_factory=list)
+    # Structural constraints for slots laid out under this pattern.
+    # Rendered verbatim into the composer prompt so adding a new
+    # architecture (or reshaping an existing one) doesn't require
+    # editing the prompt string. Each entry should be a single
+    # imperative sentence targeting the composer LLM, e.g.
+    # "slots are ordered; handoffs go slot[i] -> slot[i+1] with
+    # kind='report'".
+    slot_rules: list[str] = field(default_factory=list)
     # True if the runtime has a dedicated driver for this pattern.
     # False for reserved values (network / debate / magentic) which
     # fall back to a generic supervisor driver in v1.
@@ -53,6 +61,11 @@ ARCHITECTURES: list[ArchitectureCatalogEntry] = [
             "Add a measure to an existing semantic model",
             "Validate one lakehouse table's schema",
         ],
+        slot_rules=[
+            "Exactly one slot.",
+            "No handoffs — there is no second agent to talk to.",
+            "`entrypointSlotId` is the sole slot id.",
+        ],
     ),
     ArchitectureCatalogEntry(
         id="supervisor",
@@ -76,6 +89,12 @@ ARCHITECTURES: list[ArchitectureCatalogEntry] = [
             "Create a sales report from the Contoso lakehouse",
             "Provision a new workspace with standard governance",
         ],
+        slot_rules=[
+            "One lead slot at index 0; every other slot is a worker.",
+            "Handoffs: lead → each worker with kind='delegate'.",
+            "Workers do not talk to each other directly.",
+            "`entrypointSlotId` is the lead.",
+        ],
     ),
     ArchitectureCatalogEntry(
         id="sequential",
@@ -98,6 +117,12 @@ ARCHITECTURES: list[ArchitectureCatalogEntry] = [
             "Build a Medallion lakehouse (Bronze → Silver → Gold)",
             "Ingest → transform → publish a semantic model",
         ],
+        slot_rules=[
+            "Slots are ordered; handoffs go slot[i] → slot[i+1] with kind='report'.",
+            "No lead / supervisor slot.",
+            "Same agentId must not appear twice in a row — one agent handles its whole phase in one slot.",
+            "`entrypointSlotId` is the first slot.",
+        ],
     ),
     ArchitectureCatalogEntry(
         id="parallel",
@@ -119,6 +144,12 @@ ARCHITECTURES: list[ArchitectureCatalogEntry] = [
         fabric_use_cases=[
             "Audit every workspace in the tenant for orphaned items",
             "Review each notebook in a lakehouse for code smells",
+        ],
+        slot_rules=[
+            "Three layers: one fan-out supervisor, N parallel workers, one reducer.",
+            "Handoffs: supervisor → workers kind='delegate'; workers → reducer kind='report'.",
+            "Workers never talk to each other.",
+            "Same agentId MAY repeat across workers — that's the point of fan-out.",
         ],
     ),
     ArchitectureCatalogEntry(
@@ -144,6 +175,11 @@ ARCHITECTURES: list[ArchitectureCatalogEntry] = [
             "Triage incoming Fabric questions",
             "Route user request to data engineer / modeler / admin",
         ],
+        slot_rules=[
+            "One triage slot, with kind='handoff' edges to each candidate specialist.",
+            "Only one downstream specialist executes per run.",
+            "No report edges back to triage — the specialist is terminal.",
+        ],
     ),
     ArchitectureCatalogEntry(
         id="hierarchical",
@@ -166,6 +202,12 @@ ARCHITECTURES: list[ArchitectureCatalogEntry] = [
         fabric_use_cases=[
             "Migrate a Synapse warehouse to Fabric",
             "Stand up a new tenant-wide Fabric deployment",
+        ],
+        slot_rules=[
+            "One lead, 2–3 sub-leads under it, workers under each sub-lead.",
+            "Use `parentId` to express the tree.",
+            "Tree depth ≤ 3 (lead, sub-lead, worker).",
+            "Delegates downward, reports upward.",
         ],
     ),
     ArchitectureCatalogEntry(
@@ -192,6 +234,11 @@ ARCHITECTURES: list[ArchitectureCatalogEntry] = [
             "Optimize a Spark notebook's performance",
             "Review a KQL query for correctness + efficiency",
         ],
+        slot_rules=[
+            "Exactly two slots: an actor and a critic.",
+            "Handoffs: actor → critic kind='report', critic → actor kind='critique'.",
+            "Budget must cap turns; the critic is responsible for terminating the loop.",
+        ],
     ),
     ArchitectureCatalogEntry(
         id="mixed",
@@ -214,6 +261,11 @@ ARCHITECTURES: list[ArchitectureCatalogEntry] = [
             "Respond to a production incident",
             "Migration that needs parallel audits and sequential "
             "cutover steps",
+        ],
+        slot_rules=[
+            "Top-level supervisor with sub-teams of different patterns.",
+            "Every slot in a sub-team MUST set `subteam` to the cluster label.",
+            "Within a sub-team, follow that pattern's rules.",
         ],
     ),
     # ── Reserved: no dedicated driver yet. LLM may still pick them;
@@ -239,6 +291,10 @@ ARCHITECTURES: list[ArchitectureCatalogEntry] = [
             "Cross-discipline review of a lakehouse architecture",
         ],
         has_driver=False,
+        slot_rules=[
+            "Full-mesh peer handoffs with kind='peer'.",
+            "Budget must cap turns to prevent non-convergence.",
+        ],
     ),
     ArchitectureCatalogEntry(
         id="debate",
@@ -259,6 +315,11 @@ ARCHITECTURES: list[ArchitectureCatalogEntry] = [
             "Security / policy review of a new workspace",
         ],
         has_driver=False,
+        slot_rules=[
+            "N debaters + 1 judge.",
+            "Debaters peer each other with kind='peer'; all report to the judge with kind='report'.",
+            "Budget must cap rounds.",
+        ],
     ),
     ArchitectureCatalogEntry(
         id="magentic",
@@ -281,6 +342,10 @@ ARCHITECTURES: list[ArchitectureCatalogEntry] = [
             "Root-cause analysis across multiple workspaces",
         ],
         has_driver=False,
+        slot_rules=[
+            "One manager slot plus any number of specialists.",
+            "Manager delegates to a specialist, the specialist reports back, the manager re-plans.",
+        ],
     ),
 ]
 
@@ -293,17 +358,3 @@ ARCHITECTURES_BY_ID: dict[str, ArchitectureCatalogEntry] = {
 def get_architecture(arch_id: str) -> ArchitectureCatalogEntry | None:
     """Lookup helper with string fallthrough for reserved values."""
     return ARCHITECTURES_BY_ID.get(arch_id)
-
-
-def catalog_prompt_block() -> str:
-    """Render the catalog as a compact prompt fragment the compose LLM
-    can use to pick an architecture.
-    """
-    lines: list[str] = []
-    for a in ARCHITECTURES:
-        lines.append(
-            f"- {a.id}: {a.headline} "
-            f"Pick when: {a.pick_when} "
-            f"Watch for: {a.watch_for}"
-        )
-    return "\n".join(lines)

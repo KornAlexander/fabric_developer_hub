@@ -20,7 +20,6 @@ import httpx
 from domain.catalogs.architectures import (
     ARCHITECTURES,
     ARCHITECTURES_BY_ID,
-    catalog_prompt_block,
 )
 from domain.models.agent_models import AgentTemplate
 from domain.models.composition import (
@@ -33,6 +32,7 @@ from domain.models.composition import (
 )
 from services.agenthub.agent_registry import AGENT_TEMPLATES, list_templates
 from services.agenthub.attachments import ATTACHMENT_SHIELD_PROMPT, process_attachments
+from services.agenthub.compose import RECIPES, build_system_prompt
 from services.agenthub.compose_models import COMPOSE_FALLBACK_MODEL
 
 logger = logging.getLogger(__name__)
@@ -83,133 +83,7 @@ _ARCHITECTURE_ALIASES: dict[str, str] = {
 }
 
 
-SYSTEM_PROMPT_TEMPLATE = """\
-You are the AgentHub Composer. Given a user's task, the attachments they
-provided, a catalog of available multi-agent **architectures**, and a
-catalog of available **agents and their skills**, you produce a single
-**Composition** describing exactly how the task should be executed.
-
-You do NOT produce a "plan" — no step list, no prerequisites, no
-workspace item inventory. Plans are emitted by agents at execution
-time if they choose to. Your job is to pick the right *shape* and the
-right *people* for the job.
-
-# Architectures available
-{architectures}
-
-# Agents available
-{agents}
-
-# Boundary rules — resolve overlaps deterministically
-These rules OVERRIDE any ambiguity in the agent descriptions.
-
-- Architecture design (layers, SCD, patterns) → **Architect**, never
-  Modeler or FabricDataEngineer.
-- Choosing which Fabric items go where + writing DDL → **Modeler**,
-  never FabricDataEngineer.
-- Creating Fabric items, loading data, writing Spark / T-SQL / KQL
-  notebooks, building Bronze→Silver→Gold transforms, authoring the
-  Power BI semantic model, AND building the final Power BI report →
-  **FabricDataEngineer**. All of this is ONE phase owned by ONE slot,
-  not split across multiple FabricDataEngineer slots.
-- Workspaces, capacities, default Spark pools, RBAC, governance →
-  **FabricAdmin**, always runs BEFORE any builder.
-- External application code (Python / Node / .NET reading Fabric via
-  ODBC / XMLA / REST) → **FabricAppDev**. Do NOT pick for pure
-  end-to-end analytics tasks.
-- Dispatching work packages between multiple builders → **Creator**.
-  Only useful when the plan has Architect + Modeler + ≥2 builders.
-- Lead in supervisor or hierarchical plans → **Orchestrator**. Never
-  in sequential plans — sequential has no lead.
-
-# Picking rules
-1. Prefer the simplest architecture that fits. Start at `solo` and
-   escalate only when the task clearly needs coordination.
-2. If the caller provides a `preferredArchitecture`, honour it unless
-   it's unsuitable (e.g. `solo` requested for a clearly multi-domain
-   task). Explain briefly in `rationale` if you override it.
-3. Every slot's `agentId` MUST be one of the agent ids above. Every
-   `skills[].id` MUST be one of that agent's declared skills.
-4. **Uniqueness**: never emit two slots with the same `agentId` in a
-   sequential or supervisor plan. One agent handles its entire phase
-   in one slot, even if that phase has internal stages. Repeating an
-   agent is only allowed in `parallel` (fan-out over independent
-   inputs) or `mixed` (labelled sub-teams).
-5. **Minimality**: omit every agent whose description doesn't map to
-   an explicit sentence in the user's task. When unsure, leave it
-   out — the Orchestrator can spawn it at runtime if execution proves
-   it's needed.
-6. For `reflection`: exactly two slots — an actor and a critic.
-7. For `sequential`: slots are ordered; handoffs go slot[i] →
-   slot[i+1] with kind="report". No `Orchestrator` slot.
-8. For `supervisor`: one lead slot at index 0 delegating to each
-   worker with kind="delegate".
-9. For `parallel`: one fan-out supervisor, N parallel workers, one
-   reducer. Workers report to the reducer, not the supervisor.
-10. For `router`: one triage slot, with kind="handoff" edges to each
-    candidate specialist.
-11. For `hierarchical`: 2-3 sub-leads under one lead, each owning
-    their own workers. Use `parentId` to express the tree.
-12. For `mixed`: label each cluster with a `subteam` string on its
-    member slots.
-13. Pick a sensible `budget`. Default (20/100/600) is fine for most
-    tasks; scale up for genuinely big work, never above the schema
-    caps.
-14. `architecture` MUST be exactly one of the ids from the
-    "Architectures available" section above — never a slot role
-    like `lead`, `worker`, or `reducer`.
-
-# Task-type recipes (canonical compositions)
-Use these as the default shape when the task matches. Deviate only
-with a clear reason recorded in `rationale`.
-
-- "End-to-end analytics solution" (ingest + transform + semantic
-  model + report), greenfield or nearly so, no external app:
-    → `sequential`, 4 slots:
-       1. Architect — design the layers + SCD + contracts
-       2. Modeler — translate to Fabric blueprint + DDL
-       3. FabricAdmin — provision workspace / capacity / pool / RBAC
-       4. FabricDataEngineer — build all items, pipelines, semantic
-          model, and report in one phase
-- Same, but brownfield / small / tactical:
-    → `solo`, 1 FabricDataEngineer slot.
-- End-to-end analytics + a consumer application:
-    → `sequential` with 5 slots: Architect → Modeler → FabricAdmin →
-      FabricDataEngineer → FabricAppDev.
-- Migration or tenant-scale programme with parallel tracks:
-    → `hierarchical`, Orchestrator on top, domain sub-leads.
-- Audit / review across many workspaces or items:
-    → `parallel`, one worker per unit, one reducer.
-- Single-artifact quality pass (tune a DAX measure, fix a notebook):
-    → `reflection`, actor + critic.
-
-# Output
-Respond with ONLY valid JSON matching this schema (camelCase keys):
-
-{{
-  "architecture": "<one of the ids above>",
-  "rationale": "<why this shape fits this task, 1-2 sentences>",
-  "headline": "<one-liner shown above the graph>",
-  "subtitle": "<short subtitle — what this team is going to do>",
-  "slots": [
-    {{
-      "id": "<slot id, e.g. 'lead' or 'worker-1'>",
-      "agentId": "<agent id>",
-      "role": "<what this slot does in this task>",
-      "skills": [{{"id": "<skill id>", "name": "<skill name>"}}],
-      "parentId": null,
-      "subteam": null
-    }}
-  ],
-  "handoffs": [
-    {{"from": "<slot id>", "to": "<slot id>", "kind": "delegate|report|peer|handoff|critique", "condition": null}}
-  ],
-  "entrypointSlotId": "<slot id>",
-  "budget": {{"maxTurns": 20, "maxToolCalls": 100, "maxWallclockS": 600, "requireApprovals": true}}
-}}
-
-No markdown fences. No prose outside the JSON object.
-"""
+SYSTEM_PROMPT_HEADER_MARKER = "You are the AgentHub Composer"
 
 
 class ComposeService:
@@ -329,32 +203,27 @@ class ComposeService:
     # ── Internals ────────────────────────────────────────────────
 
     def _system_prompt(self) -> str:
-        """Render (and memoize) the static system prompt.
+        """Render (and memoize) the composer's system prompt.
 
-        Both ``catalog_prompt_block()`` and ``_agent_catalog_block()`` are
-        deterministic for a given process, so we cache the rendered
-        prompt on first use and reuse it across every compose call.
+        The prompt is a pure function of the three catalogs
+        (architectures, agents, recipes) — all static at runtime — so
+        we cache the rendered string on the instance and reuse it
+        across every compose call.
         """
         cached = getattr(self, "_system_prompt_cache", None)
         if cached is not None:
             return cached
-        rendered = SYSTEM_PROMPT_TEMPLATE.format(
-            architectures=catalog_prompt_block(),
-            agents=self._agent_catalog_block(),
-        ) + "\n\n" + ATTACHMENT_SHIELD_PROMPT
+        agents = (
+            list_templates()
+            if self._agents is AGENT_TEMPLATES
+            else list(self._agents.values())
+        )
+        rendered = (
+            build_system_prompt(ARCHITECTURES, agents, RECIPES)
+            + "\n\n" + ATTACHMENT_SHIELD_PROMPT
+        )
         self._system_prompt_cache = rendered
         return rendered
-
-    def _agent_catalog_block(self) -> str:
-        lines: list[str] = []
-        for t in list_templates() if self._agents is AGENT_TEMPLATES else self._agents.values():
-            skills_str = ", ".join(
-                f"{s.id} ({s.name})" for s in t.skills
-            ) if t.skills else "(no declared skills)"
-            lines.append(
-                f"- {t.id}: {t.description} | skills: {skills_str}"
-            )
-        return "\n".join(lines)
 
     async def _call_llm(
         self, *, messages: list[dict], copilot_token: str, correlation_id: str,
@@ -511,14 +380,13 @@ class ComposeService:
 
         rationale = str(payload.get("rationale") or "Composition derived from the task prompt.").strip()
 
-        # Post-parse normalisation: enforce the uniqueness rule from
-        # the system prompt even when the LLM ignores it. For
-        # sequential and supervisor architectures, emitting two slots
-        # with the same ``agentId`` produces two disjoint agent loops
-        # with no shared state — almost always wrong. We merge
-        # consecutive duplicates into a single slot (first one wins,
-        # roles are concatenated) and rewrite handoffs to match. See
-        # SYSTEM_PROMPT_TEMPLATE "Uniqueness" rule.
+        # Post-parse normalisation: enforce uniqueness even when the
+        # LLM ignores rule 4 in the global rules. For sequential and
+        # supervisor architectures, emitting two slots with the same
+        # ``agentId`` produces two disjoint agent loops with no shared
+        # state — almost always wrong. We merge consecutive duplicates
+        # into a single slot (first one wins, roles are concatenated)
+        # and rewrite handoffs to match.
         if arch in ("sequential", "supervisor"):
             slots, handoffs, entrypoint = _collapse_duplicate_agent_slots(
                 slots, handoffs, entrypoint,

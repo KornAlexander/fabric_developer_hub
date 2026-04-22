@@ -73,6 +73,37 @@ class MessageType(enum.StrEnum):
 
 # ── Agent Templates ──────────────────────────────────────────────────
 
+class AgentBoundaries(BaseModel):
+    """Structured ownership boundaries for an agent.
+
+    Lives on :class:`AgentTemplate` and drives the composer prompt
+    deterministically. The composer renders these fields into the
+    "Boundary matrix" prompt section so adding a new agent requires
+    only registering its boundaries — no prompt string edits.
+
+    Fields are intentionally lists (not free text): prose variations
+    across agents were a major source of cross-LLM compose variance
+    before this refactor.
+
+    * ``owns``           — exclusive responsibilities.
+    * ``does_not_own``   — responsibilities the LLM often confuses
+                           this agent with; each entry may end with
+                           ``" -> <other-agent-id>"`` to tell the
+                           composer where to route instead.
+    * ``hands_off_to``   — agent ids this agent typically delegates
+                           to next (prose hint for sequencing).
+    * ``pick_when``      — user-task sentences that select this agent.
+    * ``skip_when``      — user-task situations where this agent is
+                           NOT a fit and should be omitted.
+    """
+
+    owns: list[str] = Field(default_factory=list)
+    does_not_own: list[str] = Field(default_factory=list)
+    hands_off_to: list[str] = Field(default_factory=list)
+    pick_when: list[str] = Field(default_factory=list)
+    skip_when: list[str] = Field(default_factory=list)
+
+
 class AgentTemplate(BaseModel):
     id: str
     name: str
@@ -90,6 +121,11 @@ class AgentTemplate(BaseModel):
     default_access_level: str = "read"
     icon: str | None = None
     version: str = "1.0.0"
+    # Structured composer-facing metadata. Optional: agents without
+    # boundaries defined fall back to a description-only render in
+    # the compose prompt (legacy path). New agents should always set
+    # boundaries so the composer picks deterministically.
+    boundaries: AgentBoundaries | None = None
 
 
 class UserAgentConfig(BaseModel):

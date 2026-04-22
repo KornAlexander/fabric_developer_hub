@@ -22,7 +22,7 @@ from AnalyticsPlatformAgents. The skill ids mirror the upstream folder
 names under ``skills/`` so they remain traceable.
 """
 
-from domain.models.agent_models import AgentCategory, AgentTemplate
+from domain.models.agent_models import AgentBoundaries, AgentCategory, AgentTemplate
 from services.agenthub.catalog_loader import load_catalog
 
 AGENT_TEMPLATES: dict[str, AgentTemplate] = {}
@@ -74,16 +74,29 @@ _register(
         name="FabricAdmin",
         display_name="FabricAdmin",
         category=AgentCategory.ADMIN,
-        description=(
-            "Fabric platform operator. "
-            "OWNS: tenant settings, capacities, workspaces (create / "
-            "delete / configure), default Spark pools, RBAC / access "
-            "policies, governance, cost / capacity telemetry. "
-            "DOES NOT OWN: data ingestion, transformation, semantic "
-            "models, reports, application code. "
-            "HANDS OFF TO: FabricDataEngineer once workspaces and "
-            "pools exist. Runs BEFORE any builder agent — you cannot "
-            "land data in a workspace that doesn't exist."
+        description="Fabric platform operator — workspaces, capacity, RBAC, governance.",
+        boundaries=AgentBoundaries(
+            owns=[
+                "tenant settings",
+                "capacities and default Spark pools",
+                "workspace create / delete / configure",
+                "RBAC and access policies",
+                "cost and capacity telemetry",
+            ],
+            does_not_own=[
+                "data ingestion -> fabric-data-engineer",
+                "transformation -> fabric-data-engineer",
+                "semantic models and reports -> fabric-data-engineer",
+                "external application code -> fabric-app-dev",
+            ],
+            hands_off_to=["fabric-data-engineer"],
+            pick_when=[
+                "the task needs a new workspace, capacity, or RBAC change before any build can start",
+                "runs BEFORE any builder agent in a multi-agent plan",
+            ],
+            skip_when=[
+                "the target workspace already exists and the task only needs item-level work",
+            ],
         ),
         tags=["Governance", "Capacity", "Security", "Cost", "RBAC"],
         system_prompt=(
@@ -116,18 +129,25 @@ _register(
         name="FabricAppDev",
         display_name="FabricAppDev",
         category=AgentCategory.ENGINEERING,
-        description=(
-            "Application developer for Fabric-backed apps. "
-            "OWNS: application code (Python / Node / .NET) that reads "
-            "or writes Fabric data via ODBC, XMLA, REST APIs, or "
-            "Livy; authentication wiring; query performance tuning "
-            "from the app side. "
-            "DOES NOT OWN: creating Fabric items, designing data "
-            "models, building reports. "
-            "PICK WHEN: the task explicitly involves building or "
-            "modifying an external application, web service, or "
-            "script that consumes Fabric data. Do NOT pick for pure "
-            "end-to-end analytics tasks — those don't need an app."
+        description="Application developer for Fabric-backed apps (Python / Node / .NET via ODBC, XMLA, REST, Livy).",
+        boundaries=AgentBoundaries(
+            owns=[
+                "application code that reads or writes Fabric data",
+                "authentication wiring for the app",
+                "query performance tuning from the app side",
+            ],
+            does_not_own=[
+                "creating Fabric items -> fabric-data-engineer",
+                "designing data models -> modeler",
+                "building semantic models or reports -> fabric-data-engineer",
+            ],
+            hands_off_to=[],
+            pick_when=[
+                "the task explicitly requires an external application, web service, or script that consumes Fabric data",
+            ],
+            skip_when=[
+                "the task is pure end-to-end analytics with no external consumer app",
+            ],
         ),
         tags=["Python", "ODBC", "XMLA", "REST", "pyodbc"],
         system_prompt=(
@@ -160,25 +180,28 @@ _register(
         name="FabricDataEngineer",
         display_name="FabricDataEngineer",
         category=AgentCategory.ENGINEERING,
-        description=(
-            "Fabric builder. Creates the actual items and moves the "
-            "data. "
-            "OWNS: creating and populating Lakehouses / Warehouses / "
-            "Eventhouses, writing Spark and T-SQL notebooks, "
-            "authoring Pipelines, implementing Bronze→Silver→Gold "
-            "transforms, ingestion connectors. Also OWNS building "
-            "Power BI semantic models (TMDL / TMSL) AND Power BI "
-            "reports on the Gold layer — this is one continuous "
-            "phase, same hands. "
-            "DOES NOT OWN: designing the architecture (Architect), "
-            "choosing Fabric item shapes (Modeler), "
-            "workspace / capacity / RBAC (FabricAdmin), or external "
-            "application code (FabricAppDev). "
-            "PICK ONCE per plan: when the task mentions both "
-            "ingestion and transformation and reporting, use a "
-            "SINGLE FabricDataEngineer slot that covers the whole "
-            "build-phase — never chain two FabricDataEngineer slots "
-            "back-to-back."
+        description="Fabric builder — creates items, moves data, builds the semantic model and the final report.",
+        boundaries=AgentBoundaries(
+            owns=[
+                "creating and populating Lakehouses / Warehouses / Eventhouses",
+                "Spark and T-SQL notebooks and pipelines",
+                "Bronze -> Silver -> Gold transforms and ingestion connectors",
+                "Power BI semantic models (TMDL / TMSL) on the Gold layer",
+                "Power BI reports on the Gold layer",
+            ],
+            does_not_own=[
+                "high-level architecture -> architect",
+                "choosing Fabric item shapes and DDL -> modeler",
+                "workspace / capacity / RBAC -> fabric-admin",
+                "external application code -> fabric-app-dev",
+            ],
+            hands_off_to=[],
+            pick_when=[
+                "the task requires creating or modifying Fabric items, pipelines, semantic models, or reports",
+            ],
+            skip_when=[
+                "the task is purely a design or planning exercise with no build step",
+            ],
         ),
         tags=["Medallion", "Spark", "T-SQL", "Pipelines", "ETL"],
         system_prompt=(
@@ -213,22 +236,27 @@ _register(
         name="Architect",
         display_name="Architect",
         category=AgentCategory.ENGINEERING,
-        description=(
-            "Analytics architect. Thinks in patterns, not products. "
-            "OWNS: high-level architecture decisions — layer count "
-            "(L0 / L1 / L2), storage style (Medallion / Kimball / "
-            "Data Vault), SCD strategy, data contracts between "
-            "layers, naming conventions, metadata-driven ETL "
-            "frameworks. Output is technology-agnostic prose + "
-            "Mermaid diagrams. "
-            "DOES NOT OWN: Fabric item choices (Modeler), DDL "
-            "(Modeler), any actual item creation or data (data "
-            "engineer). "
-            "PICK WHEN: the task is genuinely greenfield, the user "
-            "asks for a 'design' / 'architecture' / 'blueprint', or "
-            "the downstream build would otherwise guess at "
-            "layering. Skip for small, tactical, or clearly-scoped "
-            "tasks."
+        description="Analytics architect — layers, SCD, contracts, naming. Technology-agnostic design docs.",
+        boundaries=AgentBoundaries(
+            owns=[
+                "layer count (L0 / L1 / L2)",
+                "storage style (Medallion / Kimball / Data Vault)",
+                "SCD strategy and inter-layer data contracts",
+                "naming conventions and metadata-driven ETL frameworks",
+                "technology-agnostic prose and Mermaid diagrams",
+            ],
+            does_not_own=[
+                "Fabric item choices and DDL -> modeler",
+                "any actual item creation or data movement -> fabric-data-engineer",
+            ],
+            hands_off_to=["modeler"],
+            pick_when=[
+                "the task is greenfield or explicitly asks for a design / architecture / blueprint",
+                "downstream build would otherwise guess at layering",
+            ],
+            skip_when=[
+                "the task is small, tactical, or clearly scoped to one artifact",
+            ],
         ),
         tags=["Architecture", "Layers", "SCD", "Data Vault", "Metadata"],
         system_prompt=(
@@ -259,24 +287,28 @@ _register(
         name="Modeler",
         display_name="Modeler",
         category=AgentCategory.ENGINEERING,
-        description=(
-            "Fabric data modeler. NOT a Power BI semantic modeler — "
-            "that's part of FabricDataEngineer's build phase. "
-            "OWNS: translating an architecture spec into a concrete "
-            "Fabric item plan — picks Lakehouse vs Warehouse vs "
-            "Eventhouse per layer, writes table DDL (Delta, T-SQL, "
-            "KQL), defines naming / Shortcut / partitioning / "
-            "retention policies, and tags each deliverable with the "
-            "Fabric agent that will build it. Output is a Fabric "
-            "blueprint document — still text, no items created yet. "
-            "DOES NOT OWN: high-level architecture (Architect), "
-            "actual item creation (FabricDataEngineer), Power BI "
-            "semantic model measure authoring or report design "
-            "(FabricDataEngineer). "
-            "PICK WHEN: following Architect output into a Fabric "
-            "build, and the stack is non-trivial enough that picking "
-            "the right Fabric item types deserves a dedicated step. "
-            "Skip for single-workload tasks."
+        description="Fabric data modeler — picks Lakehouse / Warehouse / Eventhouse per layer and writes DDL.",
+        boundaries=AgentBoundaries(
+            owns=[
+                "translating an architecture spec into a Fabric item plan",
+                "picking Lakehouse vs Warehouse vs Eventhouse per layer",
+                "table DDL (Delta, T-SQL, KQL)",
+                "naming / Shortcut / partitioning / retention policies",
+                "tagging each deliverable with the Fabric agent that will build it",
+            ],
+            does_not_own=[
+                "high-level architecture -> architect",
+                "actual item creation -> fabric-data-engineer",
+                "Power BI semantic model or report authoring -> fabric-data-engineer",
+            ],
+            hands_off_to=["fabric-data-engineer", "creator"],
+            pick_when=[
+                "an Architect spec is being translated into a Fabric build",
+                "the stack is non-trivial enough that picking the right Fabric item types deserves a dedicated step",
+            ],
+            skip_when=[
+                "the task touches a single workload or a known Fabric item shape",
+            ],
         ),
         tags=["Fabric Blueprint", "Lakehouse", "Warehouse", "Eventhouse", "DDL"],
         system_prompt=(
@@ -309,18 +341,25 @@ _register(
         name="Creator",
         display_name="Creator",
         category=AgentCategory.ADMIN,
-        description=(
-            "Build-phase dispatcher. Reads the Fabric blueprint and "
-            "splits it into agent-scoped work packages. "
-            "OWNS: work-package decomposition, build-order "
-            "validation (admin → data-engineer → app-dev), blueprint "
-            "completeness gate. Does NOT execute any package itself. "
-            "DOES NOT OWN: architecture, modeling, any actual build "
-            "work. "
-            "PICK WHEN: the plan has an Architect AND a Modeler AND "
-            "multiple downstream builders (FabricAdmin + "
-            "FabricDataEngineer, optionally FabricAppDev). For "
-            "two-agent plans the handoffs replace the Creator."
+        description="Build-phase dispatcher — splits the Fabric blueprint into agent-scoped work packages.",
+        boundaries=AgentBoundaries(
+            owns=[
+                "work-package decomposition from the blueprint",
+                "build-order validation (admin -> data-engineer -> app-dev)",
+                "blueprint completeness gate",
+            ],
+            does_not_own=[
+                "architecture -> architect",
+                "modeling -> modeler",
+                "any actual build work -> fabric-admin / fabric-data-engineer / fabric-app-dev",
+            ],
+            hands_off_to=["fabric-admin", "fabric-data-engineer", "fabric-app-dev"],
+            pick_when=[
+                "the plan already has an Architect and a Modeler AND at least two downstream builders",
+            ],
+            skip_when=[
+                "the plan has two or fewer builders — direct handoffs replace the Creator",
+            ],
         ),
         tags=["Dispatcher", "Blueprint", "Handoff"],
         system_prompt=(
@@ -349,18 +388,24 @@ _register(
         name="Orchestrator",
         display_name="Orchestrator",
         category=AgentCategory.ADMIN,
-        description=(
-            "Top-level coordinator. Only present as the lead node in "
-            "supervisor / hierarchical plans. "
-            "OWNS: routing work across the team, gating phase "
-            "transitions, and — via the team-orchestration skill — "
-            "spawning additional agents mid-run when execution "
-            "reveals a missing capability. "
-            "DOES NOT OWN: any domain work. Does not build, design, "
-            "model, ingest, report, or deploy. "
-            "PICK WHEN: the architecture is supervisor or "
-            "hierarchical AND the team has ≥ 3 workers. Do NOT use "
-            "for sequential pipelines — sequential has no lead."
+        description="Top-level coordinator — routes work, gates phase transitions, can spawn agents mid-run.",
+        boundaries=AgentBoundaries(
+            owns=[
+                "routing work across the team",
+                "gating phase transitions",
+                "spawning additional agents mid-run when execution reveals a missing capability",
+            ],
+            does_not_own=[
+                "any domain work (no build, design, modeling, ingestion, reporting, or deployment)",
+            ],
+            hands_off_to=[],
+            pick_when=[
+                "the architecture is supervisor or hierarchical AND the team has at least 3 workers",
+            ],
+            skip_when=[
+                "the architecture is sequential — sequential has no lead",
+                "the team has two or fewer workers — direct handoffs are cheaper",
+            ],
         ),
         tags=["Coordination", "Workflow", "Handoff Validation"],
         system_prompt=(
