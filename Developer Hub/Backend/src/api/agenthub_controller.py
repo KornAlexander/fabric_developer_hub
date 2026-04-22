@@ -1209,7 +1209,6 @@ async def debug_session_snapshot(
 @router.get("/orchestrate/compose-models")
 async def list_compose_models(
     request: Request,
-    ctx: AuthorizationContext | None = Depends(require_user),
 ):
     """Return the user's Copilot catalog ranked for the Compose step.
 
@@ -1217,6 +1216,12 @@ async def list_compose_models(
     render the "Plan this" model picker pre-sorted best-first, with
     short reasons and latency hints. Entries unsuitable for composition
     (embeddings, TTS, legacy) are filtered out.
+
+    Auth: uses the caller's GitHub token (Authorization header) to hit
+    the Copilot models API — the same auth path as ``/api/github/models``.
+    Does NOT require the Fabric OBO token because it has no Fabric
+    side-effects; requiring it here caused 401s for clients that only
+    ship the GitHub Bearer token on this call.
     """
     try:
         catalog = await github_chat_controller.list_models(request)
