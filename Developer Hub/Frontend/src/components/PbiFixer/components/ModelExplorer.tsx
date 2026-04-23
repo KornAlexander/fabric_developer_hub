@@ -7,6 +7,7 @@ import {
   Input,
   Textarea,
   Spinner,
+  Switch,
   makeStyles,
   shorthands,
   Tooltip,
@@ -26,7 +27,6 @@ import {
   getModelPreviewText,
   getDaxReference,
   filterTreeOptions,
-  FONT_FAMILY,
   BORDER_COLOR,
   GRAY_COLOR,
   ICON_ACCENT,
@@ -36,6 +36,9 @@ import {
   listSemanticModels,
   loadModelData,
   resolveWorkspaceId,
+  updateMeasureProperties,
+  MeasureEdit,
+  PbiAuth,
 } from "../services";
 
 // ---------------------------------------------------------------------------
@@ -77,7 +80,6 @@ const useStyles = makeStyles({
     ...shorthands.border("1px", "solid", BORDER_COLOR),
     ...shorthands.borderRadius("8px"),
     backgroundColor: SECTION_BG,
-    fontFamily: "monospace",
     fontSize: "12px",
   },
   treeItem: {
@@ -149,15 +151,20 @@ const useStyles = makeStyles({
 // ---------------------------------------------------------------------------
 
 export interface ModelExplorerProps {
-  accessToken: string;
+  auth: PbiAuth;
   workspace: string;
   datasetName: string;
+  /** Optional resolved Fabric/PBI dataset id. When set, skips the
+   *  name-based lookup against /groups/{ws}/datasets (which 404s for
+   *  Fabric-native semantic models that aren't indexed in PBI). */
+  datasetId?: string;
 }
 
 export const ModelExplorer: React.FC<ModelExplorerProps> = ({
-  accessToken,
+  auth,
   workspace,
   datasetName,
+  datasetId,
 }) => {
   const styles = useStyles();
 
@@ -167,9 +174,42 @@ export const ModelExplorer: React.FC<ModelExplorerProps> = ({
   const [status, setStatus] = useState<{ msg: string; color: string }>({ msg: "", color: GRAY_COLOR });
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const [pendingChanges] = useState<Set<string>>(new Set());
+  // Per-measure pending edits keyed by `${table}::${measure}`.
+  // Each value is a partial overlay (only the fields the user changed).
+  type MeasurePatch = Partial<Pick<MeasureEdit, "expression" | "formatString" | "description" | "displayFolder" | "isHidden">>;
+  const [pendingMeasureEdits, setPendingMeasureEdits] = useState<Record<string, MeasurePatch>>({});
+  const [saving, setSaving] = useState(false);
+  const [resolvedIds, setResolvedIds] = useState<{ wsId: string; datasetId: string } | null>(null);
+  // Tree highlight set: just the measure keys with edits.
+  const pendingChanges = useMemo<Set<string>>(
+    () => new Set(Object.keys(pendingMeasureEdits).map((k) => {
+      const [t, m] = k.split("::");
+      return `measure:${t}:${m}`;
+    })),
+    [pendingMeasureEdits]
+  );
   const [previewText, setPreviewText] = useState("");
   const [daxRef, setDaxRef] = useState("");
+
+  // Identify selected measure (table, name) so the Expression textarea can
+  // become editable and bind to pendingMeasureEdits[].expression.
+  const selectedMeasure = useMemo<{ table: string; measure: string } | null>(() => {
+    if (!selectedKey) return null;
+    const parts = selectedKey.split(":");
+    if (parts[0] !== "measure" || parts.length < 3) return null;
+    return { table: parts[1], measure: parts.slice(2).join(":") };
+  }, [selectedKey]);
+
+  // Effective expression value shown in the textarea: pending edit overlay
+  // takes precedence over the model's stored expression.
+  const expressionValue = useMemo(() => {
+    if (!selectedMeasure || !modelData) return previewText;
+    const editKey = `${selectedMeasure.table}::${selectedMeasure.measure}`;
+    const patch = pendingMeasureEdits[editKey];
+    if (patch?.expression !== undefined) return patch.expression;
+    const m = modelData.tables[selectedMeasure.table]?.measures[selectedMeasure.measure];
+    return m?.expression ?? previewText;
+  }, [selectedMeasure, modelData, pendingMeasureEdits, previewText]);
 
   // Build tree
   const treeResult = useMemo<TreeBuildResult>(() => {
@@ -187,26 +227,36 @@ export const ModelExplorer: React.FC<ModelExplorerProps> = ({
   // ---------------------------------------------------------------------------
 
   const handleLoad = useCallback(async () => {
-    if (!accessToken || !workspace || !datasetName) {
+    if (!auth.fabricToken || !workspace || !datasetName) {
       setStatus({ msg: "Workspace and dataset name required", color: "#ff3b30" });
       return;
     }
     setLoading(true);
     setStatus({ msg: "Loading model...", color: GRAY_COLOR });
     try {
-      const wsId = await resolveWorkspaceId(accessToken, workspace);
-      const models = await listSemanticModels(accessToken, wsId);
-      const match = models.find(
-        (m) => m.name.toLowerCase() === datasetName.toLowerCase()
-      );
-      if (!match) {
-        setStatus({ msg: `Dataset '${datasetName}' not found`, color: "#ff3b30" });
-        setLoading(false);
-        return;
+      const wsId = await resolveWorkspaceId(auth, workspace);
+      // Use the id from the picker when available so we don't depend on
+      // the PBI groups/datasets index (which omits Fabric-native models).
+      let resolvedId = datasetId;
+      let resolvedName = datasetName;
+      if (!resolvedId) {
+        const models = await listSemanticModels(auth, wsId);
+        const match = models.find(
+          (m) => m.name.toLowerCase() === datasetName.toLowerCase()
+        );
+        if (!match) {
+          setStatus({ msg: `Dataset '${datasetName}' not found`, color: "#ff3b30" });
+          setLoading(false);
+          return;
+        }
+        resolvedId = match.id;
+        resolvedName = match.name;
       }
-      const data = await loadModelData(accessToken, wsId, match.id, match.name);
+      const data = await loadModelData(auth, wsId, resolvedId, resolvedName);
       setModelData(data);
-      setExpanded(new Set([match.name]));
+      setResolvedIds({ wsId, datasetId: resolvedId });
+      setPendingMeasureEdits({});
+      setExpanded(new Set([resolvedName]));
       setStatus({
         msg: `Loaded ${Object.keys(data.tables).length} tables`,
         color: "#34c759",
@@ -219,7 +269,7 @@ export const ModelExplorer: React.FC<ModelExplorerProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [accessToken, workspace, datasetName]);
+  }, [auth, workspace, datasetName, datasetId]);
 
   const handleToggleNode = useCallback(
     (key: string) => {
@@ -275,6 +325,30 @@ export const ModelExplorer: React.FC<ModelExplorerProps> = ({
     all.add(dsName);
     for (const tName of Object.keys(modelData.tables)) {
       all.add(tName);
+      const t = modelData.tables[tName];
+      // Measure display folders — must mirror buildMeasuresWithFolders' key
+      // shape (`folder:<table>:<ancestor>`) and include every nested ancestor.
+      for (const m of Object.values(t.measures ?? {})) {
+        const df = m.displayFolder;
+        if (!df) continue;
+        const parts = df.replace(/\//g, "\\").split("\\");
+        for (let d = 0; d < parts.length; d++) {
+          all.add(`folder:${tName}:${parts.slice(0, d + 1).join("\\")}`);
+        }
+      }
+      // Column display folders — `colfolder:<table>:<ancestor>`. Columns may
+      // carry multiple folder paths separated by `;` — only the first is used
+      // by buildColumnsWithFolders, so mirror that here.
+      for (const c of Object.values(t.columns ?? {})) {
+        const df = c.displayFolder;
+        if (!df) continue;
+        const firstFolder = df.split(";")[0].trim();
+        if (!firstFolder) continue;
+        const parts = firstFolder.replace(/\//g, "\\").split("\\");
+        for (let d = 0; d < parts.length; d++) {
+          all.add(`colfolder:${tName}:${parts.slice(0, d + 1).join("\\")}`);
+        }
+      }
     }
     if (modelData.relationships?.length) all.add("rels:_single");
     setExpanded(all);
@@ -291,6 +365,76 @@ export const ModelExplorer: React.FC<ModelExplorerProps> = ({
   }, [daxRef]);
 
   // ---------------------------------------------------------------------------
+  // Editable measure handlers
+  // ---------------------------------------------------------------------------
+
+  const setMeasureEdit = useCallback(
+    (table: string, measure: string, field: keyof Pick<MeasureEdit, "expression" | "formatString" | "description" | "displayFolder" | "isHidden">, value: string | boolean) => {
+      const key = `${table}::${measure}`;
+      setPendingMeasureEdits((prev) => {
+        const cur = { ...(prev[key] ?? {}) } as Record<string, unknown>;
+        cur[field] = value;
+        return { ...prev, [key]: cur as MeasurePatch };
+      });
+    },
+    []
+  );
+
+  const handleDiscardEdits = useCallback(() => {
+    setPendingMeasureEdits({});
+    setStatus({ msg: "Discarded pending changes", color: GRAY_COLOR });
+  }, []);
+
+  const handleSaveEdits = useCallback(async () => {
+    if (!resolvedIds || !modelData) return;
+    const editsArr: MeasureEdit[] = Object.entries(pendingMeasureEdits).map(([k, patch]) => {
+      const [table, measure] = k.split("::");
+      return { table, measure, ...patch };
+    });
+    if (editsArr.length === 0) return;
+    setSaving(true);
+    setStatus({ msg: `Saving ${editsArr.length} measure change(s)...`, color: GRAY_COLOR });
+    try {
+      const res = await updateMeasureProperties(auth, resolvedIds.wsId, resolvedIds.datasetId, editsArr);
+      // Apply edits to local model data so the UI reflects the saved state.
+      setModelData((prev) => {
+        if (!prev) return prev;
+        const next = { ...prev, tables: { ...prev.tables } };
+        for (const e of editsArr) {
+          const tbl = next.tables[e.table];
+          if (!tbl) continue;
+          const m = tbl.measures[e.measure];
+          if (!m) continue;
+          tbl.measures = {
+            ...tbl.measures,
+            [e.measure]: {
+              ...m,
+              ...(e.expression !== undefined ? { expression: e.expression } : {}),
+              ...(e.formatString !== undefined ? { formatString: e.formatString } : {}),
+              ...(e.description !== undefined ? { description: e.description } : {}),
+              ...(e.displayFolder !== undefined ? { displayFolder: e.displayFolder } : {}),
+              ...(e.isHidden !== undefined ? { isHidden: e.isHidden } : {}),
+            },
+          };
+        }
+        return next;
+      });
+      setPendingMeasureEdits({});
+      const msg = res.errors.length > 0
+        ? `Saved ${res.updated}; ${res.errors.length} warning(s): ${res.errors.join("; ")}`
+        : `Saved ${res.updated} measure change(s)`;
+      setStatus({ msg, color: res.errors.length ? "#ff9500" : "#34c759" });
+    } catch (err) {
+      setStatus({
+        msg: `Save failed: ${err instanceof Error ? err.message : String(err)}`,
+        color: "#ff3b30",
+      });
+    } finally {
+      setSaving(false);
+    }
+  }, [auth, resolvedIds, modelData, pendingMeasureEdits]);
+
+  // ---------------------------------------------------------------------------
   // Properties panel content
   // ---------------------------------------------------------------------------
 
@@ -300,17 +444,52 @@ export const ModelExplorer: React.FC<ModelExplorerProps> = ({
     const nodeType = parts[0];
 
     if (nodeType === "measure") {
-      const t = modelData.tables[parts[1]];
-      const m = t?.measures[parts[2]];
+      const tableName = parts[1];
+      const measureName = parts[2];
+      const t = modelData.tables[tableName];
+      const m = t?.measures[measureName];
       if (!m) return null;
+      const editKey = `${tableName}::${measureName}`;
+      const patch = pendingMeasureEdits[editKey] ?? {};
+      const cur = {
+        formatString: patch.formatString ?? m.formatString,
+        description: patch.description ?? m.description,
+        displayFolder: patch.displayFolder ?? m.displayFolder,
+        isHidden: patch.isHidden ?? m.isHidden,
+      };
       return (
         <>
-          <PropRow label="Table" value={parts[1]} />
-          <PropRow label="Name" value={parts[2]} />
-          <PropRow label="Format" value={m.formatString} />
-          <PropRow label="Description" value={m.description} />
-          <PropRow label="Display Folder" value={m.displayFolder} />
-          <PropRow label="Hidden" value={String(m.isHidden)} />
+          <PropRow label="Table" value={tableName} />
+          <PropRow label="Name" value={measureName} />
+          <PropEditRow label="Format">
+            <Input
+              size="small"
+              value={cur.formatString}
+              onChange={(_, d) => setMeasureEdit(tableName, measureName, "formatString", d.value)}
+            />
+          </PropEditRow>
+          <PropEditRow label="Description">
+            <Textarea
+              size="small"
+              value={cur.description}
+              resize="vertical"
+              style={{ width: "100%", minHeight: "48px" }}
+              onChange={(_, d) => setMeasureEdit(tableName, measureName, "description", d.value)}
+            />
+          </PropEditRow>
+          <PropEditRow label="Display Folder">
+            <Input
+              size="small"
+              value={cur.displayFolder}
+              onChange={(_, d) => setMeasureEdit(tableName, measureName, "displayFolder", d.value)}
+            />
+          </PropEditRow>
+          <PropEditRow label="Hidden">
+            <Switch
+              checked={cur.isHidden}
+              onChange={(_, d) => setMeasureEdit(tableName, measureName, "isHidden", d.checked)}
+            />
+          </PropEditRow>
         </>
       );
     }
@@ -354,7 +533,7 @@ export const ModelExplorer: React.FC<ModelExplorerProps> = ({
     }
 
     return null;
-  }, [selectedKey, modelData]);
+  }, [selectedKey, modelData, pendingMeasureEdits, setMeasureEdit]);
 
   // ---------------------------------------------------------------------------
   // Render
@@ -423,7 +602,7 @@ export const ModelExplorer: React.FC<ModelExplorerProps> = ({
               );
             })}
             {filteredOptions.length === 0 && !loading && (
-              <div style={{ padding: "20px", color: GRAY_COLOR, textAlign: "center", fontStyle: "italic", fontFamily: FONT_FAMILY }}>
+              <div style={{ padding: "20px", color: GRAY_COLOR, textAlign: "center", fontStyle: "italic" }}>
                 {modelData ? "No matching items" : "Click Load Model to explore"}
               </div>
             )}
@@ -442,11 +621,12 @@ export const ModelExplorer: React.FC<ModelExplorerProps> = ({
               </div>
             )}
             <Textarea
-              value={previewText}
-              readOnly
+              value={selectedMeasure ? expressionValue : previewText}
+              readOnly={!selectedMeasure}
               resize="vertical"
               style={{ width: "100%", minHeight: "120px", fontFamily: "monospace", fontSize: "12px" }}
               placeholder="Select a measure to view its DAX expression."
+              onChange={selectedMeasure ? (_, d) => setMeasureEdit(selectedMeasure.table, selectedMeasure.measure, "expression", d.value) : undefined}
             />
           </div>
 
@@ -455,6 +635,22 @@ export const ModelExplorer: React.FC<ModelExplorerProps> = ({
             {propertiesContent ?? (
               <div style={{ padding: "12px", color: GRAY_COLOR, fontSize: "13px", fontStyle: "italic" }}>
                 Select an object to view properties
+              </div>
+            )}
+            {Object.keys(pendingMeasureEdits).length > 0 && (
+              <div style={{ display: "flex", gap: "8px", marginTop: "12px", paddingTop: "8px", borderTop: `1px solid ${BORDER_COLOR}` }}>
+                <Button
+                  appearance="primary"
+                  size="small"
+                  onClick={handleSaveEdits}
+                  disabled={saving || !resolvedIds}
+                  icon={saving ? <Spinner size="tiny" /> : undefined}
+                >
+                  Save {Object.keys(pendingMeasureEdits).length} change{Object.keys(pendingMeasureEdits).length === 1 ? "" : "s"}
+                </Button>
+                <Button appearance="secondary" size="small" onClick={handleDiscardEdits} disabled={saving}>
+                  Discard
+                </Button>
               </div>
             )}
           </div>
@@ -475,6 +671,16 @@ const PropRow: React.FC<{ label: string; value: string }> = ({ label, value }) =
     <div className={styles.propRow}>
       <span className={styles.propLabel}>{label}</span>
       <span className={styles.propValue}>{value}</span>
+    </div>
+  );
+};
+
+const PropEditRow: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => {
+  const styles = useStyles();
+  return (
+    <div className={styles.propRow} style={{ alignItems: "center" }}>
+      <span className={styles.propLabel}>{label}</span>
+      <span className={styles.propValue} style={{ flex: 1 }}>{children}</span>
     </div>
   );
 };

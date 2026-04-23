@@ -500,6 +500,23 @@ export function descriptorFromPath(path: string, search?: string): TabDescriptor
         return { id: "agents", kind: "agents", path, title: "Agents" };
     }
     if (/\/pbifixer(?:\b|$)/.test(clean)) {
+        // Each PBI Fixer sub-page (Model, Report, Fixer, …) becomes its
+        // own tab keyed on the ``nav`` query param so clicking the
+        // sidebar opens a fresh tab without overwriting the visible one.
+        const navKey = (() => {
+            if (!search) return null;
+            return new URLSearchParams(search).get("nav");
+        })();
+        if (navKey) {
+            // Capitalize for the title (best-effort: 'modelBpa' → 'ModelBpa').
+            const pretty = navKey.charAt(0).toUpperCase() + navKey.slice(1);
+            return {
+                id: `pbifixer:${navKey}`,
+                kind: "pbifixer",
+                path: path + (search ?? ""),
+                title: `PBI Fixer · ${pretty}`,
+            };
+        }
         return { id: "pbifixer", kind: "pbifixer", path, title: "Power BI Fixer" };
     }
     if (/\/settings(?:\b|$)/.test(clean)) {

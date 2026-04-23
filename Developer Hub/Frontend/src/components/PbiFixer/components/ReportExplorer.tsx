@@ -24,7 +24,6 @@ import {
   getPageProperties,
   getVisualProperties,
   filterTreeOptions,
-  FONT_FAMILY,
   BORDER_COLOR,
   GRAY_COLOR,
   ICON_ACCENT,
@@ -34,6 +33,7 @@ import {
   listReports,
   loadReportDefinition,
   resolveWorkspaceId,
+  PbiAuth,
 } from "../services";
 
 // ---------------------------------------------------------------------------
@@ -75,7 +75,6 @@ const useStyles = makeStyles({
     ...shorthands.border("1px", "solid", BORDER_COLOR),
     ...shorthands.borderRadius("8px"),
     backgroundColor: SECTION_BG,
-    fontFamily: "monospace",
     fontSize: "12px",
   },
   treeItem: {
@@ -104,6 +103,24 @@ const useStyles = makeStyles({
     backgroundColor: SECTION_BG,
     minHeight: "400px",
     flex: 1,
+    display: "flex",
+    flexDirection: "column",
+  },
+  previewSurface: {
+    flex: 1,
+    minHeight: "480px",
+    display: "flex",
+    alignItems: "stretch",
+    justifyContent: "stretch",
+    overflow: "hidden",
+    backgroundColor: "#ffffff",
+    ...shorthands.border("1px", "solid", BORDER_COLOR),
+    ...shorthands.borderRadius("6px"),
+  },
+  previewEmpty: {
+    color: GRAY_COLOR,
+    fontSize: "13px",
+    fontStyle: "italic",
   },
   propertiesPanel: {
     ...shorthands.border("1px", "solid", BORDER_COLOR),
@@ -153,17 +170,103 @@ const useStyles = makeStyles({
 // Component
 // ---------------------------------------------------------------------------
 
+interface ReportPreviewProps {
+  reportData: ReportData | null;
+  selectedKey: string | null;
+}
+
+/**
+ * Live, interactive Power BI report embed (mirrors the original Python
+ * Fixer's `powerbiclient.Report` widget). Uses the secure `reportEmbed`
+ * URL with `autoAuth=true` so the user's existing Power BI session
+ * cookie authorises the embed without us minting a separate embed
+ * token. When a page (or a visual on a page) is selected in the tree,
+ * the iframe deep-links to that page via `?pageName=<id>`.
+ *
+ * URL template:
+ *   https://app.powerbi.com/reportEmbed
+ *     ?reportId=<reportId>
+ *     &groupId=<workspaceId>
+ *     &autoAuth=true
+ *     &pageName=<pageId>            (optional — current selection)
+ *     &filterPaneEnabled=false
+ *     &navContentPaneEnabled=true
+ *
+ * The iframe is keyed on `reportId+pageName` so changing pages reloads
+ * cleanly instead of relying on postMessage handshakes.
+ */
+const ReportPreview: React.FC<ReportPreviewProps> = ({
+  reportData,
+  selectedKey,
+}) => {
+  // Resolve which page to focus from the current selection.
+  const focusedPage = useMemo(() => {
+    if (!reportData) return null;
+    if (selectedKey?.startsWith("page:")) {
+      return selectedKey.slice("page:".length);
+    }
+    if (selectedKey?.startsWith("visual:")) {
+      const parts = selectedKey.slice("visual:".length).split(":");
+      return parts[0] ?? null;
+    }
+    return null;
+  }, [reportData, selectedKey]);
+
+  if (!reportData) {
+    return <span>Load a report to see the live preview</span>;
+  }
+  if (!reportData.reportId || !reportData.workspaceId) {
+    return <span>Report metadata missing — cannot embed</span>;
+  }
+
+  const params = new URLSearchParams({
+    reportId: reportData.reportId,
+    groupId: reportData.workspaceId,
+    autoAuth: "true",
+    filterPaneEnabled: "false",
+    navContentPaneEnabled: "true",
+  });
+  if (focusedPage) params.set("pageName", focusedPage);
+
+  const src = `https://app.powerbi.com/reportEmbed?${params.toString()}`;
+
+  // Keying on src forces the iframe to fully reload when the user picks
+  // a different page; relying on internal embed message-passing would
+  // require pulling in `powerbi-client`, which we'd rather avoid for
+  // this first cut.
+  return (
+    <iframe
+      key={src}
+      title={`Power BI report ${reportData.reportId}`}
+      src={src}
+      style={{
+        width: "100%",
+        height: "100%",
+        minHeight: "480px",
+        border: "0",
+        display: "block",
+      }}
+      // Allow fullscreen + clipboard so copy-to-Excel from a visual works.
+      allow="clipboard-read; clipboard-write; fullscreen"
+      allowFullScreen
+    />
+  );
+};
+
 export interface ReportExplorerProps {
-  accessToken: string;
+  auth: PbiAuth;
   workspace: string;
   reportName: string;
+  /** Optional resolved Fabric report id. Skips name-based lookup. */
+  reportId?: string;
   onNavigateToModel?: (key: string) => void;
 }
 
 export const ReportExplorer: React.FC<ReportExplorerProps> = ({
-  accessToken,
+  auth,
   workspace,
   reportName,
+  reportId,
   onNavigateToModel,
 }) => {
   const styles = useStyles();
@@ -204,24 +307,30 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
   // ---------------------------------------------------------------------------
 
   const handleLoad = useCallback(async () => {
-    if (!accessToken || !workspace || !reportName) {
+    if (!auth.fabricToken || !workspace || !reportName) {
       setStatus({ msg: "Workspace and report name required", color: "#ff3b30" });
       return;
     }
     setLoading(true);
     setStatus({ msg: "Loading report...", color: GRAY_COLOR });
     try {
-      const wsId = await resolveWorkspaceId(accessToken, workspace);
-      const reports = await listReports(accessToken, wsId);
-      const match = reports.find(
-        (r) => r.name.toLowerCase() === reportName.toLowerCase()
-      );
-      if (!match) {
-        setStatus({ msg: `Report '${reportName}' not found`, color: "#ff3b30" });
-        setLoading(false);
-        return;
+      const wsId = await resolveWorkspaceId(auth, workspace);
+      let resolvedId = reportId;
+      let resolvedName = reportName;
+      if (!resolvedId) {
+        const reports = await listReports(auth, wsId);
+        const match = reports.find(
+          (r) => r.name.toLowerCase() === reportName.toLowerCase()
+        );
+        if (!match) {
+          setStatus({ msg: `Report '${reportName}' not found`, color: "#ff3b30" });
+          setLoading(false);
+          return;
+        }
+        resolvedId = match.id;
+        resolvedName = match.name;
       }
-      const data = await loadReportDefinition(accessToken, wsId, match.id, match.name);
+      const data = await loadReportDefinition(auth, wsId, resolvedId, resolvedName);
       setReportData(data);
       setExpanded(new Set(Object.keys(data.pages)));
       setStatus({
@@ -236,7 +345,7 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [accessToken, workspace, reportName]);
+  }, [auth, workspace, reportName, reportId]);
 
   const handleToggleNode = useCallback((key: string) => {
     const parts = key.split(":");
@@ -352,7 +461,7 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
               );
             })}
             {filteredOptions.length === 0 && !loading && (
-              <div style={{ padding: "20px", color: GRAY_COLOR, textAlign: "center", fontStyle: "italic", fontFamily: FONT_FAMILY }}>
+              <div style={{ padding: "20px", color: GRAY_COLOR, textAlign: "center", fontStyle: "italic" }}>
                 {reportData ? "No matching items" : "Click Load Report to explore"}
               </div>
             )}
@@ -362,8 +471,17 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
         <div className={styles.rightPanel}>
           <div className={styles.previewPanel}>
             <div className={styles.sectionLabel}>Preview</div>
-            <div style={{ padding: "16px", color: GRAY_COLOR, fontSize: "13px", fontStyle: "italic" }}>
-              {reportData ? "Select a page or visual to see details" : "Load a report to see the live preview"}
+            <div className={styles.previewSurface}>
+              {reportData ? (
+                <ReportPreview
+                  reportData={reportData}
+                  selectedKey={selectedKey}
+                />
+              ) : (
+                <span className={styles.previewEmpty}>
+                  Load a report to see the live preview
+                </span>
+              )}
             </div>
           </div>
 

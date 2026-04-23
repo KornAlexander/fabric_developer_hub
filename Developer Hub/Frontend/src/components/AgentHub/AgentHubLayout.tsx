@@ -33,6 +33,8 @@ import {
     Search20Regular,
     Filter20Regular,
     Dismiss16Regular,
+    ChevronRight16Regular,
+    ChevronDown16Regular,
 } from "@fluentui/react-icons";
 import { WorkloadClientAPI } from "@ms-fabric/workload-client";
 // OrchestratorPage stays eager — it's the default landing route, so lazy
@@ -68,8 +70,10 @@ const PbiFixerPage = lazyWithPreload(
     () => import("../PbiFixer").then(m => ({ PbiFixerPage: m.PbiFixerPage })),
     "PbiFixerPage",
 );
+import { NAV_ITEMS as PBIFIXER_NAV_ITEMS, DEFAULT_NAV_KEY as PBIFIXER_DEFAULT_NAV, type NavKey as PbiFixerNavKey } from "../PbiFixer";
 import { useGitHubAuth } from "./useGitHubAuth";
 import { ItemProvider } from "./ItemContext";
+import { WORKLOAD_VERSION } from "../../version";
 import { SearchProvider, useSearch, searchPlaceholderFor, isFilterScope, type SearchScope } from "./SearchContext";
 import { callAuthAcquireAccessToken } from "../../controller/AgentHubController";
 import * as api from "../../controller/AgentHubApi";
@@ -253,23 +257,26 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
     void nav;
 
     // ── Background workspace preload (fire-and-forget) ────────────
-    // Once GitHub auth lands, acquire a Fabric token and ask the backend to
-    // warm the per-user workspace cache so the workspace selector is instant
-    // on first navigation. Safe to call without a Fabric token (no-op).
+    // Once GitHub auth lands, ask the backend to warm the per-user workspace
+    // cache so the workspace selector is instant on first navigation.
+    //
+    // IMPORTANT: do NOT call ``acquireAccessToken`` here. Doing so kicks the
+    // workload host into showing its consent / "Additional authentication
+    // required" overlay the very moment the GitHub device-flow completes —
+    // which the user perceives as the page going grey and unresponsive. The
+    // overlay only resolves after a manual reload, when it re-shows in
+    // proper context. By skipping the Fabric token in the preload we let the
+    // first real Fabric-backed navigation surface the consent dialog at the
+    // right time. ``preloadWorkspaces`` is a no-op without a Fabric token.
     useEffect(() => {
         if (!auth.githubToken) return undefined;
         let cancelled = false;
         (async () => {
-            let fabricToken: string | undefined;
-            try {
-                const t = await callAuthAcquireAccessToken(workloadClient);
-                fabricToken = t.token;
-            } catch { /* ignore — preload is best-effort */ }
             if (cancelled) return;
-            await api.preloadWorkspaces({ githubToken: auth.githubToken!, fabricToken });
+            await api.preloadWorkspaces({ githubToken: auth.githubToken! });
         })();
         return () => { cancelled = true; };
-    }, [auth.githubToken, workloadClient]);
+    }, [auth.githubToken]);
 
     // ── GitHub auth gate ──────────────────────────────────────────
     if (!auth.githubToken) {
@@ -564,7 +571,19 @@ function AgentHubContent({ workloadClient, matchPath }: { workloadClient: Worklo
             case "home":     return <DashboardPage workloadClient={workloadClient} />;
             case "new":      return <OrchestratorPage workloadClient={workloadClient} />;
             case "agents":   return <AgentsPage workloadClient={workloadClient} />;
-            case "pbifixer": return <PbiFixerPage workloadClient={workloadClient} />;
+            case "pbifixer": {
+                // Extract per-tab `?nav=` so each editor tab renders
+                // its own sub-page. Without this, every PBI Fixer tab
+                // would default to the value last persisted in
+                // sessionStorage (because all tabs share the outer
+                // `window.location`).
+                let initialNav: string | undefined;
+                try {
+                    const q = tab.path.split("?")[1];
+                    if (q) initialNav = new URLSearchParams(q).get("nav") ?? undefined;
+                } catch { /* ignore */ }
+                return <PbiFixerPage workloadClient={workloadClient} initialNav={initialNav as never} />;
+            }
             case "settings": return <SettingsPage workloadClient={workloadClient} />;
             case "session": {
                 const m = tab.path.match(/\/session\/([^/?#]+)/);
@@ -660,6 +679,39 @@ function AgentHubShell({
     const [ctxMenu, setCtxMenu] = useState<{ item: NavItemId; pos: { left: number; top: number } } | null>(null);
     const dismissCtxMenu = useCallback(() => setCtxMenu(null), []);
 
+    // PBI Fixer sub-nav state — the Power BI Fixer sidebar row expands
+    // into a flat tree of 14 pages (Model, Report, Others > 12 stubs).
+    // We keep the selection + expand state here so navigation from the
+    // outer sidebar drives the PBI Fixer page rendering via a window
+    // event + sessionStorage handshake. `PbiFixerPage` listens to both.
+    const [pbiFixerNavKey, setPbiFixerNavKey] = useState<PbiFixerNavKey>(() => {
+        try {
+            const raw = sessionStorage.getItem("pbiFixer.activeNav");
+            if (raw) return raw as PbiFixerNavKey;
+        } catch { /* ignore */ }
+        return PBIFIXER_DEFAULT_NAV;
+    });
+    const [pbiFixerOthersExpanded, setPbiFixerOthersExpanded] = useState<boolean>(() => {
+        try { return sessionStorage.getItem("pbiFixer.othersExpanded") === "1"; } catch { return false; }
+    });
+    // Whether the Power BI Fixer group itself is expanded in the sidebar.
+    // Auto-expanded while the pbifixer page is active so the user can see
+    // where they are; otherwise collapsed to keep the sidebar compact.
+    const [pbiFixerGroupExpanded, setPbiFixerGroupExpanded] = useState<boolean>(activePage === "pbifixer");
+    useEffect(() => {
+        if (activePage === "pbifixer") setPbiFixerGroupExpanded(true);
+    }, [activePage]);
+    // Pick up nav changes that originate inside the PBI Fixer page
+    // itself (e.g. a page calling `onNavigate`).
+    useEffect(() => {
+        const handler = (e: Event) => {
+            const ce = e as CustomEvent<PbiFixerNavKey>;
+            if (ce.detail) setPbiFixerNavKey(ce.detail);
+        };
+        window.addEventListener("pbifixer:navchange", handler as EventListener);
+        return () => window.removeEventListener("pbifixer:navchange", handler as EventListener);
+    }, []);
+
     /** Apply a behaviour to a nav item click. Prefetches the target
      *  chunk + data in parallel, then opens/replaces/splits as requested. */
     const applyBehaviour = useCallback((item: NavItemId, behaviour: NavBehaviour) => {
@@ -703,6 +755,45 @@ function AgentHubShell({
         applyBehaviour(item, resolveBehaviour(prefs, item));
     }, [applyBehaviour, prefs]);
 
+    /** Sub-nav click on any PBI Fixer page (Model / Report / 12 stubs).
+     *  Opens a NEW tab dedicated to the selected sub-page (or focuses
+     *  it if a tab with that nav key is already open). The PbiFixerPage
+     *  reads the initial activeNav from the URL query so each tab
+     *  remembers its own page independently. */
+    const handlePbiFixerSubNav = useCallback((key: PbiFixerNavKey) => {
+        try { sessionStorage.setItem("pbiFixer.activeNav", key); } catch { /* ignore */ }
+        setPbiFixerNavKey(key);
+        const navItem = PBIFIXER_NAV_ITEMS.find((i) => i.key === key);
+        const label = navItem?.label ?? key;
+        const path = `${matchPath}/pbifixer?nav=${encodeURIComponent(key)}`;
+        const desc: TabDescriptor = {
+            id: `pbifixer:${key}`,
+            kind: "pbifixer",
+            path,
+            title: `PBI Fixer · ${label}`,
+        };
+        // Best-effort prefetch of the PBI Fixer chunk + workspaces.
+        preloadChunkFor("pbifixer");
+        const pkey = preloadKeyFor("pbifixer");
+        if (pkey && auth.githubToken) {
+            setNavPending(true);
+            Promise.race([
+                startPreload(pkey),
+                new Promise((r) => window.setTimeout(r, NAV_PREFETCH_TIMEOUT_MS)),
+            ]).finally(() => setNavPending(false));
+        }
+        closeSidebar();
+        openTab(desc);
+    }, [auth.githubToken, closeSidebar, matchPath, openTab, setNavPending, startPreload]);
+
+    const togglePbiFixerOthers = useCallback(() => {
+        setPbiFixerOthersExpanded((v) => {
+            const next = !v;
+            try { sessionStorage.setItem("pbiFixer.othersExpanded", next ? "1" : "0"); } catch { /* ignore */ }
+            return next;
+        });
+    }, []);
+
     const handleNavContextMenu = useCallback((item: NavItemId, e: React.MouseEvent<HTMLDivElement>) => {
         e.preventDefault();
         setCtxMenu({ item, pos: { left: e.clientX, top: e.clientY } });
@@ -723,6 +814,21 @@ function AgentHubShell({
                         {sidebarOpen ? <Dismiss24Regular /> : <Navigation24Regular />}
                     </button>
                     <span className="topbar-brand">Developer Hub</span>
+                    <span
+                        className="topbar-version"
+                        title="AgentHub workload version"
+                        style={{
+                            fontSize: "11px",
+                            color: "#666",
+                            marginLeft: "6px",
+                            padding: "2px 6px",
+                            border: "1px solid #ddd",
+                            borderRadius: "4px",
+                            fontFamily: "monospace",
+                        }}
+                    >
+                        {WORKLOAD_VERSION}
+                    </span>
                     <span className="topbar-divider" />
                     <div className="topbar-breadcrumb">
                         <TopbarBreadcrumbIcon activePage={activePage} />
@@ -812,16 +918,120 @@ function AgentHubShell({
                         <div className="sidenav-rail-divider" aria-hidden="true" />
 
                         <div className="sidenav-section-label sidenav-section-label--spaced">Tools</div>
-                        <SideNavItem
-                            icon={<Wrench24Regular />}
-                            label="Power BI Fixer"
-                            active={activePage === "pbifixer"}
-                            collapsed={sidebarCollapsed}
-                            draggable
-                            onClick={() => handleNavClick("pbifixer")}
-                            onContextMenu={(e) => handleNavContextMenu("pbifixer", e)}
-                            onDragStart={(e) => handleNavDragStart("pbifixer", e)}
-                        />
+                        <div className="sidenav-row-with-toggle">
+                            <SideNavItem
+                                icon={<Wrench24Regular />}
+                                label="Power BI Fixer"
+                                active={activePage === "pbifixer"}
+                                collapsed={sidebarCollapsed}
+                                draggable
+                                onClick={() => {
+                                    setPbiFixerGroupExpanded(true);
+                                    handleNavClick("pbifixer");
+                                }}
+                                onContextMenu={(e) => handleNavContextMenu("pbifixer", e)}
+                                onDragStart={(e) => handleNavDragStart("pbifixer", e)}
+                            />
+                            {!sidebarCollapsed && (
+                                <button
+                                    type="button"
+                                    className="sidenav-group-toggle"
+                                    aria-label={pbiFixerGroupExpanded ? "Collapse Power BI Fixer pages" : "Expand Power BI Fixer pages"}
+                                    aria-expanded={pbiFixerGroupExpanded}
+                                    onClick={(e) => { e.stopPropagation(); setPbiFixerGroupExpanded((v) => !v); }}
+                                >
+                                    {pbiFixerGroupExpanded ? <ChevronDown16Regular /> : <ChevronRight16Regular />}
+                                </button>
+                            )}
+                        </div>
+
+                        {/* Flat-tree sub-nav for the PBI Fixer — shown only when
+                            the group is expanded and the sidebar isn't collapsed
+                            into the narrow rail. */}
+                        {pbiFixerGroupExpanded && !sidebarCollapsed && (
+                            <div
+                                className="pbifixer-subnav"
+                                role="group"
+                                aria-label="PBI Fixer pages"
+                                onKeyDown={(e) => {
+                                    // WS-O Phase 2.3: ArrowUp/Down move focus between
+                                    // tabbable rows; ArrowRight/Left expand or
+                                    // collapse the "Others" branch when focused on it.
+                                    if (e.key !== "ArrowDown" && e.key !== "ArrowUp" &&
+                                        e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+                                    const root = e.currentTarget;
+                                    const items = Array.from(
+                                        root.querySelectorAll<HTMLDivElement>('[role="button"]'),
+                                    );
+                                    const active = document.activeElement as HTMLElement | null;
+                                    const idx = active ? items.indexOf(active as HTMLDivElement) : -1;
+                                    if (idx < 0) return;
+                                    if (e.key === "ArrowDown") {
+                                        e.preventDefault();
+                                        items[(idx + 1) % items.length]?.focus();
+                                    } else if (e.key === "ArrowUp") {
+                                        e.preventDefault();
+                                        items[(idx - 1 + items.length) % items.length]?.focus();
+                                    } else if (e.key === "ArrowRight" && active?.classList.contains("pbifixer-subnav-item--others") && !pbiFixerOthersExpanded) {
+                                        e.preventDefault();
+                                        togglePbiFixerOthers();
+                                    } else if (e.key === "ArrowLeft" && active?.classList.contains("pbifixer-subnav-item--others") && pbiFixerOthersExpanded) {
+                                        e.preventDefault();
+                                        togglePbiFixerOthers();
+                                    }
+                                }}
+                            >
+                                {PBIFIXER_NAV_ITEMS.filter((i) => i.group === "peer").map((item) => (
+                                    <div
+                                        key={item.key}
+                                        role="button"
+                                        tabIndex={0}
+                                        className={`pbifixer-subnav-item ${activePage === "pbifixer" && pbiFixerNavKey === item.key ? "pbifixer-subnav-item--active" : ""}`}
+                                        onClick={() => handlePbiFixerSubNav(item.key)}
+                                        onKeyDown={(e) => {
+                                            if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handlePbiFixerSubNav(item.key); }
+                                        }}
+                                        aria-current={activePage === "pbifixer" && pbiFixerNavKey === item.key ? "page" : undefined}
+                                    >
+                                        <span className="pbifixer-subnav-icon" aria-hidden>{item.icon}</span>
+                                        <span className="pbifixer-subnav-label">{item.label}</span>
+                                    </div>
+                                ))}
+                                <div
+                                    role="button"
+                                    tabIndex={0}
+                                    className="pbifixer-subnav-item pbifixer-subnav-item--others"
+                                    onClick={togglePbiFixerOthers}
+                                    onKeyDown={(e) => {
+                                        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); togglePbiFixerOthers(); }
+                                    }}
+                                    aria-expanded={pbiFixerOthersExpanded}
+                                >
+                                    <span className="pbifixer-subnav-chevron" aria-hidden>
+                                        {pbiFixerOthersExpanded ? <ChevronDown16Regular /> : <ChevronRight16Regular />}
+                                    </span>
+                                    <span className="pbifixer-subnav-label">Others</span>
+                                    <span className="pbifixer-subnav-count">{PBIFIXER_NAV_ITEMS.filter((i) => i.group === "others").length}</span>
+                                </div>
+                                {pbiFixerOthersExpanded && PBIFIXER_NAV_ITEMS.filter((i) => i.group === "others").map((item) => (
+                                    <div
+                                        key={item.key}
+                                        role="button"
+                                        tabIndex={0}
+                                        className={`pbifixer-subnav-item pbifixer-subnav-item--nested ${!item.ready ? "pbifixer-subnav-item--pending" : ""} ${activePage === "pbifixer" && pbiFixerNavKey === item.key ? "pbifixer-subnav-item--active" : ""}`}
+                                        onClick={() => handlePbiFixerSubNav(item.key)}
+                                        onKeyDown={(e) => {
+                                            if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handlePbiFixerSubNav(item.key); }
+                                        }}
+                                        title={item.ready ? item.label : `${item.label} — Coming soon`}
+                                        aria-current={activePage === "pbifixer" && pbiFixerNavKey === item.key ? "page" : undefined}
+                                    >
+                                        <span className="pbifixer-subnav-icon" aria-hidden>{item.icon}</span>
+                                        <span className="pbifixer-subnav-label">{item.label}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
                         <SideNavItem icon={<MoreHorizontal24Regular />} label="…" active={false} collapsed={sidebarCollapsed} onClick={() => { /* placeholder */ }} disabled />
                         <SideNavItem icon={<MoreHorizontal24Regular />} label="…" active={false} collapsed={sidebarCollapsed} onClick={() => { /* placeholder */ }} disabled />
                     </nav>

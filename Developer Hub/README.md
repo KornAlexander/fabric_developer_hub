@@ -15,6 +15,12 @@ and runs locally via Docker for development.
 - `docker-compose.yaml` — Orchestrates backend, frontend, manifest generator, and
   dev-gateway.
 
+> **PBI Fixer roadmap** — see [`Frontend/src/components/PbiFixer/PLAN.md`](Frontend/src/components/PbiFixer/PLAN.md)
+> for the parallel-development plan (WS-A … WS-F). Appendix A documents the Script Runner
+> feature (power-user backdoor, local-dev only, env-flag gated).
+>
+> **Workload-level roadmap** (item persistence, manifest, lifecycle) — see [`PLAN.md`](PLAN.md).
+
 ## Running locally
 
 See the [root README](../README.md) for the full local setup (prerequisites, `.env`

@@ -445,6 +445,39 @@ export function warmWorkspaceItems(workspaceId: string, opts: FetchOpts): void {
     void listWorkspaceItems(workspaceId, opts).catch(() => {});
 }
 
+// ── PBI Fixer proxy ─────────────────────────────────────────────────
+
+/** Forward a single Fabric or Power BI REST call through the backend so
+ *  the backend can do the OBO token exchange (the iframe SDK can only
+ *  issue workload-audience tokens, which the Fabric/PBI APIs reject).
+ *
+ *  ``api``: ``"fabric"`` → root ``api.fabric.microsoft.com/v1`` |
+ *           ``"pbi"``    → root ``api.powerbi.com/v1.0/myorg``
+ *  ``path``: must start with ``"/"``.
+ */
+export async function pbiFixerProxy<T>(
+    api: "fabric" | "pbi",
+    path: string,
+    method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
+    body: unknown,
+    opts: FetchOpts,
+): Promise<T> {
+    const res = await fetch(`${BE}/api/pbi-fixer/proxy`, {
+        method: "POST",
+        headers: headers(opts),
+        body: JSON.stringify({ api, path, method, body: body ?? null }),
+    });
+    if (!res.ok) {
+        const text = await res.text();
+        const err: Error & { status?: number } = new Error(
+            `Proxy ${method} ${api}${path} failed (${res.status}): ${text}`,
+        );
+        err.status = res.status;
+        throw err;
+    }
+    return (await res.json()) as T;
+}
+
 // ── Attachments ─────────────────────────────────────────────────────
 
 /** Mint a single-use download URL for attachment bytes.

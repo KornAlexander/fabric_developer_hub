@@ -53,6 +53,11 @@ services:
       # so it lives here (not in .env) — the host-side ./Backend/.data bind
       # mount below makes the DB file visible from your editor.
       AGENTHUB_DB_PATH: /app/data/agenthub.db
+      # Persist Fabric workload item metadata (AgentHubItem instances) to
+      # /app/data so the host bind mount picks it up — survives container
+      # rebuilds (WL-1 / C2). Without this override ItemMetadataStore
+      # writes to ~/.local/share/Org.AgentHub which is not mounted.
+      AGENTHUB_DATA_DIR: /app/data
       # Force ANSI colours in log output even though the container has no
       # TTY. ``docker compose logs`` and most terminals render the ANSI
       # escape codes, which makes ERROR lines pop red in the log stream.

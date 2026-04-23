@@ -417,6 +417,7 @@ AGENTIC_REQUEST_TIMEOUT = 300  # 5 minutes total
 # Scopes for OBO token exchange
 _FABRIC_API_SCOPES = ["https://api.fabric.microsoft.com/.default"]
 _ONELAKE_SCOPES = ["https://storage.azure.com/.default"]
+_PBI_SCOPES = ["https://analysis.windows.net/powerbi/api/.default"]
 
 # Model to fall back to for tool-calling when the primary model doesn't support it
 TOOL_CALLING_FALLBACK_MODEL = "gpt-4o"
@@ -544,9 +545,14 @@ async def _do_acquire_mcp_tokens(fabric_token: str) -> dict[str, str] | None:
     results = await asyncio.gather(
         _obo(_FABRIC_API_SCOPES, "Fabric API"),
         _obo(_ONELAKE_SCOPES, "OneLake"),
+        _obo(_PBI_SCOPES, "Power BI"),
     )
     tokens: dict[str, str] = {}
-    label_to_key = {"Fabric API": "FABRIC_API_TOKEN", "OneLake": "ONELAKE_TOKEN"}
+    label_to_key = {
+        "Fabric API": "FABRIC_API_TOKEN",
+        "OneLake": "ONELAKE_TOKEN",
+        "Power BI": "PBI_API_TOKEN",
+    }
     for label, tok in results:
         if tok:
             tokens[label_to_key[label]] = tok

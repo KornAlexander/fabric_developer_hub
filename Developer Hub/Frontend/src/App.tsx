@@ -20,7 +20,12 @@ export interface ContextProps {
 }
 
 function ItemEditorRoute({ workloadClient }: { workloadClient: WorkloadClientAPI }) {
-    const { itemObjectId } = useParams<{ itemObjectId: string }>();
+    // Fabric may pass itemObjectId either as a path segment
+    // (`/agenthub-item-editor/<id>`) or as a query parameter
+    // (`/agenthub-item-editor?itemObjectId=<id>`). Support both.
+    const params = useParams<{ itemObjectId?: string }>();
+    const queryItemId = new URLSearchParams(window.location.search).get("itemObjectId") || undefined;
+    const itemObjectId = params.itemObjectId || queryItemId;
     return <AgentHubLayout workloadClient={workloadClient} itemObjectId={itemObjectId} />;
 }
 
@@ -32,8 +37,12 @@ export function App({ history, workloadClient }: AppProps) {
                 <AgentHubLayout workloadClient={workloadClient} />
             </Route>
 
-            {/* Item editor route — Fabric navigates here when opening an existing item */}
+            {/* Item editor route — Fabric navigates here when opening an existing item.
+                Supports both path-param and query-param itemObjectId styles. */}
             <Route path="/agenthub-item-editor/:itemObjectId">
+                <ItemEditorRoute workloadClient={workloadClient} />
+            </Route>
+            <Route path="/agenthub-item-editor">
                 <ItemEditorRoute workloadClient={workloadClient} />
             </Route>
 

@@ -613,6 +613,340 @@ async def list_workspace_items(
     return {"items": items, "captured_at": captured_at}
 
 
+# ── PBI Fixer proxy ──────────────────────────────────────────────────
+
+class PbiFixerProxyRequest(BaseModel):
+    """Forward an authenticated call to a Fabric / Power BI REST endpoint.
+
+    The PBI Fixer iframe cannot acquire a Fabric- or Power BI-audience
+    token directly (Fabric workload SDK only issues workload-audience
+    tokens). This proxy does the OBO exchange server-side and forwards
+    the call with the appropriate token, scoped per ``api`` field:
+
+    - ``api="fabric"`` → token aud ``api.fabric.microsoft.com``
+    - ``api="pbi"``    → token aud ``analysis.windows.net/powerbi/api``
+
+    ``path`` is the URL portion **after** the API root, including a
+    leading slash. Example: ``"/groups/{ws}/datasets/{ds}/tables"``.
+    """
+
+    api: str = Field(..., pattern="^(fabric|pbi)$")
+    path: str
+    method: str = Field("GET", pattern="^(GET|POST|PUT|PATCH|DELETE)$")
+    body: dict | list | None = None
+
+
+_FABRIC_API_ROOT = "https://api.fabric.microsoft.com/v1"
+_PBI_API_ROOT = "https://api.powerbi.com/v1.0/myorg"
+
+
+@router.post("/pbi-fixer/proxy")
+async def pbi_fixer_proxy(
+    payload: PbiFixerProxyRequest,
+    request: Request,
+    ctx: AuthorizationContext | None = Depends(require_user),
+):
+    """Proxy a single Fabric / Power BI REST call using the user's OBO token."""
+    user_id = _user_key_from_context(ctx)
+    _rate_limit(user_id, "pbi_fixer_proxy")
+
+    mcp_tokens = await _mcp_tokens(request)
+    if not mcp_tokens:
+        raise HTTPException(400, "Fabric token required")
+
+    if payload.api == "fabric":
+        token = mcp_tokens.get("FABRIC_API_TOKEN")
+        root = _FABRIC_API_ROOT
+    else:
+        token = mcp_tokens.get("PBI_API_TOKEN") or mcp_tokens.get("FABRIC_API_TOKEN")
+        root = _PBI_API_ROOT
+
+    if not token:
+        raise HTTPException(401, f"No OBO token available for api={payload.api}")
+
+    if not payload.path.startswith("/"):
+        raise HTTPException(400, "path must start with '/'")
+
+    url = f"{root}{payload.path}"
+
+    import httpx
+    async with httpx.AsyncClient(timeout=60.0, follow_redirects=False) as client:
+        try:
+            resp = await client.request(
+                payload.method,
+                url,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+                json=payload.body if payload.body is not None else None,
+            )
+        except httpx.HTTPError as exc:
+            raise HTTPException(502, f"Upstream request failed: {exc}") from exc
+
+        # Some long-running Fabric ops (getDefinition for reports/models)
+        # return 202 with a Location header pointing at an LRO. Follow it
+        # transparently so the frontend doesn't need to know about polling.
+        attempts = 0
+        while resp.status_code == 202 and attempts < 30:
+            attempts += 1
+            location = resp.headers.get("Location") or resp.headers.get("Operation-Location")
+            if not location:
+                break
+            try:
+                retry_after = float(resp.headers.get("Retry-After", "2"))
+            except ValueError:
+                retry_after = 2.0
+            await asyncio.sleep(min(retry_after, 5.0))
+            try:
+                resp = await client.get(
+                    location,
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+            except httpx.HTTPError as exc:
+                raise HTTPException(502, f"LRO poll failed: {exc}") from exc
+
+        # Once the LRO completes, Fabric typically returns 200 on the
+        # status URL but the body is the operation status — the actual
+        # result lives at f"{location}/result". Fetch that if the body
+        # looks like an LRO status (status: Succeeded). Surface
+        # status: Failed as an HTTP error so the frontend can react —
+        # without this, write operations like updateDefinition appear
+        # to "succeed" (HTTP 200) while having actually failed inside
+        # Fabric.
+        if resp.status_code == 200 and resp.headers.get("content-type", "").startswith("application/json"):
+            try:
+                maybe_status = resp.json()
+            except Exception:
+                maybe_status = None
+            if isinstance(maybe_status, dict) and "status" in maybe_status:
+                op_status = maybe_status.get("status")
+                if op_status == "Failed":
+                    err = maybe_status.get("error") or {}
+                    err_code = err.get("errorCode", "")
+                    err_msg = err.get("message", "")
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"Fabric LRO failed [{err_code}]: {err_msg}",
+                    )
+                if (
+                    op_status in ("Succeeded", "Completed")
+                    and "result" not in maybe_status
+                    and location
+                ):
+                    # Try fetching the result endpoint. Some write
+                    # operations (e.g. updateDefinition) have no result
+                    # body — Fabric responds 400 / OperationHasNoResult.
+                    # Treat that as success and fall back to the status
+                    # body so the call does not appear to fail.
+                    try:
+                        result_resp = await client.get(
+                            f"{location.rstrip('/')}/result",
+                            headers={"Authorization": f"Bearer {token}"},
+                        )
+                    except httpx.HTTPError as exc:
+                        raise HTTPException(502, f"LRO result fetch failed: {exc}") from exc
+                    if result_resp.status_code < 400:
+                        resp = result_resp
+                    else:
+                        # 400 OperationHasNoResult or similar → keep
+                        # the Succeeded status body as the response.
+                        pass
+
+    # Surface non-2xx as the same status so the frontend can react. Body
+    # is forwarded verbatim (text) so callers see the raw API error.
+    if resp.status_code >= 400:
+        raise HTTPException(
+            status_code=resp.status_code,
+            detail=f"{payload.method} {url}: {resp.text}",
+        )
+
+    # 204/empty body → return {}
+    if not resp.content:
+        return {}
+    try:
+        return resp.json()
+    except Exception:
+        return {"raw": resp.text}
+
+
+# ── PBI Fixer: Translations (WS-G) ──────────────────────────────────
+# Auto-translate proposal + apply endpoints. The propose endpoint
+# generates translation candidates for a batch of source strings
+# against one or more target cultures. The apply endpoint is scoped
+# out for this pass — see WS-N — and returns 501 so the frontend can
+# surface a clear "not yet enabled" message.
+
+
+class TranslationSourceItem(BaseModel):
+    objectType: str = Field(..., description="Table | Column | Measure | Hierarchy | Description")
+    objectPath: str = Field(..., description="'Sales' or 'Sales[Amount]' etc.")
+    sourceCaption: str = Field(..., description="Source string to translate")
+    existingCaption: str | None = None
+
+
+class TranslationProposeRequest(BaseModel):
+    workspaceId: str
+    datasetId: str
+    targetCultures: list[str] = Field(..., min_length=1)
+    sourceCulture: str | None = "en-US"
+    sourceItems: list[TranslationSourceItem] = Field(default_factory=list)
+    glossary: dict[str, str] | None = None
+
+
+class TranslationProposalItem(BaseModel):
+    objectType: str
+    objectPath: str
+    sourceCaption: str
+    existingCaption: str | None = None
+    proposedCaption: str
+    proposedDescription: str | None = None
+
+
+class TranslationProposeResponse(BaseModel):
+    culture: str
+    items: list[TranslationProposalItem]
+
+
+# A tiny built-in glossary keeps propose output deterministic for tests
+# and offline dev. Real LLM-backed translation is deferred to WS-N; the
+# endpoint shape is stable so the client doesn't need to change.
+_BUILTIN_GLOSSARY: dict[str, dict[str, str]] = {
+    "de-DE": {
+        "sales": "Umsatz", "revenue": "Umsatz", "product": "Produkt",
+        "products": "Produkte", "customer": "Kunde", "customers": "Kunden",
+        "order": "Bestellung", "orders": "Bestellungen", "date": "Datum",
+        "amount": "Betrag", "total": "Summe", "quantity": "Menge",
+        "name": "Name", "category": "Kategorie", "region": "Region",
+        "country": "Land", "city": "Stadt", "year": "Jahr",
+        "month": "Monat", "day": "Tag", "price": "Preis", "cost": "Kosten",
+        "profit": "Gewinn", "store": "Filiale", "employee": "Mitarbeiter",
+    },
+    "fr-FR": {
+        "sales": "Ventes", "revenue": "Chiffre d'affaires", "product": "Produit",
+        "products": "Produits", "customer": "Client", "customers": "Clients",
+        "order": "Commande", "orders": "Commandes", "date": "Date",
+        "amount": "Montant", "total": "Total", "quantity": "Quantité",
+        "name": "Nom", "category": "Catégorie", "region": "Région",
+        "country": "Pays", "city": "Ville", "year": "Année",
+        "month": "Mois", "day": "Jour", "price": "Prix", "cost": "Coût",
+        "profit": "Bénéfice", "store": "Magasin", "employee": "Employé",
+    },
+    "es-ES": {
+        "sales": "Ventas", "revenue": "Ingresos", "product": "Producto",
+        "products": "Productos", "customer": "Cliente", "customers": "Clientes",
+        "order": "Pedido", "orders": "Pedidos", "date": "Fecha",
+        "amount": "Importe", "total": "Total", "quantity": "Cantidad",
+        "name": "Nombre", "category": "Categoría", "region": "Región",
+        "country": "País", "city": "Ciudad", "year": "Año",
+        "month": "Mes", "day": "Día", "price": "Precio", "cost": "Coste",
+        "profit": "Beneficio", "store": "Tienda", "employee": "Empleado",
+    },
+}
+
+
+def _translate_word(word: str, culture: str, glossary: dict[str, str] | None) -> str:
+    """Translate a single word using the user-supplied glossary first,
+    then the built-in glossary. Falls back to the original word. Case
+    sensitivity is preserved on the first character."""
+    if not word:
+        return word
+    key = word.lower()
+    # User-supplied glossary takes priority (already in target culture).
+    if glossary and key in {k.lower() for k in glossary.keys()}:
+        # Case-insensitive lookup
+        for gk, gv in glossary.items():
+            if gk.lower() == key:
+                translated = gv
+                break
+        else:
+            translated = word
+    else:
+        translated = _BUILTIN_GLOSSARY.get(culture, {}).get(key, word)
+    # Preserve leading capitalization
+    if word[:1].isupper():
+        translated = translated[:1].upper() + translated[1:]
+    return translated
+
+
+def _translate_caption(caption: str, culture: str, glossary: dict[str, str] | None) -> str:
+    """Split caption into tokens (keeping spaces / non-letter runs) and
+    translate each word via the glossary chain."""
+    import re
+    # Split on word boundaries but preserve separators.
+    parts = re.split(r"(\W+)", caption)
+    return "".join(
+        _translate_word(p, culture, glossary) if p.isalpha() else p
+        for p in parts
+    )
+
+
+@router.post("/pbi-fixer/translations/propose", response_model=TranslationProposeResponse)
+async def pbi_fixer_translations_propose(
+    payload: TranslationProposeRequest,
+    request: Request,
+    ctx: AuthorizationContext | None = Depends(require_user),
+):
+    """Generate a translation proposal for the given source items.
+
+    For this pass, translation is done via a small deterministic
+    glossary (see ``_BUILTIN_GLOSSARY``). The LLM-backed path described
+    in WS-G will be wired later; the response shape is stable so the
+    frontend review grid doesn't change when that lands.
+    """
+    user_id = _user_key_from_context(ctx)
+    _rate_limit(user_id, "pbi_fixer_translations_propose")
+
+    if not payload.sourceItems:
+        raise HTTPException(400, "sourceItems is required — pass the model objects to translate")
+    if len(payload.targetCultures) != 1:
+        # Multi-culture is a UI affordance — backend translates one
+        # culture per call to keep responses small and paginatable.
+        raise HTTPException(400, "targetCultures must contain exactly one culture per call")
+
+    culture = payload.targetCultures[0]
+    glossary = payload.glossary or {}
+
+    items: list[TranslationProposalItem] = []
+    for src in payload.sourceItems:
+        proposed = _translate_caption(src.sourceCaption, culture, glossary)
+        items.append(TranslationProposalItem(
+            objectType=src.objectType,
+            objectPath=src.objectPath,
+            sourceCaption=src.sourceCaption,
+            existingCaption=src.existingCaption,
+            proposedCaption=proposed,
+        ))
+
+    return TranslationProposeResponse(culture=culture, items=items)
+
+
+class TranslationApplyRequest(BaseModel):
+    workspaceId: str
+    datasetId: str
+    culture: str
+    items: list[TranslationProposalItem]
+
+
+@router.post("/pbi-fixer/translations/apply")
+async def pbi_fixer_translations_apply(
+    payload: TranslationApplyRequest,
+    request: Request,
+    ctx: AuthorizationContext | None = Depends(require_user),
+):
+    """Apply accepted translations to the model via sempy-labs TOM
+    write. Not yet enabled — tracked in WS-N."""
+    _ = payload, request, ctx  # silence unused
+    raise HTTPException(
+        status_code=501,
+        detail=(
+            "Translation apply is not yet enabled. Export the accepted "
+            "rows as JSON/CSV and apply via Tabular Editor until WS-N "
+            "wires the backend TOM-write path."
+        ),
+    )
+
+
 async def _fetch_workspace_snapshot(
     user_id: str,
     workspace_id: str,
