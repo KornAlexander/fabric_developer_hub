@@ -18,7 +18,7 @@ interface ItemContextValue {
     workspaceObjectId: string | null;
     settings: AgentHubSettings | null;
     itemLoading: boolean;
-    createItem: (name: string, description?: string) => Promise<string>;
+    createItem: (name: string, description?: string, workspaceObjectIdOverride?: string) => Promise<string>;
     saveSettings: (settings: AgentHubSettings) => Promise<void>;
     loadItem: (objectId: string) => Promise<void>;
 }
@@ -83,8 +83,13 @@ export function ItemProvider({ workloadClient, workspaceObjectId, routeItemObjec
         }
     }, [itemObjectId]);
 
-    const createItem = useCallback(async (name: string, description?: string): Promise<string> => {
-        if (!workspaceObjectId) {
+    const createItem = useCallback(async (name: string, description?: string, workspaceObjectIdOverride?: string): Promise<string> => {
+        // v0.36: when AgentHub is opened from the generic launcher (no
+        // ?ws= URL param), the URL-derived ``workspaceObjectId`` is
+        // null. The Save dialog then asks the user to pick a workspace
+        // and passes it through here as ``workspaceObjectIdOverride``.
+        const targetWorkspaceId = workspaceObjectIdOverride || workspaceObjectId;
+        if (!targetWorkspaceId) {
             throw new Error("No workspace context — cannot create item.");
         }
         const defaultPayload: AgentHubPayload = {
@@ -96,7 +101,7 @@ export function ItemProvider({ workloadClient, workspaceObjectId, routeItemObjec
             },
         };
         const created = await callItemCreate(
-            workspaceObjectId,
+            targetWorkspaceId,
             ITEM_TYPE,
             name,
             description || "",

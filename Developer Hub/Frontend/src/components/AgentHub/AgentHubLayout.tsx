@@ -20,6 +20,8 @@ import {
     DialogActions,
     Field,
     Input,
+    Combobox,
+    Option,
 } from "@fluentui/react-components";
 import {
     BrainCircuit24Regular,
@@ -253,6 +255,7 @@ function TopbarItemActions({
     workspaceObjectId: string | null;
 }) {
     const { itemObjectId, settings, createItem, saveSettings } = useItemContext();
+    const auth = useGitHubAuth();
     const [saveOpen, setSaveOpen] = useState(false);
     const [name, setName] = useState("AgentHub");
     const [description, setDescription] = useState("AgentHub configuration and settings");
@@ -260,15 +263,46 @@ function TopbarItemActions({
     const [savedFlash, setSavedFlash] = useState(false);
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+    // v0.36 Option B: when there's no ?ws= URL param the dialog asks
+    // the user to pick a workspace. We lazy-fetch the workspace list on
+    // first dialog open so we don't waste a Fabric round-trip on every
+    // page load.
+    const [workspaces, setWorkspaces] = useState<Array<{ id: string; name: string }>>([]);
+    const [workspacesLoading, setWorkspacesLoading] = useState(false);
+    const [pickedWorkspaceId, setPickedWorkspaceId] = useState<string>("");
+    const [pickedWorkspaceText, setPickedWorkspaceText] = useState<string>("");
+
+    const effectiveWorkspaceId = workspaceObjectId || pickedWorkspaceId || "";
+
     const flashSaved = useCallback(() => {
         setSavedFlash(true);
         window.setTimeout(() => setSavedFlash(false), 1800);
     }, []);
 
+    const ensureWorkspaces = useCallback(async () => {
+        if (workspaceObjectId) return;
+        if (workspaces.length || workspacesLoading) return;
+        if (!auth.githubToken) return;
+        setWorkspacesLoading(true);
+        try {
+            const data = await api.getWorkspaces({ githubToken: auth.githubToken });
+            const list = (data?.workspaces ?? []).map((w: any) => ({ id: w.id, name: w.name }));
+            list.sort((a, b) => a.name.localeCompare(b.name));
+            setWorkspaces(list);
+        } catch (e: any) {
+            setErrorMsg(`Failed to load workspaces: ${e?.message || e}`);
+        } finally {
+            setWorkspacesLoading(false);
+        }
+    }, [workspaceObjectId, workspaces.length, workspacesLoading, auth.githubToken]);
+
     const handleSave = useCallback(async () => {
         setErrorMsg(null);
         if (!itemObjectId) {
             setSaveOpen(true);
+            // Lazy-fetch workspaces only when the dialog actually opens
+            // and only when we don't already have workspace context.
+            void ensureWorkspaces();
             return;
         }
         if (!settings) return;
@@ -281,15 +315,15 @@ function TopbarItemActions({
         } finally {
             setBusy(false);
         }
-    }, [itemObjectId, settings, saveSettings, flashSaved]);
+    }, [itemObjectId, settings, saveSettings, flashSaved, ensureWorkspaces]);
 
     const handleConfirmCreate = useCallback(async () => {
         const trimmed = name.trim();
-        if (!trimmed || !workspaceObjectId) return;
+        if (!trimmed || !effectiveWorkspaceId) return;
         setBusy(true);
         setErrorMsg(null);
         try {
-            await createItem(trimmed, description.trim() || undefined);
+            await createItem(trimmed, description.trim() || undefined, effectiveWorkspaceId);
             setSaveOpen(false);
             flashSaved();
         } catch (e: any) {
@@ -297,7 +331,7 @@ function TopbarItemActions({
         } finally {
             setBusy(false);
         }
-    }, [name, description, workspaceObjectId, createItem, flashSaved]);
+    }, [name, description, effectiveWorkspaceId, createItem, flashSaved]);
 
     const handleClose = useCallback(async () => {
         try {
@@ -375,9 +409,29 @@ function TopbarItemActions({
                                     />
                                 </Field>
                                 {!workspaceObjectId && (
-                                    <Text size={200} style={{ color: "#a4262c" }}>
-                                        Workspace context unavailable — open this editor from a Fabric workspace to save.
-                                    </Text>
+                                    <Field
+                                        label="Workspace"
+                                        required
+                                        hint={workspacesLoading ? "Loading workspaces…" : "AgentHub will be saved as an item in this workspace."}
+                                    >
+                                        <Combobox
+                                            placeholder={workspacesLoading ? "Loading…" : "Pick a workspace"}
+                                            value={pickedWorkspaceText}
+                                            selectedOptions={pickedWorkspaceId ? [pickedWorkspaceId] : []}
+                                            disabled={busy || workspacesLoading}
+                                            onOptionSelect={(_, d) => {
+                                                if (d.optionValue) {
+                                                    setPickedWorkspaceId(d.optionValue);
+                                                    setPickedWorkspaceText(d.optionText || "");
+                                                }
+                                            }}
+                                            onChange={(e) => setPickedWorkspaceText((e.target as HTMLInputElement).value)}
+                                        >
+                                            {workspaces.map((w) => (
+                                                <Option key={w.id} value={w.id} text={w.name}>{w.name}</Option>
+                                            ))}
+                                        </Combobox>
+                                    </Field>
                                 )}
                                 {errorMsg && (
                                     <Text size={200} style={{ color: "#a4262c" }}>{errorMsg}</Text>
@@ -395,7 +449,7 @@ function TopbarItemActions({
                             <Button
                                 appearance="primary"
                                 onClick={handleConfirmCreate}
-                                disabled={busy || !name.trim() || !workspaceObjectId}
+                                disabled={busy || !name.trim() || !effectiveWorkspaceId}
                                 icon={busy ? <Spinner size="tiny" /> : <Save24Regular />}
                             >
                                 Save
