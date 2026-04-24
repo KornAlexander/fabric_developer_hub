@@ -34,7 +34,10 @@ import type { ModelData } from "../../types";
 import { loadModelData } from "../../services/fabricApi";
 import {
   exportPrototypeToPbir,
+  exportPrototypeToExcalidraw,
+  exportPrototypeToSvg,
   downloadJson,
+  downloadText,
   uploadPrototypeAsReport,
   type PrototypeDocument,
   type PrototypePage,
@@ -337,6 +340,22 @@ export const PrototypePage: React.FC<PageProps> = ({ auth, workspaceId, datasetI
     setStatus(`Exported ${safe}.pbir-skeleton.json (${json.length.toLocaleString()} chars).`);
   };
 
+  const onExportExcalidraw = () => {
+    const doc = buildDocument();
+    const safe = reportName.replace(/[^A-Za-z0-9._-]+/g, "_") || "prototype";
+    const scene = exportPrototypeToExcalidraw(doc);
+    downloadText(`${safe}.excalidraw`, scene, "application/json");
+    setStatus(`Exported ${safe}.excalidraw — open at excalidraw.com (File \u25b8 Open).`);
+  };
+
+  const onExportSvg = () => {
+    const doc = buildDocument();
+    const safe = reportName.replace(/[^A-Za-z0-9._-]+/g, "_") || "prototype";
+    const svg = exportPrototypeToSvg(doc);
+    downloadText(`${safe}.svg`, svg, "image/svg+xml");
+    setStatus(`Exported ${safe}.svg — drag onto a Figma canvas to import as editable layers.`);
+  };
+
   const onUpload = async () => {
     if (!workspaceId) return;
     const res = await uploadPrototypeAsReport(auth, workspaceId, buildDocument());
@@ -372,6 +391,12 @@ export const PrototypePage: React.FC<PageProps> = ({ auth, workspaceId, datasetI
         <div className={styles.grow} />
         <Button icon={<ArrowDownload20Regular />} appearance="primary" onClick={onExport}>
           Export JSON
+        </Button>
+        <Button icon={<ArrowDownload20Regular />} onClick={onExportExcalidraw} title="Excalidraw scene (.excalidraw) \u2014 import via excalidraw.com">
+          Export Excalidraw
+        </Button>
+        <Button icon={<ArrowDownload20Regular />} onClick={onExportSvg} title="SVG \u2014 drag onto a Figma canvas to import as editable layers">
+          Export SVG (Figma)
         </Button>
         <Button icon={<CloudArrowUp20Regular />} onClick={onUpload}>
           Upload as report
