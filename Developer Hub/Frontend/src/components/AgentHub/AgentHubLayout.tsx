@@ -285,7 +285,27 @@ function TopbarItemActions({
         if (!auth.githubToken) return;
         setWorkspacesLoading(true);
         try {
-            const data = await api.getWorkspaces({ githubToken: auth.githubToken });
+            // The /api/workspaces backend endpoint requires a Fabric OBO
+            // token (GitHub token alone returns "Invalid Fabric token").
+            // Acquire one via the workload SDK — this runs in response
+            // to the user clicking "Save to workspace…", so the consent
+            // overlay (if any) shows in a context the user expects.
+            const fabricScopes = [
+                "https://api.fabric.microsoft.com/Workspace.Read.All",
+                "https://api.fabric.microsoft.com/Item.Read.All",
+            ];
+            let fabricToken: string | undefined;
+            try {
+                const res = await workloadClient.auth.acquireAccessToken({
+                    additionalScopesToConsent: fabricScopes,
+                    claimsForConditionalAccessPolicy: "",
+                });
+                fabricToken = res?.token;
+            } catch (e) {
+                // Fall through — backend will reject with a clear error
+                // surfaced via errorMsg below.
+            }
+            const data = await api.getWorkspaces({ githubToken: auth.githubToken, fabricToken });
             const list = (data?.workspaces ?? []).map((w: any) => ({ id: w.id, name: w.name }));
             list.sort((a, b) => a.name.localeCompare(b.name));
             setWorkspaces(list);
@@ -294,7 +314,7 @@ function TopbarItemActions({
         } finally {
             setWorkspacesLoading(false);
         }
-    }, [workspaceObjectId, workspaces.length, workspacesLoading, auth.githubToken]);
+    }, [workspaceObjectId, workspaces.length, workspacesLoading, auth.githubToken, workloadClient]);
 
     const handleSave = useCallback(async () => {
         setErrorMsg(null);
