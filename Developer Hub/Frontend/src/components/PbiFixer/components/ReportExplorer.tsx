@@ -122,6 +122,12 @@ const useStyles = makeStyles({
     color: GRAY_COLOR,
     fontSize: "13px",
     fontStyle: "italic",
+    flex: 1,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    textAlign: "center",
+    ...shorthands.padding("24px"),
   },
   propertiesPanel: {
     ...shorthands.border("1px", "solid", BORDER_COLOR),
