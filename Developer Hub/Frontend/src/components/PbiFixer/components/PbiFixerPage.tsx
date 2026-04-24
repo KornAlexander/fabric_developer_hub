@@ -42,8 +42,8 @@ import {
 import { DEFAULT_NAV_KEY, NavKey } from "../types/nav";
 import type { PageProps } from "../types/shared";
 import * as api from "../../../controller/AgentHubApi";
+import { PBI_FIXER_VERSION } from "../utils/version";
 
-const PBI_FIXER_VERSION = "v0.35";
 const STORAGE_NAV_KEY = "pbiFixer.activeNav";
 
 const useStyles = makeStyles({

@@ -1113,6 +1113,46 @@ function AgentHubShell({
         });
     }, []);
 
+    // WS-N integration sweep — cross-tab BPA "Fix it" wiring.
+    //
+    // Background: with multi-tab v1.1, each PBI Fixer sub-nav lives in
+    // its own editor tab. Model BPA / Report BPA dispatch a global
+    // ``pbifixer:bpa-fix`` CustomEvent and call their local
+    // ``onNavigate('fixer')``, but the latter only mutates THAT tab's
+    // ``activeNav`` — it doesn't open the Fixer tab. So FixerPage's own
+    // ``addEventListener('pbifixer:bpa-fix')`` never fires unless the
+    // user already had the Fixer tab open before clicking Fix-it.
+    //
+    // Fix: AgentHubLayout listens at the shell level. On a BPA fix
+    // event we (1) stash the payload in sessionStorage so a freshly
+    // mounted FixerPage can drain it, (2) open / focus the Fixer tab
+    // via ``handlePbiFixerSubNav('fixer')``, and (3) re-dispatch the
+    // event after a short delay so an already-mounted FixerPage still
+    // picks it up via its existing handler.
+    useEffect(() => {
+        const handler = (e: Event) => {
+            const ce = e as CustomEvent<unknown> & { __relayed?: boolean };
+            if (ce.__relayed) return; // avoid re-entrant loops
+            try {
+                sessionStorage.setItem(
+                    "pbiFixer.pendingBpaFix",
+                    JSON.stringify(ce.detail ?? {}),
+                );
+            } catch { /* ignore */ }
+            handlePbiFixerSubNav("fixer");
+            // Re-fire so an already-mounted FixerPage's listener still
+            // catches the event. Tag the relayed event so this handler
+            // ignores it on the second pass.
+            window.setTimeout(() => {
+                const relay = new CustomEvent("pbifixer:bpa-fix", { detail: ce.detail });
+                (relay as unknown as { __relayed: boolean }).__relayed = true;
+                window.dispatchEvent(relay);
+            }, 50);
+        };
+        window.addEventListener("pbifixer:bpa-fix", handler);
+        return () => window.removeEventListener("pbifixer:bpa-fix", handler);
+    }, [handlePbiFixerSubNav]);
+
     const handleNavContextMenu = useCallback((item: NavItemId, e: React.MouseEvent<HTMLDivElement>) => {
         e.preventDefault();
         setCtxMenu({ item, pos: { left: e.clientX, top: e.clientY } });

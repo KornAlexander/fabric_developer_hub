@@ -158,17 +158,31 @@ export const FixerPage: React.FC<PageProps> = ({ auth, workspaceId, datasetId, d
 
   // BPA "Fix it" — preselect the matching fixer + log which finding triggered it.
   useEffect(() => {
-    const handler = (e: Event) => {
-      const ce = e as CustomEvent<{ ruleId?: string; objectPath?: string; source?: string }>;
-      const ruleId = ce.detail?.ruleId;
+    const apply = (detail: { ruleId?: string; objectPath?: string; source?: string } | null) => {
+      const ruleId = detail?.ruleId;
       if (!ruleId) return;
       const fx = findFixerForBpaRule(ruleId);
       if (!fx) return;
       setSelected((prev) => ({ ...prev, [fx.id]: true }));
       setRun((prev) => ({
         ...prev,
-        log: [...prev.log, `↪ Preselected ${fx.id} from ${ce.detail?.source} finding ${ruleId}${ce.detail?.objectPath ? ` (${ce.detail.objectPath})` : ""}.`],
+        log: [...prev.log, `↪ Preselected ${fx.id} from ${detail?.source} finding ${ruleId}${detail?.objectPath ? ` (${detail.objectPath})` : ""}.`],
       }));
+    };
+    // WS-N: drain a pending BPA-fix that AgentHubLayout stashed in
+    // sessionStorage right before opening the Fixer tab. This handles
+    // the case where the Fixer tab wasn't open yet when Fix-it was
+    // clicked from a BPA tab.
+    try {
+      const raw = sessionStorage.getItem("pbiFixer.pendingBpaFix");
+      if (raw) {
+        sessionStorage.removeItem("pbiFixer.pendingBpaFix");
+        apply(JSON.parse(raw));
+      }
+    } catch { /* ignore */ }
+    const handler = (e: Event) => {
+      const ce = e as CustomEvent<{ ruleId?: string; objectPath?: string; source?: string }>;
+      apply(ce.detail);
     };
     window.addEventListener("pbifixer:bpa-fix", handler);
     return () => window.removeEventListener("pbifixer:bpa-fix", handler);
