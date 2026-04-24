@@ -1,7 +1,7 @@
 // ReportExplorer — React component (FluentUI)
 // Mirrors report_explorer_tab() from _report_explorer.py
 
-import React, { useState, useCallback, useMemo } from "react";
+import React, { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import {
   Button,
   Input,
@@ -33,6 +33,7 @@ import {
   listReports,
   loadReportDefinition,
   resolveWorkspaceId,
+  getReportEmbedToken,
   PbiAuth,
 } from "../services";
 
@@ -173,32 +174,73 @@ const useStyles = makeStyles({
 interface ReportPreviewProps {
   reportData: ReportData | null;
   selectedKey: string | null;
+  auth: PbiAuth;
 }
 
 /**
  * Live, interactive Power BI report embed (mirrors the original Python
- * Fixer's `powerbiclient.Report` widget). Uses the secure `reportEmbed`
- * URL with `autoAuth=true` so the user's existing Power BI session
- * cookie authorises the embed without us minting a separate embed
- * token. When a page (or a visual on a page) is selected in the tree,
- * the iframe deep-links to that page via `?pageName=<id>`.
+ * Fixer's `powerbiclient.Report` widget).
  *
- * URL template:
- *   https://app.powerbi.com/reportEmbed
- *     ?reportId=<reportId>
- *     &groupId=<workspaceId>
- *     &autoAuth=true
- *     &pageName=<pageId>            (optional — current selection)
- *     &filterPaneEnabled=false
- *     &navContentPaneEnabled=true
+ * Embedding strategy: we mint a short-lived **embed token** server-side
+ * via `POST /groups/{ws}/reports/{id}/GenerateToken` (uses our existing
+ * OBO PBI token in the proxy) and hand it to the official
+ * `powerbi-client` SDK. The SDK is loaded once from a CDN to avoid an
+ * npm dep. This bypasses the third-party-cookie sign-in prompt that
+ * `autoAuth=true` would otherwise show inside Fabric's iframe-in-iframe
+ * context.
  *
- * The iframe is keyed on `reportId+pageName` so changing pages reloads
- * cleanly instead of relying on postMessage handshakes.
+ * When the user picks a different page in the tree we don't re-embed —
+ * we call `report.setPage(pageName)` for a smooth swap.
  */
+
+// ── powerbi-client SDK loader ────────────────────────────────────────
+const POWERBI_SDK_URL =
+  "https://cdn.jsdelivr.net/npm/powerbi-client@2.23.1/dist/powerbi.min.js";
+let pbiSdkPromise: Promise<any> | null = null;
+function loadPowerBiSdk(): Promise<any> {
+  const w = window as any;
+  if (w["powerbi-client"]) return Promise.resolve(w["powerbi-client"]);
+  if (w.powerbi && w["powerbi-client"] === undefined) {
+    // Older bundle exposes only `window.powerbi`; that's the singleton service.
+    return Promise.resolve({ service: w.powerbi, models: w["powerbi-models"] });
+  }
+  if (pbiSdkPromise) return pbiSdkPromise;
+  pbiSdkPromise = new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = POWERBI_SDK_URL;
+    s.async = true;
+    s.onload = () => {
+      const win = window as any;
+      // The CDN bundle exposes `powerbi` (service singleton) and
+      // `powerbi-client` (namespace with `models`, `Report`, …).
+      const ns = win["powerbi-client"] ?? win["powerbi-client"];
+      if (!win.powerbi) {
+        reject(new Error("powerbi-client loaded but window.powerbi missing"));
+        return;
+      }
+      resolve({
+        service: win.powerbi,
+        models: ns?.models ?? win["powerbi-client"]?.models ?? win.models,
+        namespace: ns,
+      });
+    };
+    s.onerror = () => reject(new Error(`Failed to load Power BI SDK from ${POWERBI_SDK_URL}`));
+    document.head.appendChild(s);
+  });
+  return pbiSdkPromise;
+}
+
 const ReportPreview: React.FC<ReportPreviewProps> = ({
   reportData,
   selectedKey,
+  auth,
 }) => {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const reportRef = useRef<any>(null);
+  const sdkRef = useRef<any>(null);
+  const [embedError, setEmbedError] = useState<string | null>(null);
+  const [embedLoading, setEmbedLoading] = useState(false);
+
   // Resolve which page to focus from the current selection.
   const focusedPage = useMemo(() => {
     if (!reportData) return null;
@@ -212,6 +254,83 @@ const ReportPreview: React.FC<ReportPreviewProps> = ({
     return null;
   }, [reportData, selectedKey]);
 
+  // Embed (or re-embed) the report whenever the report id / workspace changes.
+  useEffect(() => {
+    if (!reportData?.reportId || !reportData?.workspaceId) return;
+    let cancelled = false;
+    (async () => {
+      setEmbedError(null);
+      setEmbedLoading(true);
+      try {
+        const sdk = await loadPowerBiSdk();
+        if (cancelled) return;
+        sdkRef.current = sdk;
+        const tokenInfo = await getReportEmbedToken(
+          auth,
+          reportData.workspaceId,
+          reportData.reportId,
+        );
+        if (cancelled || !containerRef.current) return;
+        const models = sdk.models;
+        const config: any = {
+          type: "report",
+          id: reportData.reportId,
+          embedUrl: tokenInfo.embedUrl,
+          accessToken: tokenInfo.token,
+          tokenType: models?.TokenType?.Embed ?? 1, // 1 = Embed
+          permissions: models?.Permissions?.Read ?? 0,
+          settings: {
+            panes: {
+              filters: { visible: false },
+              pageNavigation: { visible: true },
+            },
+            background: models?.BackgroundType?.Transparent ?? 1,
+          },
+        };
+        if (focusedPage) config.pageName = focusedPage;
+        // Reset any previous embed in this container.
+        try { sdk.service.reset(containerRef.current); } catch { /* ignore */ }
+        const report = sdk.service.embed(containerRef.current, config);
+        reportRef.current = report;
+        report.off("loaded");
+        report.on("loaded", () => { if (!cancelled) setEmbedLoading(false); });
+        report.off("error");
+        report.on("error", (evt: any) => {
+          if (cancelled) return;
+          setEmbedError(evt?.detail?.message || "Embed error");
+          setEmbedLoading(false);
+        });
+      } catch (e: any) {
+        if (!cancelled) {
+          setEmbedError(e?.message || String(e));
+          setEmbedLoading(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+      try {
+        if (sdkRef.current && containerRef.current) {
+          sdkRef.current.service.reset(containerRef.current);
+        }
+      } catch { /* ignore */ }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reportData?.reportId, reportData?.workspaceId, auth.fabricToken]);
+
+  // When the user picks a different page, swap pages on the existing embed
+  // (no re-mint of the token).
+  useEffect(() => {
+    const report = reportRef.current;
+    if (!report || !focusedPage) return;
+    try {
+      const maybe = report.setPage(focusedPage);
+      if (maybe && typeof maybe.catch === "function") {
+        maybe.catch(() => { /* page may not exist yet */ });
+      }
+    } catch { /* ignore */ }
+  }, [focusedPage]);
+
   if (!reportData) {
     return <span>Load a report to see the live preview</span>;
   }
@@ -219,37 +338,30 @@ const ReportPreview: React.FC<ReportPreviewProps> = ({
     return <span>Report metadata missing — cannot embed</span>;
   }
 
-  const params = new URLSearchParams({
-    reportId: reportData.reportId,
-    groupId: reportData.workspaceId,
-    autoAuth: "true",
-    filterPaneEnabled: "false",
-    navContentPaneEnabled: "true",
-  });
-  if (focusedPage) params.set("pageName", focusedPage);
-
-  const src = `https://app.powerbi.com/reportEmbed?${params.toString()}`;
-
-  // Keying on src forces the iframe to fully reload when the user picks
-  // a different page; relying on internal embed message-passing would
-  // require pulling in `powerbi-client`, which we'd rather avoid for
-  // this first cut.
   return (
-    <iframe
-      key={src}
-      title={`Power BI report ${reportData.reportId}`}
-      src={src}
-      style={{
-        width: "100%",
-        height: "100%",
-        minHeight: "480px",
-        border: "0",
-        display: "block",
-      }}
-      // Allow fullscreen + clipboard so copy-to-Excel from a visual works.
-      allow="clipboard-read; clipboard-write; fullscreen"
-      allowFullScreen
-    />
+    <div style={{ position: "relative", width: "100%", height: "100%", minHeight: 480 }}>
+      <div
+        ref={containerRef}
+        style={{ width: "100%", height: "100%", minHeight: 480 }}
+      />
+      {embedLoading && (
+        <div style={{
+          position: "absolute", inset: 0, display: "flex", alignItems: "center",
+          justifyContent: "center", background: "rgba(255,255,255,0.6)", pointerEvents: "none",
+        }}>
+          <Spinner size="medium" label="Embedding report…" />
+        </div>
+      )}
+      {embedError && (
+        <div style={{
+          position: "absolute", left: 12, right: 12, bottom: 12,
+          padding: "8px 12px", background: "#fde7e9", color: "#a4262c",
+          border: "1px solid #f1bbbf", borderRadius: 4, fontSize: 12,
+        }}>
+          Embed failed: {embedError}
+        </div>
+      )}
+    </div>
   );
 };
 
@@ -476,6 +588,7 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
                 <ReportPreview
                   reportData={reportData}
                   selectedKey={selectedKey}
+                  auth={auth}
                 />
               ) : (
                 <span className={styles.previewEmpty}>

@@ -868,3 +868,50 @@ export async function createNotebook(
   };
 }
 
+// ---------------------------------------------------------------------------
+// Power BI embed token (used by ReportExplorer live preview)
+// ---------------------------------------------------------------------------
+
+export interface ReportEmbedInfo {
+  /** Short-lived embed token returned by GenerateToken. */
+  token: string;
+  /** ISO timestamp when the token expires. */
+  expiration: string;
+  /** `https://app.powerbi.com/reportEmbed?reportId=…&groupId=…` */
+  embedUrl: string;
+  reportId: string;
+  workspaceId: string;
+}
+
+/**
+ * Mint a Power BI embed token for a report so the live preview iframe
+ * doesn't depend on third-party app.powerbi.com cookies (which Fabric's
+ * iframe-in-iframe context strips). Calls
+ * `POST /v1.0/myorg/groups/{ws}/reports/{id}/GenerateToken` with
+ * `accessLevel: "View"`. The OBO PBI token in the proxy already has
+ * the right audience.
+ */
+export async function getReportEmbedToken(
+  auth: PbiAuth,
+  workspaceId: string,
+  reportId: string,
+): Promise<ReportEmbedInfo> {
+  const resp = await pbiPost<{
+    token: string;
+    expiration: string;
+    tokenId?: string;
+  }>(
+    auth,
+    `/groups/${workspaceId}/reports/${reportId}/GenerateToken`,
+    { accessLevel: "View" },
+  );
+
+  return {
+    token: resp.token,
+    expiration: resp.expiration,
+    embedUrl: `https://app.powerbi.com/reportEmbed?reportId=${reportId}&groupId=${workspaceId}`,
+    reportId,
+    workspaceId,
+  };
+}
+
