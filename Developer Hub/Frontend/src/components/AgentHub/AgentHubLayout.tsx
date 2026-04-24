@@ -12,6 +12,14 @@ import {
     Spinner,
     Body1,
     Tooltip,
+    Dialog,
+    DialogSurface,
+    DialogTitle,
+    DialogBody,
+    DialogContent,
+    DialogActions,
+    Field,
+    Input,
 } from "@fluentui/react-components";
 import {
     BrainCircuit24Regular,
@@ -35,6 +43,7 @@ import {
     Dismiss16Regular,
     ChevronRight16Regular,
     ChevronDown16Regular,
+    Save24Regular,
 } from "@fluentui/react-icons";
 import { WorkloadClientAPI } from "@ms-fabric/workload-client";
 // OrchestratorPage stays eager — it's the default landing route, so lazy
@@ -72,7 +81,7 @@ const PbiFixerPage = lazyWithPreload(
 );
 import { NAV_ITEMS as PBIFIXER_NAV_ITEMS, DEFAULT_NAV_KEY as PBIFIXER_DEFAULT_NAV, type NavKey as PbiFixerNavKey } from "../PbiFixer";
 import { useGitHubAuth } from "./useGitHubAuth";
-import { ItemProvider } from "./ItemContext";
+import { ItemProvider, useItemContext } from "./ItemContext";
 import { WORKLOAD_VERSION } from "../../version";
 import { SearchProvider, useSearch, searchPlaceholderFor, isFilterScope, type SearchScope } from "./SearchContext";
 import { callAuthAcquireAccessToken } from "../../controller/AgentHubController";
@@ -225,6 +234,176 @@ function TopbarSearchInput() {
                     <Dismiss16Regular />
                 </button>
             )}
+        </div>
+    );
+}
+
+/**
+ * Topbar Save / Close action group. Lives inside ``ItemProvider`` so it can
+ * read + persist the AgentHub item via ``useItemContext``. Save persists to
+ * the workspace (creating the item on first save with a name dialog); Close
+ * navigates the host back to the workspace listing. Once saved, the item
+ * shows up in the Fabric workspace alongside reports / lakehouses / etc.
+ */
+function TopbarItemActions({
+    workloadClient,
+    workspaceObjectId,
+}: {
+    workloadClient: WorkloadClientAPI;
+    workspaceObjectId: string | null;
+}) {
+    const { itemObjectId, settings, createItem, saveSettings } = useItemContext();
+    const [saveOpen, setSaveOpen] = useState(false);
+    const [name, setName] = useState("AgentHub");
+    const [description, setDescription] = useState("AgentHub configuration and settings");
+    const [busy, setBusy] = useState(false);
+    const [savedFlash, setSavedFlash] = useState(false);
+    const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+    const flashSaved = useCallback(() => {
+        setSavedFlash(true);
+        window.setTimeout(() => setSavedFlash(false), 1800);
+    }, []);
+
+    const handleSave = useCallback(async () => {
+        setErrorMsg(null);
+        if (!itemObjectId) {
+            setSaveOpen(true);
+            return;
+        }
+        if (!settings) return;
+        setBusy(true);
+        try {
+            await saveSettings(settings);
+            flashSaved();
+        } catch (e: any) {
+            setErrorMsg(String(e?.message || e));
+        } finally {
+            setBusy(false);
+        }
+    }, [itemObjectId, settings, saveSettings, flashSaved]);
+
+    const handleConfirmCreate = useCallback(async () => {
+        const trimmed = name.trim();
+        if (!trimmed || !workspaceObjectId) return;
+        setBusy(true);
+        setErrorMsg(null);
+        try {
+            await createItem(trimmed, description.trim() || undefined);
+            setSaveOpen(false);
+            flashSaved();
+        } catch (e: any) {
+            setErrorMsg(String(e?.message || e));
+        } finally {
+            setBusy(false);
+        }
+    }, [name, description, workspaceObjectId, createItem, flashSaved]);
+
+    const handleClose = useCallback(async () => {
+        try {
+            if (workspaceObjectId) {
+                await workloadClient.navigation.navigate("host", {
+                    path: `/groups/${workspaceObjectId}`,
+                });
+                return;
+            }
+        } catch {
+            /* fall through to history.back */
+        }
+        try { window.history.back(); } catch { /* no-op */ }
+    }, [workloadClient, workspaceObjectId]);
+
+    return (
+        <div
+            className="agenthub-topbar-actions"
+            style={{ display: "flex", alignItems: "center", gap: 8, marginRight: 8 }}
+        >
+            {savedFlash && (
+                <span
+                    aria-live="polite"
+                    style={{
+                        fontSize: 12,
+                        color: "#107c10",
+                        fontWeight: 600,
+                        whiteSpace: "nowrap",
+                    }}
+                >
+                    Saved ✓
+                </span>
+            )}
+            <Button
+                appearance="primary"
+                size="small"
+                icon={<Save24Regular />}
+                disabled={busy}
+                onClick={handleSave}
+                title={itemObjectId ? "Save settings to the workspace item" : "Save this AgentHub session as a workspace item"}
+            >
+                {itemObjectId ? "Save" : "Save to workspace…"}
+            </Button>
+            <Button
+                appearance="subtle"
+                size="small"
+                icon={<Dismiss24Regular />}
+                onClick={handleClose}
+                title="Close and return to the workspace"
+            >
+                Close
+            </Button>
+            <Dialog
+                open={saveOpen}
+                onOpenChange={(_, d) => { if (!busy) setSaveOpen(d.open); }}
+            >
+                <DialogSurface>
+                    <DialogBody>
+                        <DialogTitle>Save to workspace</DialogTitle>
+                        <DialogContent>
+                            <div style={{ display: "flex", flexDirection: "column", gap: 12, paddingTop: 4 }}>
+                                <Field label="Name" required>
+                                    <Input
+                                        value={name}
+                                        onChange={(_, d) => setName(d.value)}
+                                        disabled={busy}
+                                        autoFocus
+                                    />
+                                </Field>
+                                <Field label="Description">
+                                    <Input
+                                        value={description}
+                                        onChange={(_, d) => setDescription(d.value)}
+                                        disabled={busy}
+                                    />
+                                </Field>
+                                {!workspaceObjectId && (
+                                    <Text size={200} style={{ color: "#a4262c" }}>
+                                        Workspace context unavailable — open this editor from a Fabric workspace to save.
+                                    </Text>
+                                )}
+                                {errorMsg && (
+                                    <Text size={200} style={{ color: "#a4262c" }}>{errorMsg}</Text>
+                                )}
+                            </div>
+                        </DialogContent>
+                        <DialogActions>
+                            <Button
+                                appearance="secondary"
+                                onClick={() => setSaveOpen(false)}
+                                disabled={busy}
+                            >
+                                Cancel
+                            </Button>
+                            <Button
+                                appearance="primary"
+                                onClick={handleConfirmCreate}
+                                disabled={busy || !name.trim() || !workspaceObjectId}
+                                icon={busy ? <Spinner size="tiny" /> : <Save24Regular />}
+                            >
+                                Save
+                            </Button>
+                        </DialogActions>
+                    </DialogBody>
+                </DialogSurface>
+            </Dialog>
         </div>
     );
 }
@@ -470,6 +649,7 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
             toggleCollapsed={toggleCollapsed}
             startPreload={startPreload}
             setNavPending={setNavPending}
+            workspaceObjectId={workspaceObjectId}
         />
         </EditorTabsProvider>
         </SearchProvider>
@@ -632,6 +812,7 @@ interface AgentHubShellProps {
     toggleCollapsed: () => void;
     startPreload: (key: PreloadKey) => Promise<unknown>;
     setNavPending: (v: boolean) => void;
+    workspaceObjectId: string | null;
 }
 
 /** Map a nav item id → its sidebar target page slug (used by preload). */
@@ -669,6 +850,7 @@ function AgentHubShell({
     toggleCollapsed,
     startPreload,
     setNavPending,
+    workspaceObjectId,
 }: AgentHubShellProps) {
     const { openTab, openTabInNewGroup, replaceActiveTab } = useEditorTabs();
     const { prefs, setPrefs } = useNavPreferences();
@@ -839,6 +1021,10 @@ function AgentHubShell({
                     <TopbarSearchInput />
                 </div>
                 <div className="agenthub-topbar-right">
+                    <TopbarItemActions
+                        workloadClient={workloadClient}
+                        workspaceObjectId={workspaceObjectId}
+                    />
                     <Alert24Regular className="topbar-icon" />
                     <QuestionCircle24Regular className="topbar-icon" />
                     <div className="agenthub-avatar" title={auth.githubUser || "User"}>
