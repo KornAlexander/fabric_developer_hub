@@ -377,7 +377,7 @@ export const TranslationsPage: React.FC<PageProps> = ({
       const msg = e instanceof Error ? e.message : String(e);
       if (status === 501) {
         // Friendly banner — the UI path is wired, but the backend
-        // write is still pending (WS-N).
+        // TOM-write apply endpoint is not yet implemented.
         setApplyError(msg);
       } else {
         setApplyError(msg);
@@ -554,8 +554,8 @@ export const TranslationsPage: React.FC<PageProps> = ({
               <Text>
                 This will write <strong>{acceptedCount}</strong> translation(s) to
                 culture <strong>{targetCulture}</strong> in the selected model.
-                Backend write is pending (WS-N); a 501 response will open the
-                export flow instead.
+                The backend TOM-write apply endpoint is not yet implemented; a
+                501 response will open the export flow instead.
               </Text>
             </DialogContent>
             <DialogActions>

@@ -742,17 +742,24 @@ WS-A. Largest remaining workstream; can be deferred.
 
 ---
 
-## WS-N — Integration & Shared Assets Sweep 🟡 partially shipped (v0.12–v0.16)
+## WS-N — Integration & Shared Assets Sweep ✅ shipped (v0.36–v0.37)
 **Goal:** Final low-risk integration pass that is the **only** workstream allowed to touch
 shared files after WS-A. This makes the other workstreams independently buildable in parallel.
 
-**Status snapshot (as of v0.16):**
+**Status snapshot (as of v0.37):**
 - [x] BPA "Fix it" → Fixer page wiring shipped incrementally inside WS-C/D/E:
       `ModelBpaPage` + `ReportBpaPage` dispatch `window.CustomEvent('pbifixer:bpa-fix', {detail})`
       and call `onNavigate('fixer')`; `FixerPage` listens and preselects matching fixer ids.
 - [x] Cross-workstream smoke passes ran after each WS merge (manual Playwright).
-- [ ] `utils/version.ts` — **not yet extracted**: version is still a local `PBI_FIXER_VERSION`
-      const inside `PbiFixerPage.tsx`. Low urgency because only one file reads it today.
+- [x] `utils/version.ts` extracted (v0.36) — single source of truth re-exported from
+      `utils/index.ts`; `PbiFixerPage.tsx` imports from there.
+- [x] Cross-tab BPA Fix-it relay (v0.36): shell-level listener in `AgentHubLayout.tsx`
+      catches the event from any sub-tab, stashes payload in
+      `sessionStorage["pbiFixer.pendingBpaFix"]`, opens the Fixer tab via
+      `handlePbiFixerSubNav("fixer")`, then re-dispatches the event with `__relayed=true`.
+      `FixerPage.tsx` drains sessionStorage on mount + listens for the relay.
+- [x] Removed stale "WS-N" mis-labels from `TranslationsPage.tsx` and `modelBpaApi.ts` (v0.37):
+      backend TOM-write apply path is a separate future backend workstream, not WS-N.
 - [ ] Shared frontend deps (`reactflow` for WS-J, Monaco-related for WS-K) — ~~**not installed**, blocked on those workstreams starting~~ **WS-J shipped without `reactflow`** (pure SVG canvas, no shared-deps touch needed). Monaco still pending for WS-K.
 
 ### Owns
@@ -768,8 +775,8 @@ shared files after WS-A. This makes the other workstreams independently buildabl
 - Perform the final smoke pass after each batch merge
 
 ### Acceptance
-- [ ] `utils/version.ts` is the only displayed version source of truth — *deferred, still inlined*
-- [ ] Shared deps installed once, not by feature workstreams — *blocked on WS-J / WS-K*
+- [x] `utils/version.ts` is the only displayed version source of truth (v0.36)
+- [ ] Shared deps installed once, not by feature workstreams — *blocked on WS-K (Monaco)*
 - [x] BPA "Fix it" flows wire into Fixer page without feature-level merge conflicts
 - [x] Smoke test after each integration batch
 

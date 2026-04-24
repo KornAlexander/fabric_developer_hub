@@ -3,7 +3,7 @@
 // the official Best-Practice-Analyzer ruleset (subset of what
 // `sempy_labs.run_model_bpa()` ships). Implemented client-side against
 // the already-loaded `ModelData` so the page works without waiting for
-// the backend sempy-labs bridge to land (tracked in WS-N).
+// the backend sempy-labs bridge to land (separate backend workstream).
 //
 // When the backend bridge ships, `ModelBpaPage` can swap to the remote
 // result and leave this file in place for offline demos / tests — the
@@ -20,7 +20,7 @@ export interface BpaRule {
   name: string;
   description: string;
   /** Stable kind so the Fixer page knows which automated fix applies.
-   *  WS-N will wire these to TOM-write actions. */
+   *  Backend TOM-write actions are a separate future workstream. */
   fixKind?: string;
 }
 
