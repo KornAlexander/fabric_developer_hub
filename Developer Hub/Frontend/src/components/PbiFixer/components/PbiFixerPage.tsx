@@ -43,7 +43,7 @@ import { DEFAULT_NAV_KEY, NavKey } from "../types/nav";
 import type { PageProps } from "../types/shared";
 import * as api from "../../../controller/AgentHubApi";
 
-const PBI_FIXER_VERSION = "v0.34";
+const PBI_FIXER_VERSION = "v0.35";
 const STORAGE_NAV_KEY = "pbiFixer.activeNav";
 
 const useStyles = makeStyles({
@@ -469,10 +469,11 @@ export const PbiFixerPage: React.FC<PbiFixerPageProps> = ({
   // Only one picker should ever be visible at a time — Report-scoped
   // pages show the Report picker, everything else shows the Semantic
   // Model picker. Keeps the connection bar uncluttered and avoids the
-  // "which one applies to this page?" ambiguity. The Fixer page is the
-  // exception: it spans both scopes and needs both pickers visible.
+  // "which one applies to this page?" ambiguity. Pages that can target
+  // either scope (Fixer, Sempy Runner, Script Runner) show both pickers
+  // so the user can pick whichever the function/script needs.
   const isReportScoped = activeNav === "report" || activeNav === "reportBpa" || activeNav === "reversePrototype";
-  const needsBothPickers = activeNav === "fixer";
+  const needsBothPickers = activeNav === "fixer" || activeNav === "sempyRunner" || activeNav === "scriptRunner";
   const showDatasetPicker = needsBothPickers || !isReportScoped;
   const showReportPicker = needsBothPickers || isReportScoped;
 
