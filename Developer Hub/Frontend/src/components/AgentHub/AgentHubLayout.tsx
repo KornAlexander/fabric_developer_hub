@@ -79,7 +79,7 @@ const PbiFixerPage = lazyWithPreload(
     () => import("../PbiFixer").then(m => ({ PbiFixerPage: m.PbiFixerPage })),
     "PbiFixerPage",
 );
-import { NAV_ITEMS as PBIFIXER_NAV_ITEMS, DEFAULT_NAV_KEY as PBIFIXER_DEFAULT_NAV, type NavKey as PbiFixerNavKey } from "../PbiFixer";
+import { NAV_ITEMS as PBIFIXER_NAV_ITEMS, NAV_GROUPS as PBIFIXER_NAV_GROUPS, DEFAULT_NAV_KEY as PBIFIXER_DEFAULT_NAV, type NavKey as PbiFixerNavKey, type NavGroup as PbiFixerNavGroup } from "../PbiFixer";
 import { useGitHubAuth } from "./useGitHubAuth";
 import { ItemProvider, useItemContext } from "./ItemContext";
 import { WORKLOAD_VERSION } from "../../version";
@@ -873,9 +873,33 @@ function AgentHubShell({
         } catch { /* ignore */ }
         return PBIFIXER_DEFAULT_NAV;
     });
-    const [pbiFixerOthersExpanded, setPbiFixerOthersExpanded] = useState<boolean>(() => {
-        try { return sessionStorage.getItem("pbiFixer.othersExpanded") === "1"; } catch { return false; }
+    // v0.34: themed sub-groups (Model tools / Report tools / Automation)
+    // replace the single catch-all "Others" branch. State is a per-group
+    // boolean map persisted as JSON in sessionStorage.
+    type GroupKey = Exclude<PbiFixerNavGroup, "peer">;
+    const [pbiFixerExpandedGroups, setPbiFixerExpandedGroups] = useState<Record<GroupKey, boolean>>(() => {
+        const empty: Record<GroupKey, boolean> = { modelTools: false, reportTools: false, automation: false };
+        try {
+            const raw = sessionStorage.getItem("pbiFixer.expandedGroups");
+            if (!raw) return empty;
+            const parsed = JSON.parse(raw);
+            return { ...empty, ...parsed };
+        } catch { return empty; }
     });
+    // Auto-expand the group that owns the active sub-nav so deep links
+    // (e.g. ``?nav=delta``) land on a visible row instead of a closed
+    // "Model tools" header.
+    useEffect(() => {
+        const activeItem = PBIFIXER_NAV_ITEMS.find((i) => i.key === pbiFixerNavKey);
+        if (!activeItem || activeItem.group === "peer") return;
+        const g = activeItem.group as GroupKey;
+        setPbiFixerExpandedGroups((prev) => {
+            if (prev[g]) return prev;
+            const next = { ...prev, [g]: true };
+            try { sessionStorage.setItem("pbiFixer.expandedGroups", JSON.stringify(next)); } catch { /* ignore */ }
+            return next;
+        });
+    }, [pbiFixerNavKey]);
     // Whether the Power BI Fixer group itself is expanded in the sidebar.
     // Auto-expanded while the pbifixer page is active so the user can see
     // where they are; otherwise collapsed to keep the sidebar compact.
@@ -968,10 +992,10 @@ function AgentHubShell({
         openTab(desc);
     }, [auth.githubToken, closeSidebar, matchPath, openTab, setNavPending, startPreload]);
 
-    const togglePbiFixerOthers = useCallback(() => {
-        setPbiFixerOthersExpanded((v) => {
-            const next = !v;
-            try { sessionStorage.setItem("pbiFixer.othersExpanded", next ? "1" : "0"); } catch { /* ignore */ }
+    const togglePbiFixerGroup = useCallback((group: GroupKey) => {
+        setPbiFixerExpandedGroups((prev) => {
+            const next = { ...prev, [group]: !prev[group] };
+            try { sessionStorage.setItem("pbiFixer.expandedGroups", JSON.stringify(next)); } catch { /* ignore */ }
             return next;
         });
     }, []);
@@ -1133,16 +1157,18 @@ function AgentHubShell({
 
                         {/* Flat-tree sub-nav for the PBI Fixer — shown only when
                             the group is expanded and the sidebar isn't collapsed
-                            into the narrow rail. */}
+                            into the narrow rail. v0.34: top peers (Model, Report)
+                            → 3 themed collapsible groups (Model tools, Report tools,
+                            Automation) → bottom peer (About). */}
                         {pbiFixerGroupExpanded && !sidebarCollapsed && (
                             <div
                                 className="pbifixer-subnav"
                                 role="group"
                                 aria-label="PBI Fixer pages"
                                 onKeyDown={(e) => {
-                                    // WS-O Phase 2.3: ArrowUp/Down move focus between
-                                    // tabbable rows; ArrowRight/Left expand or
-                                    // collapse the "Others" branch when focused on it.
+                                    // ArrowUp/Down move focus between tabbable rows;
+                                    // ArrowRight/Left expand or collapse the group
+                                    // header that currently has focus.
                                     if (e.key !== "ArrowDown" && e.key !== "ArrowUp" &&
                                         e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
                                     const root = e.currentTarget;
@@ -1158,16 +1184,18 @@ function AgentHubShell({
                                     } else if (e.key === "ArrowUp") {
                                         e.preventDefault();
                                         items[(idx - 1 + items.length) % items.length]?.focus();
-                                    } else if (e.key === "ArrowRight" && active?.classList.contains("pbifixer-subnav-item--others") && !pbiFixerOthersExpanded) {
-                                        e.preventDefault();
-                                        togglePbiFixerOthers();
-                                    } else if (e.key === "ArrowLeft" && active?.classList.contains("pbifixer-subnav-item--others") && pbiFixerOthersExpanded) {
-                                        e.preventDefault();
-                                        togglePbiFixerOthers();
+                                    } else if (e.key === "ArrowRight" && active?.classList.contains("pbifixer-subnav-item--others")) {
+                                        const g = active.getAttribute("data-group") as GroupKey | null;
+                                        if (g && !pbiFixerExpandedGroups[g]) { e.preventDefault(); togglePbiFixerGroup(g); }
+                                    } else if (e.key === "ArrowLeft" && active?.classList.contains("pbifixer-subnav-item--others")) {
+                                        const g = active.getAttribute("data-group") as GroupKey | null;
+                                        if (g && pbiFixerExpandedGroups[g]) { e.preventDefault(); togglePbiFixerGroup(g); }
                                     }
                                 }}
                             >
-                                {PBIFIXER_NAV_ITEMS.filter((i) => i.group === "peer").map((item) => (
+                                {/* Top peers: Model + Report (anything before the
+                                    first non-peer item). */}
+                                {PBIFIXER_NAV_ITEMS.filter((i, idx) => i.group === "peer" && idx < PBIFIXER_NAV_ITEMS.findIndex((x) => x.group !== "peer")).map((item) => (
                                     <div
                                         key={item.key}
                                         role="button"
@@ -1183,39 +1211,78 @@ function AgentHubShell({
                                         <span className="pbifixer-subnav-label">{item.label}</span>
                                     </div>
                                 ))}
-                                <div
-                                    role="button"
-                                    tabIndex={0}
-                                    className="pbifixer-subnav-item pbifixer-subnav-item--others"
-                                    onClick={togglePbiFixerOthers}
-                                    onKeyDown={(e) => {
-                                        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); togglePbiFixerOthers(); }
-                                    }}
-                                    aria-expanded={pbiFixerOthersExpanded}
-                                >
-                                    <span className="pbifixer-subnav-chevron" aria-hidden>
-                                        {pbiFixerOthersExpanded ? <ChevronDown16Regular /> : <ChevronRight16Regular />}
-                                    </span>
-                                    <span className="pbifixer-subnav-label">Others</span>
-                                    <span className="pbifixer-subnav-count">{PBIFIXER_NAV_ITEMS.filter((i) => i.group === "others").length}</span>
-                                </div>
-                                {pbiFixerOthersExpanded && PBIFIXER_NAV_ITEMS.filter((i) => i.group === "others").map((item) => (
-                                    <div
-                                        key={item.key}
-                                        role="button"
-                                        tabIndex={0}
-                                        className={`pbifixer-subnav-item pbifixer-subnav-item--nested ${!item.ready ? "pbifixer-subnav-item--pending" : ""} ${activePage === "pbifixer" && pbiFixerNavKey === item.key ? "pbifixer-subnav-item--active" : ""}`}
-                                        onClick={() => handlePbiFixerSubNav(item.key)}
-                                        onKeyDown={(e) => {
-                                            if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handlePbiFixerSubNav(item.key); }
-                                        }}
-                                        title={item.ready ? item.label : `${item.label} — Coming soon`}
-                                        aria-current={activePage === "pbifixer" && pbiFixerNavKey === item.key ? "page" : undefined}
-                                    >
-                                        <span className="pbifixer-subnav-icon" aria-hidden>{item.icon}</span>
-                                        <span className="pbifixer-subnav-label">{item.label}</span>
-                                    </div>
-                                ))}
+
+                                {/* Three themed collapsible groups. */}
+                                {PBIFIXER_NAV_GROUPS.map((g) => {
+                                    const expanded = pbiFixerExpandedGroups[g.key];
+                                    const items = PBIFIXER_NAV_ITEMS.filter((i) => i.group === g.key);
+                                    return (
+                                        <React.Fragment key={g.key}>
+                                            <div
+                                                role="button"
+                                                tabIndex={0}
+                                                data-group={g.key}
+                                                className="pbifixer-subnav-item pbifixer-subnav-item--others"
+                                                onClick={() => togglePbiFixerGroup(g.key)}
+                                                onKeyDown={(e) => {
+                                                    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); togglePbiFixerGroup(g.key); }
+                                                }}
+                                                aria-expanded={expanded}
+                                            >
+                                                <span className="pbifixer-subnav-chevron" aria-hidden>
+                                                    {expanded ? <ChevronDown16Regular /> : <ChevronRight16Regular />}
+                                                </span>
+                                                <span className="pbifixer-subnav-label">{g.label}</span>
+                                                <span className="pbifixer-subnav-count">{items.length}</span>
+                                            </div>
+                                            {expanded && items.map((item) => (
+                                                <div
+                                                    key={item.key}
+                                                    role="button"
+                                                    tabIndex={0}
+                                                    className={`pbifixer-subnav-item pbifixer-subnav-item--nested ${!item.ready ? "pbifixer-subnav-item--pending" : ""} ${activePage === "pbifixer" && pbiFixerNavKey === item.key ? "pbifixer-subnav-item--active" : ""}`}
+                                                    onClick={() => handlePbiFixerSubNav(item.key)}
+                                                    onKeyDown={(e) => {
+                                                        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handlePbiFixerSubNav(item.key); }
+                                                    }}
+                                                    title={item.ready ? item.label : `${item.label} — Coming soon`}
+                                                    aria-current={activePage === "pbifixer" && pbiFixerNavKey === item.key ? "page" : undefined}
+                                                >
+                                                    <span className="pbifixer-subnav-icon" aria-hidden>{item.icon}</span>
+                                                    <span className="pbifixer-subnav-label">{item.label}</span>
+                                                </div>
+                                            ))}
+                                        </React.Fragment>
+                                    );
+                                })}
+
+                                {/* Bottom peers: anything after the last non-peer
+                                    item (currently just About). */}
+                                {(() => {
+                                    const lastNonPeer = (() => {
+                                        for (let i = PBIFIXER_NAV_ITEMS.length - 1; i >= 0; i--) {
+                                            if (PBIFIXER_NAV_ITEMS[i].group !== "peer") return i;
+                                        }
+                                        return -1;
+                                    })();
+                                    return PBIFIXER_NAV_ITEMS.slice(lastNonPeer + 1).map((item) => (
+                                        <div
+                                            key={item.key}
+                                            role="button"
+                                            tabIndex={0}
+                                            className={`pbifixer-subnav-item ${!item.ready ? "pbifixer-subnav-item--pending" : ""} ${activePage === "pbifixer" && pbiFixerNavKey === item.key ? "pbifixer-subnav-item--active" : ""}`}
+                                            onClick={() => handlePbiFixerSubNav(item.key)}
+                                            onKeyDown={(e) => {
+                                                if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handlePbiFixerSubNav(item.key); }
+                                            }}
+                                            title={item.ready ? item.label : `${item.label} — Coming soon`}
+                                            aria-current={activePage === "pbifixer" && pbiFixerNavKey === item.key ? "page" : undefined}
+                                        >
+                                            <span className="pbifixer-subnav-icon" aria-hidden>{item.icon}</span>
+                                            <span className="pbifixer-subnav-label">{item.label}</span>
+                                        </div>
+                                    ));
+                                })()}
                             </div>
                         )}
                         <SideNavItem icon={<MoreHorizontal24Regular />} label="…" active={false} collapsed={sidebarCollapsed} onClick={() => { /* placeholder */ }} disabled />

@@ -44,35 +44,68 @@ export type NavKey =
   | "sempyRunner"
   | "about";
 
+/** Sub-group identifiers used to partition the nav into themed,
+ *  collapsible sections. v0.34 replaces the single catch-all "Others"
+ *  branch with three themed groups so the rail collapses cleanly. */
+export type NavGroup = "peer" | "modelTools" | "reportTools" | "automation";
+
 export interface NavItem {
   key: NavKey;
   label: string;
   /** FluentUI 20 px regular icon. Rendered as a `React.ReactNode` so the
    *  consumer can place it inside any markup without further wrapping. */
   icon: React.ReactNode;
-  /** Peer-level items render at the top of the nav; "others" items are
-   *  grouped under a collapsible "Others" branch. */
-  group: "peer" | "others";
+  /** "peer" items render flat at the top (or bottom) of the nav.
+   *  Anything else falls under that group's collapsible header. */
+  group: NavGroup;
   /** Whether the page is production-ready (false → shows "Coming soon"). */
   ready: boolean;
 }
 
+// v0.34: Model/Report stay as flat peers at the top; About becomes a
+// flat peer at the bottom (it's meta — shouldn't hide inside a group).
+// The 13 former "Others" entries now split into three themed groups:
+//   • Model tools  — analyse / maintain the semantic model
+//   • Report tools — design / inspect reports
+//   • Automation   — execute code (TMSL / C# / Python) against items
 export const NAV_ITEMS: NavItem[] = [
-  { key: "model",        label: "Model",         icon: <Database20Regular />,        group: "peer",   ready: true  },
-  { key: "report",       label: "Report",        icon: <ChartMultiple20Regular />,   group: "peer",   ready: true  },
-  { key: "fixer",        label: "Fixer",         icon: <Wrench20Regular />,          group: "others", ready: true  },
-  { key: "modelBpa",     label: "Model BPA",     icon: <DatabaseSearch20Regular />,  group: "others", ready: true  },
-  { key: "reportBpa",    label: "Report BPA",    icon: <DocumentSearch20Regular />,  group: "others", ready: true  },
-  { key: "memory",       label: "Memory",        icon: <Storage20Regular />,         group: "others", ready: true  },
-  { key: "perspectives", label: "Perspectives",  icon: <Eye20Regular />,             group: "others", ready: true  },
-  { key: "translations", label: "Translations",  icon: <Translate20Regular />,       group: "others", ready: true  },
-  { key: "delta",        label: "Delta",         icon: <ArrowSwap20Regular />,       group: "others", ready: true  },
-  { key: "diagram",      label: "Diagram",       icon: <Flowchart20Regular />,       group: "others", ready: true  },
-  { key: "scriptRunner", label: "Script Runner", icon: <Code20Regular />,            group: "others", ready: false },
-  { key: "prototype",    label: "Prototype",     icon: <Beaker20Regular />,          group: "others", ready: true  },
-  { key: "reversePrototype", label: "Reverse Prototype", icon: <ArrowImport20Regular />, group: "others", ready: true  },
-  { key: "sempyRunner", label: "Sempy Runner",  icon: <Flash20Regular />,            group: "others", ready: true  },
-  { key: "about",        label: "About",         icon: <Info20Regular />,            group: "others", ready: false },
+  // Top peers
+  { key: "model",            label: "Model",             icon: <Database20Regular />,        group: "peer",         ready: true  },
+  { key: "report",           label: "Report",            icon: <ChartMultiple20Regular />,   group: "peer",         ready: true  },
+
+  // Model tools
+  { key: "modelBpa",         label: "Model BPA",         icon: <DatabaseSearch20Regular />,  group: "modelTools",   ready: true  },
+  { key: "memory",           label: "Memory",            icon: <Storage20Regular />,         group: "modelTools",   ready: true  },
+  { key: "perspectives",     label: "Perspectives",      icon: <Eye20Regular />,             group: "modelTools",   ready: true  },
+  { key: "translations",     label: "Translations",      icon: <Translate20Regular />,       group: "modelTools",   ready: true  },
+  { key: "delta",            label: "Delta",             icon: <ArrowSwap20Regular />,       group: "modelTools",   ready: true  },
+  { key: "diagram",          label: "Diagram",           icon: <Flowchart20Regular />,       group: "modelTools",   ready: true  },
+
+  // Report tools
+  { key: "reportBpa",        label: "Report BPA",        icon: <DocumentSearch20Regular />,  group: "reportTools",  ready: true  },
+  { key: "prototype",        label: "Prototype",         icon: <Beaker20Regular />,          group: "reportTools",  ready: true  },
+  { key: "reversePrototype", label: "Reverse Prototype", icon: <ArrowImport20Regular />,     group: "reportTools",  ready: true  },
+
+  // Automation
+  { key: "fixer",            label: "Fixer",             icon: <Wrench20Regular />,          group: "automation",   ready: true  },
+  { key: "scriptRunner",     label: "Script Runner",     icon: <Code20Regular />,            group: "automation",   ready: false },
+  { key: "sempyRunner",      label: "Sempy Runner",      icon: <Flash20Regular />,           group: "automation",   ready: true  },
+
+  // Bottom peer
+  { key: "about",            label: "About",             icon: <Info20Regular />,            group: "peer",         ready: false },
+];
+
+/** Ordered list of collapsible groups. Used by the sidebar renderer
+ *  to draw a header row + (when expanded) the group's items. */
+export interface NavGroupDef {
+  key: Exclude<NavGroup, "peer">;
+  label: string;
+}
+
+export const NAV_GROUPS: NavGroupDef[] = [
+  { key: "modelTools",  label: "Model tools"  },
+  { key: "reportTools", label: "Report tools" },
+  { key: "automation",  label: "Automation"   },
 ];
 
 export const DEFAULT_NAV_KEY: NavKey = "model";

@@ -108,8 +108,13 @@ export const PbiFixerNav: React.FC<PbiFixerNavProps> = ({
   onToggleOthers,
 }) => {
   const styles = useStyles();
+  // Note: this component is currently unused — the live sub-nav lives
+  // in `AgentHubLayout.tsx` (`.pbifixer-subnav`). Kept for backwards
+  // compatibility with anything outside the AgentHub shell that may
+  // still import it. "others" here means "anything that's not a flat
+  // peer" so the legacy lump rendering still works at type-check time.
   const peers = NAV_ITEMS.filter((i) => i.group === "peer");
-  const others = NAV_ITEMS.filter((i) => i.group === "others");
+  const others = NAV_ITEMS.filter((i) => i.group !== "peer");
 
   const handleKey = (
     e: React.KeyboardEvent<HTMLDivElement>,

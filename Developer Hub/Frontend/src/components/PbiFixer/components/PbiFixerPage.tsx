@@ -43,9 +43,8 @@ import { DEFAULT_NAV_KEY, NavKey } from "../types/nav";
 import type { PageProps } from "../types/shared";
 import * as api from "../../../controller/AgentHubApi";
 
-const PBI_FIXER_VERSION = "v0.33";
+const PBI_FIXER_VERSION = "v0.34";
 const STORAGE_NAV_KEY = "pbiFixer.activeNav";
-const STORAGE_OTHERS_KEY = "pbiFixer.othersExpanded";
 
 const useStyles = makeStyles({
   root: {
@@ -189,15 +188,6 @@ function readNavKey(): NavKey {
   }
 }
 
-function readOthersExpanded(): boolean {
-  try {
-    const raw = sessionStorage.getItem(STORAGE_OTHERS_KEY);
-    return raw === "1";
-  } catch {
-    return false;
-  }
-}
-
 export const PbiFixerPage: React.FC<PbiFixerPageProps> = ({
   workloadClient,
   initialNav,
@@ -206,7 +196,6 @@ export const PbiFixerPage: React.FC<PbiFixerPageProps> = ({
   const [activeNav, setActiveNav] = useState<NavKey>(
     () => initialNav ?? readNavKey()
   );
-  const [othersExpanded, setOthersExpanded] = useState<boolean>(readOthersExpanded);
 
   // Connection / selection state.
   const [workspaceId, setWorkspaceId] = useState("");
@@ -236,10 +225,6 @@ export const PbiFixerPage: React.FC<PbiFixerPageProps> = ({
   // The legacy ``pbifixer:navchange`` cross-tab event is intentionally
   // not subscribed to here — it would otherwise hijack the active nav
   // of every open PBI Fixer tab.
-
-  useEffect(() => {
-    try { sessionStorage.setItem(STORAGE_OTHERS_KEY, othersExpanded ? "1" : "0"); } catch { /* ignore */ }
-  }, [othersExpanded]);
 
   // Folder id → name lookup for grouping pickers.
   const folderName = useMemo(() => {
