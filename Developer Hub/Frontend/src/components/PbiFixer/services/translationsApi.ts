@@ -91,20 +91,12 @@ export async function proposeTranslations(
 export async function applyTranslations(
   auth: PbiAuth,
   req: TranslationApplyRequest,
-): Promise<{ applied: number } | { detail: string }> {
+): Promise<{ applied: number; culture?: string; createdCultureFile?: boolean }> {
   const res = await fetch(`${BE}/api/pbi-fixer/translations/apply`, {
     method: "POST",
     headers: headers(auth),
     body: JSON.stringify(req),
   });
-  // 501 is expected for now — surface the message unchanged so the UI
-  // can render it as a "not yet" banner instead of a generic error.
-  if (res.status === 501) {
-    const body = await res.json().catch(() => ({ detail: "Not implemented" }));
-    const err = new Error(body.detail || "Translation apply is not yet enabled") as Error & { status: number };
-    err.status = 501;
-    throw err;
-  }
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`applyTranslations failed (${res.status}): ${text}`);

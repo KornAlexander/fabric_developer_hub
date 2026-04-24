@@ -1,7 +1,10 @@
 // WS-G — Translations page.
 // Workflow: Load model → select scope + target culture → Generate
 // proposal → review/edit in grid → Apply (gated by confirmation
-// dialog). Apply is wired but the backend currently returns 501 —
+// dialog). Apply writes the accepted rows to the model's TMDL
+// `definition/cultures/<culture>.tmdl` part via the backend (which
+// round-trips getDefinition / updateDefinition under the user's OBO
+// Fabric token).
 // the UI shows a clear banner and offers a JSON/CSV export instead.
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
@@ -364,24 +367,18 @@ export const TranslationsPage: React.FC<PageProps> = ({
     setApplyInfo("");
     const toApply = rows.filter((r) => r.accepted).map(({ accepted, edited, ...rest }) => rest);
     try {
-      await applyTranslations(auth, {
+      const res = await applyTranslations(auth, {
         workspaceId,
         datasetId: datasetId ?? "",
         culture: targetCulture,
         items: toApply,
       });
-      setApplyInfo(`Applied ${toApply.length} translation(s) to ${targetCulture}.`);
+      const created = res.createdCultureFile ? " (new culture file created)" : "";
+      setApplyInfo(`Applied ${res.applied} translation(s) to ${targetCulture}${created}.`);
       setConfirmOpen(false);
     } catch (e) {
-      const status = (e as { status?: number }).status;
       const msg = e instanceof Error ? e.message : String(e);
-      if (status === 501) {
-        // Friendly banner — the UI path is wired, but the backend
-        // TOM-write apply endpoint is not yet implemented.
-        setApplyError(msg);
-      } else {
-        setApplyError(msg);
-      }
+      setApplyError(msg);
       setConfirmOpen(false);
     }
   }, [auth, rows, workspaceId, datasetId, targetCulture]);
@@ -471,7 +468,7 @@ export const TranslationsPage: React.FC<PageProps> = ({
       )}
       {applyError && (
         <MessageBar intent="warning">
-          <MessageBarBody><MessageBarTitle>Apply not yet enabled</MessageBarTitle> {applyError}</MessageBarBody>
+          <MessageBarBody><MessageBarTitle>Apply failed</MessageBarTitle> {applyError}</MessageBarBody>
         </MessageBar>
       )}
 
@@ -554,8 +551,8 @@ export const TranslationsPage: React.FC<PageProps> = ({
               <Text>
                 This will write <strong>{acceptedCount}</strong> translation(s) to
                 culture <strong>{targetCulture}</strong> in the selected model.
-                The backend TOM-write apply endpoint is not yet implemented; a
-                501 response will open the export flow instead.
+                The change is applied directly to the semantic model's TMDL
+                culture file via the Fabric REST API.
               </Text>
             </DialogContent>
             <DialogActions>

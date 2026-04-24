@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 import uuid
 from datetime import UTC, datetime
@@ -934,17 +935,189 @@ async def pbi_fixer_translations_apply(
     request: Request,
     ctx: AuthorizationContext | None = Depends(require_user),
 ):
-    """Apply accepted translations to the model via sempy-labs TOM
-    write. Not yet enabled — tracked in WS-N."""
-    _ = payload, request, ctx  # silence unused
-    raise HTTPException(
-        status_code=501,
-        detail=(
-            "Translation apply is not yet enabled. Export the accepted "
-            "rows as JSON/CSV and apply via Tabular Editor until WS-N "
-            "wires the backend TOM-write path."
-        ),
+    """Apply accepted translations to a semantic model.
+
+    Implementation strategy: round-trip the model TMDL definition via
+    Fabric's ``getDefinition`` / ``updateDefinition`` REST. This avoids
+    needing an XMLA / sempy-labs bridge while still producing the same
+    ``ObjectTranslation`` rows that XMLA writes would produce. Steps:
+
+    1. Pull the model definition (LRO).
+    2. Find or create ``definition/cultures/<culture>.tmdl``.
+    3. Parse the existing culture body, merge the requested items into
+       its ``translations`` block (preserving any unrelated entries +
+       linguisticMetadata), and re-serialise deterministically.
+    4. POST ``updateDefinition`` with the patched parts (LRO).
+    """
+    import base64
+    import httpx
+
+    from services.agenthub.tmdl_translations import (
+        ApplyItem,
+        empty_culture,
+        merge_items,
+        parse_culture,
+        serialize_culture,
     )
+
+    user_id = _user_key_from_context(ctx)
+    _rate_limit(user_id, "pbi_fixer_translations_apply")
+
+    if not payload.items:
+        raise HTTPException(400, "items is required")
+    if not payload.culture or not re.match(r"^[a-zA-Z]{2,3}(-[A-Za-z0-9]+)*$", payload.culture):
+        raise HTTPException(400, "culture must be a valid culture code, e.g. 'de-DE'")
+
+    mcp_tokens = await _mcp_tokens(request)
+    if not mcp_tokens:
+        raise HTTPException(400, "Fabric token required")
+    fabric_token = mcp_tokens.get("FABRIC_API_TOKEN")
+    if not fabric_token:
+        raise HTTPException(401, "No Fabric OBO token available")
+
+    base = f"{_FABRIC_API_ROOT}/workspaces/{payload.workspaceId}/semanticModels/{payload.datasetId}"
+
+    async def _follow_lro(client: httpx.AsyncClient, resp: httpx.Response) -> httpx.Response:
+        attempts = 0
+        while resp.status_code == 202 and attempts < 30:
+            attempts += 1
+            location = resp.headers.get("Location") or resp.headers.get("Operation-Location")
+            if not location:
+                break
+            try:
+                retry_after = float(resp.headers.get("Retry-After", "2"))
+            except ValueError:
+                retry_after = 2.0
+            await asyncio.sleep(min(retry_after, 5.0))
+            resp = await client.get(location, headers={"Authorization": f"Bearer {fabric_token}"})
+        # If the LRO finished with a status body, fetch /result if the
+        # operation succeeded; treat result-not-available as success.
+        if (
+            resp.status_code == 200
+            and resp.headers.get("content-type", "").startswith("application/json")
+        ):
+            try:
+                body = resp.json()
+            except Exception:
+                body = None
+            if isinstance(body, dict) and body.get("status") == "Failed":
+                err = body.get("error") or {}
+                raise HTTPException(
+                    502,
+                    f"Fabric LRO failed [{err.get('errorCode', '')}]: {err.get('message', '')}",
+                )
+            if (
+                isinstance(body, dict)
+                and body.get("status") in ("Succeeded", "Completed")
+                and "definition" not in body
+            ):
+                location = resp.url and str(resp.url) or location
+                try:
+                    rr = await client.get(
+                        f"{location.rstrip('/')}/result",
+                        headers={"Authorization": f"Bearer {fabric_token}"},
+                    )
+                    if rr.status_code < 400:
+                        resp = rr
+                except httpx.HTTPError:
+                    pass
+        return resp
+
+    async with httpx.AsyncClient(timeout=120.0, follow_redirects=False) as client:
+        # 1. getDefinition (TMDL)
+        try:
+            resp = await client.post(
+                f"{base}/getDefinition?format=TMDL",
+                headers={
+                    "Authorization": f"Bearer {fabric_token}",
+                    "Content-Type": "application/json",
+                },
+                json={},
+            )
+        except httpx.HTTPError as exc:
+            raise HTTPException(502, f"getDefinition failed: {exc}") from exc
+        resp = await _follow_lro(client, resp)
+        if resp.status_code >= 400:
+            raise HTTPException(resp.status_code, f"getDefinition: {resp.text}")
+        try:
+            def_body = resp.json()
+        except Exception as exc:
+            raise HTTPException(502, f"getDefinition returned non-JSON: {exc}") from exc
+
+        parts = (def_body.get("definition") or {}).get("parts") or []
+        if not parts:
+            raise HTTPException(502, "Semantic model definition has no parts")
+
+        culture_path = f"definition/cultures/{payload.culture}.tmdl"
+        # 2. Find or create the culture part
+        culture_part = next(
+            (p for p in parts if p.get("path") == culture_path),
+            None,
+        )
+        if culture_part is None:
+            text = ""
+            cm = empty_culture(payload.culture)
+        else:
+            try:
+                text = base64.b64decode(culture_part["payload"]).decode("utf-8")
+            except Exception as exc:
+                raise HTTPException(
+                    502, f"Failed to decode culture TMDL '{culture_path}': {exc}"
+                ) from exc
+            cm = parse_culture(text)
+            if not cm.culture:
+                cm.culture = payload.culture
+
+        # 3. Merge items
+        apply_items = [
+            ApplyItem(
+                object_type=it.objectType,
+                object_path=it.objectPath,
+                value=it.proposedCaption,
+                proposed_description=it.proposedDescription,
+            )
+            for it in payload.items
+        ]
+        touched = merge_items(cm, apply_items)
+        if touched == 0:
+            raise HTTPException(400, "No items had a recognisable object_type / object_path")
+
+        new_body = serialize_culture(cm)
+        new_payload_b64 = base64.b64encode(new_body.encode("utf-8")).decode("ascii")
+
+        new_parts = [{**p} for p in parts]
+        if culture_part is None:
+            new_parts.append(
+                {"path": culture_path, "payload": new_payload_b64, "payloadType": "InlineBase64"}
+            )
+        else:
+            for np in new_parts:
+                if np.get("path") == culture_path:
+                    np["payload"] = new_payload_b64
+                    np["payloadType"] = np.get("payloadType") or "InlineBase64"
+                    break
+
+        # 4. updateDefinition
+        try:
+            up = await client.post(
+                f"{base}/updateDefinition",
+                headers={
+                    "Authorization": f"Bearer {fabric_token}",
+                    "Content-Type": "application/json",
+                },
+                json={"definition": {"parts": new_parts}},
+            )
+        except httpx.HTTPError as exc:
+            raise HTTPException(502, f"updateDefinition failed: {exc}") from exc
+        up = await _follow_lro(client, up)
+        if up.status_code >= 400:
+            raise HTTPException(up.status_code, f"updateDefinition: {up.text}")
+
+    return {
+        "applied": touched,
+        "culture": payload.culture,
+        "createdCultureFile": culture_part is None,
+    }
 
 
 async def _fetch_workspace_snapshot(
