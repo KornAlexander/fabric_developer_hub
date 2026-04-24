@@ -134,7 +134,9 @@ const useStyles = makeStyles({
     ...shorthands.borderRadius("8px"),
     ...shorthands.padding("8px"),
     backgroundColor: SECTION_BG,
-    flex: 1,
+    flex: "0 0 auto",
+    minHeight: "180px",
+    maxHeight: "320px",
     overflowY: "auto",
   },
   sectionLabel: {
@@ -288,7 +290,10 @@ const ReportPreview: React.FC<ReportPreviewProps> = ({
           settings: {
             panes: {
               filters: { visible: false },
-              pageNavigation: { visible: true },
+              // The left-hand tree handles page navigation; hiding the
+              // in-iframe page-tab strip avoids it overlapping the
+              // Properties panel below the preview.
+              pageNavigation: { visible: false },
             },
             background: models?.BackgroundType?.Transparent ?? 1,
           },
