@@ -892,20 +892,20 @@ html, body, #root {
 .pbifixer-subnav {
     display: flex;
     flex-direction: column;
-    padding: 2px 10px 6px 10px;
+    padding: 2px 0 6px 0;
 }
 
 .pbifixer-subnav-item {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 5px 8px 5px 32px;       /* indent under the Wrench icon */
-    margin: 1px 0;
-    border-radius: 6px;
+    gap: 12px;                       /* match .sidenav-item */
+    padding: 8px 12px 8px 34px;      /* same vertical rhythm; left indent under Wrench */
+    margin: 2px 10px;                /* match .sidenav-item gutter */
+    border-radius: 8px;              /* match .sidenav-item radius */
     cursor: pointer;
     color: #404752;
-    font-size: 13px;
-    line-height: 18px;
+    font-size: 14px;                 /* match .sidenav-item */
+    line-height: 20px;               /* match .sidenav-item */
     user-select: none;
     transition: background-color 120ms ease, color 120ms ease;
 
@@ -927,8 +927,8 @@ html, body, #root {
             content: "";
             position: absolute;
             left: -4px;
-            top: 6px;
-            bottom: 6px;
+            top: 8px;
+            bottom: 8px;
             width: 3px;
             background: #005faa;
             border-radius: 999px;
@@ -939,7 +939,7 @@ html, body, #root {
         svg { color: #005faa; }
     }
 
-    &--nested { padding-left: 44px; }
+    &--nested { padding-left: 48px; }
 
     &--others {
         font-weight: 500;
@@ -962,8 +962,8 @@ html, body, #root {
     transition: color 120ms ease;
 
     svg {
-        width: 18px;
-        height: 18px;
+        width: 20px;
+        height: 20px;
     }
 }
 
