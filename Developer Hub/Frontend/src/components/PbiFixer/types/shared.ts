@@ -2,6 +2,7 @@
 // WS-A establishes the shape all page components should accept.
 
 import type { PbiAuth } from "../services/fabricApi";
+import type { WorkloadClientAPI } from "@ms-fabric/workload-client";
 
 /** Props every Fixer page receives from the shell. Pages may ignore any
  *  field they don't need. When workspace/dataset/report change, the
@@ -9,6 +10,9 @@ import type { PbiAuth } from "../services/fabricApi";
  *  reset internal state manually. */
 export interface PageProps {
   auth: PbiAuth;
+  /** Workload client (for navigation, auth, …). Optional so existing
+   *  pages don't have to declare it. */
+  workloadClient?: WorkloadClientAPI;
   workspaceId: string;
   /** Name of the selected workspace, if resolved — useful for titles. */
   workspaceName?: string;

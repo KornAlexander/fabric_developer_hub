@@ -36,13 +36,14 @@ import {
   ScriptRunnerPage,
   PrototypePage,
   ReversePrototypePage,
+  SempyRunnerPage,
   AboutPage,
 } from "./pages";
 import { DEFAULT_NAV_KEY, NavKey } from "../types/nav";
 import type { PageProps } from "../types/shared";
 import * as api from "../../../controller/AgentHubApi";
 
-const PBI_FIXER_VERSION = "v0.31";
+const PBI_FIXER_VERSION = "v0.32";
 const STORAGE_NAV_KEY = "pbiFixer.activeNav";
 const STORAGE_OTHERS_KEY = "pbiFixer.othersExpanded";
 
@@ -416,6 +417,7 @@ export const PbiFixerPage: React.FC<PbiFixerPageProps> = ({
 
   const pageProps: PageProps = {
     auth: { githubToken, fabricToken: accessToken },
+    workloadClient,
     workspaceId,
     workspaceName,
     datasetId: datasetId || undefined,
@@ -472,6 +474,7 @@ export const PbiFixerPage: React.FC<PbiFixerPageProps> = ({
       case "scriptRunner": return <ScriptRunnerPage key={remountKey} {...pageProps} />;
       case "prototype":    return <PrototypePage    key={remountKey} {...pageProps} />;
       case "reversePrototype": return <ReversePrototypePage key={remountKey} {...pageProps} />;
+      case "sempyRunner":  return <SempyRunnerPage  key={remountKey} {...pageProps} />;
       case "about":        return <AboutPage        key={remountKey} {...pageProps} />;
       default:
         return null;

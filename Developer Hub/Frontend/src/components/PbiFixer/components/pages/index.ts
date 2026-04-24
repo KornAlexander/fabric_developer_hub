@@ -19,3 +19,5 @@ export { DiagramPage } from "./DiagramPage";
 export { DeltaPage } from "./DeltaAnalyzerPage";
 // WS-N — Reverse Prototype: extract layout from existing PBI report.
 export { ReversePrototypePage } from "./ReversePrototypePage";
+// WS-P — Sempy Runner: build & launch sempy / sempy-labs calls in a Fabric notebook.
+export { SempyRunnerPage } from "./SempyRunnerPage";
