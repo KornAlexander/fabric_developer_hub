@@ -1,40 +1,45 @@
-// WS-E — TS-native fixer registry.
+// WS-E v0.41 — TS fixer registry, backend-driven.
 //
-// Each fixer implements a `scan` over already-loaded `ReportData` /
-// `ModelData` and returns findings + an optional textual diff preview.
-// `apply` is intentionally stubbed for the first cut — writing back via
-// `fabric_updateDefinition` lands after the safety-rail UX (Apply switch
-// + diff review + confirm dialog) ships in v0.14. Backend-bridge fixers
-// (`Fix_UpgradeToPbir`, `Fix_DiscourageImplicitMeasures`) land with the
-// Python sempy-labs bridge.
+// Each fixer's ``scan`` / ``apply`` delegates to the backend
+// ``/api/pbi-fixer/fixers/apply`` endpoint, which round-trips the
+// model TMDL or report PBIR JSON via Fabric REST. The frontend
+// registry just describes the catalog (id / title / scope / BPA
+// rule mapping) — the heavy lifting lives in
+// ``Backend/src/services/agenthub/pbi_fixer_handlers.py``.
+//
+// This replaces the v0.14 TS-native scan-only registry. The historical
+// ``ReportData`` / ``ModelData`` arguments are still accepted on the
+// context but unused for backend fixers.
 
 import type { ReportData } from "../types/report";
 import type { ModelData } from "../types";
+import type { PbiAuth } from "../services/fabricApi";
+import { runFixer } from "../services/fixersApi";
 
 export type FixerScope = "report" | "sm";
-export type FixerMode = "ts" | "backend";
+export type FixerMode = "backend" | "stub";
 
 export interface FixerFinding {
-  /** Short label used in the scan log + preselection matching. */
   objectPath: string;
   detail?: string;
-  /** Optional before/after snippet rendered in the diff preview. */
   before?: string;
   after?: string;
 }
 
 export interface FixerResult {
   findings: FixerFinding[];
-  /** Combined diff text — shown in the collapsible preview panel. */
   diff?: string;
-  /** True only when `apply=true` was requested AND the write-back
-   *  actually executed. For v0.14 this stays false for every fixer. */
   applied: boolean;
-  /** Extra human-readable log lines emitted during scan/apply. */
   log: string[];
 }
 
 export interface FixerContext {
+  auth?: PbiAuth;
+  workspaceId?: string;
+  datasetId?: string;
+  reportId?: string;
+  /** Kept for backward-compat with WS-E v0.14 callers; unused for
+   *  backend-mode fixers. */
   report?: ReportData;
   model?: ModelData;
 }
@@ -44,233 +49,196 @@ export interface Fixer {
   title: string;
   scope: FixerScope;
   mode: FixerMode;
-  /** Rule ids from Model/Report BPA that should preselect this fixer
-   *  when the user clicks "Fix it". */
   bpaRuleIds?: string[];
-  scan(ctx: FixerContext): FixerResult;
+  scan(ctx: FixerContext): Promise<FixerResult>;
   apply(ctx: FixerContext): Promise<FixerResult>;
 }
 
+function emptyResult(log: string[]): FixerResult {
+  return { findings: [], applied: false, log };
+}
+
+function buildDiff(findings: FixerFinding[]): string {
+  return findings
+    .filter((f) => f.before || f.after)
+    .map((f) => `- ${f.objectPath}\n    - ${f.before ?? ""}\n    + ${f.after ?? ""}`)
+    .join("\n");
+}
+
+/** Build a backend-delegating Fixer from minimal metadata. */
+function backendFixer(meta: {
+  id: string;
+  title: string;
+  scope: FixerScope;
+  bpaRuleIds?: string[];
+}): Fixer {
+  const call = async (ctx: FixerContext, scanOnly: boolean): Promise<FixerResult> => {
+    if (!ctx.auth || !ctx.workspaceId) return emptyResult(["No auth / workspace."]);
+    if (meta.scope === "sm" && !ctx.datasetId) return emptyResult(["Pick a semantic model first."]);
+    if (meta.scope === "report" && !ctx.reportId) return emptyResult(["Pick a report first."]);
+    try {
+      const res = await runFixer(ctx.auth, {
+        workspaceId: ctx.workspaceId,
+        fixerId: meta.id,
+        scanOnly,
+        datasetId: ctx.datasetId,
+        reportId: ctx.reportId,
+      });
+      const findings: FixerFinding[] = res.findings.map((f) => ({
+        objectPath: f.objectPath,
+        detail: f.detail ?? undefined,
+        before: f.before ?? undefined,
+        after: f.after ?? undefined,
+      }));
+      const log = [
+        `${scanOnly ? "Scan" : "Apply"} OK — ${findings.length} finding(s)${res.applied ? ", written back to Fabric." : "."}`,
+        ...res.log,
+      ];
+      return {
+        findings,
+        diff: buildDiff(findings),
+        applied: res.applied,
+        log,
+      };
+    } catch (e) {
+      return emptyResult([`ERROR: ${e instanceof Error ? e.message : String(e)}`]);
+    }
+  };
+  return {
+    id: meta.id,
+    title: meta.title,
+    scope: meta.scope,
+    mode: "backend",
+    bpaRuleIds: meta.bpaRuleIds,
+    scan: (ctx) => call(ctx, true),
+    apply: (ctx) => call(ctx, false),
+  };
+}
+
 /* ------------------------------------------------------------------ */
-/* Report-side fixers                                                  */
+/* Catalog                                                             */
 /* ------------------------------------------------------------------ */
 
-const PIE_TYPES = new Set(["pieChart", "donutChart", "funnel"]);
-
-export const fixPieChart: Fixer = {
+export const fixPieChart = backendFixer({
   id: "Fix_PieChart",
   title: "Replace pie / donut / funnel charts with bar charts",
   scope: "report",
-  mode: "ts",
   bpaRuleIds: ["Report.PieOrDonut"],
-  scan({ report }) {
-    const findings: FixerFinding[] = [];
-    const diffs: string[] = [];
-    if (!report) {
-      return { findings, applied: false, log: ["No report loaded."] };
-    }
-    for (const [pName, p] of Object.entries(report.pages)) {
-      for (const [vKey, v] of Object.entries(p.visuals)) {
-        if (PIE_TYPES.has(v.type)) {
-          findings.push({
-            objectPath: `${p.displayName || pName} › ${v.title || vKey}`,
-            detail: v.type,
-            before: `"visualType": "${v.type}"`,
-            after:  `"visualType": "barChart"`,
-          });
-          diffs.push(`- pages/${pName}/visuals/${vKey}/visual.json\n    - "visualType": "${v.type}"\n    + "visualType": "barChart"`);
-        }
-      }
-    }
-    return {
-      findings,
-      diff: diffs.join("\n"),
-      applied: false,
-      log: [`Scanned ${Object.keys(report.pages).length} page(s) · ${findings.length} pie/donut/funnel visual(s) to replace.`],
-    };
-  },
-  async apply(ctx) {
-    const r = this.scan(ctx);
-    r.log.push("Apply not yet wired — TS write-back via fabric_updateDefinition lands next.");
-    return r;
-  },
-};
+});
 
-export const fixBarChart: Fixer = {
-  id: "Fix_BarChart",
-  title: "Standardize bar-chart formatting",
-  scope: "report",
-  mode: "ts",
-  scan({ report }) {
-    const findings: FixerFinding[] = [];
-    if (!report) return { findings, applied: false, log: ["No report loaded."] };
-    for (const [pName, p] of Object.entries(report.pages)) {
-      for (const [vKey, v] of Object.entries(p.visuals)) {
-        if (v.type === "barChart" || v.type === "clusteredBarChart") {
-          findings.push({
-            objectPath: `${p.displayName || pName} › ${v.title || vKey}`,
-            detail: v.type,
-            before: "dataLabels: unset · legend: default",
-            after:  "dataLabels: on · legend: hidden (single series)",
-          });
-        }
-      }
-    }
-    return {
-      findings,
-      applied: false,
-      log: [`Found ${findings.length} bar chart(s) that would be standardized.`],
-    };
-  },
-  async apply(ctx) {
-    const r = this.scan(ctx);
-    r.log.push("Apply not yet wired — TS write-back via fabric_updateDefinition lands next.");
-    return r;
-  },
-};
-
-export const fixColumnChart: Fixer = {
-  id: "Fix_ColumnChart",
-  title: "Standardize column-chart formatting",
-  scope: "report",
-  mode: "ts",
-  scan({ report }) {
-    const findings: FixerFinding[] = [];
-    if (!report) return { findings, applied: false, log: ["No report loaded."] };
-    for (const [pName, p] of Object.entries(report.pages)) {
-      for (const [vKey, v] of Object.entries(p.visuals)) {
-        if (v.type === "columnChart" || v.type === "clusteredColumnChart") {
-          findings.push({
-            objectPath: `${p.displayName || pName} › ${v.title || vKey}`,
-            detail: v.type,
-            before: "dataLabels: unset · legend: default",
-            after:  "dataLabels: on · legend: hidden (single series)",
-          });
-        }
-      }
-    }
-    return {
-      findings,
-      applied: false,
-      log: [`Found ${findings.length} column chart(s) that would be standardized.`],
-    };
-  },
-  async apply(ctx) {
-    const r = this.scan(ctx);
-    r.log.push("Apply not yet wired — TS write-back via fabric_updateDefinition lands next.");
-    return r;
-  },
-};
-
-const TARGET_W = 1280;
-const TARGET_H = 720;
-
-export const fixPageSize: Fixer = {
+export const fixPageSize = backendFixer({
   id: "Fix_PageSize",
-  title: `Set page size to Full HD 16:9 (${TARGET_W}×${TARGET_H})`,
+  title: "Set page size to Full HD 16:9 (1280×720)",
   scope: "report",
-  mode: "ts",
   bpaRuleIds: ["Report.PageSizeNonStandard"],
-  scan({ report }) {
-    const findings: FixerFinding[] = [];
-    const diffs: string[] = [];
-    if (!report) return { findings, applied: false, log: ["No report loaded."] };
-    for (const [pName, p] of Object.entries(report.pages)) {
-      if ((p.width !== TARGET_W || p.height !== TARGET_H) && p.width > 0 && p.height > 0) {
-        findings.push({
-          objectPath: p.displayName || pName,
-          detail: `${p.width}×${p.height} → ${TARGET_W}×${TARGET_H}`,
-          before: `"width": ${p.width}, "height": ${p.height}`,
-          after:  `"width": ${TARGET_W}, "height": ${TARGET_H}`,
-        });
-        diffs.push(`- pages/${pName}/page.json\n    - ${p.width}×${p.height}\n    + ${TARGET_W}×${TARGET_H}`);
-      }
-    }
-    return {
-      findings,
-      diff: diffs.join("\n"),
-      applied: false,
-      log: [`${findings.length} page(s) not at ${TARGET_W}×${TARGET_H}.`],
-    };
-  },
-  async apply(ctx) {
-    const r = this.scan(ctx);
-    r.log.push("Apply not yet wired — TS write-back via fabric_updateDefinition lands next.");
-    return r;
-  },
-};
+});
 
-/* ------------------------------------------------------------------ */
-/* Semantic-model fixers (backend-bridge placeholders)                 */
-/* ------------------------------------------------------------------ */
+export const fixHideVisualFilters = backendFixer({
+  id: "Fix_HideVisualFilters",
+  title: "Hide every visual-level filter from the filter pane",
+  scope: "report",
+});
+
+export const fixDisableShowItemsNoData = backendFixer({
+  id: "Fix_DisableShowItemsNoData",
+  title: "Disable 'Show items with no data' on visual projections",
+  scope: "report",
+});
+
+export const fixRemoveUnusedCustomVisuals = backendFixer({
+  id: "Fix_RemoveUnusedCustomVisuals",
+  title: "Remove declared custom visuals that aren't used on any page",
+  scope: "report",
+});
 
 export const fixUpgradeToPbir: Fixer = {
   id: "Fix_UpgradeToPbir",
   title: "Upgrade report from PBIRLegacy to PBIR",
   scope: "report",
-  mode: "backend",
-  scan({ report }) {
+  mode: "stub",
+  async scan({ report }) {
     const findings: FixerFinding[] = [];
     if (report && report.format && report.format !== "PBIR") {
-      findings.push({
-        objectPath: `Report ${report.reportId}`,
-        detail: `format: ${report.format}`,
-      });
+      findings.push({ objectPath: `Report ${report.reportId}`, detail: `format: ${report.format}` });
     }
     return {
       findings,
       applied: false,
       log: findings.length
-        ? [`Report is in ${report?.format} format — upgrade available.`]
+        ? [`Report is in ${report?.format} format — upgrade requires the sempy-labs backend bridge.`]
         : ["Report already in PBIR format — nothing to do."],
     };
   },
   async apply(ctx) {
-    const r = this.scan(ctx);
-    r.log.push("Backend bridge (sempy-labs) not yet wired — Apply deferred.");
-    return r;
+    return this.scan(ctx);
   },
 };
 
-export const fixDiscourageImplicitMeasures: Fixer = {
+export const fixDiscourageImplicitMeasures = backendFixer({
   id: "Fix_DiscourageImplicitMeasures",
-  title: "Discourage implicit measures on the semantic model",
+  title: "Discourage implicit measures (set summarizeBy: none on numeric columns)",
   scope: "sm",
-  mode: "backend",
-  scan({ model }) {
-    const findings: FixerFinding[] = [];
-    if (!model) return { findings, applied: false, log: ["No model loaded."] };
-    const numericTypes = new Set(["Int64", "Double", "Decimal", "Currency"]);
-    for (const [tName, t] of Object.entries(model.tables ?? {})) {
-      for (const [cName, c] of Object.entries(t.columns ?? {})) {
-        if (numericTypes.has(c.dataType) && c.summarizeBy && c.summarizeBy !== "None") {
-          findings.push({
-            objectPath: `${tName}[${cName}]`,
-            detail: `summarizeBy=${c.summarizeBy}`,
-          });
-        }
-      }
-    }
-    return {
-      findings,
-      applied: false,
-      log: [`${findings.length} numeric column(s) would be flagged.`],
-    };
-  },
-  async apply(ctx) {
-    const r = this.scan(ctx);
-    r.log.push("Backend bridge (sempy-labs TOM write) not yet wired — Apply deferred.");
-    return r;
-  },
-};
+});
+
+export const fixDoNotSummarize = backendFixer({
+  id: "Fix_DoNotSummarize",
+  title: "Do not summarize numeric columns (alias of DiscourageImplicitMeasures)",
+  scope: "sm",
+});
+
+export const fixFloatingPointDataType = backendFixer({
+  id: "Fix_FloatingPointDataType",
+  title: "Replace Double data type with Decimal on columns",
+  scope: "sm",
+});
+
+export const fixHideForeignKeys = backendFixer({
+  id: "Fix_HideForeignKeys",
+  title: "Hide foreign-key columns (relationship 'from' side)",
+  scope: "sm",
+});
+
+export const fixIsAvailableInMdxFalse = backendFixer({
+  id: "Fix_IsAvailableInMdxFalse",
+  title: "Set isAvailableInMdx: false on hidden columns",
+  scope: "sm",
+});
+
+export const fixMeasureFormat = backendFixer({
+  id: "Fix_MeasureFormat",
+  title: "Default measure format to '#,0' when missing",
+  scope: "sm",
+});
+
+export const fixPercentageFormat = backendFixer({
+  id: "Fix_PercentageFormat",
+  title: "Apply percentage format to measures whose name contains '%'",
+  scope: "sm",
+});
+
+export const fixWholeNumberFormat = backendFixer({
+  id: "Fix_WholeNumberFormat",
+  title: "Default Int64 column format to '#,0' when missing",
+  scope: "sm",
+});
 
 export const FIXERS: readonly Fixer[] = Object.freeze([
+  // Report (backend)
   fixPieChart,
-  fixBarChart,
-  fixColumnChart,
   fixPageSize,
+  fixHideVisualFilters,
+  fixDisableShowItemsNoData,
+  fixRemoveUnusedCustomVisuals,
   fixUpgradeToPbir,
+  // Semantic model (backend)
   fixDiscourageImplicitMeasures,
+  fixDoNotSummarize,
+  fixFloatingPointDataType,
+  fixHideForeignKeys,
+  fixIsAvailableInMdxFalse,
+  fixMeasureFormat,
+  fixPercentageFormat,
+  fixWholeNumberFormat,
 ]);
 
 export function findFixerForBpaRule(ruleId: string): Fixer | undefined {

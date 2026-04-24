@@ -190,14 +190,24 @@ export const FixerPage: React.FC<PageProps> = ({ auth, workspaceId, datasetId, d
 
   const selectedFixers = useMemo(() => FIXERS.filter((f) => selected[f.id]), [selected]);
 
+  const buildCtx = useCallback(() => ({
+    auth,
+    workspaceId,
+    datasetId,
+    reportId,
+    report: report ?? undefined,
+    model: model ?? undefined,
+  }), [auth, workspaceId, datasetId, reportId, report, model]);
+
   const runScan = useCallback(async () => {
     if (selectedFixers.length === 0) return;
     setRun((prev) => ({ results: {}, log: [...prev.log, `— Scan started (${selectedFixers.length} fixer(s)) —`], status: "scanning" }));
     const results: Record<string, FixerResult> = {};
     const log: string[] = [];
+    const ctx = buildCtx();
     for (const fx of selectedFixers) {
       try {
-        const r = fx.scan({ report: report ?? undefined, model: model ?? undefined });
+        const r = await fx.scan(ctx);
         results[fx.id] = r;
         log.push(`[${fx.id}] ${r.findings.length} finding(s).`);
         for (const line of r.log) log.push(`  ${line}`);
@@ -207,7 +217,7 @@ export const FixerPage: React.FC<PageProps> = ({ auth, workspaceId, datasetId, d
     }
     setRun((prev) => ({ results, log: [...prev.log, ...log, "— Scan complete —"], status: "done" }));
     setDiffReviewed(false);
-  }, [selectedFixers, report, model]);
+  }, [selectedFixers, buildCtx]);
 
   const runApply = useCallback(async () => {
     if (selectedFixers.length === 0) return;
@@ -215,9 +225,10 @@ export const FixerPage: React.FC<PageProps> = ({ auth, workspaceId, datasetId, d
     setRun((prev) => ({ ...prev, status: "applying", log: [...prev.log, `— Apply started (${selectedFixers.length} fixer(s)) —`] }));
     const results: Record<string, FixerResult> = {};
     const log: string[] = [];
+    const ctx = buildCtx();
     for (const fx of selectedFixers) {
       try {
-        const r = await fx.apply({ report: report ?? undefined, model: model ?? undefined });
+        const r = await fx.apply(ctx);
         results[fx.id] = r;
         log.push(`[${fx.id}] applied=${r.applied} · ${r.findings.length} finding(s).`);
         for (const line of r.log) log.push(`  ${line}`);
@@ -226,7 +237,7 @@ export const FixerPage: React.FC<PageProps> = ({ auth, workspaceId, datasetId, d
       }
     }
     setRun((prev) => ({ results, log: [...prev.log, ...log, "— Apply complete —"], status: "done" }));
-  }, [selectedFixers, report, model]);
+  }, [selectedFixers, buildCtx]);
 
   const totalFindings = useMemo(
     () => Object.values(run.results).reduce((n, r) => n + r.findings.length, 0),
@@ -386,8 +397,9 @@ export const FixerPage: React.FC<PageProps> = ({ auth, workspaceId, datasetId, d
                 ))}
               </ul>
               <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
-                For v0.14 the write-back is stubbed (scan-only). Apply will only emit log
-                entries — no definition is mutated.
+                Backend-bridge fixers will fetch the definition via getDefinition,
+                apply the patch in memory, and write back via updateDefinition.
+                Stub fixers (e.g. Fix_UpgradeToPbir) only emit log entries.
               </Text>
             </DialogContent>
             <DialogActions>

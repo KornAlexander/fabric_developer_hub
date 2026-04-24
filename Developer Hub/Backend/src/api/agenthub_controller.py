@@ -1120,6 +1120,178 @@ async def pbi_fixer_translations_apply(
     }
 
 
+# ---------------------------------------------------------------------------
+# WS-E v0.41 — generic Fixer apply endpoint
+# ---------------------------------------------------------------------------
+
+
+class FixerApplyRequest(BaseModel):
+    workspaceId: str
+    fixerId: str
+    scanOnly: bool = True
+    datasetId: str | None = None
+    reportId: str | None = None
+
+
+@router.post("/pbi-fixer/fixers/apply")
+async def pbi_fixer_fixers_apply(
+    payload: FixerApplyRequest,
+    request: Request,
+    ctx: AuthorizationContext | None = Depends(require_user),
+):
+    """Run a TS-port PBI fixer against a semantic model or report.
+
+    The handler registry lives in ``services.agenthub.pbi_fixer_handlers``
+    and each handler mutates the TMDL or PBIR JSON parts in place. We
+    follow the same Fabric ``getDefinition`` / ``updateDefinition``
+    LRO round-trip as ``pbi_fixer_translations_apply`` (v0.40).
+    """
+    import httpx
+
+    from services.agenthub.pbi_fixer_handlers import FIXER_HANDLERS
+
+    user_id = _user_key_from_context(ctx)
+    _rate_limit(user_id, "pbi_fixer_fixers_apply")
+
+    fx = FIXER_HANDLERS.get(payload.fixerId)
+    if not fx:
+        raise HTTPException(404, f"Unknown fixerId: {payload.fixerId}")
+    scope, handler = fx
+
+    if scope == "sm" and not payload.datasetId:
+        raise HTTPException(400, "datasetId required for semantic-model fixers")
+    if scope == "report" and not payload.reportId:
+        raise HTTPException(400, "reportId required for report fixers")
+
+    mcp_tokens = await _mcp_tokens(request)
+    if not mcp_tokens:
+        raise HTTPException(400, "Fabric token required")
+    fabric_token = mcp_tokens.get("FABRIC_API_TOKEN")
+    if not fabric_token:
+        raise HTTPException(401, "No Fabric OBO token available")
+
+    if scope == "sm":
+        base = (
+            f"{_FABRIC_API_ROOT}/workspaces/{payload.workspaceId}"
+            f"/semanticModels/{payload.datasetId}"
+        )
+        get_url = f"{base}/getDefinition?format=TMDL"
+    else:
+        base = (
+            f"{_FABRIC_API_ROOT}/workspaces/{payload.workspaceId}"
+            f"/reports/{payload.reportId}"
+        )
+        get_url = f"{base}/getDefinition"
+
+    async def _follow_lro(client: httpx.AsyncClient, resp: httpx.Response) -> httpx.Response:
+        attempts = 0
+        while resp.status_code == 202 and attempts < 30:
+            attempts += 1
+            location = resp.headers.get("Location") or resp.headers.get("Operation-Location")
+            if not location:
+                break
+            try:
+                retry_after = float(resp.headers.get("Retry-After", "2"))
+            except ValueError:
+                retry_after = 2.0
+            await asyncio.sleep(min(retry_after, 5.0))
+            resp = await client.get(location, headers={"Authorization": f"Bearer {fabric_token}"})
+        if (
+            resp.status_code == 200
+            and resp.headers.get("content-type", "").startswith("application/json")
+        ):
+            try:
+                body = resp.json()
+            except Exception:
+                body = None
+            if isinstance(body, dict) and body.get("status") == "Failed":
+                err = body.get("error") or {}
+                raise HTTPException(
+                    502,
+                    f"Fabric LRO failed [{err.get('errorCode', '')}]: {err.get('message', '')}",
+                )
+            if (
+                isinstance(body, dict)
+                and body.get("status") in ("Succeeded", "Completed")
+                and "definition" not in body
+            ):
+                location = (resp.url and str(resp.url)) or location
+                try:
+                    rr = await client.get(
+                        f"{location.rstrip('/')}/result",
+                        headers={"Authorization": f"Bearer {fabric_token}"},
+                    )
+                    if rr.status_code < 400:
+                        resp = rr
+                except httpx.HTTPError:
+                    pass
+        return resp
+
+    async with httpx.AsyncClient(timeout=120.0, follow_redirects=False) as client:
+        try:
+            resp = await client.post(
+                get_url,
+                headers={
+                    "Authorization": f"Bearer {fabric_token}",
+                    "Content-Type": "application/json",
+                },
+                json={},
+            )
+        except httpx.HTTPError as exc:
+            raise HTTPException(502, f"getDefinition failed: {exc}") from exc
+        resp = await _follow_lro(client, resp)
+        if resp.status_code >= 400:
+            raise HTTPException(resp.status_code, f"getDefinition: {resp.text}")
+        try:
+            def_body = resp.json()
+        except Exception as exc:
+            raise HTTPException(502, f"getDefinition returned non-JSON: {exc}") from exc
+
+        parts = (def_body.get("definition") or {}).get("parts") or []
+        if not parts:
+            raise HTTPException(502, "Definition has no parts")
+
+        try:
+            result = handler(parts, payload.scanOnly)
+        except Exception as exc:
+            raise HTTPException(500, f"{payload.fixerId} handler failed: {exc}") from exc
+
+        applied = False
+        if not payload.scanOnly and result.findings:
+            try:
+                up = await client.post(
+                    f"{base}/updateDefinition",
+                    headers={
+                        "Authorization": f"Bearer {fabric_token}",
+                        "Content-Type": "application/json",
+                    },
+                    json={"definition": {"parts": result.parts}},
+                )
+            except httpx.HTTPError as exc:
+                raise HTTPException(502, f"updateDefinition failed: {exc}") from exc
+            up = await _follow_lro(client, up)
+            if up.status_code >= 400:
+                raise HTTPException(up.status_code, f"updateDefinition: {up.text}")
+            applied = True
+
+    return {
+        "fixerId": payload.fixerId,
+        "scope": scope,
+        "scanOnly": payload.scanOnly,
+        "applied": applied,
+        "findings": [
+            {
+                "objectPath": f.object_path,
+                "detail": f.detail,
+                "before": f.before,
+                "after": f.after,
+            }
+            for f in result.findings
+        ],
+        "log": result.log,
+    }
+
+
 async def _fetch_workspace_snapshot(
     user_id: str,
     workspace_id: str,
