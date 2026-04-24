@@ -254,7 +254,7 @@ function TopbarItemActions({
     workloadClient: WorkloadClientAPI;
     workspaceObjectId: string | null;
 }) {
-    const { itemObjectId, settings, createItem, saveSettings } = useItemContext();
+    const { itemObjectId, workspaceObjectId: ctxWorkspaceId, settings, createItem, saveSettings } = useItemContext();
     const auth = useGitHubAuth();
     const [saveOpen, setSaveOpen] = useState(false);
     const [name, setName] = useState("AgentHub");
@@ -388,18 +388,23 @@ function TopbarItemActions({
     }, [name, description, effectiveWorkspaceId, createItem, flashSaved, formatErr]);
 
     const handleClose = useCallback(async () => {
+        // Prefer the workspace id known to ItemContext (which remembers
+        // the workspace picked in the Save dialog) over the prop, which
+        // is null when AgentHub was opened from the generic launcher.
+        const targetWs = ctxWorkspaceId || workspaceObjectId;
         try {
-            if (workspaceObjectId) {
+            if (targetWs) {
                 await workloadClient.navigation.navigate("host", {
-                    path: `/groups/${workspaceObjectId}`,
+                    path: `/groups/${targetWs}/list`,
                 });
                 return;
             }
+            // No workspace context at all — go to the workspaces list.
+            await workloadClient.navigation.navigate("host", { path: "/groups" });
         } catch {
-            /* fall through to history.back */
+            try { window.history.back(); } catch { /* no-op */ }
         }
-        try { window.history.back(); } catch { /* no-op */ }
-    }, [workloadClient, workspaceObjectId]);
+    }, [workloadClient, workspaceObjectId, ctxWorkspaceId]);
 
     return (
         <div
