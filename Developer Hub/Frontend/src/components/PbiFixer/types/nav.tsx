@@ -22,6 +22,7 @@ import {
   Flowchart20Regular,
   Code20Regular,
   Beaker20Regular,
+  ArrowImport20Regular,
   Info20Regular,
 } from "@fluentui/react-icons";
 
@@ -38,6 +39,7 @@ export type NavKey =
   | "diagram"
   | "scriptRunner"
   | "prototype"
+  | "reversePrototype"
   | "about";
 
 export interface NavItem {
@@ -66,6 +68,7 @@ export const NAV_ITEMS: NavItem[] = [
   { key: "diagram",      label: "Diagram",       icon: <Flowchart20Regular />,       group: "others", ready: true  },
   { key: "scriptRunner", label: "Script Runner", icon: <Code20Regular />,            group: "others", ready: false },
   { key: "prototype",    label: "Prototype",     icon: <Beaker20Regular />,          group: "others", ready: true  },
+  { key: "reversePrototype", label: "Reverse Prototype", icon: <ArrowImport20Regular />, group: "others", ready: true  },
   { key: "about",        label: "About",         icon: <Info20Regular />,            group: "others", ready: false },
 ];
 

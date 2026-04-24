@@ -8,6 +8,7 @@
 // deferred until the backend `semantic-link-labs` bridge lands.
 
 import type { PbiAuth } from "./fabricApi";
+import type { ReportData } from "../types/report";
 
 export type VisualType =
   | "card"
@@ -86,6 +87,87 @@ export function downloadText(filename: string, content: string, mime: string): v
   a.click();
   document.body.removeChild(a);
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/* ------------------------------------------------------------------ */
+/* Reverse prototype — load existing PBI report → PrototypeDocument   */
+/* ------------------------------------------------------------------ */
+//
+// Mirrors the Python `_report_prototype.generate_report_prototype`
+// flow: walk the parsed PBIR `ReportData` (pages + visuals with
+// position/title/type) and build a fully editable PrototypeDocument.
+// The Power BI native visual type taxonomy is much larger than the
+// Prototype canvas's eight-way enum, so unknown types fold to "card"
+// (with the original PBI type preserved in the title for clarity).
+//
+// Field bindings are NOT extracted — the per-visual `query.json`
+// parts contain the field bindings but mapping them back to a
+// table[column] reference reliably requires resolving DAX projections
+// against the model. Out of scope for v1; users can re-bind in the
+// canvas after import.
+
+/** Map a Power BI native visual type to the PrototypeDocument enum. */
+export function mapPbiVisualType(pbiType: string): VisualType {
+  const t = (pbiType || "").toLowerCase();
+  if (t.includes("multirowcard") || t === "card" || t === "cardvisual") return "card";
+  if (t.includes("matrix") || t.includes("pivot")) return "matrix";
+  if (t === "tableex" || t === "table" || t.includes("tablevisual")) return "table";
+  if (t.includes("bar")) return "barChart";
+  if (t.includes("column")) return "columnChart";
+  if (t.includes("line") || t.includes("area")) return "lineChart";
+  if (t.includes("pie") || t.includes("donut")) return "pieChart";
+  if (t.includes("slicer")) return "slicer";
+  return "card";
+}
+
+/** Build a PrototypeDocument from a parsed PBI ReportData (PBIR). */
+export function reportToPrototypeDocument(
+  report: ReportData,
+  reportName: string,
+  opts: { includeHidden?: boolean } = {},
+): PrototypeDocument {
+  const includeHidden = opts.includeHidden ?? false;
+
+  // Sort pages by ordinal (the order set in pages.json).
+  const pageEntries = Object.entries(report.pages)
+    .filter(([, pg]) => includeHidden || !pg.hidden)
+    .sort(([, a], [, b]) => (a.ordinal ?? 9999) - (b.ordinal ?? 9999));
+
+  const pages: PrototypePage[] = pageEntries.map(([pageId, pg]) => {
+    const visuals: PrototypeVisual[] = Object.entries(pg.visuals)
+      .filter(([, v]) => includeHidden || !v.hidden)
+      .map(([visualId, v]) => {
+        const mapped = mapPbiVisualType(v.type);
+        const title =
+          (v.title && v.title.trim()) ||
+          (v.type ? `[${v.type}]` : visualId);
+        return {
+          id: visualId,
+          type: mapped,
+          title,
+          x: v.x ?? 0,
+          y: v.y ?? 0,
+          width: v.width ?? 200,
+          height: v.height ?? 150,
+          fields: [],
+        } as PrototypeVisual;
+      });
+
+    return {
+      id: pageId,
+      name: pg.displayName || pageId,
+      width: pg.width || 1280,
+      height: pg.height || 720,
+      visuals,
+    };
+  });
+
+  return {
+    version: "pbir-skeleton/1.0",
+    reportName: reportName || "Reverse-prototype",
+    workspaceId: report.workspaceId,
+    pages,
+  };
 }
 
 /* ------------------------------------------------------------------ */

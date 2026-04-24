@@ -35,13 +35,14 @@ import {
   DiagramPage,
   ScriptRunnerPage,
   PrototypePage,
+  ReversePrototypePage,
   AboutPage,
 } from "./pages";
 import { DEFAULT_NAV_KEY, NavKey } from "../types/nav";
 import type { PageProps } from "../types/shared";
 import * as api from "../../../controller/AgentHubApi";
 
-const PBI_FIXER_VERSION = "v0.30";
+const PBI_FIXER_VERSION = "v0.31";
 const STORAGE_NAV_KEY = "pbiFixer.activeNav";
 const STORAGE_OTHERS_KEY = "pbiFixer.othersExpanded";
 
@@ -470,6 +471,7 @@ export const PbiFixerPage: React.FC<PbiFixerPageProps> = ({
       case "diagram":      return <DiagramPage      key={remountKey} {...pageProps} />;
       case "scriptRunner": return <ScriptRunnerPage key={remountKey} {...pageProps} />;
       case "prototype":    return <PrototypePage    key={remountKey} {...pageProps} />;
+      case "reversePrototype": return <ReversePrototypePage key={remountKey} {...pageProps} />;
       case "about":        return <AboutPage        key={remountKey} {...pageProps} />;
       default:
         return null;
@@ -481,7 +483,7 @@ export const PbiFixerPage: React.FC<PbiFixerPageProps> = ({
   // Model picker. Keeps the connection bar uncluttered and avoids the
   // "which one applies to this page?" ambiguity. The Fixer page is the
   // exception: it spans both scopes and needs both pickers visible.
-  const isReportScoped = activeNav === "report" || activeNav === "reportBpa";
+  const isReportScoped = activeNav === "report" || activeNav === "reportBpa" || activeNav === "reversePrototype";
   const needsBothPickers = activeNav === "fixer";
   const showDatasetPicker = needsBothPickers || !isReportScoped;
   const showReportPicker = needsBothPickers || isReportScoped;

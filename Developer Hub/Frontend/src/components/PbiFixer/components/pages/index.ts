@@ -17,3 +17,5 @@ export { MemoryPage } from "./MemoryPage";
 export { DiagramPage } from "./DiagramPage";
 // WS-I — real Delta Analyzer page overrides the stub export.
 export { DeltaPage } from "./DeltaAnalyzerPage";
+// WS-N — Reverse Prototype: extract layout from existing PBI report.
+export { ReversePrototypePage } from "./ReversePrototypePage";
