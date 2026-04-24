@@ -337,6 +337,39 @@ function TopbarItemActions({
         }
     }, [itemObjectId, settings, saveSettings, flashSaved, ensureWorkspaces]);
 
+    const formatErr = useCallback((e: any): string => {
+        if (!e) return "Unknown error";
+        if (typeof e === "string") return e;
+        // Workload SDK rejections often have non-enumerable properties
+        // (errorCode, message buried in nested objects, etc). First try
+        // common shapes, then fall back to a deep dump including
+        // non-enumerable own props.
+        const tryFields = (o: any): string => {
+            if (!o || typeof o !== "object") return "";
+            if (typeof o.message === "string" && o.message) return o.message;
+            if (o.error) {
+                const r = tryFields(o.error);
+                if (r) return r;
+            }
+            if (o.detail) return typeof o.detail === "string" ? o.detail : tryFields(o.detail);
+            if (o.errorCode) return `[${o.errorCode}]`;
+            return "";
+        };
+        const direct = tryFields(e);
+        if (direct) return direct;
+        try {
+            // Include both enumerable and non-enumerable own props so we
+            // surface the actual SDK exception payload.
+            const dump: Record<string, any> = {};
+            for (const k of Object.getOwnPropertyNames(e)) {
+                try { dump[k] = (e as any)[k]; } catch { /* skip */ }
+            }
+            return JSON.stringify(dump);
+        } catch {
+            return String(e);
+        }
+    }, []);
+
     const handleConfirmCreate = useCallback(async () => {
         const trimmed = name.trim();
         if (!trimmed || !effectiveWorkspaceId) return;
@@ -347,11 +380,12 @@ function TopbarItemActions({
             setSaveOpen(false);
             flashSaved();
         } catch (e: any) {
-            setErrorMsg(String(e?.message || e));
+            console.error("[AgentHub Save] createItem failed", e);
+            setErrorMsg(formatErr(e));
         } finally {
             setBusy(false);
         }
-    }, [name, description, effectiveWorkspaceId, createItem, flashSaved]);
+    }, [name, description, effectiveWorkspaceId, createItem, flashSaved, formatErr]);
 
     const handleClose = useCallback(async () => {
         try {
