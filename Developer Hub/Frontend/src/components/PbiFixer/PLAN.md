@@ -201,9 +201,9 @@ collide on the same line, last edit wins; re-run the loser workstream against th
 | WS-B | Memory Analyzer (structural metadata) | 🟡 partial (Phase 2) | v0.18 | `MemoryPage.tsx`, `services/memoryApi.ts` | `true` |
 | WS-C | Model BPA | ✅ shipped | v0.12 | `ModelBpaPage.tsx` | `true` |
 | WS-D | Report BPA | ✅ shipped | v0.13 | `ReportBpaPage.tsx` | `true` |
-| WS-E | Fixer Execution | ✅ shipped | v0.14 | `FixerPage.tsx` | `true` |
+| WS-E | Fixer Execution | ✅ shipped + backend apply | v0.14 → **v0.41** | `FixerPage.tsx`, `fixers/index.ts`, `services/fixersApi.ts`, **backend `pbi_fixer_handlers.py`** | `true` |
 | WS-F | Perspectives | ✅ shipped | v0.15 | `PerspectivesPage.tsx` | `true` |
-| WS-G | Translations + Auto-Translate | ✅ shipped | v0.11 (hotfix v0.17) | `TranslationsPage.tsx`, `services/translationsApi.ts` | `true` |
+| WS-G | Translations + Auto-Translate | ✅ shipped + backend apply | v0.11 → **v0.40** | `TranslationsPage.tsx`, `services/translationsApi.ts`, **backend `tmdl_translations.py`** | `true` |
 | WS-I | Delta Analyzer | ✅ shipped | v0.24 | `DeltaAnalyzerPage.tsx`, `services/deltaApi.ts` | `true` |
 | WS-J | Diagram (SVG canvas) | ✅ shipped | v0.19–v0.20 | `DiagramPage.tsx`, `services/diagramApi.ts` | `true` |
 | WS-K | Script Runner (Monaco) | ⬜ not started | — | stub | `false` |
@@ -213,8 +213,12 @@ collide on the same line, last edit wins; re-run the loser workstream against th
 
 Legend: ✅ shipped • 🟡 partial • ⬜ not started
 
-Write-back work is stubbed across WS-C/D/E/F/G/M pending the sempy-labs backend
-bridge; see each workstream's *Implementation note* block for the specific
+Write-back work for WS-G (v0.40) and WS-E (v0.41) is now wired through a
+backend TMDL/PBIR REST round-trip (`getDefinition` → in-memory mutate → `updateDefinition`,
+both LRO). No sempy-labs/AMO/XMLA dependency required — handlers live in
+`Backend/src/services/agenthub/{tmdl_translations,pbi_fixer_handlers}.py`.
+Write-back is still stubbed across WS-C/D/F/M pending the same bridge for
+those surfaces; see each workstream's *Implementation note* block for the specific
 deferred bits.
 
 Remaining remote vestige: ~~`types/nav.ts` still carries a separate `vertipaq` nav entry alongside `memory`.~~ **Resolved in WS-B (v0.18):** `vertipaq` nav key removed; `memory` is now the single shipped entry per Python parity.
@@ -433,17 +437,34 @@ WS-A.
 
 ---
 
-## WS-E — Fixer Execution Page (first-cut fixers) ✅ shipped v0.14
+## WS-E — Fixer Execution Page ✅ shipped v0.14 → backend apply v0.41
 **Goal:** Port the Fixer tab — a page that lists all fixers as checkboxes, runs selected
 fixers, shows live stdout, and writes back via `fabric_updateDefinition`.
 
-**Implementation note (v0.14):** First cut ships the full UX contract (checkbox list
+**Implementation note (v0.14):** First cut shipped the full UX contract (checkbox list
 grouped by scope, Scan/Apply mega-button, Apply switch + diff preview + confirm dialog,
-live log panel, BPA "Fix it" preselection via `pbifixer:bpa-fix` listener) with all 6
+live log panel, BPA "Fix it" preselection via `pbifixer:bpa-fix` listener) with 6
 fixer `scan` implementations working against loaded `ReportData` / `ModelData`.
-Write-back (`apply`) is stubbed across the board — backend bridge + `fabric_updateDefinition`
-wiring lands next. Connection bar now shows BOTH pickers when Fixer page is active
-(exception to the XOR rule from WS-A).
+Write-back (`apply`) was stubbed across the board.
+
+**Implementation note (v0.41):** Write-back fully wired via new backend endpoint
+`POST /api/pbi-fixer/fixers/apply` that mirrors the v0.40 translations LRO pattern
+(`getDefinition?format=TMDL` → in-memory mutate → `updateDefinition`). New module
+`Backend/src/services/agenthub/pbi_fixer_handlers.py` ships **13 handlers** in a
+`FIXER_HANDLERS` registry (8 SM + 5 Report). Frontend `fixers/index.ts` rewritten as a
+thin backend-delegating registry (`backendFixer({id, title, scope})`). Only
+`Fix_UpgradeToPbir` remains a stub (needs sempy-labs runtime). Pytest at
+`Backend/tests/unit/services/agenthub/test_pbi_fixer_handlers.py` (15 cases). Verified
+end-to-end via Playwright (Demo / Bad Report - Testing — Fix_PieChart 1 finding,
+Fix_FloatingPointDataType 3 findings, both `applied=true · written back to Fabric`).
+
+Shipped fixers (v0.41):
+- **SM**: Fix_FloatingPointDataType, Fix_DoNotSummarize, Fix_DiscourageImplicitMeasures (alias),
+  Fix_IsAvailableInMdxFalse, Fix_MeasureFormat, Fix_PercentageFormat, Fix_WholeNumberFormat,
+  Fix_HideForeignKeys
+- **Report**: Fix_PieChart, Fix_PageSize (1280×720), Fix_HideVisualFilters,
+  Fix_DisableShowItemsNoData, Fix_RemoveUnusedCustomVisuals
+- **Stub**: Fix_UpgradeToPbir
 
 ### First-cut fixer list (user-selected)
 1. `Fix_PieChart` — replace pie/donut with bar (TS-native)
@@ -530,10 +551,20 @@ WS-A only.
 
 ---
 
-## WS-G — Translations page + Auto-Translate Semantic Model ✅ shipped v0.11 (hotfix v0.17)
+## WS-G — Translations page + Auto-Translate Semantic Model ✅ shipped v0.11 → backend apply v0.40
 **Goal:** Read/write translations from model metadata plus a new **Auto-Translate** feature
 that drafts translations for the whole model via LLM and routes them through a review grid
 before any write.
+
+**Implementation note (v0.40):** Backend write-back shipped via new
+`pbi_fixer_translations_apply` endpoint + module
+`Backend/src/services/agenthub/tmdl_translations.py` (parse/serialize/merge culture TMDL,
+deterministic output, preserves `linguisticMetadata` block verbatim, escapes special-char
+names with single quotes). Flow = OBO Fabric token → `getDefinition?format=TMDL` (LRO) →
+find/create `definition/cultures/<culture>.tmdl` → merge ApplyItems → `updateDefinition`
+(LRO). Frontend stripped of all 501 branches; confirm-dialog body now describes the TMDL
+round-trip. Pytest at `Backend/tests/unit/services/agenthub/test_tmdl_translations.py`
+(5 cases). **Same TMDL round-trip pattern was reused for v0.41 Fixer apply.**
 
 **Implementation note (v0.11):** First real page shipped on top of WS-A. Frontend ships
 the full workflow — language + scope picker, Generate proposal button, inline-editable
