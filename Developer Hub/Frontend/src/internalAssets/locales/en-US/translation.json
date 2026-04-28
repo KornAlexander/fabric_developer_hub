@@ -15,7 +15,7 @@
     "Workspace_Name": "Workspace Name",
     "Workspace_ID": "Workspace Id",
 
-    "Compose_Submit": "Plan this",
+    "Compose_Submit": "Start mission",
 
     "Recap_Task_Label": "TASK PROMPT",
     "Recap_Expand": "Show full prompt",
@@ -68,6 +68,18 @@
 
     "RunLog_Filter_All": "All agents",
     "ComposeDrawer_Compare": "Compare architectures",
+
+    "Compare_Title": "Compare architectures",
+    "Compare_Subtitle": "The composer picks the architecture that best fits your task. Here\u2019s the full catalogue it chooses from.",
+    "Compare_Close": "Close",
+    "Compare_Loading": "Loading architectures\u2026",
+    "Compare_Current": "Current",
+    "Compare_Reserved": "Preview",
+    "Compare_ReservedTitle": "Reserved pattern \u2014 runs on the supervisor driver until a dedicated driver ships",
+    "Compare_PickWhen": "When to use",
+    "Compare_UseCases": "Example Fabric tasks",
+    "Compare_UseThis": "Use this architecture",
+    "Compare_BackToGrid": "All architectures",
 
     "MissionControl_Status_planned": "PLANNED",
     "MissionControl_Status_approved": "STARTING",

@@ -1,7 +1,5 @@
 # Use the official .NET 8.0 runtime as the base image.
-# Pin to linux/amd64: the DevGateway binary distributed by Microsoft is x64-only,
-# and docker-compose.yaml declares `platform: linux/amd64` for this service.
-FROM --platform=linux/amd64 mcr.microsoft.com/dotnet/aspnet:8.0 AS base
+FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS base
 WORKDIR /app
 
 # DevGateway download link in Microsoft Download Center

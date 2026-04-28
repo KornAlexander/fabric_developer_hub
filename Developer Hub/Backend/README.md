@@ -79,6 +79,12 @@ SSL_CERTFILE=/path/to/certificate.crt
 
 # Logging Configuration
 LOG_LEVEL=Information
+
+# Local OpenTelemetry tracing (enabled by default in docker-compose)
+AGENTHUB_OTEL_ENABLED=1
+AGENTHUB_OTEL_SAMPLE_RATE=1.0
+AGENTHUB_OTEL_CONSOLE_EXPORTER=1
+AGENTHUB_OTEL_TRACE_FILE=.data/otel-traces.jsonl
 ```
 
 #### Configuration Files
@@ -88,6 +94,14 @@ The application uses JSON configuration files in [`src/`](src/) directory:
 - [`appsettings.Development.json`](src/appsettings.Development.json) - Development overrides
 
 **Identity & secrets** (`PublisherTenantId`, `ClientId`, `ClientSecret`, `Audience`, `GitHubClientId`) are the single source of truth in [`Developer Hub/.env`](../../.env) (gitignored). Copy [`Developer Hub/.env.example`](../../.env.example) to `Developer Hub/.env` and fill in your own values. Docker Compose injects these via `env_file:`; native runs load them via `python-dotenv` from `main.py`.
+
+For AgentHub Azure management tools, the Entra app registration also needs the delegated API permission **Azure Service Management / user_impersonation** (`https://management.azure.com/user_impersonation`) with tenant admin consent where required. The signed-in user still needs Azure RBAC on the target scope, for example `Microsoft.Authorization/permissions/read` to inspect permissions and `Microsoft.Fabric/capacities/resume/action` to resume a Fabric capacity.
+
+### Local OpenTelemetry
+
+The backend has local OpenTelemetry tracing enabled by default when run through Docker Compose. It samples every trace, instruments FastAPI, HTTPX, Requests, aiohttp client calls, and SQLite, then writes compact JSON spans to stdout and to `Backend/.data/otel-traces.jsonl`.
+
+Existing application logs are still the primary semantic breadcrumbs; each log line now includes the current OpenTelemetry trace and span ids as `tr:<trace_id>` and `sp:<span_id>`. Disable local tracing with `AGENTHUB_OTEL_ENABLED=0`, reduce volume with `AGENTHUB_OTEL_SAMPLE_RATE=0.1`, or turn off stdout span dumps with `AGENTHUB_OTEL_CONSOLE_EXPORTER=0` while keeping the trace file.
 
 ## 🚀 Running the Application
 

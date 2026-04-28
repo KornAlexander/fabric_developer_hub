@@ -101,6 +101,8 @@ export interface RichComposerProps {
     placeholder?: string;
     className?: string;
     id?: string;
+    ariaDescribedBy?: string;
+    ariaInvalid?: boolean;
 }
 
 // ─── helpers ───────────────────────────────────────────────────────────
@@ -395,7 +397,7 @@ function setCaretByPlainOffset(root: HTMLElement, target: number) {
 
 export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
 function RichComposer(
-    { value, onChange, onTriggerChange, placeholder, className, id },
+    { value, onChange, onTriggerChange, placeholder, className, id, ariaDescribedBy, ariaInvalid },
     forwardedRef,
 ) {
     const rootRef = useRef<HTMLDivElement | null>(null);
@@ -627,10 +629,15 @@ function RichComposer(
             ref={rootRef}
             className={className}
             contentEditable
+            spellCheck={false}
+            autoCorrect="off"
+            autoCapitalize="off"
             suppressContentEditableWarning
             role="textbox"
             aria-multiline="true"
             aria-placeholder={placeholder}
+            aria-describedby={ariaDescribedBy}
+            aria-invalid={ariaInvalid || undefined}
             data-placeholder={placeholder || ""}
             style={style}
             onInput={onInput}

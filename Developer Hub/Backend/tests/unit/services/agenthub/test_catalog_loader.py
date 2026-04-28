@@ -13,7 +13,7 @@ from services.agenthub.catalog_loader import (
 
 def test_default_catalog_loads_and_matches_known_shape() -> None:
     """REGRESSION: the bundled catalog.yaml must load cleanly and
-    contain the 15 skills and 7 agents the redesign is built around.
+    contain the 17 skills and 7 public agents the redesign is built around.
 
     Guards against accidental deletions / typos in the YAML file that
     would only surface at boot time otherwise.
@@ -24,13 +24,14 @@ def test_default_catalog_loads_and_matches_known_shape() -> None:
     # unnoticed — bump this number when you deliberately add a skill.
     # Current: 10 from skills-for-fabric + 3 unique from
     # AnalyticsPlatformAgents + 1 Fabric Local MCP docs grounding
-    # + 1 team-orchestration (coordinator-plane) = 15.
-    assert len(skills) == 15
+    # + 1 team-orchestration (coordinator-plane) + 1 verification
+    # super skill + 1 Fabric Remote Core MCP skill = 17.
+    assert len(skills) == 17
     assert len(agent_skills) == 7
 
     expected_agents = {
         "fabric-admin", "fabric-app-dev", "fabric-data-engineer",
-        "architect", "modeler", "creator", "orchestrator",
+        "architect", "modeler", "creator", "fabric-verifier",
     }
     assert set(agent_skills.keys()) == expected_agents
 
@@ -40,13 +41,22 @@ def test_default_catalog_loads_and_matches_known_shape() -> None:
     for agent in ("fabric-app-dev", "fabric-data-engineer", "architect", "modeler"):
         assert "fabric-api-docs" in agent_skills[agent]
 
-    # Orchestrator surfaces ONLY its coordinator-plane capability —
-    # no domain skills leak onto the lead node (was leaking
-    # ``check-updates`` before the catalog refactor).
-    assert agent_skills["orchestrator"] == ["team-orchestration"]
+    assert "fabric-remote-core" in skills
+    assert "list_workspaces" in skills["fabric-remote-core"].tools
+    assert "get_item_definition" in skills["fabric-remote-core"].tools
+    for agent in (
+        "fabric-admin", "fabric-app-dev", "fabric-data-engineer",
+        "architect", "modeler", "fabric-verifier",
+    ):
+        assert "fabric-remote-core" in agent_skills[agent]
+
     assert "team-orchestration" in skills
     # team-orchestration is intentionally tool-less (control plane).
     assert skills["team-orchestration"].tools == []
+    assert "fabric-verification" in skills
+    assert "fabric_verify_workspace_inventory_solution" in skills["fabric-verification"].tools
+    assert "browser_verify_visual_render" in skills["fabric-verification"].tools
+    assert agent_skills["fabric-verifier"][0] == "fabric-verification"
 
 
 def test_every_skill_agent_reference_resolves() -> None:

@@ -89,12 +89,12 @@ export function EditorGroupsRoot({ renderTab, emptyFallback }: EditorGroupsRootP
         }
     }, [state.groups]);
 
-    const onSplit = useCallback((payload: DragPayload, side: "left" | "right" | "top" | "bottom") => {
-        splitGroup(payload.tabId, payload.fromGroupId, side);
+    const onSplit = useCallback((payload: DragPayload, side: "left" | "right" | "top" | "bottom", targetGroupId: string) => {
+        splitGroup(payload.tabId, payload.fromGroupId, side, targetGroupId);
     }, [splitGroup]);
 
-    const onSplitNewTab = useCallback((desc: TabDescriptor, side: "left" | "right" | "top" | "bottom") => {
-        openTabInNewGroup(desc, side);
+    const onSplitNewTab = useCallback((desc: TabDescriptor, side: "left" | "right" | "top" | "bottom", targetGroupId: string) => {
+        openTabInNewGroup(desc, side, targetGroupId);
     }, [openTabInNewGroup]);
 
     // ── Column (horizontal) resizer drag ──

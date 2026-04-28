@@ -16,14 +16,27 @@
           <ResourceId>${AUDIENCE}</ResourceId>
         </AADApp>
         <Endpoints>
+          <!--
+            Declaring these URLs here adds them to Fabric's per-workload
+            allowlist at load time. Any URL whose origin matches one of
+            these endpoints is accepted by
+            ``workloadClient.navigation.openBrowserTab`` — crucial for
+            features that hand an http(s) URL back to the host portal
+            (attachment download, preview "open in tab", etc.).
+
+            Fabric requires HTTPS for any non-Microsoft origin. The
+            defaults below match our legacy placeholders; production
+            builds set ``WORKLOAD_BACKEND_URL`` / ``WORKLOAD_FRONTEND_URL``
+            in ``Developer Hub/.env`` (see ``.env.example``).
+          -->
           <ServiceEndpoint>
             <Name>Workload</Name>
-            <Url>https://be.endpointurl.net/workload</Url>
+            <Url>${WORKLOAD_BACKEND_URL}</Url>
             <IsEndpointResolutionService>false</IsEndpointResolutionService>
           </ServiceEndpoint>
           <ServiceEndpoint>
             <Name>Frontend</Name>
-            <Url>https://fe.endpointurl.net</Url>
+            <Url>${WORKLOAD_FRONTEND_URL}</Url>
             <IsEndpointResolutionService>false</IsEndpointResolutionService>
           </ServiceEndpoint>
         </Endpoints>

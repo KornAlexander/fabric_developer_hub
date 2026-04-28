@@ -355,8 +355,8 @@ function TabContextMenu({
     groupId: string;
     onClose: () => void;
     closeTab: (id: string, gid?: string) => void;
-    splitGroup: (id: string, fromGroupId: string, side: "left" | "right" | "top" | "bottom") => void;
-    openTabInNewGroup: (tab: TabDescriptor, side?: "left" | "right" | "top" | "bottom") => void;
+    splitGroup: (id: string, fromGroupId: string, side: "left" | "right" | "top" | "bottom", targetGroupId?: string) => void;
+    openTabInNewGroup: (tab: TabDescriptor, side?: "left" | "right" | "top" | "bottom", fromGroupId?: string) => void;
 }) {
     const menuRef = useRef<HTMLDivElement | null>(null);
     const [pos, setPos] = useState<{ top: number; left: number }>({ top: y, left: x });
@@ -479,10 +479,10 @@ export function EditorGroupDropZones({
     onSplitNewTab,
 }: {
     groupId: string;
-    onSplit: (payload: DragPayload, side: Exclude<DropSide, "center">) => void;
+    onSplit: (payload: DragPayload, side: Exclude<DropSide, "center">, targetGroupId: string) => void;
     /** Called when a side-nav item is dropped onto a side zone.
      *  Opens a new tab from the dragged descriptor in a new group. */
-    onSplitNewTab?: (descriptor: TabDescriptor, side: Exclude<DropSide, "center">) => void;
+    onSplitNewTab?: (descriptor: TabDescriptor, side: Exclude<DropSide, "center">, targetGroupId: string) => void;
 }) {
     const [dragging, setDragging] = useState(false);
     const [hoverSide, setHoverSide] = useState<DropSide | null>(null);
@@ -557,7 +557,7 @@ export function EditorGroupDropZones({
             e.preventDefault();
             let desc: TabDescriptor;
             try { desc = JSON.parse(navRaw); } catch { return; }
-            if (onSplitNewTab) onSplitNewTab(desc, side);
+            if (onSplitNewTab) onSplitNewTab(desc, side, groupId);
             setHoverSide(null);
             setDragging(false);
             return;
@@ -567,10 +567,10 @@ export function EditorGroupDropZones({
         e.preventDefault();
         let payload: DragPayload;
         try { payload = JSON.parse(raw); } catch { return; }
-        onSplit(payload, side);
+        onSplit(payload, side, groupId);
         setHoverSide(null);
         setDragging(false);
-    }, [hitTestSide, onSplit, onSplitNewTab]);
+    }, [groupId, hitTestSide, onSplit, onSplitNewTab]);
 
     const onDragLeave = useCallback((e: React.DragEvent<HTMLDivElement>) => {
         // Only clear when the leave actually exits the overlay (not a

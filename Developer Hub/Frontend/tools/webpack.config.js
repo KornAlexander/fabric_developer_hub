@@ -207,7 +207,14 @@ module.exports = {
         headers: {
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Methods": "GET,OPTIONS",
-            "Access-Control-Allow-Headers": "*"
+            "Access-Control-Allow-Headers": "*",
+            // Chrome Private Network Access (PNA): permits app.powerbi.com
+            // (a public/secure origin) to fetch from our loopback dev server.
+            // Without this header, Chrome blocks /manifests* preflights with
+            // "Permission was denied for this request to access the `loopback`
+            // address space" and the Developer Hub tile never appears in the
+            // New-item gallery.
+            "Access-Control-Allow-Private-Network": "true"
         },
         setupMiddlewares
             : function (middlewares, devServer) {
@@ -219,7 +226,8 @@ module.exports = {
                         'Content-Type': 'application/json',
                         'Access-Control-Allow-Origin': '*',
                         'Access-Control-Allow-Methods': 'GET',
-                        'Access-Control-Allow-Headers': 'Content-Type, Authorization'
+                        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+                        'Access-Control-Allow-Private-Network': 'true'
                     });
                 
                     const devParameters = {
@@ -251,7 +259,8 @@ module.exports = {
                             'Content-Disposition': `attachment; filename="ManifestPackage.1.0.0.nupkg"`,
                             'Access-Control-Allow-Origin': '*',
                             'Access-Control-Allow-Methods': 'GET',
-                            'Access-Control-Allow-Headers': 'Content-Type, Authorization'
+                            'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+                            'Access-Control-Allow-Private-Network': 'true'
                         });
                         
                         res.sendFile(filePath);

@@ -1,0 +1,145 @@
+/**
+ * Mission Control — React hook that drives the mission-control surface.
+ *
+ * It subscribes to the Server-Sent Events (SSE) endpoint to receive
+ * real-time granular events (log_line, tool_call_started, phase_start, etc)
+ * using the fetch-based `subscribeToSessionEventsFetch` method to handle
+ * authorization headers smoothly inside the Fabric iframe sandbox.
+ * Once the auth token is available, it streams events securely.
+ */
+
+import { useEffect, useReducer, useRef, useState } from "react";
+import * as api from "../../../controller/AgentHubApi";
+import {
+    missionReducer,
+    initialMissionState,
+    type MissionState,
+} from "./missionReducer";
+import type { MissionEvent } from "./events";
+
+export interface UseMissionStream {
+    state: MissionState;
+    reconnectCount: number;
+    isConnected: boolean;
+    error: string | null;
+}
+
+const RECONNECT_DELAY_MS = 2_000;
+
+export function useMissionStream(
+    sessionId: string | null,
+    opts: { enabled?: boolean; getSessionOpts?: { githubToken?: string; fabricToken?: string } } = {},
+): UseMissionStream {
+    const { enabled = true, getSessionOpts } = opts;
+    
+    // Store tokens in refs since they update asynchronously 
+    // without triggering excessive re-renders of the effect.
+    const fabricTokenRef = useRef(getSessionOpts?.fabricToken);
+    fabricTokenRef.current = getSessionOpts?.fabricToken;
+    const githubTokenRef = useRef(getSessionOpts?.githubToken);
+    githubTokenRef.current = getSessionOpts?.githubToken;
+
+    const [state, dispatch] = useReducer(missionReducer, undefined, initialMissionState);
+    const stateRef = useRef(state);
+    stateRef.current = state;
+    const [reconnectCount, setReconnectCount] = useState(0);
+    const [isConnected, setIsConnected] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const aborterRef = useRef<AbortController | null>(null);
+
+    useEffect(() => {
+        if (!sessionId || !enabled) {
+            setIsConnected(false);
+            return undefined;
+        }
+
+        let active = true;
+
+        const connect = () => {
+            if (!active) return;
+            
+            // Wait for token resolution: Fabric token may take a tick to arrive
+            const fabric = fabricTokenRef.current;
+            const github = githubTokenRef.current;
+            
+            // If we require authentication but neither token is provided yet, defer connection.
+            if (!fabric && !github) {
+                reconnectTimerRef.current = setTimeout(connect, 500);
+                return;
+            }
+
+            if (aborterRef.current) aborterRef.current.abort();
+
+            const ctl = api.subscribeToSessionEventsFetch(
+                sessionId,
+                { 
+                    githubToken: github, 
+                    fabricToken: fabric, 
+                    lastEventId: stateRef.current.lastSeq >= 0 ? String(stateRef.current.lastSeq) : undefined 
+                },
+                {
+                    onOpen: () => {
+                        if (!active) return;
+                        setIsConnected(true);
+                        setError(null);
+                        setReconnectCount(0); // Reset reconnect counter on success
+                    },
+                    onEvent: (data) => {
+                        if (!active) return;
+                        dispatch(data as MissionEvent);
+                    },
+                    onError: (err: any) => {
+                        if (!active) return;
+                        setIsConnected(false);
+                        const msg = err instanceof Error ? err.message : String(err);
+                        setError(`Stream disconnected: ${msg}`);
+                        
+                        // Terminal errors like 404 should possibly stop retrying, but typically we 
+                        // back off and reconnect in case of temporary drops.
+                        reconnectTimerRef.current = setTimeout(() => {
+                            setReconnectCount((c) => c + 1);
+                            connect();
+                        }, RECONNECT_DELAY_MS);
+                    },
+                    onClose: () => {
+                        if (!active) return;
+                        setIsConnected(false);
+                        
+                        const js = stateRef.current.jobStatus;
+                        // Determine terminal state based on latest known state
+                        if (js !== "completed" && js !== "failed" && js !== "cancelled") {
+                            reconnectTimerRef.current = setTimeout(() => {
+                                setReconnectCount((c) => c + 1);
+                                connect();
+                            }, RECONNECT_DELAY_MS);
+                        }
+                    }
+                }
+            );
+            aborterRef.current = ctl;
+        };
+
+        // Initialize connection
+        connect();
+
+        return () => {
+            active = false;
+            setIsConnected(false);
+            if (aborterRef.current) {
+                aborterRef.current.abort();
+                aborterRef.current = null;
+            }
+            if (reconnectTimerRef.current) {
+                clearTimeout(reconnectTimerRef.current);
+            }
+        };
+    }, [sessionId, enabled]); // Only change effect on major keys, token changes are picked via ref
+
+    return {
+        state,
+        reconnectCount,
+        isConnected,
+        error: error,
+    };
+}

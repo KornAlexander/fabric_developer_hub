@@ -58,6 +58,15 @@ services:
       # escape codes, which makes ERROR lines pop red in the log stream.
       FORCE_COLOR: "1"
       PYTHONUNBUFFERED: "1"
+      # Local observability: 100% sampled traces and support-grade mission
+      # events persisted to the bind-mounted ./Backend/.data folder. Keep
+      # stdout export off so docker logs stay readable.
+      AGENTHUB_OTEL_ENABLED: "1"
+      AGENTHUB_OTEL_SAMPLE_RATE: "1.0"
+      AGENTHUB_OTEL_CONSOLE_EXPORTER: "0"
+      AGENTHUB_OTEL_TRACE_FILE: /app/data/otel-traces.jsonl
+      AGENTHUB_EVENT_LEDGER_FILE: /app/data/agenthub-events.jsonl
+      OTEL_SERVICE_NAME: fabric-clawhub-backend
       # Tell MCPClientManager where to resolve ``${REPO_DIR}/mcp/...``
       # references inside the container. We mount the host's repo-root
       # ``mcp/`` directory at ``/opt/agenthub-mcp/mcp`` (see ``volumes``
@@ -201,10 +210,12 @@ services:
   #     --query accessToken -o tsv)
   #   docker compose up
   dev-gateway:
+    # Microsoft distributes the Fabric DevGateway binary as x64-only.
+    # ARM64 hosts need amd64 binfmt emulation registered before running this.
+    platform: linux/amd64
     build:
       context: tools/DevGatewayContainer
       dockerfile: Dockerfile
-    platform: linux/amd64
     user: "0"
     env_file:
       - .env

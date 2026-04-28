@@ -16,11 +16,65 @@ from pathlib import Path
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+from mcp.client.streamable_http import streamablehttp_client
+
+from services.correlation import get_request_id, get_session_id, get_user_id
 
 logger = logging.getLogger(__name__)
 
-# Timeout for individual tool calls (seconds)
-TOOL_CALL_TIMEOUT = 30
+# Timeout for individual tool calls (seconds). Most tools should stay quick;
+# known Fabric LRO helpers get a longer window below.
+TOOL_CALL_TIMEOUT = int(os.environ.get("MCP_TOOL_CALL_TIMEOUT_SECONDS", "30"))
+LONG_RUNNING_TOOL_CALL_TIMEOUT = int(os.environ.get("MCP_LONG_RUNNING_TOOL_TIMEOUT_SECONDS", "120"))
+FABRIC_INVENTORY_TOOL_TIMEOUT = int(os.environ.get("MCP_FABRIC_INVENTORY_TOOL_TIMEOUT_SECONDS", "900"))
+FABRIC_VERIFICATION_TOOL_TIMEOUT = int(os.environ.get("MCP_FABRIC_VERIFICATION_TOOL_TIMEOUT_SECONDS", "600"))
+_LONG_RUNNING_TOOLS: frozenset[str] = frozenset({
+    "fabric_create_workspace_inventory_solution",
+    "fabric_verify_report_renderable",
+    "fabric_verify_workspace_inventory_solution",
+    "browser_verify_visual_render",
+    "run_shell_command",
+})
+_TOOL_TIMEOUT_OVERRIDES: dict[str, int] = {
+    "fabric_create_workspace_inventory_solution": FABRIC_INVENTORY_TOOL_TIMEOUT,
+    "fabric_verify_report_renderable": FABRIC_VERIFICATION_TOOL_TIMEOUT,
+    "fabric_verify_workspace_inventory_solution": FABRIC_INVENTORY_TOOL_TIMEOUT,
+    "browser_verify_visual_render": FABRIC_VERIFICATION_TOOL_TIMEOUT,
+}
+
+_EXECUTION_CONTEXT_ENV_KEYS: dict[str, str] = {
+    "agent_id": "AGENTHUB_AGENT_ID",
+    "agent_name": "AGENTHUB_AGENT_NAME",
+    "actor_role": "AGENTHUB_ACTOR_ROLE",
+    "agent_session_id": "AGENTHUB_AGENT_SESSION_ID",
+    "run_id": "AGENTHUB_RUN_ID",
+    "task_id": "AGENTHUB_TASK_ID",
+    "task_title": "AGENTHUB_TASK_TITLE",
+    "tool_call_id": "AGENTHUB_TOOL_CALL_ID",
+}
+
+
+def _execution_context_env(execution_context: dict | None) -> dict[str, str]:
+    """Return bounded AgentHub actor metadata for MCP subprocess logs."""
+    if not execution_context:
+        return {}
+    env: dict[str, str] = {}
+    for key, env_name in _EXECUTION_CONTEXT_ENV_KEYS.items():
+        value = execution_context.get(key)
+        if value in (None, "", []):
+            continue
+        text = str(value).replace("\x00", "").replace("\n", " ").replace("\r", " ").strip()
+        if text:
+            env[env_name] = text[:500]
+    return env
+
+
+def _timeout_for_tool(tool_name: str) -> int:
+    if tool_name in _TOOL_TIMEOUT_OVERRIDES:
+        return _TOOL_TIMEOUT_OVERRIDES[tool_name]
+    if tool_name in _LONG_RUNNING_TOOLS:
+        return LONG_RUNNING_TOOL_CALL_TIMEOUT
+    return TOOL_CALL_TIMEOUT
 
 # Env-var allowlist for spawned MCP subprocesses. The backend's full
 # ``os.environ`` carries secrets (ClientSecret, DB paths, anything an
@@ -61,6 +115,13 @@ _PATH_ARG_KEYS: frozenset[str] = frozenset({
 _WORKSPACE_ARG_KEYS: frozenset[str] = frozenset({
     "workspace_id", "workspaceId",
 })
+
+_FLEXIBLE_STATIC_TOOL_SCHEMA: dict = {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": True,
+    "required": [],
+}
 
 
 class ToolPolicyViolation(RuntimeError):
@@ -333,10 +394,10 @@ class MCPClientManager:
         servers = [
             (name, cfg)
             for name, cfg in self.config.get("servers", {}).items()
-            if cfg.get("command")
+            if cfg.get("command") or cfg.get("transport") == "streamable_http"
         ]
         for skipped_name, cfg in self.config.get("servers", {}).items():
-            if not cfg.get("command"):
+            if not cfg.get("command") and cfg.get("transport") != "streamable_http":
                 logger.warning("Server %s has no command, skipping", skipped_name)
 
         if not servers:
@@ -357,6 +418,12 @@ class MCPClientManager:
             if error is not None:
                 self.failed_servers[name] = error
                 logger.error("Failed to discover tools from MCP server %s: %s", name, error)
+                static_added = self._register_static_tools(name, _cfg)
+                if static_added:
+                    logger.warning(
+                        "MCP server %s: using %d statically declared tool(s) after discovery failure",
+                        name, static_added,
+                    )
                 continue
 
             # Optional per-server allowlist — used to narrow the
@@ -387,6 +454,57 @@ class MCPClientManager:
                 added += 1
             logger.info("MCP server %s: discovered %d tools", name, added)
 
+    def _register_static_tools(self, server_name: str, server_config: dict) -> int:
+        """Register statically declared tool metadata for a server.
+
+        This is intentionally narrow and mainly supports authenticated HTTP
+        MCP endpoints such as Fabric Remote Core MCP. Those servers can require
+        a per-user token before ``list_tools`` succeeds, while AgentHub needs a
+        stable global tool catalog at startup so the LLM can plan. Runtime
+        dispatch still goes to the real MCP endpoint and remains policy-gated.
+        """
+        raw_tools = server_config.get("static_tools") or []
+        allowlist = server_config.get("tool_allowlist") or None
+        added = 0
+        for raw_tool in raw_tools:
+            if isinstance(raw_tool, str):
+                tool = {
+                    "name": raw_tool,
+                    "description": "Statically declared MCP tool",
+                    "inputSchema": dict(_FLEXIBLE_STATIC_TOOL_SCHEMA),
+                }
+            elif isinstance(raw_tool, dict):
+                tool = dict(raw_tool)
+            else:
+                logger.warning(
+                    "MCP server %s: ignoring invalid static tool declaration %r",
+                    server_name, raw_tool,
+                )
+                continue
+
+            name = str(tool.get("name") or "").strip()
+            if not name:
+                logger.warning("MCP server %s: static tool is missing name", server_name)
+                continue
+            if allowlist is not None and name not in allowlist:
+                continue
+            if name in self.tool_server_map:
+                existing = self.tool_server_map[name]
+                logger.warning(
+                    "  Static tool name collision: %s already provided by %s; skipping %s",
+                    name, existing, server_name,
+                )
+                continue
+            input_schema = tool.get("inputSchema") or tool.get("input_schema") or dict(_FLEXIBLE_STATIC_TOOL_SCHEMA)
+            self.tools[name] = {
+                "name": name,
+                "description": str(tool.get("description") or ""),
+                "inputSchema": input_schema,
+            }
+            self.tool_server_map[name] = server_name
+            added += 1
+        return added
+
     async def call_tool(
         self,
         tool_name: str,
@@ -395,6 +513,7 @@ class MCPClientManager:
         *,
         allowed_tools: set[str] | frozenset[str] | None = None,
         workspace_id: str | None = None,
+        execution_context: dict | None = None,
     ) -> str:
         """Execute a tool call via a per-request MCP server instance.
 
@@ -413,6 +532,8 @@ class MCPClientManager:
                 bound to. Any ``workspace_id``/``workspaceId`` argument that
                 disagrees with this value is rejected as a cross-workspace
                 pivot attempt.
+            execution_context: Optional actor/run/task metadata forwarded to
+                MCP subprocesses so their progress logs can be attributed.
 
         Raises:
             ToolPolicyViolation: policy check failed before dispatch.
@@ -441,12 +562,20 @@ class MCPClientManager:
         env_override = dict(server_config.get("env", {}))
         if server_config.get("requires_auth") and tokens:
             env_override.update(tokens)
+        env_override.update({
+            "AGENTHUB_REQUEST_ID": get_request_id(),
+            "AGENTHUB_SESSION_ID": get_session_id(),
+            "AGENTHUB_USER_ID": get_user_id(),
+            "AGENTHUB_TOOL_NAME": tool_name,
+        })
+        env_override.update(_execution_context_env(execution_context))
 
         session, stack = await self._start_server(server_config, env_override=env_override)
         try:
+            timeout_s = _timeout_for_tool(tool_name)
             result = await asyncio.wait_for(
                 session.call_tool(tool_name, arguments),
-                timeout=TOOL_CALL_TIMEOUT,
+                timeout=timeout_s,
             )
             # Flatten MCP result content into a string
             parts = []
@@ -457,7 +586,7 @@ class MCPClientManager:
                     parts.append(str(content))
             return "\n".join(parts)
         except TimeoutError as e:
-            raise TimeoutError(f"Tool {tool_name} timed out after {TOOL_CALL_TIMEOUT}s") from e
+            raise TimeoutError(f"Tool {tool_name} timed out after {timeout_s}s") from e
         finally:
             await stack.aclose()
 
@@ -520,12 +649,10 @@ class MCPClientManager:
           existing fleet today.
         * ``"streamable_http"`` — connect to a remote MCP endpoint
           over Streamable HTTP. Intended for the Fabric Remote MCP
-          (``https://api.fabric.microsoft.com/v1/mcp/core``). Deferred
-          until Microsoft ships Service Principal auth for the remote
-          server — the current preview uses browser-interactive Entra
-          ID which does not fit our per-request OBO flow. The code
-          path is scaffolded so a future wiring only needs to fill in
-          token acquisition in ``_start_http_server``.
+                    (``https://api.fabric.microsoft.com/v1/mcp/core``). AgentHub
+                    supplies the caller's Fabric OBO token as an OAuth bearer token,
+                    so all remote operations remain scoped by Entra ID, Fabric RBAC,
+                    and Fabric audit logs.
 
         Caller is responsible for calling ``await stack.aclose()`` to
         tear down the process / connection.
@@ -584,28 +711,56 @@ class MCPClientManager:
     async def _start_http_server(
         self,
         server_config: dict,
-        env_override: dict,  # noqa: ARG002 — reserved for future token injection
+        env_override: dict,
     ) -> tuple[ClientSession, AsyncExitStack]:
         """Connect to a Streamable-HTTP MCP server.
-
-        Currently raises ``NotImplementedError`` because the only
-        target (Fabric Remote MCP) requires browser-interactive Entra
-        ID auth that our backend cannot perform on behalf of a user.
-        The scaffold exists so that when Microsoft ships Service
-        Principal auth, wiring it up is a single method body change
-        rather than a cross-file refactor.
         """
         url = server_config.get("url")
         if not url:
             raise ValueError(
                 "Streamable-HTTP MCP server is missing required 'url' field"
             )
-        raise NotImplementedError(
-            "Streamable-HTTP MCP transport is not wired up yet. "
-            "Target (Fabric Remote MCP at "
-            f"{url}) requires Service Principal auth which is not "
-            "available in the current preview. See "
-            "services/mcp/mcp_client_manager.py::_start_http_server "
-            "to complete this path when upstream auth lands."
-        )
+
+        headers = self._http_headers_for_server(server_config, env_override)
+        timeout_s = float(server_config.get("timeout_seconds", TOOL_CALL_TIMEOUT))
+        sse_timeout_s = float(server_config.get("sse_read_timeout_seconds", LONG_RUNNING_TOOL_CALL_TIMEOUT))
+
+        stack = AsyncExitStack()
+        try:
+            transport = await stack.enter_async_context(
+                streamablehttp_client(
+                    url,
+                    headers=headers,
+                    timeout=timeout_s,
+                    sse_read_timeout=sse_timeout_s,
+                )
+            )
+            read, write, _get_session_id = transport
+            session = await stack.enter_async_context(ClientSession(read, write))
+            await session.initialize()
+            return session, stack
+        except Exception:
+            await stack.aclose()
+            raise
+
+    @staticmethod
+    def _http_headers_for_server(server_config: dict, env_override: dict) -> dict[str, str]:
+        """Build headers for an HTTP MCP server without leaking secrets."""
+        headers = {str(k): str(v) for k, v in (server_config.get("headers") or {}).items()}
+        token_env = str(server_config.get("auth_token_env") or "FABRIC_API_TOKEN")
+        token = str(env_override.get(token_env) or "").strip()
+        if server_config.get("requires_auth") and not token:
+            raise RuntimeError(
+                f"Streamable-HTTP MCP server requires auth token {token_env!r}, "
+                "but no token was provided for this request."
+            )
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        request_id = env_override.get("AGENTHUB_REQUEST_ID")
+        session_id = env_override.get("AGENTHUB_SESSION_ID")
+        if request_id:
+            headers["X-AgentHub-Request-ID"] = str(request_id)
+        if session_id:
+            headers["X-AgentHub-Session-ID"] = str(session_id)
+        return headers
 

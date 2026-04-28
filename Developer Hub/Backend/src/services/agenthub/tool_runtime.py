@@ -36,6 +36,9 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
+from services.logging_categories import log_extra
+from services.observability import bounded_text
+
 logger = logging.getLogger(__name__)
 
 
@@ -72,6 +75,35 @@ _CALLER_IDENTITY_ARG_KEYS: frozenset[str] = frozenset({
     "upn", "userPrincipalName", "user_upn",
     "object_id", "objectId", "oid",
 })
+
+
+def _is_existing_create_conflict(output_lower: str) -> bool:
+    return any(
+        marker in output_lower
+        for marker in (
+            "already exists",
+            "alreadyexist",
+            "conflict",
+            "itemdisplaynamealreadyinuse",
+            "display name is already in use",
+            "same display name",
+        )
+    )
+
+
+def _looks_like_tool_failure(raw_output: Any) -> bool:
+    text = str(raw_output or "").strip()
+    if not text:
+        return False
+    lowered = text.lower()
+    if _is_existing_create_conflict(lowered):
+        return False
+    return (
+        lowered.startswith("error")
+        or lowered.startswith("tool_error:")
+        or lowered.startswith("policy_denied:")
+        or (lowered.startswith("[exit ") and not lowered.startswith("[exit 0]"))
+    )
 
 
 # ── Public types ────────────────────────────────────────────────────
@@ -120,6 +152,14 @@ class CallerContext:
     user_upn: str | None
     workspace_id: str | None
     session_id: str | None = None
+    agent_id: str | None = None
+    agent_name: str | None = None
+    actor_role: str | None = None
+    agent_session_id: str | None = None
+    run_id: str | None = None
+    task_id: str | None = None
+    task_title: str | None = None
+    tool_call_id: str | None = None
 
     def __post_init__(self) -> None:
         if not self.tenant_id or not self.user_id:
@@ -157,18 +197,10 @@ _POLICY_REGISTRY: dict[str, ToolPolicy] = {}
 def register_tool(policy: ToolPolicy) -> None:
     """Register a tool policy. Call at startup, once per tool.
 
-    Rejects ``auto_allowed=True`` on WRITE / DESTRUCTIVE so a future
-    contributor cannot accidentally let a write ship without a
-    confirmation UX.
+    WRITE / DESTRUCTIVE tools may now declare ``auto_allowed=True`` to
+    opt out of the per-call confirmation gate. Tools that do not opt in
+    still require a ``confirmation_token`` at dispatch time.
     """
-    if policy.auto_allowed and policy.sensitivity in (
-        ToolSensitivity.WRITE, ToolSensitivity.DESTRUCTIVE,
-    ):
-        raise ToolRuntimeError(
-            f"Tool {policy.tool_name!r}: auto_allowed=True is not permitted "
-            f"for sensitivity={policy.sensitivity}. Writes require explicit "
-            f"per-call confirmation (not implemented in v1)."
-        )
     _POLICY_REGISTRY[policy.tool_name] = policy
 
 
@@ -260,6 +292,7 @@ def _strip_caller_identity_args(
         logger.warning(
             "[TOOL_RUNTIME] %s: dropped LLM-supplied caller-identity args: %s",
             tool_name, dropped,
+            extra=log_extra("high_level"),
         )
     return cleaned, dropped
 
@@ -324,6 +357,16 @@ async def execute(
     started = time.monotonic()
 
     args = dict(arguments or {})
+    logger.info(
+        "[TOOL_RUNTIME] dispatch start tool=%s session=%s tenant=%s workspace=%s arg_keys=%s allowed_scope=%s",
+        tool_name,
+        ctx.session_id or "-",
+        ctx.tenant_id[:8],
+        (ctx.workspace_id or "-")[:8],
+        sorted(args.keys()),
+        "custom" if allowed_tools is not None else "default",
+        extra=log_extra("diagnostic"),
+    )
 
     # (1) Registry — deny by default.
     policy = _POLICY_REGISTRY.get(tool_name)
@@ -331,6 +374,7 @@ async def execute(
         logger.warning(
             "[TOOL_RUNTIME] deny unregistered tool %r (session=%s user=%s)",
             tool_name, ctx.session_id, ctx.user_upn,
+            extra=log_extra("high_level"),
         )
         return ToolResult(
             ok=False,
@@ -350,6 +394,7 @@ async def execute(
         logger.warning(
             "[TOOL_RUNTIME] deny %s: %s (tenant=%s session=%s)",
             tool_name, kill_reason, ctx.tenant_id, ctx.session_id,
+            extra=log_extra("high_level"),
         )
         return ToolResult(
             ok=False,
@@ -363,15 +408,18 @@ async def execute(
             arg_hash=_arg_hash(args),
         )
 
-    # (3) Sensitivity gate — writes require confirmation which v1 does not
-    #     issue. The policy registry itself rejects auto_allowed=True on
-    #     WRITE/DESTRUCTIVE, so this is a second line of defense.
+    # (3) Sensitivity gate — writes/destructives normally require an
+    #     explicit ``confirmation_token``. A policy may opt out by setting
+    #     ``auto_allowed=True`` (used for first-party Fabric write tools
+    #     the orchestrator must dispatch autonomously to fulfil user
+    #     requests like "create a Lakehouse").
     if policy.sensitivity in (ToolSensitivity.WRITE, ToolSensitivity.DESTRUCTIVE):
-        if not confirmation_token:
+        if not confirmation_token and not policy.auto_allowed:
             logger.warning(
                 "[TOOL_RUNTIME] deny %s: write tool requires confirmation "
                 "(not implemented in v1) session=%s",
                 tool_name, ctx.session_id,
+                extra=log_extra("high_level"),
             )
             return ToolResult(
                 ok=False,
@@ -403,6 +451,7 @@ async def execute(
                     "[TOOL_RUNTIME] %s: overriding LLM-supplied %s=%r with "
                     "ctx.workspace_id=%r",
                     tool_name, k, args[k], ctx.workspace_id,
+                    extra=log_extra("high_level"),
                 )
                 args[k] = ctx.workspace_id
 
@@ -413,6 +462,7 @@ async def execute(
         logger.warning(
             "[TOOL_RUNTIME] circuit break %s: %d identical calls in session %s",
             tool_name, CIRCUIT_BREAKER_THRESHOLD, ctx.session_id,
+            extra=log_extra("high_level"),
         )
         return ToolResult(
             ok=False,
@@ -430,18 +480,51 @@ async def execute(
     # (6) Dispatch through the existing mcp_client_manager gate, pinning
     #     workspace_id from the VERIFIED caller context (not from args).
     try:
+        logger.info(
+            "[TOOL_RUNTIME] dispatch allowed tool=%s session=%s sensitivity=%s auto_allowed=%s arg_hash=%s dropped_identity_keys=%s",
+            tool_name,
+            ctx.session_id or "-",
+            policy.sensitivity,
+            policy.auto_allowed,
+            arg_hash,
+            dropped_keys,
+            extra=log_extra("diagnostic"),
+        )
         raw_output = await mcp_manager.call_tool(
             tool_name,
             args,
             mcp_tokens,
             allowed_tools=allowed_tools,
             workspace_id=ctx.workspace_id,
+            execution_context={
+                "agent_id": ctx.agent_id,
+                "agent_name": ctx.agent_name,
+                "actor_role": ctx.actor_role,
+                "agent_session_id": ctx.agent_session_id or ctx.session_id,
+                "run_id": ctx.run_id,
+                "task_id": ctx.task_id,
+                "task_title": ctx.task_title,
+                "tool_call_id": ctx.tool_call_id,
+            },
         )
         latency_ms = int((time.monotonic() - started) * 1000)
+        tool_failed = _looks_like_tool_failure(raw_output)
+        logger.info(
+            "[TOOL_RUNTIME] dispatch end tool=%s session=%s ok=%s decision=%s arg_hash=%s latency_ms=%d output_chars=%d preview=%.240s",
+            tool_name,
+            ctx.session_id or "-",
+            not tool_failed,
+            "tool_error" if tool_failed else "allowed",
+            arg_hash,
+            latency_ms,
+            len(str(raw_output or "")),
+            bounded_text(raw_output, max_chars=240),
+            extra=log_extra("high_level" if tool_failed else "diagnostic"),
+        )
         return ToolResult(
-            ok=True,
+            ok=not tool_failed,
             output=wrap_as_untrusted(tool_name, str(raw_output)),
-            policy_decision="allowed",
+            policy_decision="tool_error" if tool_failed else "allowed",
             tool_name=tool_name,
             arg_hash=arg_hash,
             latency_ms=latency_ms,
@@ -454,6 +537,15 @@ async def execute(
         from services.mcp.mcp_client_manager import ToolPolicyViolation
         latency_ms = int((time.monotonic() - started) * 1000)
         if isinstance(exc, ToolPolicyViolation):
+            logger.warning(
+                "[TOOL_RUNTIME] mcp policy denied tool=%s session=%s arg_hash=%s latency_ms=%d reason=%s",
+                tool_name,
+                ctx.session_id or "-",
+                arg_hash,
+                latency_ms,
+                exc,
+                extra=log_extra("high_level"),
+            )
             return ToolResult(
                 ok=False,
                 output=wrap_as_untrusted(
@@ -467,6 +559,7 @@ async def execute(
         logger.exception(
             "[TOOL_RUNTIME] tool %s dispatch failed (session=%s)",
             tool_name, ctx.session_id,
+            extra=log_extra("high_level"),
         )
         return ToolResult(
             ok=False,

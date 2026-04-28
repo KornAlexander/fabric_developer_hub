@@ -233,16 +233,83 @@ async def test_start_http_server_requires_url(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_start_http_server_is_scaffold_only(tmp_path) -> None:
-    """HTTP transport is scaffolded but not wired. Attempting to use
-    it must raise NotImplementedError with a pointer to the next step
-    (upstream SP auth)."""
+async def test_start_http_server_requires_auth_token(tmp_path) -> None:
+    """Authenticated HTTP transport should fail before connecting when
+    no per-request Fabric token is available."""
     mgr = MCPClientManager(str(tmp_path / "missing.json"))
-    with pytest.raises(NotImplementedError, match="Service Principal auth"):
+    with pytest.raises(RuntimeError, match="requires auth token"):
         await mgr._start_server(
-            {"transport": "streamable_http", "url": "https://example.invalid/mcp"},
+            {
+                "transport": "streamable_http",
+                "url": "https://example.invalid/mcp",
+                "requires_auth": True,
+            },
             env_override={},
         )
+
+
+def test_http_headers_include_bearer_token_and_correlation() -> None:
+    headers = MCPClientManager._http_headers_for_server(
+        {
+            "transport": "streamable_http",
+            "url": "https://example.invalid/mcp",
+            "requires_auth": True,
+            "auth_token_env": "FABRIC_API_TOKEN",
+            "headers": {"X-Static": "yes"},
+        },
+        {
+            "FABRIC_API_TOKEN": "token-123",
+            "AGENTHUB_REQUEST_ID": "req-1",
+            "AGENTHUB_SESSION_ID": "sess-1",
+        },
+    )
+
+    assert headers["Authorization"] == "Bearer token-123"
+    assert headers["X-Static"] == "yes"
+    assert headers["X-AgentHub-Request-ID"] == "req-1"
+    assert headers["X-AgentHub-Session-ID"] == "sess-1"
+
+
+def test_register_static_tools_adds_http_fallback_schema(tmp_path) -> None:
+    mgr = MCPClientManager(str(tmp_path / "missing.json"))
+
+    added = mgr._register_static_tools(
+        "fabric-remote-core",
+        {
+            "tool_allowlist": ["list_workspaces"],
+            "static_tools": [
+                {"name": "list_workspaces", "description": "List workspaces"},
+                {"name": "delete_workspace", "description": "Delete workspace"},
+            ],
+        },
+    )
+
+    assert added == 1
+    assert mgr.tool_server_map["list_workspaces"] == "fabric-remote-core"
+    assert mgr.tools["list_workspaces"]["inputSchema"]["additionalProperties"] is True
+
+
+@pytest.mark.asyncio
+async def test_discover_tools_uses_static_tools_after_http_auth_failure(tmp_path) -> None:
+    cfg_path = tmp_path / "mcp_servers.json"
+    cfg_path.write_text(json.dumps({
+        "servers": {
+            "fabric-remote-core": {
+                "transport": "streamable_http",
+                "url": "https://example.invalid/mcp",
+                "requires_auth": True,
+                "static_tools": [
+                    {"name": "list_workspaces", "description": "List workspaces"},
+                ],
+            },
+        },
+    }))
+    mgr = MCPClientManager(str(cfg_path))
+
+    await mgr.discover_tools()
+
+    assert "fabric-remote-core" in mgr.failed_servers
+    assert mgr.tool_server_map["list_workspaces"] == "fabric-remote-core"
 
 
 def test_qualified_name_for_known_tool(tmp_path) -> None:
@@ -256,6 +323,24 @@ def test_qualified_name_for_known_tool(tmp_path) -> None:
 def test_qualified_name_for_undiscovered_tool(tmp_path) -> None:
     mgr = MCPClientManager(str(tmp_path / "missing.json"))
     assert mgr.qualified_name("nope") == "<undiscovered>::nope"
+
+
+def test_timeout_for_tool_uses_long_window_for_known_long_running_tools(monkeypatch) -> None:
+    from services.mcp import mcp_client_manager as mod
+
+    monkeypatch.setattr(mod, "TOOL_CALL_TIMEOUT", 30)
+    monkeypatch.setattr(mod, "LONG_RUNNING_TOOL_CALL_TIMEOUT", 120)
+    monkeypatch.setattr(mod, "_TOOL_TIMEOUT_OVERRIDES", {
+        "fabric_create_workspace_inventory_solution": 120,
+        "fabric_verify_report_renderable": 120,
+        "fabric_verify_workspace_inventory_solution": 120,
+    })
+
+    assert mod._timeout_for_tool("fabric_list_items") == 30
+    assert mod._timeout_for_tool("fabric_create_workspace_inventory_solution") == 120
+    assert mod._timeout_for_tool("fabric_verify_report_renderable") == 120
+    assert mod._timeout_for_tool("fabric_verify_workspace_inventory_solution") == 120
+    assert mod._timeout_for_tool("run_shell_command") == 120
 
 
 # ── Security: tool policy enforcement ───────────────────────────────
@@ -364,4 +449,31 @@ def test_env_allowlist_excludes_secrets(monkeypatch) -> None:
     # Sanity: the allow-list does include the essentials.
     for name in ("PATH", "HOME", "SSL_CERT_FILE"):
         assert name in _BASE_ENV_ALLOWLIST
+
+
+def test_execution_context_env_maps_actor_metadata() -> None:
+    from services.mcp.mcp_client_manager import _execution_context_env
+
+    env = _execution_context_env({
+        "actor_role": "subagent",
+        "agent_id": "fabric-builder",
+        "agent_name": "Fabric Builder\nInjected line",
+        "agent_session_id": "agent-session-1",
+        "run_id": "run-1",
+        "task_id": "task-1",
+        "task_title": "Build inventory solution",
+        "tool_call_id": "call-1",
+        "ignored": "value",
+    })
+
+    assert env == {
+        "AGENTHUB_ACTOR_ROLE": "subagent",
+        "AGENTHUB_AGENT_ID": "fabric-builder",
+        "AGENTHUB_AGENT_NAME": "Fabric Builder Injected line",
+        "AGENTHUB_AGENT_SESSION_ID": "agent-session-1",
+        "AGENTHUB_RUN_ID": "run-1",
+        "AGENTHUB_TASK_ID": "task-1",
+        "AGENTHUB_TASK_TITLE": "Build inventory solution",
+        "AGENTHUB_TOOL_CALL_ID": "call-1",
+    }
 

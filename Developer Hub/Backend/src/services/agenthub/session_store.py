@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 from datetime import UTC, datetime
 from typing import Any
@@ -19,9 +20,15 @@ from domain.models.agent_models import (
     UserAgentConfig,
 )
 from domain.models.composition import Composition
-from services.agenthub import workspaces_cache
+from services.agenthub import dynamic_mission_store, workspaces_cache
 from services.agenthub._db import connect as _connect
 from services.agenthub._db import db_path as _db_path
+from services.logging_categories import (
+    LOG_CATEGORY_DIAGNOSTIC,
+    PUBLIC_LOG_CATEGORIES,
+    log_extra,
+    normalize_log_category,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +41,37 @@ _SCHEMA_VERSION = 1
 # the history list with ``composition=None`` — they can be viewed/deleted
 # but not re-run.
 _legacy_composition_warned: set[str] = set()
+_SENSITIVE_AUDIT_KEY_RE = re.compile(
+    r"(authorization|bearer|token|secret|password|credential|api[_-]?key|connection[_-]?string|sas)",
+    re.IGNORECASE,
+)
+_MAX_AUDIT_STRING_LEN = 500
+
+
+def _sanitize_audit_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            str(key): "[redacted]" if _SENSITIVE_AUDIT_KEY_RE.search(str(key)) else _sanitize_audit_value(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        sanitized = [_sanitize_audit_value(item) for item in value[:20]]
+        if len(value) > 20:
+            sanitized.append(f"... {len(value) - 20} more items")
+        return sanitized
+    if isinstance(value, str):
+        compact = value.replace("\r", " ").replace("\n", " ").strip()
+        if _SENSITIVE_AUDIT_KEY_RE.search(compact[:80]):
+            return "[redacted]"
+        return compact[:_MAX_AUDIT_STRING_LEN]
+    return value
+
+
+def _sanitize_audit_args(args: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not args:
+        return None
+    sanitized = _sanitize_audit_value(args)
+    return sanitized if isinstance(sanitized, dict) else None
 
 
 def init_db() -> None:
@@ -87,7 +125,8 @@ def init_db() -> None:
                 timestamp   TEXT NOT NULL,
                 user_id     TEXT,
                 user_upn    TEXT,
-                success     INTEGER
+                success     INTEGER,
+                log_category TEXT NOT NULL DEFAULT 'diagnostic'
             );
 
             CREATE INDEX IF NOT EXISTS idx_audit_session ON audit_log(session_id);
@@ -100,6 +139,12 @@ def init_db() -> None:
         # Workspace cache lives in the same DB so all SQLite state is
         # under one bind-mounted file.
         workspaces_cache.init_schema(conn)
+        dynamic_mission_store.init_schema(conn)
+        # Mission events are persisted so a re-loaded session shows the
+        # full live log instead of an empty trace once the in-memory
+        # _JobExecution ring is gone.
+        from services.agenthub import session_event_store as _ses
+        _ses.init_schema(conn)
         conn.commit()
         logger.info("AgentHub database initialized at %s", _db_path())
     finally:
@@ -124,6 +169,9 @@ def _migrate_add_user_upn(conn: sqlite3.Connection) -> None:
     if "success" not in audit_cols:
         conn.execute("ALTER TABLE audit_log ADD COLUMN success INTEGER")
         logger.info("Added success column to audit_log")
+    if "log_category" not in audit_cols:
+        conn.execute("ALTER TABLE audit_log ADD COLUMN log_category TEXT NOT NULL DEFAULT 'diagnostic'")
+        logger.info("Added log_category column to audit_log", extra=log_extra("diagnostic"))
 
 
 def _migrate_add_cancellation_columns(conn: sqlite3.Connection) -> None:
@@ -263,6 +311,65 @@ def list_sessions(
         return [_row_to_session(r) for r in rows]
     finally:
         conn.close()
+
+
+def summarize_sessions(user_id: str) -> dict[str, Any]:
+    """Return aggregate status counts for a user's sessions.
+
+    This is intentionally lightweight (single grouped query) so dashboard
+    KPIs can be accurate even when the UI only fetches paged session rows.
+    """
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            "SELECT status, COUNT(*) AS c FROM sessions WHERE user_id = ? GROUP BY status",
+            (user_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    by_status: dict[str, int] = {
+        str(r["status"]): int(r["c"])
+        for r in rows
+    }
+
+    running = by_status.get("running", 0) + by_status.get("executing", 0)
+    waiting = (
+        by_status.get("planned", 0)
+        + by_status.get("approved", 0)
+        + by_status.get("queued", 0)
+        + by_status.get("waiting", 0)
+        + by_status.get("generating_plan", 0)
+    )
+    failed = by_status.get("failed", 0) + by_status.get("error", 0)
+    completed = by_status.get("completed", 0) + by_status.get("success", 0)
+    cancelled = by_status.get("cancelled", 0) + by_status.get("canceled", 0)
+
+    known = {
+        "running", "executing",
+        "planned", "approved", "queued", "waiting", "generating_plan",
+        "failed", "error",
+        "completed", "success",
+        "cancelled", "canceled",
+    }
+    other_active = sum(v for k, v in by_status.items() if k not in known)
+
+    active_total = running + waiting + failed + other_active
+    history_total = completed + cancelled
+    total = active_total + history_total
+
+    return {
+        "total": total,
+        "active_total": active_total,
+        "history_total": history_total,
+        "running": running,
+        "waiting": waiting,
+        "failed": failed,
+        "completed": completed,
+        "cancelled": cancelled,
+        "other_active": other_active,
+        "by_status": by_status,
+    }
 
 
 def update_session(job: Job) -> Job:
@@ -429,6 +536,7 @@ def log_audit(
     user_upn: str | None = None,
     *,
     success: bool | None = None,
+    log_category: str = "diagnostic",
 ) -> None:
     """Record an audited event.
 
@@ -439,18 +547,25 @@ def log_audit(
     """
     conn = _connect()
     try:
+        normalized_category = normalize_log_category(log_category, default=LOG_CATEGORY_DIAGNOSTIC)
+        safe_category = (
+            normalized_category
+            if normalized_category in PUBLIC_LOG_CATEGORIES
+            else LOG_CATEGORY_DIAGNOSTIC
+        )
         conn.execute(
-            "INSERT INTO audit_log (session_id, agent_id, tool_name, tool_args, result_summary, timestamp, user_id, user_upn, success) VALUES (?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO audit_log (session_id, agent_id, tool_name, tool_args, result_summary, timestamp, user_id, user_upn, success, log_category) VALUES (?,?,?,?,?,?,?,?,?,?)",
             (
                 session_id,
                 agent_id,
                 tool_name,
-                json.dumps(tool_args) if tool_args else None,
+                json.dumps(_sanitize_audit_args(tool_args)) if tool_args else None,
                 result_summary,
                 datetime.now(UTC).isoformat(),
                 user_id,
                 user_upn,
                 None if success is None else (1 if success else 0),
+                safe_category,
             ),
         )
         conn.commit()
@@ -462,8 +577,13 @@ def get_audit_log(session_id: str) -> list[dict[str, Any]]:
     conn = _connect()
     try:
         rows = conn.execute(
-            "SELECT * FROM audit_log WHERE session_id = ? ORDER BY timestamp", (session_id,)
+            "SELECT * FROM audit_log WHERE session_id = ? AND COALESCE(log_category, 'diagnostic') != 'trace' ORDER BY timestamp",
+            (session_id,),
         ).fetchall()
-        return [dict(r) for r in rows]
+        result = [dict(r) for r in rows]
+        for row in result:
+            if not row.get("log_category"):
+                row["log_category"] = "diagnostic"
+        return result
     finally:
         conn.close()

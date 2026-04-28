@@ -35,18 +35,15 @@ _CAMEL_CONFIG = ConfigDict(
 
 
 # ── Architecture catalog (wire enum) ──────────────────────────────────
-# See ``domain.catalogs.architectures`` for the full catalog entries
-# (descriptions / typical failure modes / Fabric use cases). The enum
-# here is the subset of values the runtime accepts on the wire; the
-# catalog is the single source of truth for everything else the UI
-# shows about each architecture.
+# ``dynamic`` is the only user-facing/default strategy. Legacy values
+# remain accepted so historical sessions and explicit fallback tests can
+# still deserialize while the product path moves to the live mission graph.
 Architecture = Literal[
+    "dynamic",
     # v1 architectures with dedicated drivers
     "solo",
     "supervisor",
     "sequential",
-    "parallel",
-    "router",
     "hierarchical",
     "reflection",
     "mixed",
@@ -54,8 +51,6 @@ Architecture = Literal[
     # supervisor driver and tags the node graph with the chosen label.
     # Promote to a dedicated driver when a real task motivates it.
     "network",
-    "debate",
-    "magentic",
 ]
 
 
@@ -68,6 +63,7 @@ HandoffKind = Literal[
     "peer",       # undirected peer edge in a network
     "handoff",    # explicit router handoff between two specialists
     "critique",   # reflection: critic → actor
+    "verify",     # reflection: critic → verifier (post-convergence gate)
 ]
 
 

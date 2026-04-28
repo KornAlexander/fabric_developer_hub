@@ -1,11 +1,11 @@
 """Unit tests for ``services.agenthub.compose_service`` helpers.
 
-Focus: the post-parse normalisation step that enforces the uniqueness
-rule the system prompt gives the LLM. A correct composer NEVER emits
-two slots with the same ``agentId`` in a sequential or supervisor
-plan (one agent handles its whole phase). Some LLMs ignore this rule
-and return duplicate slots anyway — the helper collapses them back
-into one slot, merges roles + skills, and rewrites handoffs.
+Focus: the post-parse normalisation step that enforces the sequential
+uniqueness rule the system prompt gives the LLM. A correct composer
+never emits two sequential slots with the same ``agentId`` because one
+agent handles its whole phase. Some LLMs ignore this rule and return
+duplicate slots anyway — the helper collapses them back into one slot,
+merges roles + skills, and rewrites handoffs.
 
 The full compose flow (LLM call + parse) is integration-territory and
 is exercised in the broader test suite; here we pin the collapse
@@ -14,8 +14,18 @@ the dedupe invariant.
 """
 from __future__ import annotations
 
+import json
+
+import pytest
+
 from domain.models.composition import AgentSlot, Handoff, SkillRef
-from services.agenthub.compose_service import _collapse_duplicate_agent_slots
+from services.agenthub.agent_registry import AGENT_TEMPLATES
+from services.agenthub.compose_service import (
+    ComposeService,
+    CompositionError,
+    _collapse_duplicate_agent_slots,
+    _make_quality_slot,
+)
 
 
 def _slot(slot_id: str, agent_id: str, role: str, skills: list[str] | None = None) -> AgentSlot:
@@ -45,6 +55,36 @@ def test_collapse_noop_when_all_unique() -> None:
     assert got_slots is slots
     assert got_entry == "s1"
     assert len(got_hs) == 2
+
+
+def test_quality_verifier_slot_prefers_fabric_verifier_super_skill() -> None:
+    slot = _make_quality_slot(
+        "final-verifier",
+        AGENT_TEMPLATES,
+        visual=True,
+        verifier=True,
+        role="Final verifier: check created Fabric report and data.",
+        fallback_agent_id="modeler",
+    )
+
+    assert slot.agent_id == "fabric-verifier"
+    assert [skill.id for skill in slot.skills] == ["fabric-verification"]
+
+
+def test_quality_reviewer_still_uses_modeler_visual_review_skill() -> None:
+    slot = _make_quality_slot(
+        "quality-review",
+        AGENT_TEMPLATES,
+        visual=True,
+        verifier=False,
+        role="Quality reviewer: review report visual clarity.",
+        fallback_agent_id="fabric-data-engineer",
+    )
+
+    assert slot.agent_id == "modeler"
+    skill_ids = [skill.id for skill in slot.skills]
+    assert "powerbi-ibcs" in skill_ids
+    assert "fabric-verification" in skill_ids
 
 
 def test_collapse_merges_two_fabric_data_engineer_slots() -> None:
@@ -119,3 +159,152 @@ def test_collapse_dedupes_duplicate_handoffs_after_remap() -> None:
     # Both s1→s2 and s1→s3 remap to s1→s2; keep one.
     assert len(got_hs) == 1
     assert (got_hs[0].from_, got_hs[0].to) == ("s1", "s2")
+
+
+def test_parse_normalizes_legacy_solo_report_to_dynamic_seed() -> None:
+    svc = ComposeService(agents=AGENT_TEMPLATES)
+    raw = json.dumps({
+        "architecture": "solo",
+        "rationale": "One builder can create the report.",
+        "headline": "Create the report.",
+        "subtitle": "Single pass.",
+        "slots": [{
+            "id": "builder",
+            "agentId": "fabric-data-engineer",
+            "role": "Create the Power BI report page",
+            "skills": [{"id": "powerbi-authoring-cli", "name": "Power BI authoring"}],
+        }],
+        "handoffs": [],
+        "entrypointSlotId": "builder",
+        "budget": {"maxTurns": 20, "maxToolCalls": 100, "maxWallclockS": 600, "requireApprovals": True},
+    })
+    comp = svc._parse(
+        raw,
+        session_id="s-report",
+        task=(
+            "Create one Power BI report page with aligned visuals, clean "
+            "variance styling, and a professional leadership-ready layout."
+        ),
+        require_approvals=True,
+    )
+
+    assert comp.architecture == "dynamic"
+    assert [s.id for s in comp.slots] == ["generalist"]
+    assert comp.slots[0].agent_id == "generalist"
+    assert comp.handoffs == []
+
+
+def test_parse_preserves_explicit_single_agent_artifact_request() -> None:
+    svc = ComposeService(agents=AGENT_TEMPLATES)
+    raw = json.dumps({
+        "architecture": "solo",
+        "rationale": "The user explicitly requested one agent.",
+        "headline": "Create one notebook.",
+        "subtitle": "Single agent only.",
+        "slots": [{
+            "id": "builder",
+            "agentId": "fabric-data-engineer",
+            "role": "Create the notebook shell and summarize the result",
+            "skills": [],
+        }],
+        "handoffs": [],
+        "entrypointSlotId": "builder",
+        "budget": {"maxTurns": 20, "maxToolCalls": 100, "maxWallclockS": 600, "requireApprovals": True},
+    })
+
+    comp = svc._parse(
+        raw,
+        session_id="s-solo-explicit",
+        task=(
+            "Within only this workspace, complete a single-agent artifact creation task. "
+            "Do not delegate, branch, supervise, debate, or add any extra agents. "
+            "Create one notebook item shell and return the item id."
+        ),
+        require_approvals=True,
+    )
+
+    assert comp.architecture == "dynamic"
+    assert [s.id for s in comp.slots] == ["generalist"]
+    assert comp.handoffs == []
+
+
+def test_parse_normalizes_multidomain_report_to_dynamic_seed() -> None:
+    svc = ComposeService(agents=AGENT_TEMPLATES)
+    raw = json.dumps({
+        "architecture": "supervisor",
+        "rationale": "Coordinator delegates the build.",
+        "headline": "Build sales analytics.",
+        "subtitle": "Supervisor team.",
+        "slots": [
+            {"id": "lead", "agentId": "architect", "role": "Coordinate the build", "skills": []},
+            {"id": "data", "agentId": "fabric-data-engineer", "role": "Ingest and transform lakehouse data", "skills": []},
+            {"id": "report", "agentId": "fabric-data-engineer", "role": "Publish the semantic model and report", "skills": []},
+        ],
+        "handoffs": [
+            {"from": "lead", "to": "data", "kind": "delegate"},
+            {"from": "lead", "to": "report", "kind": "delegate"},
+        ],
+        "entrypointSlotId": "lead",
+        "budget": {"maxTurns": 20, "maxToolCalls": 100, "maxWallclockS": 600, "requireApprovals": True},
+    })
+    comp = svc._parse(
+        raw,
+        session_id="s-mixed",
+        task=(
+            "Create an end-to-end executive sales analytics solution: ingest "
+            "raw files, transform them into curated lakehouse tables, build "
+            "the semantic model, and publish a Power BI report with polished "
+            "leadership-ready visuals."
+        ),
+        require_approvals=True,
+    )
+
+    assert comp.architecture == "dynamic"
+    assert [s.id for s in comp.slots] == ["generalist"]
+    assert comp.handoffs == []
+
+
+def test_parse_rejects_internal_orchestrator_slot() -> None:
+    svc = ComposeService(agents={**AGENT_TEMPLATES, "orchestrator": AGENT_TEMPLATES["architect"]})
+    raw = json.dumps({
+        "architecture": "supervisor",
+        "rationale": "Bad visible internal control plane.",
+        "headline": "Coordinate.",
+        "subtitle": "Should be rejected.",
+        "slots": [
+            {"id": "lead", "agentId": "orchestrator", "role": "Coordinate", "skills": []},
+            {"id": "worker", "agentId": "architect", "role": "Plan", "skills": []},
+        ],
+        "handoffs": [{"from": "lead", "to": "worker", "kind": "delegate"}],
+        "entrypointSlotId": "lead",
+        "budget": {"maxTurns": 20, "maxToolCalls": 100, "maxWallclockS": 600, "requireApprovals": True},
+    })
+
+    with pytest.raises(CompositionError, match="internal control plane"):
+        svc._parse(raw, session_id="s-internal", task="Do work", require_approvals=True)
+
+
+def test_parse_preserves_read_only_inventory_as_solo() -> None:
+    svc = ComposeService(agents=AGENT_TEMPLATES)
+    raw = json.dumps({
+        "architecture": "solo",
+        "rationale": "Read-only inventory.",
+        "headline": "Inspect workspace.",
+        "subtitle": "No changes.",
+        "slots": [{"id": "reader", "agentId": "fabric-admin", "role": "List current items", "skills": []}],
+        "handoffs": [],
+        "entrypointSlotId": "reader",
+        "budget": {"maxTurns": 20, "maxToolCalls": 100, "maxWallclockS": 600, "requireApprovals": True},
+    })
+
+    comp = svc._parse(
+        raw,
+        session_id="s-readonly",
+        task="List the current workspace items and return a read-only inventory summary.",
+        require_approvals=True,
+    )
+
+    assert comp.architecture == "dynamic"
+    assert len(comp.slots) == 1
+    assert comp.slots[0].agent_id == "generalist"
+    assert comp.handoffs == []

@@ -126,6 +126,7 @@ class AgentTemplate(BaseModel):
     # the compose prompt (legacy path). New agents should always set
     # boundaries so the composer picks deterministically.
     boundaries: AgentBoundaries | None = None
+    is_internal: bool = False
 
 
 class UserAgentConfig(BaseModel):

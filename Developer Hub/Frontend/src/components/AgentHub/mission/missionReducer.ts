@@ -13,11 +13,15 @@
 
 import type {
     Artifact,
+    ChangeRecord,
     MissionEvent,
+    PublicLogCategory,
     SlotProgress,
     JobStatusLite,
+    VerifierVerdictEvent,
 } from "./events";
 import type { Composition } from "./types";
+import { formatActionMessage, formatOperationalMessage, formatToolEndMessage, formatToolStartMessage } from "./logPresentation";
 
 export interface LogEntry {
     seq: number;
@@ -26,11 +30,22 @@ export interface LogEntry {
     agentName?: string;
     level: "info" | "warn" | "error";
     message: string;
+    logCategory: PublicLogCategory;
     kind: "log" | "phase" | "decision" | "tool_start" | "tool_end" | "action" | "error";
     callId?: string;
     toolName?: string;
+    argsPreview?: Record<string, unknown>;
+    toolStatus?: "ok" | "error";
+    errorPreview?: string | null;
     durationMs?: number;
+    eventId?: string;
+    payloadDigest?: string;
+    payloadSummary?: Record<string, unknown>;
+    sourceEventType?: string;
 }
+
+type LogEntryInput = Omit<LogEntry, "logCategory"> & { logCategory?: PublicLogCategory };
+type LogSupportFields = Pick<LogEntry, "eventId" | "payloadDigest" | "payloadSummary" | "sourceEventType">;
 
 export interface PendingApproval {
     approvalId: string;
@@ -51,8 +66,11 @@ export interface MissionState {
     composition: Composition | null;
     activeAgentId: string | null;
     slotProgress: Record<string, SlotProgress>;   // keyed by slotId
+    agentStatus: Record<string, "queued" | "running" | "waiting" | "completed" | "error">;
     artifacts: Record<string, Artifact>;          // keyed by artifactId
     artifactOrder: string[];                      // insertion order for display
+    changes: Record<string, ChangeRecord>;        // keyed by recordId
+    changeOrder: string[];                        // insertion order for display
     logs: LogEntry[];
     approvals: Record<string, PendingApproval>;
     lastSeq: number;
@@ -66,8 +84,11 @@ export function initialMissionState(seed?: Partial<MissionState>): MissionState 
         composition: null,
         activeAgentId: null,
         slotProgress: {},
+        agentStatus: {},
         artifacts: {},
         artifactOrder: [],
+        changes: {},
+        changeOrder: [],
         logs: [],
         approvals: {},
         lastSeq: 0,
@@ -75,16 +96,72 @@ export function initialMissionState(seed?: Partial<MissionState>): MissionState 
     };
 }
 
-function pushLog(state: MissionState, entry: LogEntry): MissionState {
+function mergeChangeRecords(state: MissionState, records: ChangeRecord[] | undefined): MissionState {
+    if (!records?.length) return state;
+    const changes = { ...state.changes };
+    const order = [...state.changeOrder];
+    for (const record of records) {
+        if (!record?.recordId) continue;
+        if (!changes[record.recordId]) order.push(record.recordId);
+        changes[record.recordId] = record;
+    }
+    return { ...state, changes, changeOrder: order };
+}
+
+function defaultLogCategoryForEntry(entry: LogEntryInput): PublicLogCategory {
+    if (entry.kind === "tool_start" || entry.kind === "tool_end" || entry.kind === "error") {
+        return "diagnostic";
+    }
+    if (entry.kind === "phase" || entry.kind === "decision" || entry.kind === "action") {
+        return "high_level";
+    }
+    if (entry.level === "warn") {
+        return "high_level";
+    }
+    if (entry.level === "error") {
+        return "diagnostic";
+    }
+    return "detailed";
+}
+
+function publicLogCategoryFromEvent(ev: MissionEvent): PublicLogCategory | undefined {
+    const category = (ev as any).logCategory;
+    if (category === "high_level" || category === "detailed" || category === "diagnostic") {
+        return category;
+    }
+    return undefined;
+}
+
+function pushLog(state: MissionState, entry: LogEntryInput): MissionState {
     // Bound the log list at a reasonable size so a very long run
     // does not balloon component memory. Keep the most recent 2k
     // entries — completed-run filtering works against the full
     // server-side phase list via getSession(), not this buffer.
     const MAX = 2000;
+    const categorizedEntry: LogEntry = {
+        ...entry,
+        logCategory: entry.logCategory ?? defaultLogCategoryForEntry(entry),
+    };
     const next = state.logs.length >= MAX
-        ? [...state.logs.slice(-MAX + 1), entry]
-        : [...state.logs, entry];
+        ? [...state.logs.slice(-MAX + 1), categorizedEntry]
+        : [...state.logs, categorizedEntry];
     return { ...state, logs: next };
+}
+
+function supportLogFields(ev: MissionEvent): LogSupportFields {
+    return {
+        eventId: (ev as any).eventId,
+        payloadDigest: (ev as any).payloadDigest,
+        payloadSummary: (ev as any).payloadSummary,
+        sourceEventType: (ev as any).type,
+    };
+}
+
+function pushEventLog(state: MissionState, ev: MissionEvent, entry: LogEntryInput): MissionState {
+    return pushLog(state, {
+        ...supportLogFields(ev),
+        ...entry,
+    });
 }
 
 /**
@@ -104,11 +181,25 @@ export function missionReducer(state: MissionState, ev: MissionEvent): MissionSt
         ? { ...state, lastSeq: seq }
         : { ...state };
 
+    if ((ev as any).logCategory === "trace") {
+        return next;
+    }
+
     switch (ev.type) {
         case "run_overview": {
             next.composition = ev.composition;
             next.activeAgentId = ev.activeAgentId;
             next.jobStatus = (ev.job?.status as JobStatusLite) || next.jobStatus;
+            // If the snapshot reveals a terminal status, mark it so
+            // the UI stops the timer and shows the correct dot colour.
+            const TERMINAL_STATUSES: JobStatusLite[] = ["completed", "failed", "cancelled"];
+            if (TERMINAL_STATUSES.includes(next.jobStatus) && !next.terminalType) {
+                const typeMap: Record<string, MissionState["terminalType"]> = {
+                    completed: "job_complete", failed: "job_failed", cancelled: "job_cancelled",
+                };
+                next.terminalType = typeMap[next.jobStatus];
+                next.totalDuration = (ev as any).totalDuration || next.totalDuration;
+            }
             // Merge artifacts preserving existing state; server is
             // authoritative on identity but we keep any local-order
             // we already had.
@@ -120,11 +211,23 @@ export function missionReducer(state: MissionState, ev: MissionEvent): MissionSt
             }
             next.artifacts = artifacts;
             next.artifactOrder = order;
+            const changedState = mergeChangeRecords(next, ev.changes || []);
+            next.changes = changedState.changes;
+            next.changeOrder = changedState.changeOrder;
             const slotProgress = { ...next.slotProgress };
+            const agentStatus = { ...next.agentStatus };
             for (const s of ev.slotProgress || []) {
                 slotProgress[s.slotId] = s;
+                if (s.agentId) {
+                    agentStatus[s.agentId] = s.status === "running" ? "running"
+                        : s.status === "done" ? "completed"
+                            : s.status === "approval_required" ? "waiting"
+                                : s.status === "failed" ? "error"
+                                    : "queued";
+                }
             }
             next.slotProgress = slotProgress;
+            next.agentStatus = agentStatus;
             return next;
         }
 
@@ -134,12 +237,249 @@ export function missionReducer(state: MissionState, ev: MissionEvent): MissionSt
 
         case "agent_status": {
             if (ev.status === "running") next.activeAgentId = ev.agentId;
-            return pushLog(next, {
-                seq: ev.seq, ts: ev.ts, kind: "log", level: "info",
+            next.agentStatus = {
+                ...next.agentStatus,
+                [ev.agentId]: ev.status === "failed" ? "error" : ev.status,
+            };
+            return pushEventLog(next, ev, {
+                seq: ev.seq, ts: ev.ts, logCategory: publicLogCategoryFromEvent(ev), kind: "log", level: "info",
                 agentId: ev.agentId, agentName: ev.agentName,
-                message: ev.currentStep || `status: ${ev.status}`,
+                message: formatOperationalMessage(ev.currentStep || `status: ${ev.status}`),
             });
         }
+
+        case "agent_added": {
+            const agent = ev.agent || {};
+            const slotId = String(agent.sessionId || agent.session_id || "");
+            const templateId = String(agent.agentId || agent.agent_id || slotId || "agent");
+            const role = String(agent.role || templateId || "Recovery agent");
+            if (slotId) {
+                next.slotProgress = {
+                    ...next.slotProgress,
+                    [slotId]: {
+                        slotId,
+                        agentId: slotId,
+                        status: "queued",
+                        agentName: role,
+                        role,
+                    },
+                };
+                next.agentStatus = {
+                    ...next.agentStatus,
+                    [slotId]: "queued",
+                };
+            }
+            return pushEventLog(next, ev, {
+                seq: ev.seq, ts: ev.ts, logCategory: publicLogCategoryFromEvent(ev), kind: "log", level: "warn",
+                agentId: slotId || undefined,
+                agentName: role,
+                message: `Agent added: ${role}`,
+            });
+        }
+
+        case "mission_seeded":
+            return pushEventLog(next, ev, {
+                seq: ev.seq, ts: ev.ts, logCategory: publicLogCategoryFromEvent(ev), kind: "log", level: "info",
+                message: `Mission seeded with ${ev.taskCount ?? 0} task${ev.taskCount === 1 ? "" : "s"}`,
+            });
+
+        case "task_created":
+            return pushEventLog(next, ev, {
+                seq: ev.seq, ts: ev.ts, logCategory: publicLogCategoryFromEvent(ev), kind: "log", level: "info",
+                message: `Task queued: ${ev.task.title}`,
+            });
+
+        case "task_blocked":
+            return pushEventLog(next, ev, {
+                seq: ev.seq, ts: ev.ts, logCategory: publicLogCategoryFromEvent(ev), kind: "log", level: "warn",
+                message: `Task blocked: ${ev.message || ev.reason}`,
+            });
+
+        case "task_failed":
+            return pushEventLog(next, ev, {
+                seq: ev.seq, ts: ev.ts, logCategory: publicLogCategoryFromEvent(ev), kind: "error", level: "error",
+                message: `Task failed: ${ev.message || ev.reason}`,
+            });
+
+        case "generalist_check_in":
+            return pushEventLog(next, ev, {
+                seq: ev.seq, ts: ev.ts, logCategory: publicLogCategoryFromEvent(ev), kind: "decision", level: "info",
+                message: `Generalist checkpoint: ${ev.readyTaskCount ?? 0} ready, ${ev.runningSubagentCount ?? 0} running, ${ev.completedTaskCount ?? 0} complete`,
+            });
+
+        case "generalist_context_pack":
+        case "agent_context_received":
+            return pushEventLog(next, ev, {
+                seq: ev.seq, ts: ev.ts, logCategory: publicLogCategoryFromEvent(ev), kind: "decision", level: "info",
+                agentId: ev.runId,
+                agentName: ev.agentName || ev.agentId,
+                message: `Delegated structured context to ${ev.agentName || ev.agentId} for ${ev.taskTitle || ev.taskId}`,
+            });
+
+        case "generalist_direct_work":
+            return pushEventLog(next, ev, {
+                seq: ev.seq, ts: ev.ts, logCategory: publicLogCategoryFromEvent(ev), kind: "decision", level: "info",
+                agentId: ev.runId,
+                message: `Generalist handled directly: ${ev.taskTitle || ev.taskId} - ${ev.reason}`,
+            });
+
+        case "generalist_state_decision":
+            return pushEventLog(next, ev, {
+                seq: ev.seq, ts: ev.ts, logCategory: publicLogCategoryFromEvent(ev), kind: "decision", level: ev.errorCount ? "warn" : "info",
+                agentId: ev.runId,
+                message: `Generalist integrated feedback: ${ev.summary || ev.rationale || ev.resultStatus || "subagent result reviewed"}`,
+            });
+
+        case "generalist_steering":
+        case "subagent_steered":
+            return pushEventLog(next, ev, {
+                seq: ev.seq, ts: ev.ts, logCategory: publicLogCategoryFromEvent(ev), kind: "decision", level: "warn",
+                agentId: ev.runId,
+                agentName: ev.agentName || ev.agentId,
+                message: `Generalist steered ${ev.agentName || ev.agentId || ev.runId}: ${ev.reason}`,
+            });
+
+        case "subagent_inspected": {
+            const signal = ev.signal || {};
+            const signalLabel = typeof signal.kind === "string" ? signal.kind : "progress";
+            const toolName = typeof signal.toolName === "string" ? ` (${signal.toolName})` : "";
+            return pushEventLog(next, ev, {
+                seq: ev.seq, ts: ev.ts, logCategory: publicLogCategoryFromEvent(ev), kind: "log", level: "info",
+                agentId: ev.runId,
+                message: `Generalist inspected subagent ${signalLabel}${toolName}`,
+            });
+        }
+
+        case "subagent_stale":
+            return pushEventLog(next, ev, {
+                seq: ev.seq, ts: ev.ts, logCategory: publicLogCategoryFromEvent(ev), kind: "log", level: "warn",
+                agentId: ev.runId,
+                message: `Subagent progress stale after ${Math.round(ev.staleSeconds ?? 0)} s`,
+            });
+
+        case "subagent_abandoned":
+            return pushEventLog(next, ev, {
+                seq: ev.seq, ts: ev.ts, logCategory: publicLogCategoryFromEvent(ev), kind: "decision", level: "warn",
+                agentId: ev.runId,
+                message: `Subagent reassigned to ${ev.replacementTaskId}: ${ev.reason}`,
+            });
+
+        case "subagent_cancelled":
+            return pushEventLog(next, ev, {
+                seq: ev.seq, ts: ev.ts, logCategory: publicLogCategoryFromEvent(ev), kind: "decision", level: "warn",
+                agentId: ev.runId,
+                message: `Subagent cancelled: ${ev.reason}`,
+            });
+
+        case "orchestrator_decision":
+            return pushEventLog(next, ev, {
+                seq: ev.seq, ts: ev.ts, logCategory: publicLogCategoryFromEvent(ev), kind: "decision", level: "info",
+                message: `Orchestrator: ${ev.decision.rationale}`,
+            });
+
+        case "subagent_spawned": {
+            const sessionId = ev.run.agentSessionId || ev.run.agent_session_id || "";
+            if (sessionId) {
+                next.slotProgress = {
+                    ...next.slotProgress,
+                    [sessionId]: {
+                        slotId: sessionId,
+                        agentId: sessionId,
+                        status: "running",
+                        agentName: ev.task?.title || ev.run.agentId || ev.run.agent_id,
+                        role: ev.task?.title,
+                    },
+                };
+                next.agentStatus = { ...next.agentStatus, [sessionId]: "running" };
+                next.activeAgentId = sessionId;
+            }
+            return pushEventLog(next, ev, {
+                seq: ev.seq, ts: ev.ts, logCategory: publicLogCategoryFromEvent(ev), kind: "log", level: "info",
+                agentId: sessionId || undefined,
+                message: `Subagent started: ${ev.task?.title || ev.run.agentId || ev.run.agent_id || ev.run.id}`,
+            });
+        }
+
+        case "parallel_group_spawned":
+            return pushEventLog(next, ev, {
+                seq: ev.seq, ts: ev.ts, logCategory: publicLogCategoryFromEvent(ev), kind: "log", level: "info",
+                message: `Started ${ev.runIds.length} tasks in parallel`,
+            });
+
+        case "subagent_result": {
+            const failed = ev.result.status === "failed" || ev.result.status === "blocked";
+            const cancelled = ev.result.status === "cancelled";
+            return pushEventLog(next, ev, {
+                seq: ev.seq, ts: ev.ts, logCategory: publicLogCategoryFromEvent(ev), kind: failed ? "error" : "decision",
+                level: failed ? "error" : cancelled ? "warn" : "info",
+                message: `Task result: ${ev.result.summary}`,
+            });
+        }
+
+        case "mission_replanned":
+            return pushEventLog(next, ev, {
+                seq: ev.seq, ts: ev.ts, logCategory: publicLogCategoryFromEvent(ev), kind: "log", level: "info",
+                message: `Mission replanned: added follow-up task ${ev.taskId}`,
+            });
+
+        case "verifier_verdict": {
+            const passed = !!ev.passed;
+            const failures = (ev.structuralFailures || []).filter(Boolean);
+            const evidenceDetail: string[] = [];
+            const ev2 = ev.evidence || ({} as VerifierVerdictEvent["evidence"]);
+            if (ev2.browserVerifiedUrls?.length) {
+                evidenceDetail.push(`urls=${ev2.browserVerifiedUrls.length}`);
+            }
+            if (ev2.screenshotPaths?.length) {
+                evidenceDetail.push(`screenshots=${ev2.screenshotPaths.length}`);
+            }
+            evidenceDetail.push(`visualsRendered=${ev2.visualsRendered ? "yes" : "no"}`);
+            if (ev2.loadingStuckObserved) {
+                evidenceDetail.push("loadingStuck");
+            }
+            if (ev2.errorsObserved?.length) {
+                evidenceDetail.push(`errors=${ev2.errorsObserved.length}`);
+            }
+            const verdictLabel = passed ? "Verifier PASSED" : "Verifier REJECTED";
+            const detail = failures.length ? `: ${failures.join(", ")}` : "";
+            const message =
+                `${verdictLabel}${detail} — ${ev.decisionRationale} ` +
+                `[${evidenceDetail.join(" · ")}]`;
+            return pushEventLog(next, ev, {
+                seq: ev.seq, ts: ev.ts, logCategory: publicLogCategoryFromEvent(ev),
+                kind: passed ? "decision" : "error",
+                level: passed ? "info" : "error",
+                agentId: ev.verifierRunId,
+                agentName: ev.verifierAgentId || "FabricVerifier",
+                message,
+            });
+        }
+
+        case "resource_lock_acquired":
+            return pushEventLog(next, ev, {
+                seq: ev.seq, ts: ev.ts, logCategory: publicLogCategoryFromEvent(ev), kind: "log", level: "info",
+                message: `Locked ${ev.key} for ${ev.mode || "work"}`,
+            });
+
+        case "resource_lock_released":
+            return pushEventLog(next, ev, {
+                seq: ev.seq, ts: ev.ts, logCategory: publicLogCategoryFromEvent(ev), kind: "log", level: "info",
+                message: `Released lock on ${ev.key}`,
+            });
+
+        case "mission_completed":
+        case "mission_blocked":
+        case "mission_failed":
+        case "mission_cancelled":
+            return pushEventLog(next, ev, {
+                seq: ev.seq, ts: ev.ts, logCategory: publicLogCategoryFromEvent(ev), kind: ev.type === "mission_failed" ? "error" : "log",
+                level: ev.type === "mission_completed" ? "info" : "warn",
+                message:
+                    ev.type === "mission_completed" ? "Mission complete"
+                    : ev.type === "mission_cancelled" ? "Mission cancelled"
+                    : ev.type === "mission_blocked" ? "Mission blocked"
+                    : `Mission failed${ev.reason ? `: ${ev.reason}` : ""}`,
+            });
 
         case "slot_progress": {
             const slotId = ev.slotId || ev.agentId;
@@ -154,6 +494,14 @@ export function missionReducer(state: MissionState, ev: MissionEvent): MissionSt
                     reason: ev.reason,
                 },
             };
+            next.agentStatus = {
+                ...next.agentStatus,
+                [ev.agentId]: ev.status === "running" ? "running"
+                    : ev.status === "done" ? "completed"
+                        : ev.status === "approval_required" ? "waiting"
+                            : ev.status === "failed" ? "error"
+                                : "queued",
+            };
             if (ev.status === "running" && (ev.activeAgentId || ev.agentId)) {
                 next.activeAgentId = ev.activeAgentId || ev.agentId;
             }
@@ -161,71 +509,91 @@ export function missionReducer(state: MissionState, ev: MissionEvent): MissionSt
         }
 
         case "phase_start":
-            return pushLog(next, {
-                seq: ev.seq, ts: ev.ts, kind: "phase", level: "info",
+            return pushEventLog(next, ev, {
+                seq: ev.seq, ts: ev.ts, logCategory: publicLogCategoryFromEvent(ev), kind: "phase", level: "info",
                 agentId: ev.agentId, agentName: ev.agentName,
                 message: `Phase ${ev.phase.number}: ${ev.phase.title}`,
             });
 
         case "phase_complete":
-            return pushLog(next, {
-                seq: ev.seq, ts: ev.ts, kind: "phase", level: "info",
+            return pushEventLog(next, ev, {
+                seq: ev.seq, ts: ev.ts, logCategory: publicLogCategoryFromEvent(ev), kind: "phase", level: "info",
                 agentId: ev.agentId, agentName: ev.agentName,
                 message: `Phase ${ev.phaseNumber} complete`,
             });
 
         case "phase_detail":
-            return pushLog(next, {
-                seq: ev.seq, ts: ev.ts, kind: "log", level: "info",
+            return pushEventLog(next, ev, {
+                seq: ev.seq, ts: ev.ts, logCategory: publicLogCategoryFromEvent(ev), kind: "log", level: "info",
                 agentId: ev.agentId, agentName: ev.agentName,
-                message: ev.detail,
+                message: formatOperationalMessage(ev.detail),
             });
 
         case "agent_decision":
-            return pushLog(next, {
-                seq: ev.seq, ts: ev.ts, kind: "decision", level: "info",
+            return pushEventLog(next, ev, {
+                seq: ev.seq, ts: ev.ts, logCategory: publicLogCategoryFromEvent(ev), kind: "decision", level: "info",
                 agentId: ev.agentId, agentName: ev.agentName,
-                message: ev.decision,
+                message: formatOperationalMessage(ev.decision),
             });
 
         case "agent_error":
-            return pushLog(next, {
-                seq: ev.seq, ts: ev.ts, kind: "error", level: "error",
+            return pushEventLog(next, ev, {
+                seq: ev.seq, ts: ev.ts, logCategory: publicLogCategoryFromEvent(ev), kind: "error", level: "error",
                 agentId: ev.agentId, agentName: ev.agentName,
-                message: ev.error,
+                message: formatOperationalMessage(ev.error),
             });
 
         case "log_line":
-            return pushLog(next, {
-                seq: ev.seq, ts: ev.ts, kind: "log", level: ev.level,
-                agentId: ev.agentId, message: ev.message,
+            return pushEventLog(next, ev, {
+                seq: ev.seq, ts: ev.ts, logCategory: publicLogCategoryFromEvent(ev), kind: "log", level: ev.level,
+                agentId: ev.agentId, agentName: ev.agentName, message: formatOperationalMessage(ev.message),
             });
 
         case "tool_call_started":
-            return pushLog(next, {
-                seq: ev.seq, ts: ev.ts, kind: "tool_start", level: "info",
+            return pushEventLog(next, ev, {
+                seq: ev.seq, ts: ev.ts, logCategory: publicLogCategoryFromEvent(ev), kind: "tool_start", level: "info",
                 agentId: ev.agentId, agentName: ev.agentName,
                 callId: ev.callId, toolName: ev.toolName,
-                message: `→ ${ev.toolName}`,
+                argsPreview: ev.argsPreview,
+                message: formatToolStartMessage(ev.toolName, ev.argsPreview),
             });
 
         case "tool_call_ended":
-            return pushLog(next, {
-                seq: ev.seq, ts: ev.ts, kind: "tool_end",
+            return pushEventLog(next, ev, {
+                seq: ev.seq, ts: ev.ts, logCategory: publicLogCategoryFromEvent(ev), kind: "tool_end",
                 level: ev.status === "ok" ? "info" : "error",
                 agentId: ev.agentId, callId: ev.callId, toolName: ev.toolName,
+                toolStatus: ev.status,
+                errorPreview: ev.errorPreview,
                 durationMs: ev.durationMs,
-                message: `← ${ev.toolName} (${ev.durationMs}ms, ${ev.status})`,
+                message: formatToolEndMessage(ev.toolName, ev.status, ev.durationMs),
             });
 
         case "action": {
             const a = ev.action as any;
-            return pushLog(next, {
-                seq: ev.seq, ts: ev.ts, kind: "action", level: "info",
+            return pushEventLog(next, ev, {
+                seq: ev.seq, ts: ev.ts, logCategory: publicLogCategoryFromEvent(ev), kind: "action", level: "info",
                 agentId: ev.agentId, agentName: ev.agentName,
-                message: `${a.action_type} ${a.entity_type}: ${a.entity_name}`,
+                message: formatActionMessage(a),
             });
         }
+
+        case "change_recorded":
+            return mergeChangeRecords(next, [{
+                recordId: ev.recordId,
+                kind: ev.kind,
+                status: ev.status,
+                targetName: ev.targetName,
+                targetType: ev.targetType,
+                targetScope: ev.targetScope,
+                summary: ev.summary,
+                toolName: ev.toolName,
+                agentId: ev.agentId,
+                agentName: ev.agentName,
+                targetId: ev.targetId,
+                webUrl: ev.webUrl,
+                ts: ev.ts,
+            }]);
 
         case "artifact_added": {
             if (!next.artifacts[ev.artifactId]) {
@@ -274,8 +642,8 @@ export function missionReducer(state: MissionState, ev: MissionEvent): MissionSt
                     raisedAt: ev.ts,
                 },
             };
-            return pushLog(next, {
-                seq: ev.seq, ts: ev.ts, kind: "log", level: "warn",
+            return pushEventLog(next, ev, {
+                seq: ev.seq, ts: ev.ts, logCategory: publicLogCategoryFromEvent(ev), kind: "log", level: "warn",
                 agentId: ev.agentId,
                 message: `Approval required: ${ev.summary}`,
             });
@@ -292,8 +660,8 @@ export function missionReducer(state: MissionState, ev: MissionEvent): MissionSt
                     },
                 };
             }
-            return pushLog(next, {
-                seq: ev.seq, ts: ev.ts, kind: "log", level: "info",
+            return pushEventLog(next, ev, {
+                seq: ev.seq, ts: ev.ts, logCategory: publicLogCategoryFromEvent(ev), kind: "log", level: "info",
                 message: `Approval ${ev.approvalId}: ${ev.action}`,
             });
         }
@@ -304,8 +672,8 @@ export function missionReducer(state: MissionState, ev: MissionEvent): MissionSt
             next.jobStatus = ev.status;
             next.totalDuration = ev.totalDuration;
             next.terminalType = ev.type;
-            return pushLog(next, {
-                seq: ev.seq, ts: ev.ts, kind: "log",
+            return pushEventLog(next, ev, {
+                seq: ev.seq, ts: ev.ts, logCategory: publicLogCategoryFromEvent(ev), kind: "log",
                 level: ev.type === "job_complete" ? "info" : "warn",
                 message:
                     ev.type === "job_complete" ? `Run complete (${ev.totalDuration ?? "?"})`

@@ -17,6 +17,7 @@ import {
 import type { Plan, Team, TeamNode, TeamPattern } from "./plan/types";
 import { TaskPromptRecap } from "./TaskPromptRecap";
 import { OrchCanvas, naturalCanvasSize, agentKind, agentIcon, formatRole } from "./team/OrchCanvas";
+import { visibleTeam } from "./team/teamVisibility";
 import { CompareArchitecturesModal } from "./CompareArchitecturesModal";
 
 /**
@@ -159,8 +160,8 @@ function useCanvasFit(
 const PATTERN_META: Record<TeamPattern, { label: string; headline: (n: number) => string; subtitle: string }> = {
     supervisor: {
         label: "Supervisor pattern",
-        headline: (n) => n <= 1 ? "A single orchestrator." : `A supervisor with ${n - 1} specialist${n - 1 === 1 ? "" : "s"}.`,
-        subtitle: "One orchestrator coordinates the domain agents. Regenerate, swap agents, or inspect any node before anything runs.",
+        headline: (n) => n <= 1 ? "A focused specialist." : `A coordinated team of ${n} specialist${n === 1 ? "" : "s"}.`,
+        subtitle: "Specialists stay visible; lifecycle, recovery, and routing are coordinated behind the scenes.",
     },
     sequential: {
         label: "Sequential pipeline",
@@ -185,7 +186,7 @@ const PATTERN_META: Record<TeamPattern, { label: string; headline: (n: number) =
     mixed: {
         label: "Mixed architecture",
         headline: (n) => `A composed team of ${n} agents.`,
-        subtitle: "A top-level supervisor delegates to sub-teams that each use the pattern that fits their sub-task.",
+        subtitle: "Specialist sub-teams use the pattern that fits each sub-task, with internal orchestration handling routing and recovery.",
     },
 };
 
@@ -301,7 +302,7 @@ export function Step2View({
     // the canvas at the floor and let the wrapper scroll horizontally —
     // panning beats scaling on small viewports.
     const canvasWrapRef = useRef<HTMLDivElement | null>(null);
-    const rawTeam: Team | null = plan?.team ?? null;
+    const rawTeam: Team | null = plan?.team ? visibleTeam(plan.team) : null;
 
     // Resolve workspace GUIDs appearing in node role strings to their
     // human-readable names before rendering. The backend sometimes
@@ -362,6 +363,7 @@ export function Step2View({
     const pattern = (team?.pattern || "supervisor") as TeamPattern;
     const meta = PATTERN_META[pattern] || PATTERN_META.supervisor;
     const agentCount = team?.nodes.length || 0;
+    const workerCount = team ? Math.max(0, team.nodes.length - 1) : 0;
     // Count unique unordered endpoint pairs rather than raw edges, so
     // a delegate (A→B) + report (B→A) round-trip reports as ONE
     // connection — matching what the canvas actually renders after
@@ -563,9 +565,10 @@ export function Step2View({
 
     // Click-drag panning — mutates the transform pan directly so the
     // cursor stays glued to the world point under it while dragging.
+    // Always enabled so users can grab-and-drag at any zoom level.
     useEffect(() => {
         const el = canvasScrollRef.current;
-        if (!el || !isInteractive) return undefined;
+        if (!el) return undefined;
         let down = false;
         let startX = 0, startY = 0, startPan = { x: 0, y: 0 };
         const onDown = (e: MouseEvent) => {
@@ -595,7 +598,7 @@ export function Step2View({
             window.removeEventListener("mousemove", onMove);
             window.removeEventListener("mouseup", onUp);
         };
-    }, [isInteractive, pan]);
+    }, [pan]);
 
     // "Compare architectures" modal state.
     const [compareOpen, setCompareOpen] = useState(false);
@@ -614,9 +617,7 @@ export function Step2View({
         ? LOADING_STATUSES[statusIndex]
         : meta.subtitle;
 
-    const orchestrator = team?.nodes.find((n) => n.id === "orchestrator") || team?.nodes[0];
-    const workers = team ? team.nodes.filter((n) => n.id !== orchestrator?.id) : [];
-    const orderedRoles = orchestrator && team ? [orchestrator, ...workers] : [];
+    const orderedRoles = team?.nodes ?? [];
 
     return (
         <section className="mc-review mc-step2" aria-labelledby="mc-step2-title" aria-busy={loading}>
@@ -837,9 +838,6 @@ export function Step2View({
 
                 <aside className="mc-sidebar">
                     <div>
-                        <div className="mc-sidebar__eyebrow">
-                            {(t("Review_Eyebrow") || "Agents in this run")}
-                        </div>
                         <h3 className="mc-section-title mc-sidebar__h2">
                             {t("Review_Roles") || "Roles & handoffs"}
                         </h3>
@@ -855,7 +853,7 @@ export function Step2View({
                             ? Array.from({ length: 4 }).map((_, i) => <RoleCardSkeleton key={i} delay={i * 120} />)
                             : orderedRoles.map((n) => {
                                 const kind = agentKind(n.agent, n.id);
-                                const summary = n.summary || roleSummary(n, team, workers.length);
+                                const summary = n.summary || roleSummary(n, team, workerCount);
                                 return (
                                 <article
                                     key={n.id}
@@ -929,34 +927,68 @@ export function Step2View({
 /* ── Helpers & skeletons ─────────────────────────────────────── */
 
 /**
- * Render a natural-language blurb describing what an agent does in the
- * current run — the paragraph shown under each role card in the
- * Step 2 sidebar. When the backend supplies ``TeamNode.summary`` we
- * use that directly; this fallback keeps the design-accurate prose
- * shape even for legacy plans that don't include a summary.
+ * Render a one-liner describing the agent's **connections and skills**
+ * — the information that the graph shows visually but the sidebar
+ * expresses in words.
+ *
+ * The role card header already shows the role text (what the agent
+ * does), so the summary must NOT repeat it. Instead it answers:
+ *   "Who feeds this agent? What does it hand off to? What skills?"
  */
 function roleSummary(node: TeamNode, team: Team | null, workerCount: number): string {
     if (!team) return "";
-    const isOrchestrator = node.id === "orchestrator";
-    if (isOrchestrator) {
-        const n = Math.max(1, workerCount);
-        const workstreams = n === 1 ? "the workstream" : `${n} workstreams`;
-        return `Splits the task into ${workstreams}, delegates each, and gates approvals to you.`;
-    }
+
+    // Incoming edges (who sends work to this agent)
+    const inbound = team.edges
+        .filter((e) => e.to === node.id)
+        .map((e) => {
+            const src = team.nodes.find((x) => x.id === e.from);
+            return { agent: src?.agent || e.from, kind: e.kind };
+        });
+
+    // Outgoing edges (who this agent hands off to)
     const outbound = team.edges
-        .filter((e) => e.from === node.id && e.kind !== "report")
-        .map((e) => team.nodes.find((x) => x.id === e.to)?.agent)
-        .filter((x): x is string => Boolean(x));
-    // Normalize the role text: backend often supplies it in uppercase
-    // with a trailing period (display-friendly for the node card's
-    // eyebrow line, but awkward when spliced into a sentence). Strip
-    // both so we produce "Handles transform the data, then hands off…"
-    // instead of "Handles TRANSFORM THE DATA. for this run."
-    const role = node.role.toLowerCase().replace(/[.!?\s]+$/, "").trim();
-    const handoffClause = outbound.length > 0
-        ? `, then hands off to ${outbound.join(" and ")}.`
-        : ".";
-    return `Handles ${role}${handoffClause}`;
+        .filter((e) => e.from === node.id)
+        .map((e) => {
+            const tgt = team.nodes.find((x) => x.id === e.to);
+            return { agent: tgt?.agent || e.to, kind: e.kind };
+        });
+
+    // Skills selected for this slot
+    const skills = node.skills || [];
+
+    const parts: string[] = [];
+
+    // Connection description
+    const receivesFrom = inbound.filter((e) => e.kind === "delegate" || e.kind === "report");
+    if (receivesFrom.length > 0) {
+        parts.push(`Receives from ${receivesFrom.map((e) => e.agent).join(", ")}`);
+    }
+    const handsTo = outbound.filter((e) => e.kind !== "report");
+    const reportsTo = outbound.filter((e) => e.kind === "report");
+    if (handsTo.length > 0) {
+        parts.push(`hands off to ${handsTo.map((e) => e.agent).join(", ")}`);
+    }
+    if (reportsTo.length > 0) {
+        parts.push(`reports to ${reportsTo.map((e) => e.agent).join(", ")}`);
+    }
+    if (inbound.length === 0 && outbound.length === 0) {
+        parts.push("Works independently");
+    }
+
+    // Skills line (only if we have selected skills)
+    if (skills.length > 0) {
+        const MAX_SHOW = 3;
+        const shown = skills.slice(0, MAX_SHOW).join(", ");
+        const overflow = skills.length > MAX_SHOW ? ` +${skills.length - MAX_SHOW} more` : "";
+        parts.push(`using ${shown}${overflow}`);
+    }
+
+    if (parts.length === 0) return "";
+
+    // Join: first part capitalised, rest lower, end with period
+    const sentence = parts.join("; ");
+    return sentence.charAt(0).toUpperCase() + sentence.slice(1) + ".";
 }
 
 function RoleCardSkeleton({ delay = 0 }: { delay?: number }) {
@@ -980,6 +1012,8 @@ function CanvasSkeleton({ canvasWidth }: { canvasWidth: number }) {
     const W = canvasWidth;
     const H = 480;
     const NODE_W = 200;
+    const NODE_H = 56;            // skeleton node: 10px pad + 32px avatar + 10px pad + border
+    const orchY = 40;
     const orchX = (W - NODE_W) / 2;
     const workerY = 320;
     const gutter = 32;
@@ -992,7 +1026,7 @@ function CanvasSkeleton({ canvasWidth }: { canvasWidth: number }) {
                 <svg className="mc-canvas__edges" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" aria-hidden="true">
                     {workerXs.map((wx, i) => {
                         const x1 = orchX + NODE_W / 2;
-                        const y1 = 40 + 110;
+                        const y1 = orchY + NODE_H;
                         const x2 = wx + NODE_W / 2;
                         const y2 = workerY;
                         const midY = (y1 + y2) / 2;
@@ -1006,7 +1040,7 @@ function CanvasSkeleton({ canvasWidth }: { canvasWidth: number }) {
                         );
                     })}
                 </svg>
-                <div className="mc-node mc-node--skeleton" data-state="planned" style={{ left: orchX, top: 40, width: NODE_W }}>
+                <div className="mc-node mc-node--skeleton" data-state="planned" style={{ left: orchX, top: orchY, width: NODE_W }}>
                     <div className="mc-node__head">
                         <span className="mc-skeleton mc-skeleton--avatar" />
                         <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4 }}>

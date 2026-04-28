@@ -1,0 +1,31 @@
+# ─────────────────────────────────────────────────────────────────────
+# agenthub-agent — ephemeral per-slot agent container
+# ─────────────────────────────────────────────────────────────────────
+# Minimal image: Python runtime + httpx for LLM calls + pydantic for
+# config parsing. No framework (no FastAPI, no uvicorn). The agent is
+# a CLI process, not a server.
+#
+# Build:   docker build -f Dockerfile.agent -t agenthub-agent:latest .
+# Run:     (spawned by ContainerSlotRunner — not run manually)
+# ─────────────────────────────────────────────────────────────────────
+
+FROM python:3.13-slim
+
+WORKDIR /app
+
+# Install minimal deps — no dev tools, no framework overhead
+RUN pip install --no-cache-dir \
+    httpx==0.28.* \
+    pydantic==2.* \
+    && rm -rf /root/.cache
+
+# Copy only the agent loop code — no orchestrator, no tool runtime,
+# no secrets, no config files
+COPY src/services/agenthub/agent/ /app/agent/
+
+# Non-root user for defense in depth
+RUN useradd -m -u 1001 agentuser
+USER agentuser
+
+# The agent reads SLOT_CONFIG from env and runs to completion
+ENTRYPOINT ["python", "-m", "agent"]

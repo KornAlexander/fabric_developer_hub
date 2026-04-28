@@ -124,6 +124,91 @@ async def test_fabric_list_items_without_filter(
     assert "?type=" not in url
 
 
+@pytest.mark.asyncio
+async def test_fabric_validate_workspace_capacity_reports_active(
+    monkeypatch: pytest.MonkeyPatch, fabric_token_env: None
+) -> None:
+    fake = FakeAsyncClient(
+        responses_by_method={
+            "GET": [
+                make_response(200, json_body={"id": "ws-1", "capacityId": "cap-1"}, text="{}"),
+                make_response(200, json_body={"value": [{"id": "cap-1", "displayName": "Cap", "state": "Active"}]}, text="{}"),
+            ]
+        }
+    )
+    install_fake_client(monkeypatch, fabric, fake)
+
+    result = await fabric.fabric_validate_workspace_capacity("ws-1")
+
+    parsed = json.loads(result)
+    assert parsed["status"] == "active"
+    assert parsed["capacityId"] == "cap-1"
+    assert fake.calls[0][1].endswith("/v1/workspaces/ws-1")
+    assert fake.calls[1][1].endswith("/v1/capacities")
+
+
+@pytest.mark.asyncio
+async def test_fabric_verify_report_renderable_returns_render_proof(
+    monkeypatch: pytest.MonkeyPatch, fabric_token_env: None
+) -> None:
+    fake = FakeAsyncClient(
+        responses_by_method={
+            "GET": [
+                make_response(200, json_body={"id": "report-1", "datasetId": "model-1"}, text="{}"),
+            ],
+            "POST": [
+                make_response(202, json_body={"id": "export-1", "status": "Succeeded"}, text="{}"),
+            ],
+        }
+    )
+    install_fake_client(monkeypatch, fabric, fake)
+
+    result = await fabric.fabric_verify_report_renderable("ws-1", "report-1", "model-1")
+
+    parsed = json.loads(result)
+    assert parsed["status"] == "rendered"
+    assert parsed["via"] == "powerbi_exportTo_pdf"
+    assert parsed["exportId"] == "export-1"
+    assert fake.calls[0][1].endswith("/groups/ws-1/reports/report-1")
+    assert fake.calls[1][1].endswith("/groups/ws-1/reports/report-1/ExportTo")
+
+
+@pytest.mark.asyncio
+async def test_fabric_verify_report_renderable_polls_accepted_export_status(
+    monkeypatch: pytest.MonkeyPatch, fabric_token_env: None
+) -> None:
+    async def no_sleep(_delay: float) -> None:
+        return None
+
+    monkeypatch.setattr(fabric.asyncio, "sleep", no_sleep)
+    fake = FakeAsyncClient(
+        responses_by_method={
+            "GET": [
+                make_response(200, json_body={"id": "report-1", "datasetId": "model-1"}, text="{}"),
+                make_response(
+                    202,
+                    json_body={"id": "export-1", "status": "Running"},
+                    text="{}",
+                    headers={"Retry-After": "1"},
+                ),
+                make_response(200, json_body={"id": "export-1", "status": "Succeeded"}, text="{}"),
+            ],
+            "POST": [
+                make_response(202, json_body={"id": "export-1", "status": "Running"}, text="{}", headers={"Retry-After": "1"}),
+            ],
+        }
+    )
+    install_fake_client(monkeypatch, fabric, fake)
+
+    result = await fabric.fabric_verify_report_renderable("ws-1", "report-1", "model-1")
+
+    parsed = json.loads(result)
+    assert parsed["status"] == "rendered"
+    assert parsed["via"] == "powerbi_exportTo_pdf"
+    assert parsed["exportId"] == "export-1"
+    assert fake.calls[2][1].endswith("/groups/ws-1/reports/report-1/exports/export-1")
+
+
 # ── _get_item_route_segment ─────────────────────────────────────────
 
 @pytest.mark.parametrize("item_type,expected", [
@@ -140,6 +225,42 @@ def test_get_item_route_segment(item_type: str, expected: str) -> None:
 # ── fabric_create_item ──────────────────────────────────────────────
 
 @pytest.mark.asyncio
+async def test_fabric_create_folder_root(
+    monkeypatch: pytest.MonkeyPatch, fabric_token_env: None
+) -> None:
+    fake = FakeAsyncClient(default_response=make_response(
+        201,
+        json_body={"id": "folder-1", "displayName": "E2E Run", "workspaceId": "ws-1"},
+    ))
+    install_fake_client(monkeypatch, fabric, fake)
+
+    result = await fabric.fabric_create_folder("ws-1", "E2E Run")
+
+    parsed = json.loads(result)
+    assert parsed["id"] == "folder-1"
+    method, url, kwargs = fake.calls[0]
+    assert method == "POST"
+    assert url.endswith("/workspaces/ws-1/folders")
+    assert kwargs["json"] == {"displayName": "E2E Run"}
+
+
+@pytest.mark.asyncio
+async def test_fabric_create_folder_with_parent(
+    monkeypatch: pytest.MonkeyPatch, fabric_token_env: None
+) -> None:
+    fake = FakeAsyncClient(default_response=make_response(
+        201,
+        json_body={"id": "folder-2", "displayName": "Child", "parentFolderId": "folder-1"},
+    ))
+    install_fake_client(monkeypatch, fabric, fake)
+
+    await fabric.fabric_create_folder("ws-1", "Child", parent_folder_id="folder-1")
+
+    _, _, kwargs = fake.calls[0]
+    assert kwargs["json"] == {"displayName": "Child", "parentFolderId": "folder-1"}
+
+
+@pytest.mark.asyncio
 async def test_fabric_create_item_with_description(
     monkeypatch: pytest.MonkeyPatch, fabric_token_env: None
 ) -> None:
@@ -150,7 +271,7 @@ async def test_fabric_create_item_with_description(
     install_fake_client(monkeypatch, fabric, fake)
 
     result = await fabric.fabric_create_item(
-        "ws-1", "New LH", "Lakehouse", description="my desc"
+        "ws-1", "New LH", "Lakehouse", description="my desc", folder_id="folder-1"
     )
 
     parsed = json.loads(result)
@@ -158,7 +279,12 @@ async def test_fabric_create_item_with_description(
     assert "hostPath" in parsed
     method, _, kwargs = fake.calls[0]
     assert method == "POST"
-    assert kwargs["json"] == {"displayName": "New LH", "type": "Lakehouse", "description": "my desc"}
+    assert kwargs["json"] == {
+        "displayName": "New LH",
+        "type": "Lakehouse",
+        "description": "my desc",
+        "folderId": "folder-1",
+    }
 
 
 @pytest.mark.asyncio

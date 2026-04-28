@@ -166,6 +166,12 @@ class DeviceCodeResponse(BaseModel):
     device_code: str
     user_code: str
     verification_uri: str
+    # GitHub also returns a ``verification_uri_complete`` URL that has
+    # the user code pre-embedded. Opening *that* URL sends the user
+    # straight to the Authorize screen (one click) instead of a blank
+    # prompt where they must paste the code. The field is optional
+    # because older GitHub apps historically didn't return it.
+    verification_uri_complete: str | None = None
     expires_in: int
     interval: int
 
@@ -229,6 +235,7 @@ async def start_device_flow():
         device_code=data["device_code"],
         user_code=data["user_code"],
         verification_uri=data["verification_uri"],
+        verification_uri_complete=data.get("verification_uri_complete"),
         expires_in=data["expires_in"],
         interval=data["interval"],
     )
@@ -416,7 +423,16 @@ AGENTIC_REQUEST_TIMEOUT = 300  # 5 minutes total
 
 # Scopes for OBO token exchange
 _FABRIC_API_SCOPES = ["https://api.fabric.microsoft.com/.default"]
+_POWERBI_API_SCOPES = [
+    "https://analysis.windows.net/powerbi/api/Dataset.ReadWrite.All",
+    "https://analysis.windows.net/powerbi/api/Report.ReadWrite.All",
+]
 _ONELAKE_SCOPES = ["https://storage.azure.com/.default"]
+# Azure Management is intentionally not acquired in the default MCP token bundle.
+# Fabric inventory/report missions need Fabric, Power BI, and OneLake tokens only;
+# eagerly requesting ARM often triggers tenant consent/Conditional Access warnings
+# that look like mission failures even though the Fabric path can proceed.
+_AZURE_MANAGEMENT_SCOPES = ["https://management.azure.com/.default"]
 
 # Model to fall back to for tool-calling when the primary model doesn't support it
 TOOL_CALLING_FALLBACK_MODEL = "gpt-4o"
@@ -443,7 +459,7 @@ SYSTEM_PROMPT = (
 
 
 async def _acquire_mcp_tokens(fabric_token: str) -> dict[str, str] | None:
-    """Exchange the user's workload token for Fabric API + OneLake tokens via OBO.
+    """Exchange the user's workload token for Fabric API, Power BI API, and OneLake tokens via OBO.
 
     Wraps ``_do_acquire_mcp_tokens`` with a TTL cache + in-flight dedup
     so the 20-ish parallel workspace preload requests that fire on page
@@ -486,7 +502,7 @@ async def _acquire_mcp_tokens(fabric_token: str) -> dict[str, str] | None:
 
 
 async def _do_acquire_mcp_tokens(fabric_token: str) -> dict[str, str] | None:
-    """Exchange the user's workload token for Fabric API + OneLake tokens via OBO.
+    """Exchange the user's workload token for Fabric API, Power BI API, and OneLake tokens via OBO.
 
     ``AuthenticationService.get_access_token_on_behalf_of`` already offloads
     the synchronous MSAL call via ``asyncio.to_thread``, so we just fan the
@@ -543,10 +559,16 @@ async def _do_acquire_mcp_tokens(fabric_token: str) -> dict[str, str] | None:
 
     results = await asyncio.gather(
         _obo(_FABRIC_API_SCOPES, "Fabric API"),
+        _obo(_POWERBI_API_SCOPES, "Power BI API"),
         _obo(_ONELAKE_SCOPES, "OneLake"),
     )
     tokens: dict[str, str] = {}
-    label_to_key = {"Fabric API": "FABRIC_API_TOKEN", "OneLake": "ONELAKE_TOKEN"}
+    label_to_key = {
+        "Fabric API": "FABRIC_API_TOKEN",
+        "Power BI API": "POWERBI_API_TOKEN",
+        "OneLake": "ONELAKE_TOKEN",
+        "Azure Management": "AZURE_MANAGEMENT_TOKEN",
+    }
     for label, tok in results:
         if tok:
             tokens[label_to_key[label]] = tok

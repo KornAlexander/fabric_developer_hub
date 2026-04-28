@@ -197,16 +197,68 @@ def test_log_audit_and_retrieve_in_chronological_order() -> None:
         "j-1", "agent-1", "fabric_list_workspaces", {}, "ok", user_id="u-1",
     )
     session_store.log_audit(
-        "j-1", "agent-1", "fabric_create_item", {"display_name": "lh"}, "created", user_id="u-1",
+        "j-1", "agent-1", "fabric_create_item",
+        {"display_name": "lh", "access_token": "secret-token-value"},
+        "created", user_id="u-1",
     )
     session_store.log_audit("j-2", None, None, None, "unrelated")
 
     rows = session_store.get_audit_log("j-1")
     assert len(rows) == 2
     assert [r["tool_name"] for r in rows] == ["fabric_list_workspaces", "fabric_create_item"]
+    assert [r["log_category"] for r in rows] == ["diagnostic", "diagnostic"]
     # tool_args is JSON-serialised
-    assert _json.loads(rows[1]["tool_args"]) == {"display_name": "lh"}
+    assert _json.loads(rows[1]["tool_args"]) == {"display_name": "lh", "access_token": "[redacted]"}
+
+
+def test_log_audit_coerces_non_public_category_to_diagnostic() -> None:
+    session_store.log_audit(
+        "j-1", "agent-1", "internal_tool", {"debug": "x"}, "hidden", log_category="trace",
+    )
+
+    rows = session_store.get_audit_log("j-1")
+    assert len(rows) == 1
+    assert rows[0]["log_category"] == "diagnostic"
 
 
 def test_get_audit_log_empty_when_no_entries() -> None:
     assert session_store.get_audit_log("never-logged") == []
+
+
+# ── Session summary aggregation ────────────────────────────────────
+
+
+def test_summarize_sessions_classifies_active_and_history_buckets() -> None:
+    session_store.create_session(_make_job("p", "u", JobStatus.PLANNED))
+    session_store.create_session(_make_job("a", "u", JobStatus.APPROVED))
+    session_store.create_session(_make_job("r", "u", JobStatus.RUNNING))
+    session_store.create_session(_make_job("f", "u", JobStatus.FAILED))
+    session_store.create_session(_make_job("c", "u", JobStatus.COMPLETED))
+    session_store.create_session(_make_job("x", "u", JobStatus.CANCELLED))
+
+    summary = session_store.summarize_sessions("u")
+
+    assert summary["total"] == 6
+    assert summary["running"] == 1
+    assert summary["waiting"] == 2  # planned + approved
+    assert summary["failed"] == 1
+    assert summary["completed"] == 1
+    assert summary["cancelled"] == 1
+    assert summary["active_total"] == 4
+    assert summary["history_total"] == 2
+
+
+def test_summarize_sessions_isolated_per_user() -> None:
+    session_store.create_session(_make_job("u1-running", "u1", JobStatus.RUNNING))
+    session_store.create_session(_make_job("u2-failed", "u2", JobStatus.FAILED))
+
+    s1 = session_store.summarize_sessions("u1")
+    s2 = session_store.summarize_sessions("u2")
+
+    assert s1["total"] == 1
+    assert s1["running"] == 1
+    assert s1["failed"] == 0
+
+    assert s2["total"] == 1
+    assert s2["running"] == 0
+    assert s2["failed"] == 1

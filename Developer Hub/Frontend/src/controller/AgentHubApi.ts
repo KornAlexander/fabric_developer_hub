@@ -28,6 +28,34 @@ function headers(opts: FetchOpts): Record<string, string> {
     return h;
 }
 
+async function readHttpErrorDetail(res: Response): Promise<string> {
+    let raw = "";
+    try {
+        raw = await res.text();
+    } catch {
+        return "";
+    }
+    if (!raw) return "";
+    try {
+        const parsed = JSON.parse(raw) as { detail?: unknown };
+        const detail = parsed?.detail;
+        if (typeof detail === "string") {
+            return detail;
+        }
+        if (detail && typeof detail === "object") {
+            const msg = (detail as { message?: unknown }).message;
+            const reason = (detail as { reason?: unknown }).reason;
+            const code = (detail as { code?: unknown }).code;
+            if (typeof msg === "string" && msg) return msg;
+            if (typeof reason === "string" && reason) return reason;
+            if (typeof code === "string" && code) return code;
+        }
+    } catch {
+        // fall through to raw body
+    }
+    return raw;
+}
+
 // ── Sessions ────────────────────────────────────────────────────────
 
 /** A file attached to a prompt. Content shape depends on kind:
@@ -109,8 +137,49 @@ export async function listSessions(
     return res.json();
 }
 
+export interface SessionSummary {
+    total: number;
+    active_total: number;
+    history_total: number;
+    running: number;
+    waiting: number;
+    failed: number;
+    completed: number;
+    cancelled: number;
+    other_active: number;
+    by_status: Record<string, number>;
+}
+
+export async function getSessionSummary(opts: FetchOpts): Promise<SessionSummary> {
+    const res = await fetch(`${BE}/api/sessions/summary`, { headers: headers(opts) });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+}
+
 export async function getSession(sessionId: string, opts: FetchOpts) {
     const res = await fetch(`${BE}/api/sessions/${sessionId}`, { headers: headers(opts) });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+}
+
+export interface SessionStatusResponse {
+    id: string;
+    status: string;
+    workspaceId: string;
+    architecture?: string | null;
+    slotCount: number;
+    agentCount: number;
+    agentStatuses: Record<string, number>;
+    phaseCount: number;
+    actionCount: number;
+    createdAt?: string | null;
+    startedAt?: string | null;
+    completedAt?: string | null;
+    digest: string;
+}
+
+export async function getSessionStatus(sessionId: string, opts: FetchOpts): Promise<SessionStatusResponse> {
+    const res = await fetch(`${BE}/api/sessions/${sessionId}/status`, { headers: headers(opts) });
     if (!res.ok) throw new Error(await res.text());
     return res.json();
 }
@@ -131,8 +200,122 @@ export async function sendMessage(sessionId: string, message: string, targetAgen
     return res.json();
 }
 
-export function subscribeToSessionEvents(sessionId: string): EventSource {
-    return new EventSource(`${BE}/api/sessions/${sessionId}/events`);
+/**
+ * Subscribe to session events using fetch-based SSE streaming.
+ *
+ * The browser-native ``EventSource`` API cannot send custom headers
+ * and is blocked by the Fabric workload iframe sandbox. This
+ * implementation uses ``fetch()`` with a ``ReadableStream`` reader to
+ * consume the same ``text/event-stream`` response through the
+ * standard authenticated fetch path that already works inside the
+ * sandboxed iframe.
+ *
+ * Returns an ``AbortController`` so the caller can cancel the stream,
+ * and accepts callbacks for each parsed SSE event.
+ */
+export function subscribeToSessionEventsFetch(
+    sessionId: string,
+    opts: FetchOpts & { lastEventId?: string },
+    callbacks: {
+        onEvent: (data: unknown) => void;
+        onOpen?: () => void;
+        onError?: (err: unknown) => void;
+        onClose?: () => void;
+    },
+): AbortController {
+    const controller = new AbortController();
+    let url = `${BE}/api/sessions/${sessionId}/events`;
+    if (opts.lastEventId) {
+        url += `?lastEventId=${encodeURIComponent(opts.lastEventId)}`;
+    }
+
+    (async () => {
+        try {
+            // SSE is a GET with no body — use minimal headers to avoid
+            // triggering a CORS preflight. Content-Type is not needed
+            // (no request body) and adding it would make this a non-simple
+            // request that requires a preflight OPTIONS check, which may
+            // fail inside the Fabric iframe sandbox.
+            const sseHeaders: Record<string, string> = {};
+            // Intentionally do not forward the GitHub token as Authorization
+            // here: this endpoint expects a Fabric token identity.
+            if (opts.fabricToken) sseHeaders['X-Fabric-Token'] = `Bearer ${opts.fabricToken}`;
+            const rid = opts.requestId ?? currentRequestId();
+            if (rid) sseHeaders['X-Request-ID'] = rid;
+
+            const res = await fetch(url, {
+                headers: sseHeaders,
+                signal: controller.signal,
+            });
+            if (!res.ok) {
+                const detail = (await readHttpErrorDetail(res)).replace(/\s+/g, " ").trim();
+                const suffix = detail ? ` (${detail.slice(0, 240)})` : "";
+                callbacks.onError?.(new Error(`SSE fetch ${res.status}: ${res.statusText}${suffix}`));
+                return;
+            }
+            callbacks.onOpen?.();
+
+            const reader = res.body?.getReader();
+            if (!reader) {
+                callbacks.onError?.(new Error('Response body is not readable'));
+                return;
+            }
+
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+
+                // SSE frames are delimited by double newlines
+                const frames = buffer.split('\n\n');
+                // Keep the last (possibly incomplete) chunk in the buffer
+                buffer = frames.pop() || '';
+
+                for (const frame of frames) {
+                    if (!frame.trim()) continue;
+                    // Parse SSE: extract "data:" lines
+                    let dataStr = '';
+                    for (const line of frame.split('\n')) {
+                        if (line.startsWith('data: ')) {
+                            dataStr += line.slice(6);
+                        } else if (line.startsWith('data:')) {
+                            dataStr += line.slice(5);
+                        }
+                    }
+                    if (dataStr) {
+                        try {
+                            callbacks.onEvent(JSON.parse(dataStr));
+                        } catch {
+                            /* ignore malformed JSON */
+                        }
+                    }
+                }
+            }
+            callbacks.onClose?.();
+        } catch (err) {
+            if ((err as DOMException)?.name === 'AbortError') {
+                callbacks.onClose?.();
+                return;
+            }
+            callbacks.onError?.(err);
+        }
+    })();
+
+    return controller;
+}
+
+// Legacy EventSource-based subscription — kept as fallback for
+// environments where fetch streaming isn't available.
+export function subscribeToSessionEvents(sessionId: string, opts?: { fabricToken?: string }): EventSource {
+    let url = `${BE}/api/sessions/${sessionId}/events`;
+    if (opts?.fabricToken) {
+        url += `?token=${encodeURIComponent(opts.fabricToken)}`;
+    }
+    return new EventSource(url);
 }
 
 // ── Orchestration ───────────────────────────────────────────────────

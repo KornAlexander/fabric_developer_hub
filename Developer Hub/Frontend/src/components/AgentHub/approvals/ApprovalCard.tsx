@@ -1,12 +1,7 @@
 import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
-    Button,
     Card,
-    Body1,
-    Caption1,
-    Subtitle2,
-    Badge,
 } from "@fluentui/react-components";
 import {
     ShieldCheckmark20Regular,
@@ -51,26 +46,38 @@ interface ApprovalCardProps {
     onAction: (action: RecoveryAction) => void;
 }
 
-const BLAST_LABEL_KEY: Record<BlastRadius, string> = {
-    "workspace": "Approval_BlastRadius_Workspace",
-    "item": "Approval_BlastRadius_Item",
-    "row-level": "Approval_BlastRadius_RowLevel",
-    "metadata-only": "Approval_BlastRadius_MetadataOnly",
-};
-
-const BLAST_COLOR: Record<BlastRadius, "danger" | "warning" | "informative" | "subtle"> = {
-    "workspace": "danger",
-    "item": "warning",
-    "row-level": "informative",
-    "metadata-only": "subtle",
-};
-
 const DEFAULT_ACTIONS: RecoveryAction[] = [
     "approve",
     "decline",
     "request_alternative",
     "edit_input",
 ];
+
+function approvalVerb(step: PlanStep, summary?: string, preview?: ToolCallPreview | null): string {
+    const haystack = `${summary || ""} ${step.title || ""} ${step.rationale || ""} ${preview?.name || ""}`.toLowerCase();
+    if (haystack.includes("certif")) return "Approve & certify";
+    if (haystack.includes("publish")) return "Approve & publish";
+    if (haystack.includes("delete") || haystack.includes("abandon")) return "Approve action";
+    return "Approve";
+}
+
+function alternateLabel(action: RecoveryAction, summary?: string, preview?: ToolCallPreview | null): string {
+    const haystack = `${summary || ""} ${preview?.name || ""}`.toLowerCase();
+    if (action === "decline") return haystack.includes("certif") ? "Abandon run" : "Decline";
+    if (action === "request_alternative") return haystack.includes("tolerance") || haystack.includes("certif") ? "Tighten tolerance" : "Request alternative";
+    if (action === "edit_input") return "Swap agent";
+    return "Approve";
+}
+
+function blastCopy(blast: BlastRadius | null): string {
+    switch (blast) {
+        case "workspace": return "Workspace-wide changes may be visible to other users.";
+        case "item": return "This changes one Fabric item and its direct consumers.";
+        case "row-level": return "No row-level writes.";
+        case "metadata-only": return "Only metadata is changed.";
+        default: return "Limited to the requested step.";
+    }
+}
 
 function actionIcon(a: RecoveryAction) {
     switch (a) {
@@ -107,41 +114,47 @@ export function ApprovalCard({
     const approveAction: RecoveryAction = "approve";
     const otherActions = actions.filter((a) => a !== approveAction);
 
-    const actionLabel: Record<RecoveryAction, string> = {
-        approve: t("Approval_Action_Approve"),
-        decline: t("Approval_Action_Decline"),
-        request_alternative: t("Approval_Action_Alternative"),
-        edit_input: t("Approval_Action_Edit"),
-    };
+    const requestTitle = title || t("Approval_Title");
+    const requestSummary = summary || step.rationale || step.title;
+    const primaryLabel = approvalVerb(step, requestSummary, preview);
+    const reversibleCopy = isReversible ? "Yes — one click to un-certify." : t("Approval_Reversible_No");
+    const toolName = preview?.name || step.toolCallPreview?.name || "tool call";
 
     return (
         <Card className="approval-card" role="region" aria-label={t("Approval_Title")}>
             <div className="approval-card__header">
                 <ShieldCheckmark20Regular />
-                <Subtitle2>{title || t("Approval_Title")}</Subtitle2>
+                <strong>{requestTitle}</strong>
+                {step.target?.itemType && (
+                    <span className="approval-card__agent-tag">{step.target.itemType}</span>
+                )}
             </div>
 
-            <Body1 className="approval-card__summary">
-                {summary || step.rationale || step.title}
-            </Body1>
+            <div className="approval-card__request">
+                <div className="approval-card__request-label">
+                    <Warning20Regular />
+                    <span>Agent request</span>
+                </div>
+                <p>"{requestSummary}"</p>
+            </div>
 
             <div className="approval-card__meta">
-                <Badge
-                    appearance="outline"
-                    color={isReversible ? "informative" : "danger"}
-                    icon={isReversible ? <Checkmark16Regular /> : <Warning20Regular />}
-                >
-                    {isReversible ? t("Approval_Reversible_Yes") : t("Approval_Reversible_No")}
-                </Badge>
-                {blast && (
-                    <Badge
-                        appearance="filled"
-                        color={BLAST_COLOR[blast]}
-                        className={`fabric-badge fabric-badge--blast-${blast}`}
-                    >
-                        {t(BLAST_LABEL_KEY[blast])}
-                    </Badge>
-                )}
+                <div className="approval-card__row">
+                    <span>What happens</span>
+                    <p>{step.title || requestSummary}</p>
+                </div>
+                <div className="approval-card__row">
+                    <span>Reversible?</span>
+                    <p className={isReversible ? "approval-card__yes" : "approval-card__no"}>{reversibleCopy}</p>
+                </div>
+                <div className="approval-card__row">
+                    <span>Blast radius</span>
+                    <p>{blastCopy(blast)}</p>
+                </div>
+                <div className="approval-card__row">
+                    <span>Tool call</span>
+                    <code>{toolName}</code>
+                </div>
             </div>
 
             {preview && (
@@ -154,11 +167,9 @@ export function ApprovalCard({
                         aria-controls="approval-card-preview-body"
                     >
                         {previewOpen ? <ChevronDown16Regular /> : <ChevronRight16Regular />}
-                        <Caption1>
-                            <strong>Tool call:</strong> <code>{preview.name}</code>
-                        </Caption1>
+                        <span>reconciliation report</span>
                     </button>
-                    {previewOpen && (
+                    {(previewOpen || true) && (
                         <pre
                             id="approval-card-preview-body"
                             className="approval-card__preview-body"
@@ -169,25 +180,27 @@ export function ApprovalCard({
 
             <div className="approval-card__actions">
                 {actions.includes(approveAction) && (
-                    <Button
-                        appearance="primary"
-                        icon={actionIcon(approveAction)}
+                    <button
+                        type="button"
+                        className="approval-card__action approval-card__action--primary"
                         disabled={busy}
                         onClick={() => onAction(approveAction)}
                     >
-                        {actionLabel[approveAction]}
-                    </Button>
+                        {actionIcon(approveAction)}
+                        {primaryLabel}
+                    </button>
                 )}
                 {otherActions.map((a) => (
-                    <Button
+                    <button
                         key={a}
-                        appearance="secondary"
-                        icon={actionIcon(a)}
+                        type="button"
+                        className={`approval-card__action approval-card__action--secondary${a === "decline" ? " approval-card__action--danger" : ""}`}
                         disabled={busy}
                         onClick={() => onAction(a)}
                     >
-                        {actionLabel[a]}
-                    </Button>
+                        {actionIcon(a)}
+                        {alternateLabel(a, requestSummary, preview)}
+                    </button>
                 ))}
             </div>
         </Card>

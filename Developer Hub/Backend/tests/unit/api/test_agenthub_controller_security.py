@@ -192,3 +192,48 @@ def test_list_workspaces_ok_returns_simplified_shape(
             assert key in w, f"missing {key} in {w}"
     assert body["source"] == "refreshed"
     assert body["cached_at"] is not None
+
+
+def test_query_semantic_model_uses_backend_obo_and_mcp_policy(
+    isolated_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def _fake_acquire(_token: str) -> dict:
+        return {
+            "FABRIC_API_TOKEN": "fab-tok",
+            "POWERBI_API_TOKEN": "pbi-tok",
+            "ONELAKE_TOKEN": "ol-tok",
+        }
+
+    monkeypatch.setattr(
+        "api.github_chat_controller._acquire_mcp_tokens", _fake_acquire,
+    )
+
+    fake_manager = AsyncMock()
+    fake_manager.call_tool.return_value = '[{"[ItemCount]": 3}]'
+    monkeypatch.setattr(
+        "api.github_chat_controller._mcp_manager", fake_manager, raising=False,
+    )
+
+    resp = isolated_client.post(
+        "/api/workspaces/ws-1/semantic-models/ds-1/query",
+        headers={"X-Fabric-Token": "Bearer test"},
+        json={"query": 'EVALUATE ROW("ItemCount", [Item Count])'},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == {"rows": [{"[ItemCount]": 3}]}
+    fake_manager.call_tool.assert_awaited_once_with(
+        "sl_evaluate_dax",
+        {
+            "workspace_id": "ws-1",
+            "dataset_id": "ds-1",
+            "dax_query": 'EVALUATE ROW("ItemCount", [Item Count])',
+        },
+        {
+            "FABRIC_API_TOKEN": "fab-tok",
+            "POWERBI_API_TOKEN": "pbi-tok",
+            "ONELAKE_TOKEN": "ol-tok",
+        },
+        allowed_tools={"sl_evaluate_dax"},
+        workspace_id="ws-1",
+    )

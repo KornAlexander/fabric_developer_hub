@@ -7,7 +7,7 @@ product aligns with:
   when there is any overlap)
 * https://github.com/patrikborosch/AnalyticsPlatformAgents
 
-Agents (7):
+Agents (6):
 
 * ``fabric-admin``          → FabricAdmin (skills-for-fabric)
 * ``fabric-app-dev``        → FabricAppDev (skills-for-fabric)
@@ -15,7 +15,12 @@ Agents (7):
 * ``architect``             → Architect (AnalyticsPlatformAgents)
 * ``modeler``               → Modeler (AnalyticsPlatformAgents)
 * ``creator``               → Creator (AnalyticsPlatformAgents)
-* ``orchestrator``          → Orchestrator (AnalyticsPlatformAgents)
+
+The Orchestrator is deliberately not a registered agent template. It is
+an internal control-plane service implemented by ``OrchestratorEngine``:
+it manages agent lifecycle, recovery decisions, cancellation, and
+dynamic recovery-agent attachment without appearing in the public agent
+catalog or composition slots.
 
 Skills (13) — the ten from skills-for-fabric plus three unique extras
 from AnalyticsPlatformAgents. The skill ids mirror the upstream folder
@@ -26,6 +31,7 @@ from domain.models.agent_models import AgentBoundaries, AgentCategory, AgentTemp
 from services.agenthub.catalog_loader import load_catalog
 
 AGENT_TEMPLATES: dict[str, AgentTemplate] = {}
+GENERALIST_AGENT_ID = "generalist"
 
 
 def _register(t: AgentTemplate) -> None:
@@ -67,6 +73,68 @@ def _attach_skills(t: AgentTemplate) -> AgentTemplate:
 
 
 # ── FabricAdmin ─────────────────────────────────────────────────────
+
+_register(
+    AgentTemplate(
+        id=GENERALIST_AGENT_ID,
+        name="AgentHubGeneralist",
+        display_name="AgentHub Generalist",
+        category=AgentCategory.ENGINEERING,
+        description=(
+            "Internal mission generalist that can inspect Fabric state with bootstrap MCP tools "
+            "and delegate newly discovered work to specialist agents."
+        ),
+        boundaries=AgentBoundaries(
+            owns=[
+                "mission discovery and live task graph evolution",
+                "choosing whether to act directly or delegate to a specialist",
+                "summarizing follow-up tasks for runtime specialist spawning",
+            ],
+            does_not_own=[
+                "public agent catalog membership",
+                "specialist branding in the frontend",
+            ],
+            hands_off_to=[
+                "fabric-admin",
+                "fabric-data-engineer",
+                "fabric-app-dev",
+                "architect",
+                "modeler",
+                "creator",
+            ],
+            pick_when=[
+                "every dynamic mission starts here so discovery can happen before specialist selection",
+            ],
+            skip_when=[
+                "fixed legacy orchestration is explicitly enabled by environment override",
+            ],
+        ),
+        tags=["Internal", "Generalist", "Dynamic orchestration", "MCP"],
+        system_prompt=(
+            "You are the internal AgentHub Generalist. You are a runtime mission controller, "
+            "not a public specialist. Start with discovery, use the available MCP tools directly "
+            "when that is the quickest safe path, and create precise follow-up tasks when a "
+            "specialist should take over. Keep all operations inside the selected workspace. "
+            "Before declaring any create, publish, or modify task successful, run the most direct "
+            "user-observable verification loop available. For Fabric and Power BI deliverables, "
+            "verify both data queryability and report open/render/export readiness; do not treat "
+            "item creation alone as success. Prefer delegating final Fabric acceptance checks to "
+            "FabricVerifier. If verification fails, use the verifier's evidence to create precise "
+            "repair tasks for the owning builder/modeler/admin agent, then verify again before "
+            "closing the mission. If a repair round produces low or no observable improvement, stop "
+            "the loop, name the concrete cause, and report the mission as blocked, failed, or partial "
+            "depending on whether it is missing a tool/permission, repeating the same approach, or has "
+            "a broken artifact that cannot be safely fixed. If repair is impossible, report the mission "
+            "as blocked or partial and clean up or clearly identify any broken artifacts. Never present yourself as a "
+            "user-facing catalog agent."
+        ),
+        available_tools=[],
+        default_access_level="write",
+        icon="OrchestratorIcon",
+        version="1.0.0",
+        is_internal=True,
+    )
+)
 
 _register(
     AgentTemplate(
@@ -287,24 +355,26 @@ _register(
         name="Modeler",
         display_name="Modeler",
         category=AgentCategory.ENGINEERING,
-        description="Fabric data modeler — picks Lakehouse / Warehouse / Eventhouse per layer and writes DDL.",
+        description="Fabric data modeler — picks Fabric item shapes, writes DDL, and reviews report/model quality.",
         boundaries=AgentBoundaries(
             owns=[
                 "translating an architecture spec into a Fabric item plan",
                 "picking Lakehouse vs Warehouse vs Eventhouse per layer",
                 "table DDL (Delta, T-SQL, KQL)",
                 "naming / Shortcut / partitioning / retention policies",
+                "Power BI report visual-quality rubric, IBCS review, and presentation-readiness critique",
                 "tagging each deliverable with the Fabric agent that will build it",
             ],
             does_not_own=[
                 "high-level architecture -> architect",
                 "actual item creation -> fabric-data-engineer",
-                "Power BI semantic model or report authoring -> fabric-data-engineer",
+                "Power BI semantic model or report implementation -> fabric-data-engineer",
             ],
             hands_off_to=["fabric-data-engineer", "creator"],
             pick_when=[
                 "an Architect spec is being translated into a Fabric build",
                 "the stack is non-trivial enough that picking the right Fabric item types deserves a dedicated step",
+                "a report, dashboard, or semantic model needs visual/design quality review before delivery",
             ],
             skip_when=[
                 "the task touches a single workload or a known Fabric item shape",
@@ -320,7 +390,10 @@ _register(
             "(Spark/Delta types for Lakehouse, T-SQL for Warehouse, "
             "KQL for Eventhouse), Notebook / Stored Procedure / "
             "Pipeline specs, naming conventions, and cross-workspace "
-            "access patterns. Use Delta Time Travel for rollback, "
+            "access patterns. For reports and dashboards, critique "
+            "visual clarity, metric semantics, IBCS/style hygiene, and "
+            "presentation readiness without taking over implementation. "
+            "Use Delta Time Travel for rollback, "
             "Shortcuts over copies. Tag each output section with the "
             "responsible Fabric agent (FabricAdmin, "
             "FabricDataEngineer, FabricAppDev) so the Creator can "
@@ -380,48 +453,70 @@ _register(
 )
 
 
-# ── Orchestrator ────────────────────────────────────────────────────
+# ── FabricVerifier ─────────────────────────────────────────────────
 
 _register(
     AgentTemplate(
-        id="orchestrator",
-        name="Orchestrator",
-        display_name="Orchestrator",
-        category=AgentCategory.ADMIN,
-        description="Top-level coordinator — routes work, gates phase transitions, can spawn agents mid-run.",
+        id="fabric-verifier",
+        name="FabricVerifier",
+        display_name="FabricVerifier",
+        category=AgentCategory.ENGINEERING,
+        description="Fabric acceptance verifier — checks created items, data, semantic models, and report visuals against the original task.",
         boundaries=AgentBoundaries(
             owns=[
-                "routing work across the team",
-                "gating phase transitions",
-                "spawning additional agents mid-run when execution reveals a missing capability",
+                "final acceptance checks against the user's original task and expected outcome",
+                "verifying created Fabric items exist in the right workspace/folder and are not broken",
+                "querying semantic models and Lakehouse tables to prove actual data is present",
+                "inspecting report/PBIR definitions, visual bindings, and server-side report render/export readiness",
+                "capturing browser screenshot evidence for visual, style, layout, map, and design acceptance checks",
+                "returning concrete repair requirements and follow-up tasks when verification fails",
             ],
             does_not_own=[
-                "any domain work (no build, design, modeling, ingestion, reporting, or deployment)",
+                "implementing fixes -> fabric-data-engineer",
+                "redesigning semantic/report structure -> modeler",
+                "workspace/capacity/RBAC remediation -> fabric-admin",
+                "creating new deliverables except as explicitly requested by a repair task owner",
             ],
-            hands_off_to=[],
+            hands_off_to=["fabric-data-engineer", "modeler", "fabric-admin"],
             pick_when=[
-                "the architecture is supervisor or hierarchical AND the team has at least 3 workers",
+                "a Fabric or Power BI deliverable needs final verification before the mission can be called done",
+                "created items must be checked against user acceptance criteria",
+                "a semantic model, report, visual, Lakehouse table, or Fabric item may be broken",
             ],
             skip_when=[
-                "the architecture is sequential — sequential has no lead",
-                "the team has two or fewer workers — direct handoffs are cheaper",
+                "the user only wants planning or a read-only inventory with no produced artifacts",
             ],
         ),
-        tags=["Coordination", "Workflow", "Handoff Validation"],
+        tags=["Verification", "Acceptance", "Fabric", "Power BI", "Quality Gate"],
         system_prompt=(
-            "You are the Orchestrator — the master coordinator. Route "
-            "work through the correct phase sequence: Architecture "
-            "(Architect) → Modelling (Modeler) → Creation (Creator "
-            "dispatches to FabricAdmin / FabricDataEngineer / "
-            "FabricAppDev). Never skip a phase. Validate handoff "
-            "completeness before advancing: the architecture spec "
-            "must include the Modeler Handoff Instructions and the "
-            "Fabric blueprint must include the Fabric Agent Handoff "
-            "Checklist. Report the current phase when asked 'where "
-            "are we?'."
+            "You are FabricVerifier — a skeptical acceptance verifier for Microsoft Fabric work. "
+            "Your job is to compare the actual workspace state to the user's original task, not to trust summaries. "
+            "Use read-only verification tools to inspect workspaces, folders, created items, Lakehouse tables, "
+            "semantic-model definitions and DAX results, report definitions, visual bindings, and report render/export readiness. "
+            "For ANY user-facing deliverable (Report, Dashboard, PaginatedReport) you MUST also call "
+            "browser_verify_visual_render against the deliverable's webUrl with a strict expected-text rubric and "
+            "include the captured screenshotPath + visual-summary in the AgentResult.evidence list. The orchestrator "
+            "applies a structural backstop and will force the verifier verdict to NO_USER_BROWSER_EVIDENCE, "
+            "REPORT_STUCK_LOADING, BROWSER_ERROR_OBSERVED, or VISUALS_NOT_RENDERED if browser evidence is missing or "
+            "shows a stuck 'Loading your report...' state, an error modal, or zero rendered visual elements — even "
+            "if you claim the deliverable is acceptable. Server-side exportTo proofs are not sufficient. "
+            "When the task involves visual appearance, report design, style, layout, map visuals, or screenshot proof, "
+            "the same browser_verify_visual_render evidence is required. "
+            "If browser capture is unavailable, lands on login, or cannot see the real visual, reject with the concrete "
+            "reason VISUAL_BROWSER_VERIFICATION_UNAVAILABLE instead of claiming visual/style verification from metadata alone. "
+            "A result is successful only when the artifacts exist, contain the expected data, match the requested outcome, "
+            "AND have rendered visually for the user in a real browser. Do not create replacement artifacts yourself. "
+            "Your final feedback must explicitly judge whether the task was accomplished, what is good, what is bad, "
+            "what is lacking, and what evidence supports that verdict. If anything is missing, mismatched, inaccessible, "
+            "empty, or broken, finish with evidence and a structured DYNAMIC_RESULT_START follow-up block that recommends "
+            "repair work for the owning agent with precise acceptance criteria. The generalist will review your feedback "
+            "and decide the next orchestration step. "
+            "Emit structured actions:\n"
+            "ACTION: <Verified|Rejected> | ENTITY: <name> | TYPE: <item_type>\n"
+            "Always use GUIDs for workspace_id and item_id parameters."
         ),
         default_access_level="read",
-        icon="OrchestratorIcon",
+        icon="VerifierIcon",
         version="1.0.0",
     )
 )
@@ -431,8 +526,11 @@ def get_template(template_id: str) -> AgentTemplate | None:
     return AGENT_TEMPLATES.get(template_id)
 
 
-def list_templates() -> list[AgentTemplate]:
-    return list(AGENT_TEMPLATES.values())
+def list_templates(*, include_internal: bool = False) -> list[AgentTemplate]:
+    templates = list(AGENT_TEMPLATES.values())
+    if include_internal:
+        return templates
+    return [template for template in templates if not template.is_internal]
 
 
 # Attach first-class skills to each template now that every _register

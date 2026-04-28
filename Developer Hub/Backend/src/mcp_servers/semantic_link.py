@@ -10,6 +10,7 @@ per-request by MCPClientManager — no Fabric notebook context needed.
 
 Token env vars (set by MCPClientManager):
   FABRIC_API_TOKEN  — Fabric REST API (api.fabric.microsoft.com)
+    POWERBI_API_TOKEN — Power BI REST API (api.powerbi.com)
   ONELAKE_TOKEN     — OneLake DFS API  (onelake.dfs.fabric.microsoft.com)
 """
 
@@ -51,8 +52,33 @@ def _headers() -> dict:
 
 
 def _pbi_headers() -> dict:
-    """Power BI REST API shares the same Fabric token."""
-    return _headers()
+    token = os.environ.get("POWERBI_API_TOKEN") or os.environ.get("FABRIC_API_TOKEN", "")
+    if not token:
+        raise RuntimeError("POWERBI_API_TOKEN or FABRIC_API_TOKEN not set")
+    return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+
+def _pbi_header_candidates() -> list[dict]:
+    candidates: list[dict] = []
+    seen: set[str] = set()
+    for env_name in ("POWERBI_API_TOKEN", "FABRIC_API_TOKEN"):
+        token = os.environ.get(env_name, "")
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        candidates.append({"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+    if not candidates:
+        raise RuntimeError("POWERBI_API_TOKEN or FABRIC_API_TOKEN not set")
+    return candidates
+
+
+async def _post_powerbi_json_with_auth_fallback(client, url: str, body: dict):
+    last_resp = None
+    for headers in _pbi_header_candidates():
+        last_resp = await client.post(url, json=body, headers=headers)
+        if last_resp.status_code not in (401, 403):
+            return last_resp
+    return last_resp
 
 
 async def _async_sleep(seconds: float) -> None:
@@ -79,7 +105,7 @@ async def sl_evaluate_dax(
     body = {"queries": [{"query": dax_query}], "serializerSettings": {"includeNulls": True}}
     url = f"{PBI_API}/groups/{workspace_id}/datasets/{dataset_id}/executeQueries"
     async with shared_client(60.0) as client:
-        resp = await client.post(url, json=body, headers=_pbi_headers())
+        resp = await _post_powerbi_json_with_auth_fallback(client, url, body)
     if resp.status_code != 200:
         return format_http_error(resp)
     data = resp.json()

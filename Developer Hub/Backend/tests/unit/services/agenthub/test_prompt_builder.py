@@ -11,13 +11,13 @@ from domain.models.agent_models import AgentBoundaries, AgentCategory, AgentTemp
 from services.agenthub.agent_registry import list_templates
 from services.agenthub.compose import build_system_prompt
 from services.agenthub.compose.prompt import (
+    GLOBAL_RULES,
     render_agents_section,
     render_architectures_section,
     render_boundary_matrix,
     render_recipes_section,
 )
 from services.agenthub.compose.recipes import RECIPES, CompositionRecipe
-
 
 # ── Fixtures ─────────────────────────────────────────────────────────
 
@@ -132,7 +132,7 @@ def test_render_recipes_includes_order_and_notes():
 def test_build_system_prompt_contains_all_sections():
     prompt = build_system_prompt(ARCHITECTURES, list_templates(), RECIPES)
     for section in (
-        "# Architectures available",
+        "# Mission strategy",
         "# Agents available",
         "# Agent boundaries",
         "# Canonical compositions",
@@ -140,6 +140,25 @@ def test_build_system_prompt_contains_all_sections():
         "# Output",
     ):
         assert section in prompt, f"missing section: {section}"
+
+
+def test_global_rules_require_dynamic_generalist_seed():
+    assert "Always choose `dynamic`" in GLOBAL_RULES
+    assert "`agentId` = `generalist`" in GLOBAL_RULES
+    assert "Do not emit a visible specialist team up front" in GLOBAL_RULES
+    assert "specialist registry" in GLOBAL_RULES
+    assert "prefer delegating" in GLOBAL_RULES
+    assert "domain work" in GLOBAL_RULES
+    assert "touch targets" in GLOBAL_RULES
+    assert "do-not-touch boundaries" in GLOBAL_RULES
+    assert "Parallel work is opt-in" in GLOBAL_RULES
+
+
+def test_output_schema_uses_generalist_without_upfront_handoffs():
+    prompt = build_system_prompt(ARCHITECTURES, list_templates(), RECIPES)
+    assert '"architecture": "dynamic"' in prompt
+    assert '"agentId": "generalist"' in prompt
+    assert '"handoffs": []' in prompt
 
 
 def test_build_system_prompt_has_no_hardcoded_ids_when_catalogs_are_empty():
@@ -214,10 +233,10 @@ def test_every_registered_architecture_has_slot_rules():
     "fabric-admin",
     "fabric-app-dev",
     "fabric-data-engineer",
+    "fabric-verifier",
     "architect",
     "modeler",
     "creator",
-    "orchestrator",
 ])
 def test_every_registered_agent_has_boundaries(agent_id: str):
     agents = {a.id: a for a in list_templates()}
@@ -226,3 +245,61 @@ def test_every_registered_agent_has_boundaries(agent_id: str):
         f"{agent_id} missing AgentBoundaries \u2014 the boundary matrix "
         "section depends on this."
     )
+
+
+def test_orchestrator_is_internal_only_in_prompt_catalog():
+    agents = {a.id for a in list_templates()}
+    assert "orchestrator" not in agents
+    assert "Never emit `orchestrator` as a slot `agentId`" in GLOBAL_RULES
+
+
+def test_modeler_boundaries_cover_report_quality_review():
+    agents = {a.id: a for a in list_templates()}
+    modeler = agents["modeler"]
+    boundaries = modeler.boundaries
+    assert boundaries is not None
+    all_boundary_text = "\n".join(
+        [
+            modeler.description,
+            *boundaries.owns,
+            *boundaries.pick_when,
+            *boundaries.does_not_own,
+        ]
+    )
+    assert "report visual-quality" in all_boundary_text
+    assert "visual/design quality review" in all_boundary_text
+
+
+def test_fabric_verifier_boundaries_cover_live_acceptance_verification():
+    agents = {a.id: a for a in list_templates()}
+    verifier = agents["fabric-verifier"]
+    boundaries = verifier.boundaries
+    assert boundaries is not None
+    all_boundary_text = "\n".join(
+        [
+            verifier.description,
+            verifier.system_prompt,
+            *boundaries.owns,
+            *boundaries.pick_when,
+            *boundaries.does_not_own,
+        ]
+    )
+    assert "original task" in all_boundary_text
+    assert "semantic models" in all_boundary_text
+    assert "report render/export" in all_boundary_text
+    assert "browser screenshot" in all_boundary_text
+    assert "browser_verify_visual_render" in all_boundary_text
+    assert "VISUAL_BROWSER_VERIFICATION_UNAVAILABLE" in all_boundary_text
+    assert "whether the task was accomplished" in all_boundary_text
+    assert "what is good" in all_boundary_text
+    assert "what is bad" in all_boundary_text
+    assert "what is lacking" in all_boundary_text
+    assert "generalist will review" in all_boundary_text
+
+
+def test_generalist_boundaries_stop_low_improvement_repair_loops():
+    agents = {a.id: a for a in list_templates(include_internal=True)}
+    generalist = agents["generalist"]
+    assert "low or no observable improvement" in generalist.system_prompt
+    assert "name the concrete cause" in generalist.system_prompt
+    assert "blocked, failed, or partial" in generalist.system_prompt

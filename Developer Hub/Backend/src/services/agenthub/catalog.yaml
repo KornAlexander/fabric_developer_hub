@@ -10,6 +10,17 @@
 #   skills:       map of skill-id → Skill fields (matches domain.models.skill.Skill)
 #   agent_skills: map of agent-id → list of skill-ids
 #
+# This file does NOT contain full agent definitions. Agent prompts,
+# boundaries, display metadata, and upstream origin are defined in
+# `services/agenthub/agent_registry.py`; this YAML only binds those
+# agents to skill ids and binds skills to MCP tool names.
+#
+# This file also does NOT define where a tool comes from. Tool origin is
+# runtime-discovered from `src/mcp_servers.json` by `MCPClientManager`:
+#   * tool name → MCP server id is exposed by `/api/catalogs/tools`
+#   * log/error output can render `server_id::tool_name` via
+#     `MCPClientManager.qualified_name(...)`
+#
 # Validation runs at startup via `services.agenthub.capability_registry`:
 #   * every tool a skill declares must be provided by a running MCP server
 #   * every skill an agent declares must exist in the `skills:` map
@@ -30,7 +41,10 @@ skills:
     tools:
       - fabric_list_workspaces
       - fabric_list_items
+      - fabric_list_folders
       - fabric_create_item
+      - fabric_create_workspace_inventory_solution
+      - fabric_create_folder
       - fabric_delete_item
       - fabric_list_files
       - fabric_read_file
@@ -75,7 +89,9 @@ skills:
     tools:
       - fabric_list_workspaces
       - fabric_list_items
+      - fabric_list_folders
       - fabric_create_item
+      - fabric_create_folder
       - fabric_delete_item
       - sl_list_warehouses
       - sl_list_sql_endpoints
@@ -108,7 +124,9 @@ skills:
     tools:
       - fabric_list_workspaces
       - fabric_list_items
+      - fabric_list_folders
       - fabric_create_item
+      - fabric_create_folder
       - fabric_delete_item
     applicable_when: >-
       Create or alter KQL tables, ingest into Eventhouse, or configure
@@ -133,8 +151,17 @@ skills:
       CI/CD.
     tools:
       - fabric_list_items
+      - fabric_list_folders
       - fabric_create_item
+      - fabric_create_folder
       - fabric_delete_item
+      - fabric_definition_checkout
+      - fabric_definition_list_files
+      - fabric_definition_diff
+      - fabric_definition_validate
+      - fabric_definition_plan_publish
+      - fabric_definition_publish
+      - fabric_definition_discard_checkout
       - sl_list_semantic_models
       - sl_get_semantic_model_definition
       - sl_get_semantic_model_tables
@@ -192,6 +219,45 @@ skills:
       Run a DAX query, inspect a semantic model, or list measures /
       tables.
 
+  fabric-verification:
+    name: Fabric verification super skill
+    description: >-
+      Verify created Fabric and Power BI deliverables against the original
+      task: capacity readiness, item existence, semantic-model data,
+      Lakehouse tables, PBIR/report definitions, report renderability, and
+      browser screenshot evidence for visual/design acceptance.
+    tools:
+      - fabric_list_workspaces
+      - fabric_list_items
+      - fabric_list_folders
+      - fabric_validate_workspace_capacity
+      - fabric_verify_report_renderable
+      - fabric_verify_workspace_inventory_solution
+      - browser_verify_visual_render
+      - fabric_definition_checkout
+      - fabric_definition_list_files
+      - fabric_definition_validate
+      - sl_list_lakehouses
+      - sl_get_lakehouse_tables
+      - sl_list_semantic_models
+      - sl_get_semantic_model_tables
+      - sl_get_semantic_model_definition
+      - sl_evaluate_dax
+      - sl_list_reports
+      - sl_get_report_definition
+      - sl_get_refresh_history
+      - pbir_validate
+      - pbir_visuals
+      - pbir_pages
+      - pbir_fields
+      - scan_report
+      - scan_semantic_model
+    applicable_when: >-
+      Final verification, acceptance verification, quality gates, or checking
+      that created Fabric items, semantic models, reports, and visuals work
+      and match the user's requested outcome. Use browser screenshot evidence
+      for design, style, layout, map, or visual-quality requirements.
+
   e2e-medallion-architecture:
     name: End-to-end Medallion
     description: >-
@@ -201,7 +267,9 @@ skills:
     tools:
       - fabric_list_workspaces
       - fabric_list_items
+      - fabric_list_folders
       - fabric_create_item
+      - fabric_create_folder
       - fabric_list_files
       - fabric_read_file
       - fabric_write_file
@@ -254,7 +322,9 @@ skills:
       datasets, deployment to a workspace.
     tools:
       - fabric_list_items
+      - fabric_list_folders
       - fabric_create_item
+      - fabric_create_folder
       - sl_list_reports
       - sl_get_report_definition
       - sl_clone_report
@@ -282,7 +352,8 @@ skills:
     description: >-
       Apply International Business Communication Standards (IBCS)
       patterns to Power BI reports — consistent variance visuals, colour
-      semantics, chart hygiene.
+      semantics, chart hygiene, layout alignment, and visual design
+      review for presentation-ready dashboards.
     tools:
       - scan_report
       - fix_report_bpa
@@ -295,8 +366,9 @@ skills:
       - pbir_set
       - pbir_validate
     applicable_when: >-
-      User asks for IBCS-compliant reports, variance visualisations, or
-      strict chart-style hygiene.
+      User asks for IBCS-compliant reports, variance visualisations,
+      strict chart-style hygiene, visual appeal, report design review,
+      layout alignment, or presentation-ready dashboards.
 
   # ── Grounding from the Fabric Local MCP (docs tool only) ─────────
   # Pulled in via the `fabric-docs` server in `mcp_servers.json` with a
@@ -319,6 +391,48 @@ skills:
       schemas, or recommending pagination / retry / error-handling
       patterns.
 
+  fabric-remote-core:
+    name: Fabric Remote Core operations
+    description: >-
+      Operate live Fabric workspaces, items, folders, permissions,
+      capacities, item definitions, long-running operations, and item-type
+      guidance through Microsoft's cloud-hosted Fabric Core MCP Server.
+      Uses the caller's Entra ID / Fabric RBAC context and Fabric Audit Logs.
+    tools:
+      - list_workspaces
+      - get_workspace
+      - create_workspace
+      - update_workspace
+      - delete_workspace
+      - add_workspace_role
+      - list_workspace_roles
+      - get_workspace_role
+      - update_workspace_role
+      - delete_workspace_role
+      - list_items
+      - get_item
+      - create_item
+      - update_item
+      - delete_item
+      - get_item_definition
+      - update_item_definition
+      - bulk_move_items
+      - create_folder
+      - list_folders
+      - get_folder
+      - update_folder
+      - delete_folder
+      - move_folder
+      - list_capacities
+      - get_operation_state
+      - get_operation_result
+      - get_knowledge
+    applicable_when: >-
+      Use for live Fabric control-plane operations where the official Remote
+      MCP should execute under the signed-in user's permissions and audit
+      trail. Prefer read-only/list/get tools for verification and planning;
+      writes remain governed by AgentHub tool policies.
+
 
 # ── Agent → skill-id mapping ───────────────────────────────────────
 # Taken verbatim from each upstream agent's ``delegates_to`` list, with
@@ -338,10 +452,12 @@ agent_skills:
     - eventhouse-consumption-cli
     - powerbi-authoring-cli
     - powerbi-consumption-cli
+    - fabric-verification
     - e2e-medallion-architecture
     - paginated-report-authoring
     - paginated-report-ops
     - fabric-api-docs
+    - fabric-remote-core
 
   fabric-admin:
     - spark-authoring-cli
@@ -352,17 +468,29 @@ agent_skills:
     - eventhouse-consumption-cli
     - powerbi-authoring-cli
     - powerbi-consumption-cli
+    - fabric-verification
     - e2e-medallion-architecture
     - check-updates
+    - fabric-remote-core
 
   fabric-app-dev:
     - sqldw-authoring-cli
     - sqldw-consumption-cli
     - powerbi-consumption-cli
+    - fabric-verification
     - paginated-report-ops
     - fabric-api-docs
+    - fabric-remote-core
 
-  # AnalyticsPlatformAgents — architect / modeler / creator / orchestrator
+  fabric-verifier:
+    - fabric-verification
+    - powerbi-consumption-cli
+    - spark-consumption-cli
+    - sqldw-consumption-cli
+    - eventhouse-consumption-cli
+    - fabric-remote-core
+
+  # AnalyticsPlatformAgents — architect / modeler / creator
 
   # Architect is technology-agnostic but needs awareness of what the
   # downstream modeller / engineers can build, so we expose the
@@ -372,8 +500,10 @@ agent_skills:
     - sqldw-authoring-cli
     - eventhouse-authoring-cli
     - powerbi-authoring-cli
+    - fabric-verification
     - e2e-medallion-architecture
     - fabric-api-docs
+    - fabric-remote-core
 
   # Modeler translates the architecture into a Fabric blueprint and
   # needs the full authoring surface.
@@ -385,19 +515,15 @@ agent_skills:
     - e2e-medallion-architecture
     - paginated-report-authoring
     - powerbi-ibcs
+    - fabric-verification
     - fabric-api-docs
+    - fabric-remote-core
 
   # Creator dispatches work to the Fabric agents — it doesn't build
   # itself. Keep the skill set narrow (pattern-awareness only).
   creator:
     - e2e-medallion-architecture
 
-  # Orchestrator coordinates the team. Its skill surface is
-  # deliberately one entry — the coordinator-plane capability itself —
-  # so the UI shows a single accurate chip ("Team orchestration")
-  # rather than leaking implementation-detail skills onto the lead
-  # node. The runtime-side implementation lives in
-  # ``OrchestratorEngine.add_agent_to_job`` and is reachable via
-  # ``POST /api/sessions/{id}/agents``.
-  orchestrator:
-    - team-orchestration
+  # The Orchestrator is internal control plane now, not an agent entry.
+  # ``team-orchestration`` remains in the skill catalog as documentation
+  # for the runtime capability implemented by ``OrchestratorEngine``.

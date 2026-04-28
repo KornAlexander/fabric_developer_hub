@@ -30,7 +30,6 @@ from services.agenthub import tool_runtime
 from services.agenthub.tool_runtime import (
     CallerContext,
     ToolPolicy,
-    ToolRuntimeError,
     ToolSensitivity,
     clear_registry_for_tests,
     register_tool,
@@ -94,11 +93,14 @@ def test_unregistered_tool_is_denied():
     mgr.call_tool.assert_not_called()
 
 
-def test_auto_allowed_rejected_for_write_policy():
-    with pytest.raises(ToolRuntimeError):
-        register_tool(ToolPolicy("w", ToolSensitivity.WRITE, auto_allowed=True))
-    with pytest.raises(ToolRuntimeError):
-        register_tool(ToolPolicy("d", ToolSensitivity.DESTRUCTIVE, auto_allowed=True))
+def test_auto_allowed_now_permitted_for_write_policy():
+    # The v1 gate that rejected ``auto_allowed=True`` on WRITE/DESTRUCTIVE
+    # has been lifted so first-party Fabric write tools (fabric_create_item,
+    # fabric_write_file, ...) can be dispatched autonomously. Registration
+    # must succeed; dispatch is exercised in
+    # ``test_write_tool_with_auto_allowed_dispatches`` below.
+    register_tool(ToolPolicy("w", ToolSensitivity.WRITE, auto_allowed=True))
+    register_tool(ToolPolicy("d", ToolSensitivity.DESTRUCTIVE, auto_allowed=True))
 
 
 # ── Argument scrubbing ──────────────────────────────────────────────
@@ -174,6 +176,68 @@ def test_destructive_tool_denied_without_confirmation():
     assert r.ok is False
     assert r.policy_decision == "denied:confirmation_required"
     mgr.call_tool.assert_not_called()
+
+
+def test_write_tool_with_auto_allowed_dispatches():
+    # Opt-in escape hatch: WRITE tools registered with ``auto_allowed=True``
+    # bypass the confirmation gate. Used for first-party Fabric create /
+    # write tools the orchestrator must call autonomously.
+    register_tool(ToolPolicy("safe_write", ToolSensitivity.WRITE, auto_allowed=True))
+    mgr = _mock_mgr(return_value="created")
+    r = asyncio.run(tool_runtime.execute(
+        tool_name="safe_write",
+        arguments={"display_name": "X"},
+        ctx=_ctx(),
+        mcp_manager=mgr,
+        mcp_tokens=None,
+    ))
+    assert r.ok is True
+    assert r.policy_decision == "allowed"
+    mgr.call_tool.assert_awaited()
+
+
+def test_canonical_mcp_error_output_marks_tool_failed():
+    register_tool(ToolPolicy("safe_write", ToolSensitivity.WRITE, auto_allowed=True))
+    mgr = _mock_mgr(return_value='Error creating item: 400 - {"errorCode":"InvalidItemType"}')
+    r = asyncio.run(tool_runtime.execute(
+        tool_name="safe_write",
+        arguments={"display_name": "X"},
+        ctx=_ctx(),
+        mcp_manager=mgr,
+        mcp_tokens=None,
+    ))
+    assert r.ok is False
+    assert r.policy_decision == "tool_error"
+    assert "Error creating item: 400" in r.output
+
+
+def test_existing_create_conflict_remains_idempotent_success():
+    register_tool(ToolPolicy("safe_write", ToolSensitivity.WRITE, auto_allowed=True))
+    mgr = _mock_mgr(return_value='Error creating item: 409 - {"errorCode":"ItemDisplayNameAlreadyInUse"}')
+    r = asyncio.run(tool_runtime.execute(
+        tool_name="safe_write",
+        arguments={"display_name": "Existing"},
+        ctx=_ctx(),
+        mcp_manager=mgr,
+        mcp_tokens=None,
+    ))
+    assert r.ok is True
+    assert r.policy_decision == "allowed"
+
+
+def test_destructive_tool_with_auto_allowed_dispatches():
+    register_tool(ToolPolicy("safe_destroy", ToolSensitivity.DESTRUCTIVE, auto_allowed=True))
+    mgr = _mock_mgr(return_value="deleted")
+    r = asyncio.run(tool_runtime.execute(
+        tool_name="safe_destroy",
+        arguments={},
+        ctx=_ctx(),
+        mcp_manager=mgr,
+        mcp_tokens=None,
+    ))
+    assert r.ok is True
+    assert r.policy_decision == "allowed"
+    mgr.call_tool.assert_awaited()
 
 
 # ── Kill-switches ───────────────────────────────────────────────────

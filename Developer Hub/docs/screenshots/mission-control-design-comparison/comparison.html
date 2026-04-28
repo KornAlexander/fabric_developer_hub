@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Mission Control live/design comparison</title>
+    <style>
+        body { margin: 0; font: 14px/1.4 "Segoe UI", Arial, sans-serif; background: #eef2f6; color: #172033; }
+        main { max-width: 1800px; margin: 0 auto; padding: 20px; display: grid; gap: 20px; }
+        h1, h2 { margin: 0; }
+        h1 { font-size: 20px; }
+        h2 { font-size: 15px; color: #334155; }
+        .pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
+        figure { margin: 0; border: 1px solid #cbd5e1; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 10px 24px rgba(15, 23, 42, .08); }
+        figcaption { padding: 10px 12px; font-weight: 700; border-bottom: 1px solid #e2e8f0; }
+        img { display: block; width: 100%; height: auto; }
+        @media (max-width: 1000px) { .pair { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+<main>
+    <h1>Mission Control live/design comparison</h1>
+    <section>
+        <h2>High-level mission canvas</h2>
+        <div class="pair">
+            <figure><figcaption>Live implementation</figcaption><img src="live-high-level.png" alt="Live Mission Control high-level frame"></figure>
+            <figure><figcaption>Prototype design</figcaption><img src="design-high-level.png" alt="Prototype high-level frame"></figure>
+        </div>
+    </section>
+    <section>
+        <h2>Additional prototype reference states</h2>
+        <div class="pair">
+            <figure><figcaption>Approval gate design</figcaption><img src="design-approval.png" alt="Prototype approval frame"></figure>
+            <figure><figcaption>Completed run design</figcaption><img src="design-complete.png" alt="Prototype completed frame"></figure>
+        </div>
+    </section>
+</main>
+</body>
+</html>

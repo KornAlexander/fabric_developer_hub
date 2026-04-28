@@ -10,6 +10,25 @@
       "args": ["${SRC_DIR}/mcp_servers/semantic_link.py"],
       "requires_auth": true
     },
+    "azure-management": {
+      "command": "${PYTHON}",
+      "args": ["${SRC_DIR}/mcp_servers/azure_management.py"],
+      "requires_auth": true,
+      "tool_allowlist": [
+        "azure_list_subscriptions",
+        "azure_list_resource_groups",
+        "azure_list_resources",
+        "azure_get_resource",
+        "azure_check_permissions",
+        "azure_list_role_assignments",
+        "azure_list_role_definitions",
+        "azure_get_activity_log",
+        "azure_get_resource_health",
+        "azure_list_fabric_capacities",
+        "azure_get_fabric_capacity",
+        "azure_resume_fabric_capacity"
+      ]
+    },
     "pbi-fixer": {
       "command": "${PYTHON}",
       "args": ["${REPO_DIR}/mcp/pbi_fixer/server.py"],
@@ -25,6 +44,131 @@
       "args": ["-y", "@microsoft/fabric-mcp", "server", "start"],
       "requires_auth": false,
       "tool_allowlist": ["docs"]
+    },
+    "fabric-remote-core": {
+      "transport": "streamable_http",
+      "url": "https://api.fabric.microsoft.com/v1/mcp/core",
+      "requires_auth": true,
+      "auth_token_env": "FABRIC_API_TOKEN",
+      "timeout_seconds": 30,
+      "sse_read_timeout_seconds": 300,
+      "tool_allowlist": [
+        "list_workspaces",
+        "get_workspace",
+        "create_workspace",
+        "update_workspace",
+        "delete_workspace",
+        "add_workspace_role",
+        "list_workspace_roles",
+        "get_workspace_role",
+        "update_workspace_role",
+        "delete_workspace_role",
+        "list_items",
+        "get_item",
+        "create_item",
+        "update_item",
+        "delete_item",
+        "get_item_definition",
+        "update_item_definition",
+        "bulk_move_items",
+        "create_folder",
+        "list_folders",
+        "get_folder",
+        "update_folder",
+        "delete_folder",
+        "move_folder",
+        "list_capacities",
+        "get_operation_state",
+        "get_operation_result",
+        "get_knowledge"
+      ],
+      "static_tools": [
+        {"name": "list_workspaces", "description": "Fabric Remote Core MCP: list all workspaces visible to the authenticated user."},
+        {"name": "get_workspace", "description": "Fabric Remote Core MCP: get detailed information about a workspace."},
+        {"name": "create_workspace", "description": "Fabric Remote Core MCP: create a new workspace in the caller's Fabric tenant."},
+        {"name": "update_workspace", "description": "Fabric Remote Core MCP: update a workspace name or description."},
+        {"name": "delete_workspace", "description": "Fabric Remote Core MCP: delete an existing workspace."},
+        {"name": "add_workspace_role", "description": "Fabric Remote Core MCP: grant a user access to a workspace."},
+        {"name": "list_workspace_roles", "description": "Fabric Remote Core MCP: list role assignments for a workspace."},
+        {"name": "get_workspace_role", "description": "Fabric Remote Core MCP: get details for a workspace role assignment."},
+        {"name": "update_workspace_role", "description": "Fabric Remote Core MCP: change a user's workspace role."},
+        {"name": "delete_workspace_role", "description": "Fabric Remote Core MCP: remove a user's workspace access."},
+        {"name": "list_items", "description": "Fabric Remote Core MCP: list items in a workspace."},
+        {"name": "get_item", "description": "Fabric Remote Core MCP: get detailed information about an item."},
+        {"name": "create_item", "description": "Fabric Remote Core MCP: create a new item in a workspace."},
+        {"name": "update_item", "description": "Fabric Remote Core MCP: update an item's name or description."},
+        {"name": "delete_item", "description": "Fabric Remote Core MCP: delete an item from a workspace."},
+        {"name": "get_item_definition", "description": "Fabric Remote Core MCP: get the schema or definition of an item."},
+        {"name": "update_item_definition", "description": "Fabric Remote Core MCP: update an item's definition or schema."},
+        {"name": "bulk_move_items", "description": "Fabric Remote Core MCP: move multiple items to a folder."},
+        {"name": "create_folder", "description": "Fabric Remote Core MCP: create a folder in a workspace."},
+        {"name": "list_folders", "description": "Fabric Remote Core MCP: list folders in a workspace."},
+        {"name": "get_folder", "description": "Fabric Remote Core MCP: get details about a folder."},
+        {"name": "update_folder", "description": "Fabric Remote Core MCP: rename a folder."},
+        {"name": "delete_folder", "description": "Fabric Remote Core MCP: delete an empty folder."},
+        {"name": "move_folder", "description": "Fabric Remote Core MCP: move a folder to a new parent folder."},
+        {"name": "list_capacities", "description": "Fabric Remote Core MCP: list Fabric capacities visible to the authenticated user."},
+        {"name": "get_operation_state", "description": "Fabric Remote Core MCP: check the status of a long-running operation."},
+        {"name": "get_operation_result", "description": "Fabric Remote Core MCP: get the result of a completed long-running operation."},
+        {"name": "get_knowledge", "description": "Fabric Remote Core MCP: get guidelines and best practices for Fabric item types."}
+      ]
+    },
+    "code-interpreter": {
+      "command": "${PYTHON}",
+      "args": ["${SRC_DIR}/mcp_servers/code_interpreter.py"],
+      "requires_auth": false,
+      "tool_allowlist": ["run_python_code"]
+    },
+    "workspace-shell": {
+      "command": "${PYTHON}",
+      "args": ["${SRC_DIR}/mcp_servers/workspace_shell.py", "${SRC_DIR}/.."],
+      "requires_auth": false,
+      "tool_allowlist": ["run_shell_command"]
+    },
+    "web-access": {
+      "command": "${PYTHON}",
+      "args": ["${SRC_DIR}/mcp_servers/web_access.py"],
+      "requires_auth": false,
+      "tool_allowlist": ["web_fetch_url", "web_search"]
+    },
+    "browser-visual": {
+      "command": "${PYTHON}",
+      "args": ["${SRC_DIR}/mcp_servers/browser_visual.py"],
+      "requires_auth": false,
+      "tool_allowlist": ["browser_verify_visual_render"],
+      "env": {
+        "NODE_PATH": "/usr/local/lib/node_modules",
+        "BROWSER_VISUAL_CHROMIUM_EXECUTABLE": "/usr/bin/chromium"
+      }
+    },
+    "fabric-definition-workspace": {
+      "command": "${PYTHON}",
+      "args": ["${SRC_DIR}/mcp_servers/fabric_definition_workspace.py"],
+      "requires_auth": true,
+      "tool_allowlist": [
+        "fabric_definition_checkout",
+        "fabric_definition_list_files",
+        "fabric_definition_diff",
+        "fabric_definition_validate",
+        "fabric_definition_plan_publish",
+        "fabric_definition_publish",
+        "fabric_definition_discard_checkout"
+      ]
+    },
+    "sequential-thinking": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+      "requires_auth": false,
+      "tool_allowlist": ["sequential_thinking"],
+      "env": {
+        "DISABLE_THOUGHT_LOGGING": "true"
+      }
+    },
+    "time": {
+      "command": "uvx",
+      "args": ["mcp-server-time"],
+      "requires_auth": false,
+      "tool_allowlist": ["get_current_time", "convert_time"]
     }
   }
 }

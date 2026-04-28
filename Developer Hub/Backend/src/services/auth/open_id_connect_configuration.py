@@ -34,6 +34,29 @@ class OpenIdConnectConfigurationManager:
         self.configuration: OpenIdConnectConfiguration | None = None
         self.last_updated: float = 0
         self._lock = asyncio.Lock()  # For thread-safe updates
+        self._refreshing = False  # Guard for background refresh
+
+    async def _background_refresh(self, timeout_seconds: int = 5) -> None:
+        """Refresh the OIDC config in the background so no request blocks."""
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(self.metadata_endpoint, timeout=timeout_seconds)
+                response.raise_for_status()
+                config_data = response.json()
+                jwks_uri = config_data.get("jwks_uri")
+                if jwks_uri:
+                    jwks_response = await client.get(jwks_uri, timeout=timeout_seconds)
+                    jwks_response.raise_for_status()
+                    self.configuration = OpenIdConnectConfiguration(
+                        issuer=config_data.get("issuer"),
+                        jwks_data=jwks_response.json(),
+                    )
+                    self.last_updated = time.time()
+                    logger.info("OpenID Connect configuration background-refreshed")
+        except Exception:
+            logger.debug("Background OIDC refresh failed (will retry on next request)", exc_info=True)
+        finally:
+            self._refreshing = False
 
     async def get_configuration_async(self, timeout_seconds: int = 5) -> OpenIdConnectConfiguration:
         """
@@ -43,6 +66,12 @@ class OpenIdConnectConfigurationManager:
 
         # Return cached configuration if still valid
         if self.configuration and current_time - self.last_updated < self.cache_duration_seconds:
+            # Background refresh when within 10% of expiry so the next
+            # request never blocks on a network call. Fire-and-forget.
+            remaining = self.cache_duration_seconds - (current_time - self.last_updated)
+            if remaining < self.cache_duration_seconds * 0.1 and not self._refreshing:
+                self._refreshing = True
+                asyncio.get_event_loop().create_task(self._background_refresh(timeout_seconds))
             return self.configuration
 
         # Use lock to prevent multiple concurrent refreshes

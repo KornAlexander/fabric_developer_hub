@@ -5,11 +5,17 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 import pytest
 
+import services.agenthub.orchestrator_engine as oe
 from domain.models.agent_models import Job, JobStatus
-from services.agenthub.orchestrator_engine import _JobExecution
+from services.agenthub.orchestrator_engine import (
+    _JobExecution,
+    _change_record_from_tool,
+    _detect_action_from_tool,
+)
 
 
 def _exe() -> _JobExecution:
@@ -31,6 +37,83 @@ def test_emit_stamps_monotonic_seq_and_session() -> None:
     assert seqs == [1, 2, 3]
     assert all(ev["sessionId"] == "j-1" for ev in exe._ring)
     assert all("ts" in ev for ev in exe._ring)
+
+
+def test_emit_classifies_public_log_categories() -> None:
+    exe = _exe()
+    exe.emit("mission_seeded", taskCount=2)
+    exe.emit("agent_decision", agentId="a", phaseNumber=1, decision="Inspect workspace")
+    exe.emit("task_created", task={"id": "t1", "title": "Inspect workspace"})
+    exe.emit("subagent_result", result={"status": "completed", "summary": "done"})
+    exe.emit("action", action={"type": "create", "target": "Report"})
+    exe.emit("tool_call_started", agentId="a", callId="c1", toolName="fabric_list_items")
+    exe.emit("log_line", level="warn", message="Retrying model call", tags=["llm_retry"])
+
+    assert [event["logCategory"] for event in exe._ring] == [
+        "high_level",
+        "detailed",
+        "high_level",
+        "high_level",
+        "high_level",
+        "diagnostic",
+        "diagnostic",
+    ]
+
+
+def test_emit_suppresses_trace_events_from_public_buffers() -> None:
+    exe = _exe()
+    exe.emit("resource_lock_acquired", key="workspace:1", mode="write", runId="r1")
+    exe.emit("log_line", level="info", message="Internal state", tags=["trace"])
+    exe.emit("log_line", level="info", message="Visible progress")
+
+    assert [event["message"] for event in exe._ring] == ["Visible progress"]
+    assert exe.event_queue.qsize() == 1
+    assert len(exe._trace_ring) == 2
+    assert all(event["logCategory"] == "trace" for event in exe._trace_ring)
+
+
+def test_emit_writes_backend_mission_trace_and_audit(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exe = _exe()
+    audit_calls: list[tuple[tuple, dict]] = []
+    monkeypatch.setattr(oe, "log_audit", lambda *args, **kwargs: audit_calls.append((args, kwargs)))
+
+    with caplog.at_level(logging.INFO, logger="services.agenthub.orchestrator_engine"):
+        exe.emit(
+            "generalist_state_decision",
+            runId="run-1",
+            taskId="task-1",
+            agentId="generalist",
+            summary="Merged specialist feedback into the plan.",
+            rationale="Generalist reviewed output and selected verifier handoff.",
+        )
+
+    assert exe._ring[-1]["logCategory"] == "high_level"
+    trace_records = [record for record in caplog.records if "[MISSION_TRACE:j-1" in record.getMessage()]
+    assert trace_records
+    assert "generalist_state_decision" in trace_records[-1].getMessage()
+    assert "Merged specialist feedback" in trace_records[-1].getMessage()
+
+    assert audit_calls
+    args, kwargs = audit_calls[-1]
+    assert args[0] == "j-1"
+    assert args[2] == "mission_event:generalist_state_decision"
+    assert args[4].startswith("generalist_state_decision: Merged specialist feedback")
+    assert kwargs["log_category"] == "high_level"
+
+
+def test_trace_events_do_not_enter_audit(monkeypatch: pytest.MonkeyPatch) -> None:
+    exe = _exe()
+    audit_calls: list[tuple[tuple, dict]] = []
+    monkeypatch.setattr(oe, "log_audit", lambda *args, **kwargs: audit_calls.append((args, kwargs)))
+
+    exe.emit("resource_lock_acquired", key="workspace:1", mode="write", runId="r1")
+
+    assert exe._ring == []
+    assert len(exe._trace_ring) == 1
+    assert audit_calls == []
 
 
 def test_ring_buffer_bounded_at_max() -> None:
@@ -82,14 +165,89 @@ def test_snapshot_run_overview_shape() -> None:
               activeAgentId="s1")
     exe.emit("artifact_added", artifactId="x", agentId="s1",
               kind="Lakehouse", name="Bronze", state="written")
+    exe.emit("change_recorded", recordId="c1", kind="created", status="applied",
+              targetName="Bronze", targetType="Lakehouse", targetScope="item",
+              summary="Created Lakehouse Bronze.", toolName="fabric_create_item",
+              agentId="s1", agentName="Fabric Data Engineer")
 
     snap = exe.snapshot_run_overview()
     assert snap["job"]["id"] == "j-1"
     assert snap["activeAgentId"] == "s1"
     assert len(snap["artifacts"]) == 1
     assert snap["artifacts"][0]["name"] == "Bronze"
+    assert len(snap["changes"]) == 1
+    assert snap["changes"][0]["recordId"] == "c1"
+    assert snap["changes"][0]["kind"] == "created"
+    assert "logCategory" not in snap["changes"][0]
     assert len(snap["slotProgress"]) == 1
     assert snap["slotProgress"][0]["status"] == "running"
+
+
+def test_change_record_from_tool_accepts_successful_writes_only() -> None:
+    created_action = _detect_action_from_tool(
+        "fabric_create_item",
+        {"display_name": "Bronze", "item_type": "Lakehouse"},
+        '{"id":"lh-1","webUrl":"https://fabric/items/lh-1"}',
+    )
+    assert created_action is not None
+    created = _change_record_from_tool(
+        "fabric_create_item",
+        {"display_name": "Bronze", "item_type": "Lakehouse"},
+        "created",
+        created_action,
+    )
+
+    assert created is not None
+    assert created["kind"] == "created"
+    assert created["status"] == "applied"
+    assert created["targetName"] == "Bronze"
+    assert created["targetType"] == "Lakehouse"
+    assert created["targetId"] == "lh-1"
+
+    read_action = _detect_action_from_tool(
+        "fabric_read_file",
+        {"file_path": "Files/input.csv"},
+        "contents",
+    )
+    assert read_action is not None
+    assert _change_record_from_tool(
+        "fabric_read_file",
+        {"file_path": "Files/input.csv"},
+        "contents",
+        read_action,
+    ) is None
+
+
+def test_change_record_from_tool_captures_important_non_item_writes() -> None:
+    change = _change_record_from_tool(
+        "sl_run_item_job",
+        {"item_id": "pipeline-1", "job_type": "Pipeline"},
+        "started",
+        None,
+    )
+
+    assert change is not None
+    assert change["kind"] == "important_action"
+    assert change["status"] == "applied"
+    assert change["targetScope"] == "execution"
+    assert change["toolName"] == "sl_run_item_job"
+
+
+def test_change_record_from_tool_excludes_failed_writes() -> None:
+    failed_action = _detect_action_from_tool(
+        "fabric_create_directory",
+        {"directory_path": "Files/new-folder"},
+        "Error creating directory: 403 Forbidden",
+    )
+
+    assert failed_action is not None
+    assert failed_action.action_type == "Failed"
+    assert _change_record_from_tool(
+        "fabric_create_directory",
+        {"directory_path": "Files/new-folder"},
+        "Error creating directory: 403 Forbidden",
+        failed_action,
+    ) is None
 
 
 @pytest.mark.asyncio

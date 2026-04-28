@@ -9,7 +9,9 @@
     "build:prod": "env-cmd -f ../.env webpack --config ./tools/webpack.config.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:e2e:new-session": "playwright test e2e/new-session-flow.spec.ts e2e/new-session-experience-visual.spec.ts e2e/new-session-dynamic-default.spec.ts --project=chromium",
+    "login:e2e": "node scripts/e2e-login.mjs"
   },
   "author": "",
   "license": "ISC",

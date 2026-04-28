@@ -33,6 +33,26 @@ def test_every_recipe_has_at_least_one_slot():
     assert not bad, f"recipes with empty slot list: {bad}"
 
 
+def test_dynamic_recipes_use_single_generalist_slot():
+    bad = [
+        r.id for r in RECIPES
+        if r.architecture == "dynamic" and r.slot_agent_ids != ["generalist"]
+    ]
+    assert not bad, f"dynamic recipes without the generalist seed slot: {bad}"
+
+
+def test_default_recipe_uses_dynamic_generalist():
+    recipe = RECIPES_BY_ID["dynamic-generalist-default"]
+    assert recipe.architecture == "dynamic"
+    assert recipe.slot_agent_ids == ["generalist"]
+    assert any("full MCP tool access" in note for note in recipe.notes)
+
+
+def test_no_recipe_exposes_orchestrator_slot():
+    bad = [r.id for r in RECIPES if "orchestrator" in r.slot_agent_ids]
+    assert not bad, f"recipes expose internal orchestrator: {bad}"
+
+
 def test_validate_recipes_flags_unknown_architecture():
     errors = validate_recipes(
         architecture_ids=set(),  # nothing resolves

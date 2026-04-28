@@ -26,6 +26,13 @@ def test_headers_raises_without_token(monkeypatch: pytest.MonkeyPatch) -> None:
         semantic_link._headers()
 
 
+def test_pbi_headers_prefer_powerbi_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FABRIC_API_TOKEN", "fabric-token")
+    monkeypatch.setenv("POWERBI_API_TOKEN", "powerbi-token")
+
+    assert semantic_link._pbi_headers()["Authorization"] == "Bearer powerbi-token"
+
+
 # ── sl_evaluate_dax ─────────────────────────────────────────────────
 
 @pytest.mark.asyncio

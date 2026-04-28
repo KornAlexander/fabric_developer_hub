@@ -34,8 +34,11 @@ from services.agenthub.agent_registry import AGENT_TEMPLATES, list_templates
 from services.agenthub.attachments import ATTACHMENT_SHIELD_PROMPT, process_attachments
 from services.agenthub.compose import RECIPES, build_system_prompt
 from services.agenthub.compose_models import COMPOSE_FALLBACK_MODEL
+from services.agenthub.workspace_context_service import WorkspaceContext
 
 logger = logging.getLogger(__name__)
+
+_INTERNAL_CONTROL_AGENT_IDS = {"orchestrator"}
 
 
 COPILOT_API_BASE = "https://api.githubcopilot.com"
@@ -70,20 +73,137 @@ def _get_http_client() -> httpx.AsyncClient:
 # them silently rather than triggering a repair retry — which doubles
 # compose latency and burns ~2k tokens per miss.
 _ARCHITECTURE_ALIASES: dict[str, str] = {
-    "orchestrator": "supervisor",
-    "orchestration": "supervisor",
-    "fanout": "parallel",
-    "fan-out": "parallel",
-    "map-reduce": "parallel",
-    "mapreduce": "parallel",
-    "pipeline": "sequential",
-    "chain": "sequential",
-    "single": "solo",
-    "actor-critic": "reflection",
+    "orchestrator": "dynamic",
+    "orchestration": "dynamic",
+    "fanout": "dynamic",
+    "fan-out": "dynamic",
+    "map-reduce": "dynamic",
+    "mapreduce": "dynamic",
+    "parallel": "dynamic",
+    "router": "dynamic",
+    "magentic": "dynamic",
+    "debate": "dynamic",
+    "pipeline": "dynamic",
+    "chain": "dynamic",
+    "single": "dynamic",
+    "solo": "dynamic",
+    "supervisor": "dynamic",
+    "sequential": "dynamic",
+    "hierarchical": "dynamic",
+    "reflection": "dynamic",
+    "mixed": "dynamic",
+    "network": "dynamic",
+    "actor-critic": "dynamic",
 }
 
 
+import re as _re
+
+# Regex that matches ```json ... ``` or ``` ... ``` fenced blocks.
+_MD_FENCE_RE = _re.compile(
+    r"```(?:json)?\s*\n?(.*?)\n?\s*```",
+    _re.DOTALL,
+)
+
+
+def _extract_json(raw: str) -> str:
+    """Best-effort extraction of a JSON object from LLM output.
+
+    Handles three common failure modes:
+    1. Empty / whitespace-only response
+    2. Markdown-fenced JSON (```json ... ```)
+    3. Prose before or after the JSON object
+
+    Returns the cleaned string ready for ``json.loads``.
+    Raises ``CompositionError`` if no JSON object can be found.
+    """
+    text = raw.strip()
+    if not text:
+        raise CompositionError("LLM returned empty response")
+
+    # Already starts with { — try fast path, fall through if extra data
+    if text.startswith("{"):
+        try:
+            json.loads(text)
+            return text
+        except json.JSONDecodeError:
+            pass  # Fall through to brace extraction
+
+    # Strip markdown fences
+    fence_match = _MD_FENCE_RE.search(text)
+    if fence_match:
+        text = fence_match.group(1).strip()
+        if text.startswith("{"):
+            return text
+
+    # Find the first { and last } — extract the object
+    first_brace = text.find("{")
+    last_brace = text.rfind("}")
+    if first_brace != -1 and last_brace > first_brace:
+        candidate = text[first_brace:last_brace + 1]
+        # Quick sanity check: try to parse it
+        try:
+            json.loads(candidate)
+            return candidate
+        except json.JSONDecodeError:
+            pass  # Fall through to return original
+
+    # If raw looks like it *could* be JSON (just with leading whitespace
+    # or BOM), return it stripped and let json.loads produce a precise error.
+    return text
+
+
 SYSTEM_PROMPT_HEADER_MARKER = "You are the AgentHub Composer"
+
+
+def _log_composition_result(
+    correlation_id: str,
+    comp,
+    *,
+    retry: bool = False,
+) -> None:
+    """Log the parsed Composition in a structured, human-readable format."""
+    tag = "RETRY RESULT" if retry else "RESULT"
+    logger.info(
+        "[COMPOSE][%s] ── %s ──────────────────────────",
+        correlation_id, tag,
+    )
+    logger.info(
+        "[COMPOSE][%s] architecture: %s | slots: %d | handoffs: %d | entrypoint: %s",
+        correlation_id,
+        comp.architecture,
+        len(comp.slots),
+        len(comp.handoffs),
+        comp.entrypoint_slot_id,
+    )
+    logger.info(
+        "[COMPOSE][%s] headline: %s",
+        correlation_id, comp.headline,
+    )
+    logger.info(
+        "[COMPOSE][%s] rationale: %s",
+        correlation_id, comp.rationale,
+    )
+    for i, slot in enumerate(comp.slots):
+        skills = ", ".join(s.name for s in slot.skills) if slot.skills else "(none)"
+        logger.info(
+            "[COMPOSE][%s] slot[%d]: id=%s agent=%s role=%.100s skills=[%s]",
+            correlation_id, i, slot.id, slot.agent_id, slot.role, skills,
+        )
+    for h in comp.handoffs:
+        logger.info(
+            "[COMPOSE][%s] handoff: %s → %s (kind=%s%s)",
+            correlation_id, h.from_, h.to, h.kind,
+            f", condition={h.condition}" if h.condition else "",
+        )
+    logger.info(
+        "[COMPOSE][%s] budget: turns=%d tools=%d wallclock=%ds approvals=%s",
+        correlation_id,
+        comp.budget.max_turns,
+        comp.budget.max_tool_calls,
+        comp.budget.max_wallclock_s,
+        comp.budget.require_approvals,
+    )
 
 
 class ComposeService:
@@ -108,6 +228,7 @@ class ComposeService:
         require_approvals: bool = True,
         branch_out: bool = False,
         model: str | None = None,
+        workspace_context: WorkspaceContext | None = None,
     ) -> Composition:
         """Make the single compose call and return a Composition.
 
@@ -119,9 +240,39 @@ class ComposeService:
         session_id = session_id or str(uuid.uuid4())
         chosen_model = model or COMPOSE_MODEL
 
+        # ── Log the input ────────────────────────────────────────
+        logger.info(
+            "[COMPOSE][%s] ── INPUT ──────────────────────────────────",
+            correlation_id,
+        )
+        logger.info(
+            "[COMPOSE][%s] task: %.500s",
+            correlation_id, task_description,
+        )
+        if preferred_architecture:
+            logger.info(
+                "[COMPOSE][%s] preferred_architecture: %s",
+                correlation_id, preferred_architecture,
+            )
+        logger.info(
+            "[COMPOSE][%s] workspace: %s | model: %s | approvals: %s | branch_out: %s",
+            correlation_id, workspace_id, chosen_model, require_approvals, branch_out,
+        )
+
         att_dicts: list[dict] = []
         for a in attachments or []:
             att_dicts.append(a.model_dump() if hasattr(a, "model_dump") else a)
+
+        if att_dicts:
+            for i, att in enumerate(att_dicts):
+                name = att.get("name", "?")
+                kind = att.get("kind", "?")
+                content_len = len(att.get("content", ""))
+                logger.info(
+                    "[COMPOSE][%s] attachment[%d]: %s (kind=%s, %d chars)",
+                    correlation_id, i, name, kind, content_len,
+                )
+
         text_block, image_parts, att_warnings = process_attachments(att_dicts)
         if att_warnings:
             logger.info(
@@ -138,6 +289,8 @@ class ComposeService:
         user_msg_parts: list[str] = [f"USER TASK:\n{task_description}"]
         if text_block:
             user_msg_parts.append(f"ATTACHMENTS:\n{text_block}")
+        if workspace_context and not workspace_context.is_empty():
+            user_msg_parts.append(workspace_context.render())
         if preferred_architecture:
             user_msg_parts.append(
                 f"PREFERRED ARCHITECTURE: {preferred_architecture}"
@@ -159,46 +312,98 @@ class ComposeService:
             {"role": "user", "content": user_content},
         ]
 
+        # ── Log the outbound LLM call ───────────────────────────
         logger.info(
-            "[COMPOSE][%s] calling LLM (model=%s, sys_chars=%d, user_chars=%d, images=%d)",
+            "[COMPOSE][%s] ── LLM CALL ──────────────────────────────",
+            correlation_id,
+        )
+        logger.info(
+            "[COMPOSE][%s] model=%s | sys_chars=%d | user_text_chars=%d | images=%d",
             correlation_id, chosen_model,
             len(system_prompt), len(user_msg), len(image_parts),
         )
+        # Log the task + context the LLM sees (attachment content is
+        # already summarised by the per-attachment log lines above —
+        # printing it again would flood the logs with PDF/file dumps).
+        task_and_context = "\n\n".join(
+            p for p in user_msg_parts if not p.startswith("ATTACHMENTS:")
+        )
+        logger.info(
+            "[COMPOSE][%s] user_message (excl. attachment bodies): %.1000s%s",
+            correlation_id, task_and_context,
+            " [TRUNCATED]" if len(task_and_context) > 1000 else "",
+        )
+
         t0 = time.monotonic()
         raw = await self._call_llm(
             messages=messages, copilot_token=copilot_token,
             correlation_id=correlation_id, model=chosen_model,
         )
+        elapsed = time.monotonic() - t0
+
+        # ── Log the raw LLM response ────────────────────────────
         logger.info(
-            "[COMPOSE][%s] LLM responded in %.2fs (%d chars)",
-            correlation_id, time.monotonic() - t0, len(raw),
+            "[COMPOSE][%s] ── LLM RESPONSE ──────────────────────────",
+            correlation_id,
+        )
+        logger.info(
+            "[COMPOSE][%s] responded in %.2fs (%d chars)",
+            correlation_id, elapsed, len(raw),
+        )
+        logger.info(
+            "[COMPOSE][%s] raw: %.2000s%s",
+            correlation_id, raw,
+            " [TRUNCATED]" if len(raw) > 2000 else "",
         )
         try:
-            return self._parse(
+            composition = self._parse(
                 raw, session_id=session_id, task=task_description,
                 require_approvals=require_approvals,
             )
+            _log_composition_result(correlation_id, composition)
+            return composition
         except CompositionError as e:
             logger.warning(
-                "[COMPOSE][%s] parse failed — retrying once: %s",
+                "[COMPOSE][%s] ── PARSE FAILED ──────────────────────",
+                correlation_id,
+            )
+            logger.warning(
+                "[COMPOSE][%s] reason: %s",
                 correlation_id, e.reason,
             )
+            logger.warning(
+                "[COMPOSE][%s] raw response was: %.500s",
+                correlation_id, raw,
+            )
             # Single repair retry — tell the model exactly what broke.
-            messages.append({
-                "role": "system",
-                "content": (
-                    "Your previous response failed schema validation: "
-                    f"{e.reason}. Emit ONLY a valid JSON Composition."
-                ),
-            })
+            repair_msg = (
+                "Your previous response failed schema validation: "
+                f"{e.reason}. Emit ONLY a valid JSON Composition."
+            )
+            logger.info(
+                "[COMPOSE][%s] ── RETRY ─────────────────────────────",
+                correlation_id,
+            )
+            logger.info(
+                "[COMPOSE][%s] repair prompt: %s",
+                correlation_id, repair_msg,
+            )
+            messages.append({"role": "system", "content": repair_msg})
             raw2 = await self._call_llm(
                 messages=messages, copilot_token=copilot_token,
                 correlation_id=correlation_id, model=chosen_model,
             )
-            return self._parse(
+            logger.info(
+                "[COMPOSE][%s] retry raw: %.2000s%s",
+                correlation_id, raw2,
+                " [TRUNCATED]" if len(raw2) > 2000 else "",
+            )
+            composition2 = self._parse(
                 raw2, session_id=session_id, task=task_description,
                 require_approvals=require_approvals,
             )
+            _log_composition_result(correlation_id, composition2, retry=True)
+            return composition2
 
     # ── Internals ────────────────────────────────────────────────
 
@@ -271,8 +476,9 @@ class ComposeService:
         task: str,
         require_approvals: bool,
     ) -> Composition:
+        cleaned = _extract_json(raw)
         try:
-            payload = json.loads(raw)
+            payload = json.loads(cleaned)
         except json.JSONDecodeError as exc:
             raise CompositionError(f"not JSON: {exc}") from exc
         if not isinstance(payload, dict):
@@ -288,6 +494,25 @@ class ComposeService:
                 f"unknown architecture '{arch}' — must be one of "
                 f"{sorted(ARCHITECTURES_BY_ID)}"
             )
+        original_slots = payload.get("slots") or []
+        if isinstance(original_slots, list):
+            for idx, original_slot in enumerate(original_slots):
+                if not isinstance(original_slot, dict):
+                    continue
+                original_agent_id = str(original_slot.get("agentId") or original_slot.get("agent_id") or "")
+                if original_agent_id == "orchestrator":
+                    raise CompositionError(
+                        f"slot[{idx}] agentId 'orchestrator' is internal control plane and must not be emitted as a user-facing agent"
+                    )
+        if arch == "dynamic":
+            payload["slots"] = [{
+                "id": "generalist",
+                "agentId": "generalist",
+                "role": "Generalist mission controller",
+                "skills": [],
+            }]
+            payload["handoffs"] = []
+            payload["entrypointSlotId"] = "generalist"
 
         # Slot / agent / skill validation. We fix up minor issues the
         # LLM tends to make (missing skill.name, unknown skill id) by
@@ -300,12 +525,19 @@ class ComposeService:
             if not isinstance(s, dict):
                 raise CompositionError(f"slot[{idx}] must be an object")
             agent_id = str(s.get("agentId") or s.get("agent_id") or "")
-            if agent_id not in self._agents:
+            if agent_id in _INTERNAL_CONTROL_AGENT_IDS:
+                raise CompositionError(
+                    f"slot[{idx}] agentId '{agent_id}' is internal control plane and must not be emitted as a user-facing agent"
+                )
+            if agent_id == "generalist":
+                known_skills = {}
+            elif agent_id not in self._agents:
                 raise CompositionError(
                     f"slot[{idx}] agentId '{agent_id}' is not a known agent"
                 )
-            tpl = self._agents[agent_id]
-            known_skills = {sk.id: sk for sk in tpl.skills}
+            else:
+                tpl = self._agents[agent_id]
+                known_skills = {sk.id: sk for sk in tpl.skills}
             raw_skills = s.get("skills") or []
             resolved_skills: list[SkillRef] = []
             for sk in raw_skills:
@@ -335,7 +567,7 @@ class ComposeService:
         raw_handoffs = payload.get("handoffs") or []
         handoffs: list[Handoff] = []
         slot_ids = {s.id for s in slots}
-        for idx, h in enumerate(raw_handoffs):
+        for h in raw_handoffs:
             if not isinstance(h, dict):
                 continue
             frm = str(h.get("from") or "")
@@ -380,17 +612,25 @@ class ComposeService:
 
         rationale = str(payload.get("rationale") or "Composition derived from the task prompt.").strip()
 
-        # Post-parse normalisation: enforce uniqueness even when the
-        # LLM ignores rule 4 in the global rules. For sequential and
-        # supervisor architectures, emitting two slots with the same
+        # Post-parse normalisation: enforce sequential uniqueness even
+        # when the LLM ignores rule 4 in the global rules. For
+        # sequential architectures, emitting two slots with the same
         # ``agentId`` produces two disjoint agent loops with no shared
-        # state — almost always wrong. We merge consecutive duplicates
-        # into a single slot (first one wins, roles are concatenated)
-        # and rewrite handoffs to match.
-        if arch in ("sequential", "supervisor"):
+        # state — almost always wrong. We merge duplicates into a
+        # single slot (first one wins, roles are concatenated) and
+        # rewrite handoffs to match. Do NOT apply this to supervisor:
+        # fan-out patterns may legitimately use the same agent template
+        # in multiple lead/worker roles.
+        if arch == "sequential":
             slots, handoffs, entrypoint = _collapse_duplicate_agent_slots(
                 slots, handoffs, entrypoint,
             )
+
+        arch, slots, handoffs, entrypoint = _enforce_quality_gate_defaults(
+            arch, slots, handoffs, entrypoint, task, self._agents,
+        )
+
+        _validate_architecture_shape(arch, slots, handoffs)
 
         return Composition(
             session_id=session_id,
@@ -421,13 +661,15 @@ def _collapse_duplicate_agent_slots(
     handoffs: list[Handoff],
     entrypoint: str,
 ) -> tuple[list[AgentSlot], list[Handoff], str]:
-    """Merge consecutive slots that share the same ``agent_id``.
+    """Merge slots that share the same ``agent_id``.
 
-    Sequential / supervisor plans should never instantiate the same
-    agent twice — it produces two disjoint agent loops with no shared
-    memory, which almost always means the composer mis-decomposed the
-    task (e.g. two ``FabricDataEngineer`` slots for "ingestion" and
-    "transformation", when one slot covers the whole build phase).
+    Sequential plans should not instantiate the same agent twice: it
+    produces disjoint agent loops with no shared memory, which almost
+    always means the composer mis-decomposed the task (e.g. two
+    ``FabricDataEngineer`` slots for "ingestion" and "transformation",
+    when one slot covers the whole build phase). Do not apply this to
+    supervisor fan-out plans; repeated agent templates can be valid
+    when the lead/worker roles are distinct.
 
     Strategy: keep the first occurrence, concatenate its ``role`` with
     the duplicates' roles so context isn't lost, then rewrite every
@@ -486,3 +728,269 @@ def _collapse_duplicate_agent_slots(
         [s for s, k in id_remap.items() if s != k],
     )
     return kept, new_handoffs, new_entry
+
+
+_CREATE_OR_MODIFY_RE = _re.compile(
+    r"\b(create|build|modify|update|fix|optimi[sz]e|publish|generate|write|implement|deploy|produce|refine|polish)\b",
+    _re.IGNORECASE,
+)
+_READ_ONLY_RE = _re.compile(
+    r"\b(read[-\s]?only|list|inspect|inventory|summari[sz]e|describe|show|check)\b",
+    _re.IGNORECASE,
+)
+_NO_REVIEW_RE = _re.compile(
+    r"\b(?:"
+    r"(?:no|without|do not)\s+(?:review|critic|critique|verify|validate|verifier|quality\s+gate|"
+    r"delegate|branch|supervise|debate|add\s+(?:any\s+)?(?:extra|additional)\s+agents?)"
+    r"|single[-\s]?agent|one[-\s]?agent|exactly\s+one\s+(?:agent|slot)|no\s+extra\s+agents?"
+    r")\b",
+    _re.IGNORECASE,
+)
+_ARTIFACT_RE = _re.compile(
+    r"\b(report|dashboard|semantic\s+model|model|notebook|pipeline|dataflow|query|kql|sql|dax|measure|lakehouse|warehouse|eventhouse|config|code|artifact|page|visual)\b",
+    _re.IGNORECASE,
+)
+_VISUAL_DELIVERABLE_RE = _re.compile(
+    r"\b(report|dashboard|visual|layout|presentation|leadership|executive|power\s*bi|variance|ibcs|design|appealing|polish(?:ed)?)\b",
+    _re.IGNORECASE,
+)
+_VERIFIABLE_RE = _re.compile(
+    r"\b(test|verify|validate|execute|run|render|publish|query|notebook|pipeline|report|semantic\s+model|dax|sql|kql)\b",
+    _re.IGNORECASE,
+)
+_MULTI_DOMAIN_RE = _re.compile(
+    r"\b(ingest|transform|curat(?:e|ed)|semantic\s+model|report|dashboard|pipeline|lakehouse|warehouse|governance|rbac|workspace|app|api)\b",
+    _re.IGNORECASE,
+)
+_QUALITY_ROLE_RE = _re.compile(
+    r"\b(critic|critique|review|reviewer|quality|designer|visual|presentation|verifier|verify|validator|approver)\b",
+    _re.IGNORECASE,
+)
+
+
+def _enforce_quality_gate_defaults(
+    arch: str,
+    slots: list[AgentSlot],
+    handoffs: list[Handoff],
+    entrypoint: str,
+    task: str,
+    agents: dict[str, AgentTemplate],
+) -> tuple[str, list[AgentSlot], list[Handoff], str]:
+    """Normalize under-composed artifact work into quality-gated teams.
+
+    The system prompt already tells the LLM that users should not need
+    to say "iterate", "review", or "verify" to get a critic/verifier
+    loop. This guardrail makes that contract durable when a model emits
+    a too-simple shape anyway:
+
+    * single artifact create/modify -> ``reflection``
+    * multi-domain user-facing deliverable -> ``mixed`` with a quality
+      subteam
+
+    Explicit read-only tasks and explicit "no review / no verification"
+    requests are preserved.
+    """
+    if arch == "dynamic":
+        return arch, slots, handoffs, entrypoint
+    if not slots or not _task_needs_quality_gate(task):
+        return arch, slots, handoffs, entrypoint
+
+    visual = bool(_VISUAL_DELIVERABLE_RE.search(task))
+    verifiable = bool(_VERIFIABLE_RE.search(task))
+    multi_domain = _is_multi_domain_deliverable(task)
+    has_quality_slot = any(_slot_is_quality_gate(s) for s in slots)
+
+    if arch == "solo":
+        actor = slots[0]
+        critic = _make_quality_slot(
+            "critic",
+            agents,
+            visual=visual,
+            role=(
+                "Critic: review the artifact for correctness, completeness, "
+                "visual clarity, and presentation readiness before delivery."
+                if visual else
+                "Critic: review the artifact for correctness and completeness before delivery."
+            ),
+            fallback_agent_id=actor.agent_id,
+        )
+        new_slots = [actor, critic]
+        new_handoffs = [
+            _handoff(actor.id, critic.id, "critique"),
+            _handoff(critic.id, actor.id, "report"),
+        ]
+        if verifiable:
+            verifier_slot = _make_quality_slot(
+                "verifier",
+                agents,
+                visual=visual,
+                verifier=True,
+                role=(
+                    "Verifier: validate the final artifact against the original task, "
+                    "confirm required outputs exist, inspect live data/results, and "
+                    "approve only when the result is ready. If validation fails, "
+                    "return concrete repair requirements."
+                ),
+                fallback_agent_id=critic.agent_id,
+            )
+            new_slots.append(verifier_slot)
+            new_handoffs.append(_handoff(actor.id, verifier_slot.id, "verify"))
+        logger.info("compose upgraded solo artifact task to reflection quality gate")
+        return "reflection", new_slots, new_handoffs, actor.id
+
+    if multi_domain and arch not in {"mixed", "reflection"}:
+        arch = "mixed"
+
+    if arch == "mixed" and not has_quality_slot:
+        last = slots[-1]
+        reviewer = _make_quality_slot(
+            _unique_slot_id(slots, "quality-review"),
+            agents,
+            visual=visual,
+            role=(
+                "Quality reviewer / designer: critique the final deliverable, "
+                "judge visual appeal and metric correctness, and require "
+                "revision until it is presentation-ready."
+                if visual else
+                "Quality reviewer: critique the final deliverable and require revision until it is ready."
+            ),
+            fallback_agent_id=last.agent_id,
+        )
+        slots = [*slots, reviewer]
+        handoffs = [*handoffs, _handoff(last.id, reviewer.id, "critique")]
+        if verifiable:
+            verifier_slot = _make_quality_slot(
+                _unique_slot_id(slots, "final-verifier"),
+                agents,
+                visual=visual,
+                verifier=True,
+                role=(
+                    "Final verifier: validate requested outputs against the original task, "
+                    "inspect live Fabric items/data/visuals, prove they are ready for users, "
+                    "and return actionable repair requirements for any mismatch."
+                ),
+                fallback_agent_id=reviewer.agent_id,
+            )
+            slots = [*slots, verifier_slot]
+            handoffs = [*handoffs, _handoff(reviewer.id, verifier_slot.id, "verify")]
+        logger.info("compose added mixed quality gate for multi-domain deliverable")
+
+    return arch, slots, handoffs, entrypoint
+
+
+def _task_needs_quality_gate(task: str) -> bool:
+    text = task or ""
+    if _NO_REVIEW_RE.search(text):
+        return False
+    if _READ_ONLY_RE.search(text) and not _CREATE_OR_MODIFY_RE.search(text):
+        return False
+    return bool(_CREATE_OR_MODIFY_RE.search(text) and _ARTIFACT_RE.search(text))
+
+
+def _is_multi_domain_deliverable(task: str) -> bool:
+    hits = {m.group(0).lower() for m in _MULTI_DOMAIN_RE.finditer(task or "")}
+    return len(hits) >= 3 and bool(_VISUAL_DELIVERABLE_RE.search(task or ""))
+
+
+def _slot_is_quality_gate(slot: AgentSlot) -> bool:
+    text = " ".join([slot.id, slot.role, *(sk.id for sk in slot.skills), *(sk.name for sk in slot.skills)])
+    return bool(_QUALITY_ROLE_RE.search(text))
+
+
+def _make_quality_slot(
+    slot_id: str,
+    agents: dict[str, AgentTemplate],
+    *,
+    visual: bool,
+    role: str,
+    verifier: bool = False,
+    fallback_agent_id: str,
+) -> AgentSlot:
+    if verifier and "fabric-verifier" in agents:
+        agent_id = "fabric-verifier"
+    else:
+        agent_id = "modeler" if visual and "modeler" in agents else fallback_agent_id
+    skills: list[SkillRef] = []
+    if agent_id in agents:
+        available = {sk.id: sk for sk in agents[agent_id].skills}
+        if visual and not verifier and "powerbi-ibcs" in available:
+            sk = available["powerbi-ibcs"]
+            skills.append(SkillRef(id=sk.id, name=sk.name))
+        if "fabric-verification" in available:
+            sk = available["fabric-verification"]
+            if all(existing.id != sk.id for existing in skills):
+                skills.append(SkillRef(id=sk.id, name=sk.name))
+    return AgentSlot(id=slot_id, agent_id=agent_id, role=role[:160], skills=skills)
+
+
+def _handoff(frm: str, to: str, kind: str) -> Handoff:
+    return Handoff.model_validate({"from": frm, "to": to, "kind": kind, "condition": None})
+
+
+def _unique_slot_id(slots: list[AgentSlot], base: str) -> str:
+    existing = {s.id for s in slots}
+    if base not in existing:
+        return base
+    i = 2
+    while f"{base}-{i}" in existing:
+        i += 1
+    return f"{base}-{i}"
+
+
+def _validate_architecture_shape(
+    arch: str,
+    slots: list[AgentSlot],
+    handoffs: list[Handoff],
+) -> None:
+    """Reject structurally impossible compositions before runtime.
+
+    The most important invariant: ``solo`` is the only architecture
+    allowed to have a single slot. Every other topology is, by
+    definition, multi-agent. If the LLM emits ``architecture`` =
+    supervisor/sequential/etc. with one slot, the parser must fail so
+    the compose retry can repair it instead of the E2E test silently
+    running a solo-shaped plan under a multi-agent label.
+    """
+    slot_count = len(slots)
+    if arch == "dynamic":
+        if slot_count != 1:
+            raise CompositionError(
+                f"dynamic architecture requires exactly 1 generalist slot; got {slot_count}"
+            )
+        slot = slots[0]
+        if slot.id != "generalist" or slot.agent_id != "generalist":
+            raise CompositionError("dynamic architecture must start with the internal generalist slot")
+        if handoffs:
+            raise CompositionError("dynamic architecture must not include upfront handoffs")
+        return
+    if arch == "solo":
+        if slot_count != 1:
+            raise CompositionError(
+                f"solo architecture requires exactly 1 slot; got {slot_count}"
+            )
+        if handoffs:
+            raise CompositionError("solo architecture must not include handoffs")
+        return
+
+    if slot_count < 2:
+        if arch == "sequential":
+            raise CompositionError(
+                "sequential architecture requires at least 2 distinct "
+                "agentIds; only solo may use one slot"
+            )
+        raise CompositionError(
+            f"{arch} architecture requires at least 2 slots; only solo may use one slot"
+        )
+
+    if arch == "reflection" and slot_count not in (2, 3):
+        raise CompositionError(
+            f"reflection architecture requires 2 or 3 slots; got {slot_count}"
+        )
+    if arch == "hierarchical" and slot_count < 3:
+        raise CompositionError(
+            f"hierarchical architecture requires at least 3 slots; got {slot_count}"
+        )
+    if arch == "mixed" and slot_count < 3:
+        raise CompositionError(
+            f"mixed architecture requires at least 3 slots; got {slot_count}"
+        )

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
     BuildingFactory20Filled,
     ShieldCheckmark20Filled,
@@ -8,6 +8,7 @@ import {
     Flash20Filled,
 } from "@fluentui/react-icons";
 import type { Team, TeamEdge, TeamNode, TeamPattern } from "../plan/types";
+import { visibleTeam } from "./teamVisibility";
 
 /**
  * Pixel-faithful orchestration canvas ported from
@@ -35,17 +36,26 @@ const CANVAS_W_DEFAULT = 860;
  *  graph: when the container is narrower, the outer wrapper applies a
  *  CSS transform to zoom-out uniformly rather than collapsing spacing. */
 const NODE_W = 208;
-const NODE_W_NARROW = 184;
-/** Routing height used for edge anchor math — matches a node *without*
- *  skills (head + state only). Visual height is larger when a node
- *  renders skills; use ``NODE_CONTENT_H`` to budget canvas height. */
-const NODE_H = 112;
+const NODE_W_NARROW = 208;
+/** Routing height for edge anchor math — node with skills (head + role
+ *  + compacted skills row). This is deliberately close to the rendered
+ *  card footprint so connectors start outside cards instead of through
+ *  wrapped skill chips. For nodes without skills, use
+ *  ``NODE_H_COMPACT``. */
+const NODE_H = 156;
+/** Routing height for a node without skills (head + role only).
+ *  Matches the CSS: 12px pad + 32px icon + ~14px role gap/text +
+ *  12px pad + 2px border ≈ 72px. */
+const NODE_H_COMPACT = 72;
 /** Budgeted visual height for a node with a head, skills row, and
- *  state footer. Used solely for canvas.height so the card doesn't
- *  leave a dead strip of grid below the last row. */
-const NODE_CONTENT_H = 188;
+ *  state footer. Used solely for row spacing and canvas.height so the
+ *  card doesn't leave a dead strip of grid below the last row. */
+const NODE_CONTENT_H = 176;
 /** Minimum horizontal gap between neighbouring nodes so edges breathe. */
 const MIN_GAP_X = 64;
+/** Sequential edges carry inline labels in the horizontal gaps; use a
+ *  wider gutter so those captions never touch adjacent cards. */
+const SEQUENTIAL_GAP_X = 96;
 /** Vertical row separation (orchestrator → workers). Mirrors the
  *  design mockup — generous enough for the edge curves to breathe. */
 const ROW_GAP_Y = 140;
@@ -54,6 +64,27 @@ const CANVAS_PAD_X = 64;
 /** Natural canvas width floor — small teams still get a sensible card
  *  footprint rather than a pill-shaped sliver. */
 const NATURAL_W_FLOOR = 640;
+/** Inline skill chips shown before the overflow popover takes over.
+ *  Keeps graph nodes readable even when an agent template exposes a
+ *  broad Fabric capability catalog. */
+const VISIBLE_SKILL_LIMIT = 2;
+
+const COMPACT_SKILL_LABELS: Record<string, string> = {
+    "Warehouse / SQL authoring": "SQL authoring",
+    "Warehouse / SQL consumption": "SQL consumption",
+    "Spark consumption": "Spark read",
+    "Eventhouse authoring": "Eventhouse",
+    "Eventhouse consumption": "Eventhouse read",
+    "Power BI consumption": "Power BI read",
+    "End-to-end Medallion": "Medallion",
+    "Paginated report authoring": "Report authoring",
+    "Paginated report ops": "Report ops",
+    "Fabric API grounding": "API grounding",
+};
+
+function compactSkillLabel(skill: string): string {
+    return COMPACT_SKILL_LABELS[skill] || skill;
+}
 
 export interface OrchCanvasProps {
     team: Team;
@@ -74,10 +105,10 @@ export interface OrchCanvasProps {
 
 export function agentKind(agent: string, id: string): string {
     const a = (agent + " " + id).toLowerCase();
-    if (id === "orchestrator" || a.includes("orchestr") || a.includes("supervisor") || a.includes("lead")) return "orch";
+    if (id === "orchestrator" || a.includes("orchestr") || a.includes("supervisor") || (a.includes("lead") && !a.includes("sub"))) return "orch";
     if (a.includes("fabricdataengineer") || a.includes("dataengineer") || a.includes("ingest") || a.includes("spark") || a.includes("notebook") || a.includes("pipeline") || a.includes("lakehouse") || a.includes("warehouse")) return "fde";
-    if (a.includes("admin") || a.includes("govern") || a.includes("security") || a.includes("policy")) return "admin";
-    if (a.includes("report") || a.includes("powerbi") || a.includes("dashboard") || a.includes("semantic")) return "reporter";
+    if (a.includes("admin") || a.includes("govern") || a.includes("security") || a.includes("policy") || a.includes("architect")) return "admin";
+    if (a.includes("report") || a.includes("powerbi") || a.includes("dashboard") || a.includes("semantic") || a.includes("modeler") || a.includes("creator")) return "reporter";
     if (a.includes("realtime") || a.includes("kusto") || a.includes("stream") || a.includes("event")) return "rt";
     return "generic";
 }
@@ -136,7 +167,19 @@ export function formatRole(role: string): string {
     return result;
 }
 
-interface NodePos { x: number; y: number; w: number; }
+interface NodePos { x: number; y: number; w: number; h: number; }
+
+/** Pick the routing height for a node based on whether it renders
+ *  a skills row. Keeps edge anchors flush with the card bottom. */
+function nodeH(node: TeamNode, measuredHeights?: Map<string, number>): number {
+    const measured = measuredHeights?.get(node.id);
+    if (measured && Number.isFinite(measured)) return measured;
+    return (node.skills?.length || node.allSkills?.length) ? NODE_H : NODE_H_COMPACT;
+}
+
+function maxNodeH(nodes: TeamNode[], measuredHeights?: Map<string, number>): number {
+    return nodes.reduce((max, node) => Math.max(max, nodeH(node, measuredHeights)), 0);
+}
 
 /**
  * Compute the **natural** (design-faithful) width for a team's layout.
@@ -154,8 +197,9 @@ export function naturalCanvasWidth(team: Team): number {
 /** Returns both natural width and height so Step2View can reserve the
  *  right amount of vertical space when scaling the canvas down. */
 export function naturalCanvasSize(team: Team): { width: number; height: number } {
-    const w = _naturalWidthInner(team);
-    const { height } = layoutFor(team, w);
+    const displayTeam = visibleTeam(team);
+    const w = _naturalWidthInner(displayTeam);
+    const { height } = layoutFor(displayTeam, w);
     return { width: w, height };
 }
 
@@ -172,7 +216,10 @@ function _naturalWidthInner(team: Team): number {
     if (pattern === "sequential") {
         // Sequential is a single horizontal pipeline. Use narrow nodes
         // to match the design; let it grow as wide as it needs.
-        return Math.max(NATURAL_W_FLOOR, rowWidth(n, NODE_W_NARROW));
+        return Math.max(
+            NATURAL_W_FLOOR,
+            2 * CANVAS_PAD_X + n * NODE_W_NARROW + Math.max(0, n - 1) * SEQUENTIAL_GAP_X,
+        );
     }
 
     if (pattern === "network") {
@@ -193,49 +240,72 @@ function _naturalWidthInner(team: Team): number {
         return Math.max(NATURAL_W_FLOOR, rowWidth(widest));
     }
 
+    if (pattern === "mixed") {
+        const orchestrator = team.nodes.find((x) => x.id === "orchestrator") || team.nodes[0];
+        const directChildIds = new Set<string>();
+        const nestedChildIds = new Set<string>();
+        for (const e of team.edges) {
+            if (e.kind !== "delegate") continue;
+            if (e.from === orchestrator.id) directChildIds.add(e.to);
+            else nestedChildIds.add(e.to);
+        }
+        if (nestedChildIds.size > 0) {
+            const directCount = Math.max(directChildIds.size, 1);
+            const nestedCount = Math.max(nestedChildIds.size, n - 1 - directChildIds.size, 1);
+            return Math.max(NATURAL_W_FLOOR, rowWidth(Math.max(directCount, nestedCount)));
+        }
+    }
+
     // supervisor + mixed: one row of (n-1) workers.
     const workers = n - 1;
     return Math.max(NATURAL_W_FLOOR, rowWidth(workers));
 }
 
-function layoutFor(team: Team, canvasW: number): { positions: Map<string, NodePos>; height: number; canvasClass?: string } {
+function layoutFor(team: Team, canvasW: number, measuredHeights?: Map<string, number>): { positions: Map<string, NodePos>; height: number; canvasClass?: string } {
     const pattern: TeamPattern = team.pattern || "supervisor";
     const nodes = team.nodes;
     const out = new Map<string, NodePos>();
     if (nodes.length === 0) return { positions: out, height: 420 };
 
     if (pattern === "solo" || nodes.length === 1) {
-        out.set(nodes[0].id, { x: (canvasW - NODE_W) / 2, y: 140, w: NODE_W });
+        out.set(nodes[0].id, { x: (canvasW - NODE_W) / 2, y: 140, w: NODE_W, h: nodeH(nodes[0], measuredHeights) });
         return { positions: out, height: 340 };
     }
 
     if (pattern === "sequential") {
         const n = nodes.length;
-        const rowW = n * NODE_W_NARROW + (n - 1) * MIN_GAP_X;
+        const rowW = n * NODE_W_NARROW + (n - 1) * SEQUENTIAL_GAP_X;
         const startX = (canvasW - rowW) / 2;
         nodes.forEach((node, i) => {
             out.set(node.id, {
-                x: startX + i * (NODE_W_NARROW + MIN_GAP_X),
+                x: startX + i * (NODE_W_NARROW + SEQUENTIAL_GAP_X),
                 y: 40,
                 w: NODE_W_NARROW,
+                h: nodeH(node, measuredHeights),
             });
         });
-        return { positions: out, height: 40 + NODE_CONTENT_H + 24, canvasClass: "mc-canvas--sequential" };
+        return { positions: out, height: 40 + Math.max(NODE_CONTENT_H, maxNodeH(nodes, measuredHeights)) + 24, canvasClass: "mc-canvas--sequential" };
     }
 
     if (pattern === "network") {
         const cx = canvasW / 2;
         const r = Math.min(240, 120 + 18 * nodes.length);
-        const cy = r + 70;
+        const maxMeasuredH = Math.max(NODE_H_COMPACT, maxNodeH(nodes, measuredHeights));
+        const cy = r + maxMeasuredH / 2 + 32;
+        let maxBottom = 0;
         nodes.forEach((node, i) => {
             const angle = (2 * Math.PI * i) / nodes.length - Math.PI / 2;
+            const nh = nodeH(node, measuredHeights);
+            const y = cy + r * Math.sin(angle) - nh / 2;
+            maxBottom = Math.max(maxBottom, y + nh);
             out.set(node.id, {
                 x: cx + r * Math.cos(angle) - NODE_W / 2,
-                y: cy + r * Math.sin(angle) - NODE_H / 2,
+                y,
                 w: NODE_W,
+                h: nh,
             });
         });
-        return { positions: out, height: Math.max(480, 2 * r + 140) };
+        return { positions: out, height: Math.max(480, maxBottom + 32) };
     }
 
     if (pattern === "hierarchical") {
@@ -259,28 +329,84 @@ function layoutFor(team: Team, canvasW: number): { positions: Map<string, NodePo
         // skills and footer). Using NODE_H caused the third row to
         // overlap the second row by roughly 48px when the sub-lead
         // cards rendered skills.
-        out.set(orchestrator.id, { x: (canvasW - NODE_W) / 2, y: 30, w: NODE_W });
+        out.set(orchestrator.id, { x: (canvasW - NODE_W) / 2, y: 30, w: NODE_W, h: nodeH(orchestrator, measuredHeights) });
 
         const subRowW = subleads.length * NODE_W + Math.max(0, subleads.length - 1) * MIN_GAP_X;
         const subStartX = (canvasW - subRowW) / 2;
-        const subleadY = 30 + NODE_CONTENT_H + ROW_GAP_Y;
+        const subleadY = 30 + Math.max(NODE_CONTENT_H, nodeH(orchestrator, measuredHeights)) + ROW_GAP_Y;
         subleads.forEach((s, i) => {
             out.set(s.id, {
                 x: subStartX + i * (NODE_W + MIN_GAP_X),
                 y: subleadY,
                 w: NODE_W,
+                h: nodeH(s, measuredHeights),
             });
         });
 
-        const workerY = subleadY + NODE_CONTENT_H + ROW_GAP_Y;
-        workers.forEach((w) => {
-            const parent = workerParent.get(w.id);
-            const parentPos = parent ? out.get(parent) : undefined;
-            const x = parentPos ? parentPos.x : (canvasW - NODE_W) / 2;
-            out.set(w.id, { x, y: workerY, w: NODE_W });
+        const workerY = subleadY + Math.max(NODE_CONTENT_H, maxNodeH(subleads, measuredHeights)) + ROW_GAP_Y;
+        const groupedWorkers = [
+            ...subleads.flatMap((s) => workers.filter((w) => workerParent.get(w.id) === s.id)),
+            ...workers.filter((w) => !workerParent.has(w.id)),
+        ];
+        const workerRowW = groupedWorkers.length * NODE_W + Math.max(0, groupedWorkers.length - 1) * MIN_GAP_X;
+        const workerStartX = (canvasW - workerRowW) / 2;
+        groupedWorkers.forEach((w, i) => {
+            out.set(w.id, {
+                x: workerStartX + i * (NODE_W + MIN_GAP_X),
+                y: workerY,
+                w: NODE_W,
+                h: nodeH(w, measuredHeights),
+            });
         });
 
-        return { positions: out, height: workerY + NODE_CONTENT_H + 24 };
+        return { positions: out, height: workerY + Math.max(NODE_CONTENT_H, maxNodeH(groupedWorkers, measuredHeights)) + 24 };
+    }
+
+    if (pattern === "mixed") {
+        const orchestrator = nodes.find((n) => n.id === "orchestrator") || nodes[0];
+        const directChildIds = new Set<string>();
+        const parentByChild = new Map<string, string>();
+        for (const e of team.edges) {
+            if (e.kind !== "delegate") continue;
+            if (e.from === orchestrator.id) directChildIds.add(e.to);
+            else parentByChild.set(e.to, e.from);
+        }
+
+        if (parentByChild.size > 0) {
+            const directChildren = nodes.filter((n) => n.id !== orchestrator.id && directChildIds.has(n.id));
+            const nestedChildren = [
+                ...directChildren.flatMap((p) => nodes.filter((n) => parentByChild.get(n.id) === p.id)),
+                ...nodes.filter((n) => n.id !== orchestrator.id && !directChildIds.has(n.id) && !parentByChild.has(n.id)),
+            ];
+            const topY = 30;
+            out.set(orchestrator.id, { x: (canvasW - NODE_W) / 2, y: topY, w: NODE_W, h: nodeH(orchestrator, measuredHeights) });
+
+            const subleadY = topY + Math.max(NODE_CONTENT_H, nodeH(orchestrator, measuredHeights)) + ROW_GAP_Y;
+            const directRowW = directChildren.length * NODE_W + Math.max(0, directChildren.length - 1) * MIN_GAP_X;
+            const directStartX = (canvasW - directRowW) / 2;
+            directChildren.forEach((child, i) => {
+                out.set(child.id, {
+                    x: directStartX + i * (NODE_W + MIN_GAP_X),
+                    y: subleadY,
+                    w: NODE_W,
+                    h: nodeH(child, measuredHeights),
+                });
+            });
+
+            const nestedY = subleadY + Math.max(NODE_CONTENT_H, maxNodeH(directChildren, measuredHeights)) + ROW_GAP_Y;
+            const nestedRowW = nestedChildren.length * NODE_W + Math.max(0, nestedChildren.length - 1) * MIN_GAP_X;
+            const nestedStartX = (canvasW - nestedRowW) / 2;
+            nestedChildren.forEach((child, i) => {
+                out.set(child.id, {
+                    x: nestedStartX + i * (NODE_W + MIN_GAP_X),
+                    y: nestedY,
+                    w: NODE_W,
+                    h: nodeH(child, measuredHeights),
+                });
+            });
+
+            return { positions: out, height: nestedY + Math.max(NODE_CONTENT_H, maxNodeH(nestedChildren, measuredHeights)) + 24 };
+        }
     }
 
     // supervisor + mixed — design-faithful layout:
@@ -289,25 +415,27 @@ function layoutFor(team: Team, canvasW: number): { positions: Map<string, NodePo
     // wide as it needs; the wrapper handles zoom-to-fit.
     const orchestrator = nodes.find((n) => n.id === "orchestrator") || nodes[0];
     const workers = nodes.filter((n) => n.id !== orchestrator.id);
-    out.set(orchestrator.id, { x: (canvasW - NODE_W) / 2, y: 30, w: NODE_W });
+    const orchH = nodeH(orchestrator, measuredHeights);
+    out.set(orchestrator.id, { x: (canvasW - NODE_W) / 2, y: 30, w: NODE_W, h: orchH });
     if (workers.length === 0) return { positions: out, height: 200 };
 
     const rowW = workers.length * NODE_W + (workers.length - 1) * MIN_GAP_X;
     const startX = (canvasW - rowW) / 2;
-    const workerY = 30 + NODE_H + ROW_GAP_Y;
+    const workerY = 30 + orchH + ROW_GAP_Y;
     workers.forEach((worker, i) => {
         out.set(worker.id, {
             x: startX + i * (NODE_W + MIN_GAP_X),
             y: workerY,
             w: NODE_W,
+            h: nodeH(worker, measuredHeights),
         });
     });
-    return { positions: out, height: workerY + NODE_CONTENT_H + 24 };
+    return { positions: out, height: workerY + Math.max(NODE_CONTENT_H, maxNodeH(workers, measuredHeights)) + 24 };
 }
 
 function pathSmooth(from: NodePos, to: NodePos): string {
     const x1 = from.x + from.w / 2;
-    const y1 = from.y + NODE_H;
+    const y1 = from.y + from.h;
     const x2 = to.x + to.w / 2;
     const y2 = to.y;
     if (Math.abs(x1 - x2) < 4) return `M ${x1} ${y1} L ${x2} ${y2}`;
@@ -316,31 +444,46 @@ function pathSmooth(from: NodePos, to: NodePos): string {
 }
 
 function pathHorizontal(from: NodePos, to: NodePos): string {
-    const x1 = from.x + from.w;
-    const y1 = from.y + NODE_H / 2;
-    const x2 = to.x;
-    const y2 = to.y + NODE_H / 2;
+    const leftToRight = from.x <= to.x;
+    const x1 = leftToRight ? from.x + from.w : from.x;
+    const y1 = from.y + from.h / 2;
+    const x2 = leftToRight ? to.x : to.x + to.w;
+    const y2 = to.y + to.h / 2;
     return `M ${x1} ${y1} L ${x2} ${y2}`;
 }
 
 function pathPeer(from: NodePos, to: NodePos): string {
     const x1 = from.x + from.w / 2;
-    const y1 = from.y + NODE_H / 2;
+    const y1 = from.y + from.h / 2;
     const x2 = to.x + to.w / 2;
-    const y2 = to.y + NODE_H / 2;
+    const y2 = to.y + to.h / 2;
     return `M ${x1} ${y1} L ${x2} ${y2}`;
 }
 
 function stateFor(node: TeamNode, active: boolean): string {
-    if (active) return "active";
-    return node.status || "planned";
+    if (node.lifecycle) {
+        if (active && node.lifecycle !== "finished" && node.lifecycle !== "failed") {
+            return "running";
+        }
+        return node.lifecycle;
+    }
+    if (active) return "running";
+    if (node.status === "active") return "running";
+    if (node.status === "done") return "finished";
+    if (node.status === "failed") return "failed";
+    if (node.status === "waiting") return "waiting";
+    return "planned";
 }
 
 const STATE_LABEL: Record<string, string> = {
     planned: "Planned",
-    active: "Running",
-    done: "Done",
+    spinning_up: "Spinning up",
     waiting: "Waiting",
+    running: "Running",
+    finished: "Finished",
+    failed: "Failed",
+    active: "Running",
+    done: "Finished",
 };
 
 /**
@@ -376,17 +519,19 @@ function NodeSkills({
         return out;
     }, [selected, allSkills]);
     if (full.length === 0) return null;
-    const overflow = full.length - selected.length;
+    const visibleSelected = selected.slice(0, VISIBLE_SKILL_LIMIT);
+    const selectedSet = new Set(selected);
+    const overflow = full.length - visibleSelected.length;
 
     return (
         <div className="mc-node__skills">
-            {selected.map((s) => (
+            {visibleSelected.map((s) => (
                 <span
                     key={`sel-${s}`}
                     className="mc-node__skill mc-node__skill--selected"
                     title={`${s} — chosen for this task`}
                 >
-                    {s}
+                    {compactSkillLabel(s)}
                 </span>
             ))}
             {overflow > 0 && (
@@ -405,11 +550,11 @@ function NodeSkills({
                                 {nodeLabel} — all skills
                             </span>
                             <span className="mc-node__skill-pop-list">
-                                {full.map((s, i) => (
+                                {full.map((s) => (
                                     <span
                                         key={s}
                                         className="mc-node__skill-pop-item"
-                                        data-selected={i < selected.length ? "true" : undefined}
+                                        data-selected={selectedSet.has(s) ? "true" : undefined}
                                     >
                                         {s}
                                     </span>
@@ -434,12 +579,36 @@ export function OrchCanvas({
     canvasWidth,
     onNodeHover,
 }: OrchCanvasProps) {
+    const displayTeam = useMemo(() => visibleTeam(team), [team]);
     const effectiveW = Math.max(NATURAL_W_FLOOR, canvasWidth ?? CANVAS_W_DEFAULT);
+    const nodeRefs = useRef(new Map<string, HTMLDivElement>());
+    const [measuredHeights, setMeasuredHeights] = useState<Map<string, number>>(() => new Map());
     const { positions, height, canvasClass } = useMemo(
-        () => layoutFor(team, effectiveW),
-        [team, effectiveW],
+        () => layoutFor(displayTeam, effectiveW, measuredHeights),
+        [displayTeam, effectiveW, measuredHeights],
     );
     const viewH = compact ? Math.min(420, height) : height;
+
+    useLayoutEffect(() => {
+        const next = new Map<string, number>();
+        for (const node of displayTeam.nodes) {
+            const element = nodeRefs.current.get(node.id);
+            if (!element) continue;
+            next.set(node.id, Math.ceil(element.offsetHeight));
+        }
+
+        let changed = next.size !== measuredHeights.size;
+        if (!changed) {
+            for (const [id, heightValue] of next) {
+                if (Math.abs((measuredHeights.get(id) || 0) - heightValue) > 1) {
+                    changed = true;
+                    break;
+                }
+            }
+        }
+
+        if (changed) setMeasuredHeights(next);
+    }, [displayTeam.nodes, effectiveW, measuredHeights]);
 
     // Group edges by their unordered endpoint pair so a delegate + report
     // round-trip between the same two nodes collapses into a single
@@ -463,11 +632,13 @@ export function OrchCanvas({
             kinds: Set<string>;
             from: NodePos;
             to: NodePos;
+            fromNodeId: string;
+            toNodeId: string;
             fromId: string;
             primaryKind: string;
         };
         const byPair = new Map<string, Entry>();
-        for (const e of team.edges) {
+        for (const e of displayTeam.edges) {
             const from = positions.get(e.from);
             const to = positions.get(e.to);
             if (!from || !to) continue;
@@ -476,6 +647,14 @@ export function OrchCanvas({
             const existing = byPair.get(pair);
             if (existing) {
                 existing.kinds.add(e.kind);
+                if (e.kind === "delegate" && existing.primaryKind !== "delegate") {
+                    existing.from = from;
+                    existing.to = to;
+                    existing.fromNodeId = e.from;
+                    existing.toNodeId = e.to;
+                    existing.fromId = e.from;
+                    existing.primaryKind = e.kind;
+                }
                 continue;
             }
             byPair.set(pair, {
@@ -483,6 +662,8 @@ export function OrchCanvas({
                 kinds: new Set([e.kind]),
                 from,
                 to,
+                fromNodeId: e.from,
+                toNodeId: e.to,
                 // Preserve the directional "from" for fan-out grouping;
                 // if either endpoint is the orchestrator/lead, treat
                 // that as the source for dedupe purposes.
@@ -494,14 +675,13 @@ export function OrchCanvas({
             const hasDelegate = kinds.has("delegate");
             const hasReport = kinds.has("report");
             const hasPeer = kinds.has("peer");
-            // Sequential pipelines lay out left-to-right; the arrow
-            // direction IS the label. Suppressing here avoids clunky
-            // overlapping pills on the short between-node segments.
-            if (team.pattern === "sequential") return "";
             if (hasDelegate && hasReport) return "delegates & reports";
             if (hasDelegate) return "delegates";
-            if (hasReport) return "reports back";
+            if (hasReport) return "reports";
             if (hasPeer) return "hands off";
+            if (kinds.has("handoff")) return "hands off";
+            if (kinds.has("critique")) return "critiques";
+            if (kinds.has("verify")) return "verifies";
             return "";
         };
         const classFor = (kinds: Set<string>): string => {
@@ -515,73 +695,37 @@ export function OrchCanvas({
             klass: classFor(entry.kinds),
         })).filter((x) => x.text);
 
-        // Group fan-outs with identical label coming from the same
-        // source. A "source" for a delegate/report pair is the node
-        // with the shallower (smaller y) position — typically the
-        // orchestrator/sub-lead sitting on the row above.
-        type Group = { sourceId: string; text: string; picks: typeof entries };
-        const groupKey = (x: typeof entries[number]) => {
-            const { from, to } = x.entry;
-            const src = from.y <= to.y ? x.entry.fromId : (
-                // pair is unordered; recover the "other" id from the key
-                x.entry.key.split("↔").find((id) => id !== x.entry.fromId) || x.entry.fromId
-            );
-            return `${src}::${x.text}`;
-        };
-        const groups = new Map<string, typeof entries>();
-        for (const x of entries) {
-            const k = groupKey(x);
-            const arr = groups.get(k);
-            if (arr) arr.push(x);
-            else groups.set(k, [x]);
-        }
-
-        return entries.map((x) => {
+        const labels = entries.map((x) => {
             const { entry } = x;
             const { from, to } = entry;
             // Midpoint along the same curve the SVG renders.
             let cx: number, cy: number;
-            if (team.pattern === "sequential") {
+            let sourceId = entry.fromId;
+            let axisDistance = 0;
+            const sameRow = Math.abs(from.y - to.y) < 20;
+            if (displayTeam.pattern === "sequential") {
                 cx = (from.x + from.w + to.x) / 2;
-                cy = from.y + NODE_H / 2;
-            } else if (entry.kinds.has("peer") || team.pattern === "network") {
+                cy = from.y + from.h / 2;
+            } else if (sameRow && !entry.kinds.has("peer") && displayTeam.pattern !== "network") {
+                // Horizontal edge between same-row nodes — label in gap
+                const lf = from.x < to.x ? from : to;
+                const rt = from.x < to.x ? to : from;
+                cx = (lf.x + lf.w + rt.x) / 2;
+                cy = from.y + from.h / 2;
+            } else if (entry.kinds.has("peer") || displayTeam.pattern === "network") {
                 cx = (from.x + from.w / 2 + to.x + to.w / 2) / 2;
-                cy = (from.y + NODE_H / 2 + to.y + NODE_H / 2) / 2;
+                cy = (from.y + from.h / 2 + to.y + to.h / 2) / 2;
             } else {
-                // pathSmooth anchors bottom-center of ``from`` to
-                // top-center of ``to``; the geometric midpoint of that
-                // cubic happens to fall at the midpoint of its chord.
-                const x1 = from.x + from.w / 2;
-                const y1 = from.y + NODE_H;
-                const x2 = to.x + to.w / 2;
-                const y2 = to.y;
-                cx = (x1 + x2) / 2;
-                cy = (y1 + y2) / 2;
-            }
-
-            // Fan-out suppression: keep the label only on the edge
-            // whose target is closest to the source's centerline,
-            // drop it on all other siblings in the group.
-            const group = groups.get(groupKey(x)) || [];
-            if (group.length > 1) {
-                const srcIsFrom = from.y <= to.y;
-                const srcCenter = (srcIsFrom ? from : to).x + NODE_W / 2;
-                const distFor = (e: typeof x) => {
-                    const t = srcIsFrom ? e.entry.to : e.entry.from;
-                    return Math.abs(t.x + NODE_W / 2 - srcCenter);
-                };
-                const winner = group.reduce((best, curr) =>
-                    distFor(curr) < distFor(best) ? curr : best,
+                const source = from.y <= to.y ? from : to;
+                const target = from.y <= to.y ? to : from;
+                sourceId = from.y <= to.y ? entry.fromNodeId : entry.toNodeId;
+                axisDistance = Math.abs(
+                    (target.x + target.w / 2) - (source.x + source.w / 2),
                 );
-                if (winner !== x) {
-                    return {
-                        key: entry.key,
-                        text: "",
-                        cx,
-                        cy,
-                        kind: x.klass,
-                    };
-                }
+                const sourceBottom = source.y + source.h;
+                const targetTop = target.y;
+                cx = (source.x + source.w / 2 + target.x + target.w / 2) / 2;
+                cy = sourceBottom + (targetTop - sourceBottom) * 0.58;
             }
 
             return {
@@ -590,9 +734,63 @@ export function OrchCanvas({
                 cx,
                 cy,
                 kind: classFor(entry.kinds),
+                sourceId,
+                axisDistance,
+                orientation: sameRow || displayTeam.pattern === "sequential" ? "horizontal" : "vertical",
             };
         }).filter(l => l.text);
-    }, [team, positions]);
+
+        if (displayTeam.pattern === "network") {
+            const peerLabels = labels.filter((l) => l.kind === "peer");
+            if (peerLabels.length > 1) {
+                let cx = 0;
+                let cy = 0;
+                positions.forEach((p) => {
+                    cx += p.x + p.w / 2;
+                    cy += p.y + p.h / 2;
+                });
+                const n = Math.max(1, positions.size);
+                return [
+                    ...labels.filter((l) => l.kind !== "peer"),
+                    {
+                        key: "network-peer-label",
+                        text: "hands off",
+                        cx: cx / n,
+                        cy: cy / n,
+                        kind: "peer",
+                        orientation: "network",
+                    },
+                ];
+            }
+        }
+
+        const singles: typeof labels = [];
+        const fanoutGroups = new Map<string, typeof labels>();
+        for (const label of labels) {
+            const isFanoutLabel =
+                label.kind === "delegate"
+                && displayTeam.pattern !== "sequential"
+                && !!label.sourceId;
+            if (!isFanoutLabel) {
+                singles.push(label);
+                continue;
+            }
+            const key = `${label.sourceId}|${label.kind}|${label.text}`;
+            const group = fanoutGroups.get(key);
+            if (group) group.push(label);
+            else fanoutGroups.set(key, [label]);
+        }
+
+        fanoutGroups.forEach((group) => {
+            if (group.length <= 1) {
+                singles.push(...group);
+                return;
+            }
+            singles.push([...group].sort((a, b) => a.axisDistance - b.axisDistance)[0]);
+        });
+
+        return singles;
+    }, [displayTeam, positions]);
 
     return (
         <>
@@ -600,14 +798,21 @@ export function OrchCanvas({
                 className={`mc-canvas${canvasClass ? " " + canvasClass : ""}`}
                 style={{ width: effectiveW, height: viewH }}
                 role="img"
-                aria-label={`Orchestration graph, ${team.pattern} pattern`}
+                aria-label={`Orchestration graph, ${displayTeam.pattern} pattern`}
             >
                 <svg
                     className="mc-canvas__edges"
+                    width={effectiveW}
+                    height={viewH}
                     viewBox={`0 0 ${effectiveW} ${viewH}`}
-                    preserveAspectRatio="none"
                     aria-hidden="true"
                 >
+                    <defs>
+                        <marker id="ah-delegate" viewBox="0 0 8 6" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><polygon points="0 0.5, 7 3, 0 5.5" fill="#a3c9ff" /></marker>
+                        <marker id="ah-report"   viewBox="0 0 8 6" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><polygon points="0 0.5, 7 3, 0 5.5" fill="#c8e6c9" /></marker>
+                        <marker id="ah-peer"     viewBox="0 0 8 6" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><polygon points="0 0.5, 7 3, 0 5.5" fill="#ffb689" /></marker>
+                        <marker id="ah-default"  viewBox="0 0 8 6" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><polygon points="0 0.5, 7 3, 0 5.5" fill="#c0c7d4" /></marker>
+                    </defs>
                     {(() => {
                         // Collapse unordered endpoint pairs so a
                         // delegate (A→B) + report (B→A) round-trip
@@ -626,9 +831,10 @@ export function OrchCanvas({
                             from: string;
                             to: string;
                             primary: TeamEdge;
+                            count: number;
                         };
                         const byPair = new Map<string, Merged>();
-                        for (const e of team.edges) {
+                        for (const e of displayTeam.edges) {
                             const pair = [e.from, e.to].sort().join("↔");
                             const existing = byPair.get(pair);
                             if (!existing) {
@@ -638,10 +844,12 @@ export function OrchCanvas({
                                     from: e.from,
                                     to: e.to,
                                     primary: e,
+                                    count: 1,
                                 });
                                 continue;
                             }
                             existing.kinds.add(e.kind);
+                            existing.count++;
                             // Prefer a delegate-direction path so the
                             // smooth curve flows top-down.
                             if (e.kind === "delegate" && existing.primary.kind !== "delegate") {
@@ -655,10 +863,13 @@ export function OrchCanvas({
                             const to = positions.get(m.to);
                             if (!from || !to) return null;
                             let d: string;
-                            if (team.pattern === "sequential") {
+                            const sameRow = Math.abs(from.y - to.y) < 20;
+                            if (displayTeam.pattern === "sequential") {
                                 d = pathHorizontal(from, to);
-                            } else if (m.kinds.has("peer") && !m.kinds.has("delegate") || team.pattern === "network") {
+                            } else if (m.kinds.has("peer") && !m.kinds.has("delegate") || displayTeam.pattern === "network") {
                                 d = pathPeer(from, to);
+                            } else if (sameRow) {
+                                d = pathHorizontal(from, to);
                             } else {
                                 // If only ``report`` is present (no
                                 // matching delegate), swap direction so
@@ -672,6 +883,14 @@ export function OrchCanvas({
                             const active =
                                 !!activeAgentId &&
                                 (m.from === activeAgentId || m.to === activeAgentId);
+                            // Arrow markers: bidirectional for merged pairs,
+                            // unidirectional for single delegate/report,
+                            // none for single peer (undirected connection).
+                            const bidir = m.count >= 2;
+                            const singlePeer = m.count === 1 && m.kinds.has("peer") && !m.kinds.has("delegate");
+                            const arrowId = ["delegate", "report", "peer"].includes(kindAttr) ? kindAttr : "default";
+                            const mEnd = !singlePeer ? `url(#ah-${arrowId})` : undefined;
+                            const mStart = bidir && !singlePeer ? `url(#ah-${arrowId})` : undefined;
                             return (
                                 <path
                                     key={`e-${i}-${m.key}`}
@@ -679,21 +898,28 @@ export function OrchCanvas({
                                     data-kind={kindAttr}
                                     data-active={active ? "true" : undefined}
                                     d={d}
+                                    markerEnd={mEnd}
+                                    markerStart={mStart}
                                 />
                             );
                         });
                     })()}
                 </svg>
 
-                {team.nodes.map((n) => {
+                {displayTeam.nodes.map((n) => {
                     const pos = positions.get(n.id);
                     if (!pos) return null;
                     const kind = agentKind(n.agent, n.id);
                     const active = activeAgentId === n.id;
                     const state = stateFor(n, active);
+                    const stateLabel = STATE_LABEL[state] || state;
                     return (
                         <div
                             key={n.id}
+                            ref={(element) => {
+                                if (element) nodeRefs.current.set(n.id, element);
+                                else nodeRefs.current.delete(n.id);
+                            }}
                             className="mc-node"
                             data-agent={kind}
                             data-state={state}
@@ -725,17 +951,13 @@ export function OrchCanvas({
                                     nodeLabel={n.agent}
                                 />
                             ) : null}
-                            {/* Runtime status row — only rendered when the
-                                node has a real ``status`` from the backend
-                                (e.g. live execution in mission control).
-                                In Step 2 / Review no status exists yet, so
-                                hovering must not fake a "Running" label;
-                                the lit ``data-active`` border conveys the
-                                highlight on its own. */}
-                            {n.status && n.status !== "planned" && (
+                            {/* Runtime status row surfaces lifecycle state
+                                directly when available in live execution. */}
+                            {state !== "planned" && (
                                 <div className="mc-node__state">
                                     <span className="mc-node__state-dot" />
-                                    {STATE_LABEL[n.status] || n.status}
+                                    {stateLabel}
+                                    {n.stateReason && <span className="mc-node__state-reason">· {n.stateReason}</span>}
                                 </div>
                             )}
                         </div>
@@ -751,6 +973,7 @@ export function OrchCanvas({
                     <div
                         key={lbl.key}
                         className={`mc-edge-label mc-edge-label--${lbl.kind}`}
+                        data-orientation={lbl.orientation}
                         style={{ left: lbl.cx, top: lbl.cy }}
                     >
                         {lbl.text}
