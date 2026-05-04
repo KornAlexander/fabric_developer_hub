@@ -1493,10 +1493,10 @@ function AgentHubShell({
                         >
                             <Info24Regular /> <Text size={200}>About</Text>
                         </button>
-                        <div className="sidenav-footer-item" title="Support">
+                        <div className="sidenav-footer-item sidenav-footer-item--inactive" title="Support (coming soon)" aria-disabled="true">
                             <QuestionCircle24Regular /> <Text size={200}>Support</Text>
                         </div>
-                        <div className="sidenav-footer-item" title="Feedback">
+                        <div className="sidenav-footer-item sidenav-footer-item--inactive" title="Feedback (coming soon)" aria-disabled="true">
                             <Chat24Regular /> <Text size={200}>Feedback</Text>
                         </div>
                     </div>
