@@ -260,7 +260,7 @@ function TopbarItemActions({
     const auth = useGitHubAuth();
     const [saveOpen, setSaveOpen] = useState(false);
     const [name, setName] = useState("AgentHub");
-    const [description, setDescription] = useState("AgentHub configuration and settings");
+    const [description, setDescription] = useState("");
     const [busy, setBusy] = useState(false);
     const [savedFlash, setSavedFlash] = useState(false);
     const [errorMsg, setErrorMsg] = useState<string | null>(null);

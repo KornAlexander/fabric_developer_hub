@@ -359,7 +359,7 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
                             onClick={async () => {
                                 setCreating(true);
                                 try {
-                                    await createItem("AgentHub", "AgentHub configuration and settings");
+                                    await createItem("AgentHub", "");
                                 } catch (e) {
                                     console.error("Failed to create item:", e);
                                 } finally {
