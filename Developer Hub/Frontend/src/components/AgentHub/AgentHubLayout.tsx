@@ -38,7 +38,6 @@ import {
     AddCircle24Regular,
     Sparkle24Regular,
     ChatMultiple24Regular,
-    MoreHorizontal24Regular,
     PanelLeftContract24Regular,
     PanelLeftExpand24Regular,
     Search20Regular,
@@ -1447,8 +1446,6 @@ function AgentHubShell({
                                 })()}
                             </div>
                         )}
-                        <SideNavItem icon={<MoreHorizontal24Regular />} label="…" active={false} collapsed={sidebarCollapsed} onClick={() => { /* placeholder */ }} disabled />
-                        <SideNavItem icon={<MoreHorizontal24Regular />} label="…" active={false} collapsed={sidebarCollapsed} onClick={() => { /* placeholder */ }} disabled />
                     </nav>
 
                     <div className="agenthub-sidebar-footer">
