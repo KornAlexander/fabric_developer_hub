@@ -5,4 +5,4 @@
 // own independent version (`PBI_FIXER_VERSION` in
 // `components/PbiFixer/components/PbiFixerPage.tsx`) — bump that one
 // separately for Fixer-only changes.
-export const WORKLOAD_VERSION = "v1.23";
+export const WORKLOAD_VERSION = "v1.24";

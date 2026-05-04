@@ -488,7 +488,10 @@ export const TranslationsPage: React.FC<PageProps> = ({
       {applying && (
         <MessageBar intent="info">
           <MessageBarBody>
-            <Spinner size="tiny" /> Applying {acceptedCount} translation(s) to {targetCulture}…
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+              <Spinner size="tiny" />
+              <span>Applying {acceptedCount} translation(s) to {targetCulture}…</span>
+            </span>
           </MessageBarBody>
         </MessageBar>
       )}
