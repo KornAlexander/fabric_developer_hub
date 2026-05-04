@@ -391,97 +391,35 @@ All other workstreams add to their own files + append-only exports from `types/s
 
 ---
 
-## Open questions for Alexander (answer in chat)
+## WS-O decisions (locked, May 2026)
 
-Resolved already (do not re-ask):
-- ~~Icon set~~ — FluentUI 20 px icons shipped in v1.2 (`Database20Regular`, `ChartMultiple20Regular`, …). Optional follow-up: bump to 24 px to match AgentHub size exactly.
-- ~~Dark mode~~ — **not a priority.** Token-only path is fine; no explicit dark-mode pass needed.
+All open questions answered by Alexander. WS-O scope below; older question/recommendation text removed (kept in git history).
 
-Remaining decisions, with context + a recommendation for each:
+| # | Decision | Notes |
+|---|---|---|
+| 1 | **Connection bar — restyle in place (option a)** | Keep position, change bg to AgentHub warm `#faf9f8` + 1 px hairline so it reads as topbar sub-header. |
+| 2 | **Migrate Fixer chrome to shared SCSS classes** | Refactor `PbiFixerNav.tsx` + `PbiFixerPage.tsx` to `className` against `.agenthub-sidenav`, `.sidenav-item`, `.sidenav-item--active`, etc. Drop the corresponding `makeStyles` rules. |
+| 3 | **Topbar right cluster — skip entirely** | No Help / version / Open-in-Fabric. Host AgentHub topbar covers the right side. |
+| 4 | **Lazy-loading — defer** | Out of WS-O. Park for a dedicated perf pass when bundle size becomes a complaint. |
+| 5 | **EditorGroups / tabs integration — out of scope for WS-O** | Park as a separate workstream after WS-O lands. Needs Lukasz alignment before sizing. |
+| 6 | **Switch nav to React Router** | URL-driven Fixer nav state; deep-links like `#/agent-hub/pbifixer/diagram` work. Browser back/forward navigates between pages. Drop `sessionStorage["pbiFixer.activeNav"]` (keep `pbiFixer.othersExpanded` if still relevant). |
+| 7 | **Sidebar footer — leave empty** | No "Report a bug", "Open notebook", or version pill in the Fixer sidebar bottom. |
+| 8 | **AgentHub blue (`#005faa`) applies everywhere — including text** | Not just the accent bar. Audit every text color, link color, heading color, focus ring across the Fixer surfaces and align to the AgentHub blue palette. Replaces stray `colorBrandForeground*` / `tokens.colorBrand*` overrides where they diverge from `#005faa`. |
+| 9 | **Page-swap motion — crossfade matching AgentHub** | ~120 ms opacity crossfade on `activeNav` change. No horizontal slide. |
+| 10 | **Hide nav items with `ready: false`** | Matches AgentHub (never advertises unfinished pages). `NAV_ITEMS` filter at render time. CHANGELOG/PLAN remain the roadmap source for stakeholders. |
 
-### Q1. Connection bar treatment
-Today: a horizontal strip with three Comboboxes (Workspace / Semantic Model / Report) sits directly under the header, full-width across the body. AgentHub has no equivalent — its pages have no "connection context" concept, so we have to invent one that *feels* AgentHub-native.
+### Implications for WS-O Owns / Acceptance
 
-- **Option (a) — restyled horizontal strip:** keep position, change background to AgentHub warm surface `#faf9f8`, add a soft 1 px hairline so it visually reads as a sub-header of the topbar instead of a third stripe. Lowest disruption to muscle memory.
-- **Option (b) — move into sidebar above nav:** stack Workspace / SM / Report vertically as the top section of the sidebar. Frees full horizontal width for the content area, exactly mirrors no-connection-bar AgentHub pages. Loses ~250 px of sidebar height; pickers harder to scan; muscle memory breaks for current users.
-
-**Recommendation: (a).** Cheap visual fix, no UX regression.
-
-### Q2. SCSS classes vs FluentUI `makeStyles` for the chrome
-PBI Fixer chrome currently uses `makeStyles` with `tokens.*`. AgentHub chrome uses SCSS classes in `styles.scss` (`.agenthub-sidenav`, `.sidenav-item`, etc.).
-
-- **Migrate to shared SCSS classes:** automatic visual parity — every redesign Lukasz ships in `styles.scss` reaches the Fixer for free. Cost: one-time refactor of `PbiFixerNav.tsx` + `PbiFixerPage.tsx` to use `className` instead of `makeStyles`.
-- **Stay on `makeStyles` + tokens:** Fixer stays self-contained; no shared-file ownership conflict with Lukasz; but every Lukasz redesign forces a manual re-derive in our token map.
-
-**Recommendation: migrate to shared SCSS classes.** One-time cost, prevents permanent drift. Fixer chrome should not own its own visual language.
-
-### Q3. Topbar right cluster
-AgentHub topbar has icons (Help, Notifications, Chat) + avatar on the right. PBI Fixer topbar today is empty on the right. The host AgentHub topbar already shows the avatar one tier up, so we don't need to duplicate that.
-
-Proposed minimum content:
-- Help link → GitHub README of `pbi_fixer`
-- Version pill (`v0.x` from `utils/version.ts`)
-- "Open in Fabric" link (deep-links the currently-selected workspace/SM/report into Fabric)
-
-**Recommendation: ship those three.** Skip notifications + avatar (host hub already provides them). Anything else you want there?
-
-### Q4. Lazy-loading PBI Fixer pages
-AgentHub pages each have their own webpack chunk + `preload()` on hover. PBI Fixer today bundles all 15 pages in a single chunk.
-
-- **Lazy-load now (in WS-O):** mirrors AgentHub pattern, ~30–50 % smaller initial bundle, faster first paint. Adds Suspense boundaries you have to handle (loading spinners, error boundaries).
-- **Defer to a later perf pass:** Fixer bundle isn't huge today; the win is modest.
-
-**Recommendation: defer.** WS-O is already big; keep this for a dedicated perf pass when bundle size becomes a real complaint.
-
-### Q5. Tabs / EditorGroups integration
-AgentHub uses `EditorTabsProvider` + `EditorGroupsRoot` so users can open multiple pages as tabs, split the view, drag-reorder. PBI Fixer today has only one active page at a time.
-
-- **Integrate:** most AgentHub-native possible — a Fixer page would behave exactly like any other AgentHub item. Big payoff for power users.
-- **Cost:** requires touching `AgentHubLayout.tsx` (Lukasz's territory), agreeing on a contract for how a Fixer page registers as a tab, chunky refactor of `PbiFixerPage.tsx` (it can no longer assume it owns the whole content area).
-
-**Recommendation: out of scope for WS-O.** Park as a separate workstream after WS-O lands. Needs Lukasz alignment before sizing.
-
-### Q6. Routing — React Router vs sessionStorage
-Today the active page is stored in `sessionStorage` (`pbiFixer.activeNav`). URLs do not change. You can't deep-link to `#/agent-hub/pbifixer/diagram` from a doc or chat.
-
-- **Switch to React Router:** deep-links work, browser back/forward navigates between Fixer pages, easier to share specific tabs.
-- **Stay on sessionStorage:** simpler, Fixer remains a sub-app rather than a route-aware citizen.
-
-**Recommendation: switch to React Router.** Cheap win, big UX dividend (paste a deep-link to a Diagram of a specific dataset in an email and it just works).
-
-### Q7. Footer slot in the Fixer sidebar
-AgentHub sidebar has a footer slot (`.sidenav-footer-item`) for items like Help / Sign-out / Settings. The Fixer sidebar today has nothing at the bottom.
-
-If About moves to the AgentHub shell footer (already decided in Open bugs / UX tasks → WS-L revised), the Fixer sidebar footer can host:
-- "Report a bug" → GitHub Issues
-- "Open notebook version" → link to the Python notebook source
-- Fixer version pill
-
-**Recommendation: yes, add a footer slot** with those three. Mirrors AgentHub's pattern.
-
-### Q8. Active-state accent colour
-AgentHub uses `#005faa` (primary blue) for the active-page accent bar.
-
-- **Reuse `#005faa`:** maximum seamlessness — the Fixer disappears into AgentHub's visual language. Best for users who use multiple AgentHub items.
-- **Pick a distinct PBI accent (e.g. PBI yellow `#F2C811`):** users *see* they're inside the Fixer surface. Helps onboarding and screenshots.
-
-**Recommendation: reuse `#005faa`.** Topbar title "PBI Fixer" already provides the identity cue.
-
-### Q9. Page-swap motion
-When the active page changes (e.g. you click Diagram → Memory):
-
-- **Opacity crossfade (~120 ms):** matches AgentHub's motion language. Smoother on the eye.
-- **Instant swap:** no transition. Slightly faster; some users find motion annoying on dense data grids.
-
-**Recommendation: opacity crossfade.** 120 ms is fast enough not to feel laggy.
-
-### Q10. Disabled "Coming soon" items in the nav
-Today the Fixer shows nav items with `ready: false` as italic + muted (currently: Script Runner, About). AgentHub never lists unfinished pages — they're hidden until ready.
-
-- **Keep showing (current behaviour):** users see the roadmap. Helps when demoing upcoming features.
-- **Hide until ready:** matches AgentHub. Cleaner nav.
-
-**Recommendation: hide until ready.** Matches AgentHub's pattern. CHANGELOG / PLAN already documents the roadmap for stakeholders.
+Update the WS-O Owns + Acceptance lists above to reflect these decisions:
+- **Owns adds:** routing wiring (likely a small `PbiFixerRouter.tsx` mounting React Router routes for each `NavKey`).
+- **Owns drops:** topbar right cluster components, Fixer-sidebar footer components.
+- **Acceptance adds:**
+  - [ ] Deep-link `#/agent-hub/pbifixer/<navKey>` routes correctly on first load
+  - [ ] Browser back/forward navigates between Fixer pages
+  - [ ] All visible text uses AgentHub blue palette (no rogue brand colors leaking)
+  - [ ] Nav items with `ready: false` do not render in the sidebar
+- **Acceptance drops:**
+  - Topbar right cluster, sidebar footer, dark-mode parity, lazy-loading, EditorGroups integration.
 
 ---
 

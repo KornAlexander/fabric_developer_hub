@@ -38,7 +38,7 @@ import React, {
 } from "react";
 import { useHistory, useLocation } from "react-router-dom";
 
-export type TabKind = "session" | "new" | "home" | "agents" | "pbifixer" | "settings";
+export type TabKind = "session" | "new" | "home" | "agents" | "pbifixer" | "settings" | "about";
 
 export interface TabDescriptor {
     /** Stable id derived from ``kind`` + optional path param. Reused so
@@ -531,6 +531,9 @@ export function descriptorFromPath(path: string, search?: string): TabDescriptor
     }
     if (/\/settings(?:\b|$)/.test(clean)) {
         return { id: "settings", kind: "settings", path, title: "Settings" };
+    }
+    if (/\/about(?:\b|$)/.test(clean)) {
+        return { id: "about", kind: "about", path, title: "About" };
     }
     return null;
 }

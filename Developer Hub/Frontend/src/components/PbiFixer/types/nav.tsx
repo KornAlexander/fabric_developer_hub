@@ -24,7 +24,6 @@ import {
   Beaker20Regular,
   ArrowImport20Regular,
   Flash20Regular,
-  Info20Regular,
 } from "@fluentui/react-icons";
 
 export type NavKey =
@@ -41,8 +40,7 @@ export type NavKey =
   | "scriptRunner"
   | "prototype"
   | "reversePrototype"
-  | "sempyRunner"
-  | "about";
+  | "sempyRunner";
 
 /** Sub-group identifiers used to partition the nav into themed,
  *  collapsible sections. v0.34 replaces the single catch-all "Others"
@@ -90,9 +88,6 @@ export const NAV_ITEMS: NavItem[] = [
   { key: "fixer",            label: "Fixer",             icon: <Wrench20Regular />,          group: "automation",   ready: true  },
   { key: "scriptRunner",     label: "Script Runner",     icon: <Code20Regular />,            group: "automation",   ready: false },
   { key: "sempyRunner",      label: "Sempy Runner",      icon: <Flash20Regular />,           group: "automation",   ready: true  },
-
-  // Bottom peer
-  { key: "about",            label: "About",             icon: <Info20Regular />,            group: "peer",         ready: false },
 ];
 
 /** Ordered list of collapsible groups. Used by the sidebar renderer

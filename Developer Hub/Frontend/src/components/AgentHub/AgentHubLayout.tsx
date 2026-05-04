@@ -29,6 +29,7 @@ import {
     SignOut24Regular,
     QuestionCircle24Regular,
     Chat24Regular,
+    Info24Regular,
     Alert24Regular,
     PersonCircle32Regular,
     Navigation24Regular,
@@ -73,6 +74,7 @@ function lazyWithPreload<T extends Record<string, any>>(
 const DashboardPage = lazyWithPreload(() => import("./DashboardPage"), "DashboardPage");
 const AgentsPage = lazyWithPreload(() => import("./AgentsPage"), "AgentsPage");
 const SettingsPage = lazyWithPreload(() => import("./SettingsPage"), "SettingsPage");
+const AboutPage = lazyWithPreload(() => import("./AboutPage"), "AboutPage");
 // Direct prop-driven variant of MissionControlPage used by the tabs
 // system — lets non-active editor groups render a session by id without
 // needing to own the URL via ``useParams``.
@@ -884,6 +886,7 @@ function AgentHubContent({ workloadClient, matchPath }: { workloadClient: Worklo
                 return <PbiFixerPage workloadClient={workloadClient} initialNav={initialNav as never} />;
             }
             case "settings": return <SettingsPage workloadClient={workloadClient} />;
+            case "about":    return <AboutPage />;
             case "session": {
                 const m = tab.path.match(/\/session\/([^/?#]+)/);
                 const sid = m?.[1] ?? "";
@@ -1456,6 +1459,17 @@ function AgentHubShell({
                             title={`Sign out (${auth.githubUser})`}
                         >
                             <SignOut24Regular /> <Text size={200}>Sign out ({auth.githubUser})</Text>
+                        </button>
+                        <button
+                            type="button"
+                            className="sidenav-footer-item"
+                            onClick={() => {
+                                openTab({ id: "about", kind: "about", path: `${matchPath}/about`, title: "About" });
+                                closeSidebar();
+                            }}
+                            title="About Developer Hub"
+                        >
+                            <Info24Regular /> <Text size={200}>About</Text>
                         </button>
                         <div className="sidenav-footer-item" title="Support">
                             <QuestionCircle24Regular /> <Text size={200}>Support</Text>

@@ -37,7 +37,6 @@ import {
   PrototypePage,
   ReversePrototypePage,
   SempyRunnerPage,
-  AboutPage,
 } from "./pages";
 import { DEFAULT_NAV_KEY, NavKey } from "../types/nav";
 import type { PageProps } from "../types/shared";
@@ -466,7 +465,6 @@ export const PbiFixerPage: React.FC<PbiFixerPageProps> = ({
       case "prototype":    return <PrototypePage    key={remountKey} {...pageProps} />;
       case "reversePrototype": return <ReversePrototypePage key={remountKey} {...pageProps} />;
       case "sempyRunner":  return <SempyRunnerPage  key={remountKey} {...pageProps} />;
-      case "about":        return <AboutPage        key={remountKey} {...pageProps} />;
       default:
         return null;
     }

@@ -73,7 +73,7 @@ export const ScriptRunnerPage: React.FC<PageProps> = (_props) => (
 // WS-M replaces the Prototype stub with the real page — see
 // ``PrototypePage.tsx``. Re-exported from ``pages/index.ts``.
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-export const AboutPage: React.FC<PageProps> = (_props) => (
-  <ComingSoon navKey="about" detail="version + build info" />
-);
+// WL-A v1.13: the About page moved out of the PBI Fixer entirely
+// (it's a hub-wide concern, not a Fixer concern). The hub-level
+// ``AboutPage`` lives at ``Frontend/src/components/AgentHub/AboutPage.tsx``
+// and is opened from the sidebar footer above Support.
