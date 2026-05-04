@@ -176,7 +176,13 @@ function readNavKey(): NavKey {
     if (typeof window !== "undefined") {
       const sp = new URLSearchParams(window.location.search);
       const fromUrl = sp.get("nav");
-      if (fromUrl) return fromUrl as NavKey;
+      if (fromUrl) {
+        // Iframe bootstrap URL can nest a second ``?…`` inside the
+        // nav value (e.g. ``nav=report?experience=fabric-developer``).
+        // Strip it down to the first alphanumeric token.
+        const m = fromUrl.match(/^[A-Za-z0-9_-]+/);
+        if (m) return m[0] as NavKey;
+      }
     }
   } catch { /* ignore */ }
   try {

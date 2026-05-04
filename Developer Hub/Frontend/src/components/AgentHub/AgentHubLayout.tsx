@@ -873,7 +873,13 @@ function AgentHubContent({ workloadClient, matchPath }: { workloadClient: Worklo
                 let initialNav: string | undefined;
                 try {
                     const q = tab.path.split("?")[1];
-                    if (q) initialNav = new URLSearchParams(q).get("nav") ?? undefined;
+                    if (q) {
+                        const raw = new URLSearchParams(q).get("nav") ?? undefined;
+                        // Defensive: strip any nested ``?…``/``&…`` segment
+                        // that leaked in via the iframe bootstrap URL.
+                        const m = raw?.match(/^[A-Za-z0-9_-]+/);
+                        initialNav = m ? m[0] : raw;
+                    }
                 } catch { /* ignore */ }
                 return <PbiFixerPage workloadClient={workloadClient} initialNav={initialNav as never} />;
             }

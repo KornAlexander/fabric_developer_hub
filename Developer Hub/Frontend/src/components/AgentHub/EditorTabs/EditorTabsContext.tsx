@@ -505,15 +505,25 @@ export function descriptorFromPath(path: string, search?: string): TabDescriptor
         // sidebar opens a fresh tab without overwriting the visible one.
         const navKey = (() => {
             if (!search) return null;
-            return new URLSearchParams(search).get("nav");
+            const raw = new URLSearchParams(search).get("nav");
+            if (!raw) return null;
+            // The iframe bootstrap URL nests query strings — e.g.
+            // ``?ws=...&nav=report?experience=fabric-developer`` — so the
+            // raw value can carry a trailing ``?…`` or ``&…`` segment.
+            // Keep only the alphanumeric nav key (e.g. ``report``).
+            const m = raw.match(/^[A-Za-z0-9_-]+/);
+            return m ? m[0] : null;
         })();
         if (navKey) {
             // Capitalize for the title (best-effort: 'modelBpa' → 'ModelBpa').
             const pretty = navKey.charAt(0).toUpperCase() + navKey.slice(1);
+            // Build a clean path so downstream tab.path consumers don't
+            // have to re-parse nested query strings.
+            const cleanPath = `${path.replace(/\/+$/, "")}?nav=${navKey}`;
             return {
                 id: `pbifixer:${navKey}`,
                 kind: "pbifixer",
-                path: path + (search ?? ""),
+                path: cleanPath,
                 title: `PBI Fixer · ${pretty}`,
             };
         }

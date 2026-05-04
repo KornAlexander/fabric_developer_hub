@@ -238,6 +238,8 @@ interface ReportPreviewProps {
   reportData: ReportData | null;
   selectedKey: string | null;
   auth: PbiAuth;
+  /** Bumped by the parent to force a fresh embed (Load Report / post-Save). */
+  refreshNonce?: number;
 }
 
 /**
@@ -297,6 +299,7 @@ const ReportPreview: React.FC<ReportPreviewProps> = ({
   reportData,
   selectedKey,
   auth,
+  refreshNonce,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const reportRef = useRef<any>(null);
@@ -382,7 +385,7 @@ const ReportPreview: React.FC<ReportPreviewProps> = ({
       } catch { /* ignore */ }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reportData?.reportId, reportData?.workspaceId, auth.fabricToken]);
+  }, [reportData?.reportId, reportData?.workspaceId, auth.fabricToken, refreshNonce]);
 
   // When the user picks a different page, swap pages on the existing embed
   // (no re-mint of the token).
@@ -458,6 +461,10 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
   const [scanResults] = useState<ScanResult>({});
 
   const [pendingChanges, setPendingChanges] = useState<Record<string, Record<string, unknown>>>({});
+
+  // Bumped on Load Report and after a successful Save — forces ReportPreview
+  // to mint a fresh embed token + reset the iframe so PBIR changes show up.
+  const [previewNonce, setPreviewNonce] = useState(0);
 
   // Build tree
   const treeResult = useMemo<TreeBuildResult>(() => {
@@ -542,6 +549,7 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
       setReportData(data);
       setVisualEdit({});
       setPageEdit({});
+      setPreviewNonce((n) => n + 1);
       setStatus({ msg: "Saved", color: "#34c759" });
     } catch (err) {
       setStatus({
@@ -584,6 +592,7 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
       const data = await loadReportDefinition(auth, wsId, resolvedId, resolvedName);
       setReportData(data);
       setExpanded(new Set(Object.keys(data.pages)));
+      setPreviewNonce((n) => n + 1);
       setStatus({
         msg: `Loaded ${Object.keys(data.pages).length} pages`,
         color: "#34c759",
@@ -728,6 +737,7 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
                   reportData={reportData}
                   selectedKey={selectedKey}
                   auth={auth}
+                  refreshNonce={previewNonce}
                 />
               ) : (
                 <span className={styles.previewEmpty}>
