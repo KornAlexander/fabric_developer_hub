@@ -71,18 +71,19 @@ const useStyles = makeStyles({
   title: {
     fontSize: tokens.fontSizeBase400,
     fontWeight: tokens.fontWeightSemibold,
-    color: "#1a1c1c",
+    color: tokens.colorNeutralForeground1,
   },
-  // Version pill — matches the AgentHub workload-version badge style so
-  // both badges (workload + Fixer) read as siblings.
+  // Version pill — matches the AgentHub AboutPage badge style so all
+  // version badges across the hub read as siblings (12 px monospace,
+  // neutral foreground 2, hairline border on neutral background 3).
   version: {
-    fontSize: "11px",
-    color: "#605e5c",
+    fontSize: "12px",
+    color: tokens.colorNeutralForeground2,
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
     ...shorthands.padding("2px", "6px"),
     ...shorthands.border("1px", "solid", "rgba(192, 199, 212, 0.4)"),
     ...shorthands.borderRadius("4px"),
-    backgroundColor: "#ffffff",
+    backgroundColor: tokens.colorNeutralBackground3,
   },
   headerRight: {
     marginLeft: "auto",

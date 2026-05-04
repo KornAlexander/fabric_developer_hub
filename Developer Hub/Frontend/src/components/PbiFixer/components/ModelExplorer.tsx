@@ -11,6 +11,7 @@ import {
   makeStyles,
   shorthands,
   Tooltip,
+  tokens,
 } from "@fluentui/react-components";
 import {
   Search20Regular,
@@ -614,7 +615,7 @@ export const ModelExplorer: React.FC<ModelExplorerProps> = ({
             <div className={styles.sectionLabel}>Expression</div>
             {daxRef && (
               <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
-                <code style={{ fontSize: "12px", color: "#555" }}>{daxRef}</code>
+                <code style={{ fontSize: "12px", color: tokens.colorNeutralForeground2 }}>{daxRef}</code>
                 <Tooltip content="Copy DAX reference" relationship="label">
                   <Button appearance="subtle" size="small" icon={<Copy20Regular />} onClick={handleCopyRef} />
                 </Tooltip>
