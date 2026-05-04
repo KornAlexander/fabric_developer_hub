@@ -129,11 +129,27 @@ export const AboutPage: React.FC<AboutPageProps> = () => {
           <ul className={styles.list}>
             <li>
               <Body1Strong>Lukasz Obst</Body1Strong>
-              <Body1> — creator &amp; maintainer.</Body1>
+              <Body1> — creator &amp; maintainer.</Body1>{" "}
+              <Link
+                href="https://www.linkedin.com/in/lukasz-obst-3672083a2/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className={styles.inlineLink}
+              >
+                LinkedIn <Open16Regular />
+              </Link>
             </li>
             <li>
               <Body1Strong>Alexander Korn</Body1Strong>
-              <Body1> — creator &amp; maintainer; Solution Engineer Data Platform, Microsoft.</Body1>
+              <Body1> — creator &amp; maintainer; Solution Engineer Data Platform, Microsoft.</Body1>{" "}
+              <Link
+                href="https://www.linkedin.com/in/alexanderkorn/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className={styles.inlineLink}
+              >
+                LinkedIn <Open16Regular />
+              </Link>
             </li>
           </ul>
         </section>
