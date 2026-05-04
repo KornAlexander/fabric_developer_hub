@@ -133,7 +133,7 @@ export const AboutPage: React.FC<AboutPageProps> = () => {
             </li>
             <li>
               <Body1Strong>Alexander Korn</Body1Strong>
-              <Body1> — contributor; Solution Engineer Data Platform, Microsoft.</Body1>
+              <Body1> — creator &amp; maintainer; Solution Engineer Data Platform, Microsoft.</Body1>
             </li>
           </ul>
         </section>
