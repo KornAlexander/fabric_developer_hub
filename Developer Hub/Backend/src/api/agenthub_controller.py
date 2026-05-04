@@ -1068,6 +1068,31 @@ async def pbi_fixer_translations_apply(
             if not cm.culture:
                 cm.culture = payload.culture
 
+        # If we don't yet know the model name (fresh culture file or
+        # legacy parser miss), look it up in `definition/model.tmdl` —
+        # the TMDL file always starts with `model <Name>`. Fabric's
+        # culture validator requires the `translations` block to wrap
+        # tables under `model <Name>`; using the real name keeps the
+        # round-trip stable.
+        if not cm.model_name:
+            model_part = next(
+                (p for p in parts if p.get("path") == "definition/model.tmdl"),
+                None,
+            )
+            if model_part:
+                try:
+                    model_text = base64.b64decode(model_part["payload"]).decode("utf-8")
+                    import re as _re
+                    m_model = _re.search(r"^\s*model\s+(\S.*?)\s*$", model_text, _re.MULTILINE)
+                    if m_model:
+                        raw = m_model.group(1).strip()
+                        # Strip optional surrounding single quotes
+                        if raw.startswith("'") and raw.endswith("'") and len(raw) >= 2:
+                            raw = raw[1:-1].replace("''", "'")
+                        cm.model_name = raw
+                except Exception:
+                    pass  # fall back to default "Model" in serialize_culture
+
         # 3. Merge items
         apply_items = [
             ApplyItem(

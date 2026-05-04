@@ -39,6 +39,11 @@ def test_merge_then_serialize_roundtrips() -> None:
     # Names with spaces get single-quoted
     assert "measure 'Total Sales'" in out
     assert "caption: Gesamtumsatz" in out
+    # WS-N v0.45 — Fabric requires tables nested under `model <Name>`.
+    # Without it Fabric rejects the file with
+    # MismatchObjectType / "expected Model but actual was table".
+    assert "\t\tmodel Model" in out
+    assert "\t\t\ttable Sales" in out
 
     # Round-trip parse → serialize is idempotent
     cm2 = parse_culture(out)

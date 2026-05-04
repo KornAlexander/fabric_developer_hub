@@ -22,7 +22,7 @@
 | WS-I | Delta Analyzer | ✅ shipped | v0.24 |
 | WS-J | Diagram (SVG canvas) | ✅ shipped | v0.19–v0.20 |
 | WS-K | Script Runner (Monaco) | ⬜ not started | — |
-| WS-L | About | ⬜ not started | — |
+| WS-L | About — **moved to AgentHub shell** (was Fixer page) | ⬜ not started | — |
 | WS-M | Prototype | ✅ shipped | v0.16 |
 | WS-N | Integration sweep | 🟡 partial | v0.36–v0.37 |
 | WS-Q | Editable visual / page properties | ✅ shipped | v0.42–v0.43 |
@@ -40,9 +40,83 @@ Legend: ✅ shipped • 🟡 partial • ⬜ not started • 📋 proposed (open
 
 ---
 
+## Open bugs / UX tasks (next steps)
+
+Tracked here so they're not lost between sessions. Several are AgentHub-shell scope, not just PBI Fixer — call them out and coordinate with the AgentHub workstream where noted.
+
+### PBI Fixer — bugs
+- **B1. Empty Description on items.** Allow item creation / edit with an empty Description field (currently appears to require a value). Verify both create and update paths.
+- **B2. Placeholder below the Fixer.** Stray placeholder element renders below the Fixer panel — delete it.
+- **B3. Close button.** Test the close button in the Fixer view. If it does not actually close the surface (or behaves inconsistently with other AgentHub items), wire it up. If the button is non-functional and not needed, remove it instead.
+- **B4. AgentHub item persistence.** Re-verify persistence of the AgentHub item linked to the PBI Fixer — last check showed unstable state. Reproduce on reload + cross-session and confirm.
+
+### AgentHub-shell — bugs (coordinate with WS-O / Lukasz)
+- **B5. GitHub sign-in greys out the hub.** When signing in with GitHub on a "create item" task in Developer Hub, the whole hub greys out and only recovers after a full page refresh. Reproduce the flow (create item → sign into GitHub → verify hub stays interactive). Likely a missing post-auth message handler or modal-overlay state that doesn't get cleared on the OAuth popup return.
+- **B6. SSO prompted per tab.** Each new tab re-prompts for SSO. Either make SSO **silent/transparent** for tabs after the first, or — preferably — **single sign-on once for the whole Developer Hub** and share the token across tabs (e.g. via shared MSAL cache, broadcast channel, or service-worker token broker). If sharing across tabs is not possible (e.g. cross-origin iframes with strict storage isolation), document the technical reason in [CHANGELOG.md](CHANGELOG.md) so we stop revisiting the question.
+
+### Move "About" out of PBI Fixer into the Developer Hub shell — **WS-L revised**
+The current plan has WS-L scoped as a Fixer-only About page. New requirement: **About belongs to the whole Developer Hub**, not the Fixer.
+
+- **Move location:** bottom-left of the AgentHub sidebar, **above "Support"** (matches `.sidenav-footer-item` slot in `styles.scss`).
+- **Delete the About entry from the PBI Fixer nav** (`types/nav.ts` → drop `about` NavKey; `Others` count goes 11 → 10).
+- **Content plan:**
+  - Developer Hub authors: **Lukasz** (upstream maintainer) and **Alexander Korn** (PBI Fixer + extensions)
+  - Credit **Michael Kovalsky** for [`semantic-link-labs`](https://github.com/microsoft/semantic-link-labs) (the engine underneath the Fixer)
+  - Build/version info — pulled from `utils/version.ts` for the Fixer + a hub-level version
+  - Links: GitHub repo, semantic-link-labs repo, IBCS website (since IBCS is a shipped feature), notebook origin (`PBI-Fixer/pbi_fixer/`)
+  - Short license / acknowledgements blurb
+- **Owns (revised):**
+  - `Developer Hub/Frontend/src/components/agenthub/AboutPage.tsx` — **NEW** (hub-level, not Fixer-level)
+  - `Developer Hub/Frontend/src/components/agenthub/AgentHubLayout.tsx` — add About to footer slot above Support
+  - `Developer Hub/Frontend/src/components/PbiFixer/types/nav.ts` — remove `about` NavKey
+  - `Developer Hub/Frontend/src/components/PbiFixer/components/pages/AboutPage.tsx` — **DELETE**
+- **Acceptance:**
+  - [ ] About link appears in Developer Hub left sidebar above Support
+  - [ ] About page lists Lukasz + Alexander as authors, credits Michael Kovalsky for semantic-link-labs
+  - [ ] PBI Fixer "Others" no longer shows About; tab count drops to 10
+  - [ ] Hub version pulled from a single source of truth
+
+### WS-O design alignment — **bumped priority** based on user feedback
+Visual alignment between Fixer and AgentHub is now an active complaint, not a "nice to have". Focus the first WS-O slice on the cheapest wins:
+- **Font color and font sizes** (explicit user request) — audit every `Text` / heading / body in the Fixer surfaces against the AgentHub tokens. Strip remaining hard-coded `fontFamily` and `color` overrides in `ModelExplorer.tsx`, `ReportExplorer.tsx`, page headers, and DataGrid header rows.
+- Then proceed with the rest of WS-O Phase 1 (sidebar palette, active accent bar, topbar). See **Appendix B** for the full plan.
+
+---
+
 ## Remaining fixers (WS-E backlog)
 
 13 fixer handlers shipped in v0.41 (8 SM + 5 Report — see CHANGELOG WS-E). Priority for the rest:
+
+### IBCS workstream (P0 — Alexander's signature feature) — **WS-E-IBCS**
+
+The IBCS feature set is the differentiator vs. other Power BI tooling. Treat as a single
+cohesive batch — the Variance fixer depends on PY measures + Calendar + a Measure Table being
+present, so they ship together. Also surface as a **one-click "Apply IBCS"** macro that runs
+the full chain in order.
+
+| Fixer | Python File | Lines | Notes |
+|---|---|---|---|
+| **Add Calculated Calendar Table** | `_Add_CalculatedTable_Calendar.py` | ~290 | DAX `CALENDARAUTO`, full date hierarchy + sort-by-column, **auto-detects fact-table date columns and creates Many→One relationships to `CalcCalendar[Date]`**. Backend bridge required (TOM `add_relationship`, calculated tables) |
+| **Add Measure Table** | `_Add_CalculatedTable_MeasureTable.py` | ~150 | Empty calculated table for measure organization |
+| **Add CalcGroup — Time Intelligence** | `_Add_CalcGroup_TimeIntelligence.py` | ~200 | YTD / MTD / QTD / PY / YoY calc-group items |
+| **Add CalcGroup — Units** | `_Add_CalcGroup_Units.py` | ~150 | k / M / B unit scaling calc group |
+| **Add PY Measures** | `_Add_PYMeasures.py` | ~150 | Generates `PY`, `Δ PY`, `Δ PY %`, `Max Green PY`, `Max Red AC` for every detected AC measure (prerequisite for IBCS Variance) |
+| **Fix IBCS Variance** | `_Fix_IBCSVariance.py` | **771** | Transforms column charts → IBCS variance: ensures PY measures exist, adds them to visual, sets **error bars (red `#FF0000`)**, overlap, labels, AC/PY colors, axes, sorting. Largest single fixer in the suite |
+| **Fix All Charts (IBCS pass)** | `_Fix_Charts.py` | ~200 | Unified IBCS-friendly cleanup across Bar/Column/Line: no gridlines, data labels on, clean axes |
+| **Apply IBCS Theme** | (theme JSON in `_report_theme.py`) | ~100 | Push IBCS-compliant report theme |
+
+**Priority: P0** — these are the headline features. Ship in this exact dependency order:
+Calendar → Measure Table → CalcGroups → PY Measures → IBCS Variance → Fix Charts → Theme.
+All require the **TMDL/PBIR round-trip backend pattern** (already shipped in v0.40/v0.41 for
+translations + simple SM fixers); the additional unknown is whether the TMDL writer can emit
+**calculated tables**, **calculation groups**, and **relationships** (current `tmdl_translations.py`
+only mutates cultures). Spike that question first before sizing the batch.
+
+**Backend bridge gap:** TOM-level operations (`tom.add_relationship`, calc-group creation,
+calculated-table creation) may need a real sempy-labs runtime in the backend container —
+TMDL emission alone could be enough for tables + relationships, but calc groups need
+`calculationGroup` blocks in TMDL which `tmdl_translations.py` doesn't model yet. **Decide
+spike vs. real sempy-labs install before starting.**
 
 ### Report fixers (not yet ported)
 
@@ -50,30 +124,31 @@ Legend: ✅ shipped • 🟡 partial • ⬜ not started • 📋 proposed (open
 |---|---|---|---|
 | Fix Bar Chart Formatting | `report/_Fix_BarChart.py` | 299 | P1 |
 | Fix Column Chart Formatting | `report/_Fix_ColumnChart.py` | 299 | P1 |
-| Upgrade PBIRLegacy → PBIR | `report/_Fix_UpgradeToPbir.py` | 100 | P2 (sempy-labs) |
+| Fix Visual Alignment | `_Fix_VisualAlignment.py` | ~200 | P1 (snap misaligned visuals) |
+| Migrate Report-Level Measures | `report/_Fix_MigrateReportLevelMeasures.py` | ~150 | P2 |
+| Upgrade PBIRLegacy → PBIR | `report/_Fix_UpgradeToPbir.py` | 100 | P2 (sempy-labs runtime) |
 | Migrate Slicers → Slicerbar | `report/_Fix_MigrateSlicerToSlicerbar.py` | ~150 | P2 |
-| Fix Line Chart | `report/_Fix_LineChart.py` | ~200 | P2 |
-| Fix KPI Card | `report/_Fix_KpiCard.py` | ~150 | P2 |
-| Fix Matrix | `report/_Fix_Matrix.py` | ~200 | P2 |
-| Fix Table | `report/_Fix_Table.py` | ~200 | P2 |
-| Fix Titles | `report/_Fix_FixTitles.py` | ~100 | P2 |
-| Set Data Source Version | `report/_Fix_SetDataSourceVersion.py` | 84 | P3 |
 | Convert Column → Line | `_Fix_ColumnToLine.py` | 118 | P3 |
 
 ### Semantic Model fixers (not yet ported)
 
 | Fixer | Python File | Lines | Priority |
 |---|---|---|---|
-| Add Measures from Columns | `semantic_model/_Add_MeasuresFromColumns.py` | ~150 | P1 |
-| Add PY Measures | `semantic_model/_Add_PYMeasures.py` | ~150 | P1 |
-| Trim Object Names | `semantic_model/_Fix_TrimObjectNames.py` | 71 | P2 |
-| Use DIVIDE Function | `semantic_model/_Fix_UseDivideFunction.py` | 59 | P2 |
-| Mark Primary Keys | `semantic_model/_Fix_MarkPrimaryKeys.py` | 44 | P2 |
-| Measure Descriptions | `semantic_model/_Fix_MeasureDescriptions.py` | 40 | P2 |
-| Month Column Format | `semantic_model/_Fix_MonthColumnFormat.py` | 38 | P3 |
-| Sort Month Column | `semantic_model/_Fix_SortMonthColumn.py` | 61 | P3 |
-| Flag Column Format | `semantic_model/_Fix_FlagColumnFormat.py` | 48 | P3 |
-| IsAvailableInMDX (True) | `semantic_model/_Fix_IsAvailableInMdxTrue.py` | 49 | P3 |
+| Add Measures from Columns | `_Add_MeasuresFromColumns.py` | ~150 | P1 |
+| Add LastRefresh Table | `_Add_Table_LastRefresh.py` | ~80 | P1 |
+| Avoid Adding 0 (in measures) | `_Fix_AvoidAdding0.py` | ~60 | P1 |
+| Trim Object Names | `_Fix_TrimObjectNames.py` | 71 | P2 |
+| Use DIVIDE Function | `_Fix_UseDivideFunction.py` | 59 | P2 |
+| Mark Primary Keys | `_Fix_MarkPrimaryKeys.py` | 44 | P2 |
+| Measure Descriptions | `_Fix_MeasureDescriptions.py` | 40 | P2 |
+| Capitalize Object Names | `_Fix_CapitalizeObjectNames.py` | ~60 | P2 |
+| Set Data Category | `_Fix_DataCategory.py` | ~80 | P2 |
+| Date Column Format | `_Fix_DateColumnFormat.py` | ~50 | P2 |
+| Default Data Source Version | `_Fix_DefaultDataSourceVersion.py` | ~50 | P2 |
+| Month Column Format | `_Fix_MonthColumnFormat.py` | 38 | P3 |
+| Sort Month Column | `_Fix_SortMonthColumn.py` | 61 | P3 |
+| Flag Column Format | `_Fix_FlagColumnFormat.py` | 48 | P3 |
+| IsAvailableInMDX (True) | `_Fix_IsAvailableInMdxTrue.py` | 49 | P3 |
 
 ### Top-level features (not yet ported)
 
@@ -88,6 +163,7 @@ Legend: ✅ shipped • 🟡 partial • ⬜ not started • 📋 proposed (open
 - Report: `Fix_PieChart`, `Fix_PageSize`, `Fix_HideVisualFilters`, `Fix_DisableShowItemsNoData`, `Fix_RemoveUnusedCustomVisuals`
 
 **Priority legend:**
+- **P0** — IBCS batch (signature feature, ship as one workstream)
 - **P1** — high user value, ship next batch
 - **P2** — medium value, ship after P1 batch
 - **P3** — niche / formatting polish, ship opportunistically
@@ -118,7 +194,7 @@ Lower-priority parity items still missing from the existing TS components:
 - Drag-and-drop page reorder
 
 ### Other tabs not yet planned as standalone WSes
-None — all 12 originally-identified tabs are covered: Fixer (WS-E), Perspectives (WS-F), Translations (WS-G), Model BPA (WS-C), Report BPA (WS-D), Memory/Vertipaq (WS-B), Delta (WS-I), Prototype (WS-M), Diagram (WS-J), Script Runner (WS-K), About (WS-L). Visual Properties editor shipped as WS-Q.
+None — all originally-identified tabs are covered: Fixer (WS-E), Perspectives (WS-F), Translations (WS-G), Model BPA (WS-C), Report BPA (WS-D), Memory/Vertipaq (WS-B), Delta (WS-I), Prototype (WS-M), Diagram (WS-J), Script Runner (WS-K). About moved out to the AgentHub shell (WS-L revised). Visual Properties editor shipped as WS-Q.
 
 ---
 
@@ -142,16 +218,10 @@ Monaco editor + Run button → backend eval endpoint. **Full-power**, feature-fl
 
 ---
 
-### WS-L — About page
-Version, links (GitHub, sempy-labs, notebook demo), credits, build info.
+### WS-L — About page (revised — Developer Hub shell, not Fixer)
+Moved out of the PBI Fixer into the AgentHub shell footer (above Support). See **Open bugs / UX tasks → "Move About out of PBI Fixer"** above for full scope, content plan, owns, and acceptance criteria.
 
-**Owns:** `components/pages/AboutPage.tsx`
-
-**Acceptance:**
-- [ ] Shows current `v0.x` from `utils/version.ts`
-- [ ] Links open in new tab
-
-**Dependencies:** WS-A only. Trivial.
+**Dependencies:** Coordinate with the AgentHub shell maintainer (Lukasz) — touches `AgentHubLayout.tsx` + `styles.scss` footer slot.
 
 ---
 
@@ -238,7 +308,7 @@ All other workstreams add to their own files + append-only exports from `types/s
 | Item shape | `border-radius: 8px`, `margin: 2px 10px`, padding `8px 12px` | `borderRadiusMedium` (4 px), `padding: 6px 10px` |
 | Hover | `rgba(233, 232, 231, 0.6)`, icon recolours | `colorNeutralBackground3Hover`, no icon recolour |
 | Active | White card + 3 px primary accent bar + box-shadow + icon turns primary blue + animated slide-in | Subtle tint, semibold text, no accent bar, no animation |
-| Icons | FluentUI 24 px regular icons | Plain Unicode emoji glyphs (🗂 📊 ⚡ …), 16 px |
+| Icons | FluentUI 24 px regular icons | FluentUI 20 px regular icons (matches AgentHub family, smaller size) |
 | Section dividers | `.sidenav-section-label` uppercase 11 px, `.sidenav-rail-divider` between groups | Single uppercase "PBI Fixer" header |
 | Footer | `.sidenav-footer-item` slot | None |
 | Keyboard | Tab + Enter/Space; arrow-key tree nav not present | Same; no arrow-key nav |
@@ -278,7 +348,7 @@ All other workstreams add to their own files + append-only exports from `types/s
 
 ### Phase 1 — Visual parity (no behavioural change)
 1. Switch PBI Fixer sidebar to AgentHub class language. Replace `makeStyles` rules with shared `.agenthub-sidenav`, `.sidenav-item`, `.sidenav-item--active`, `.sidenav-section-label`, `.sidenav-rail-divider`. Keeps markup React-controlled, pulls styling from shared SCSS → automatic theming parity.
-2. Replace emoji glyphs with FluentUI 24 px regular icons. Map each `NavKey` (e.g. `model → DatabaseStack24Regular`, `report → ChartMultiple24Regular`, `fixer → Wrench24Regular`, `modelBpa/reportBpa → BookSearch24Regular`, `memory → MemoryRegular24Regular`, `perspectives → Eye24Regular`, `translations → Globe24Regular`, `delta → ArrowSwap24Regular`, `diagram → Flowchart24Regular`, `scriptRunner → Code24Regular`, `prototype → Beaker24Regular`, `about → Info24Regular`). **Verify each icon exists in installed `@fluentui/react-icons` bundle** (see WS-J v0.20 gotcha — TS compile passes for non-existent names; runtime is `undefined`).
+2. ~~Replace emoji glyphs with FluentUI icons.~~ **Done in v1.2** — nav uses FluentUI 20 px regular icons (`Database20Regular`, `ChartMultiple20Regular`, `Wrench20Regular`, `DatabaseSearch20Regular`, `DocumentSearch20Regular`, `Storage20Regular`, `Eye20Regular`, `Translate20Regular`, `ArrowSwap20Regular`, `Flowchart20Regular`, `Code20Regular`, `Beaker20Regular`, `ArrowImport20Regular`, `Flash20Regular`, `Info20Regular`). Optional follow-up: bump to 24 px to match AgentHub size exactly.
 3. Promote active-page accent bar (3 px primary + white card + icon recolour matching `.sidenav-item--active`).
 4. Add slide-in accent animation (`@keyframes sidenavAccentIn` — already in SCSS).
 5. Topbar redesign: move title + version into `.agenthub-topbar`-styled strip. Right-side cluster: Help link to GitHub README, notifications dot for fixer-run results (placeholder), build/version pill. 48 px height + warm `#faf9f8`.
@@ -314,27 +384,104 @@ All other workstreams add to their own files + append-only exports from `types/s
 ### Owns (proposed)
 - `components/PbiFixerNav.tsx` — rewrite styling to use shared SCSS classes
 - `components/PbiFixerPage.tsx` — header + connection-bar restyle, content padding
-- `types/nav.ts` — replace `icon: string` (emoji) with `icon: React.ReactNode` (FluentUI icons); verify each name exists in bundle
+- `types/nav.tsx` — already uses `React.ReactNode` icons (v1.2). No further work.
 - `styles.scss` — only **append** new classes if needed (e.g. `.pbifixer-connection-bar`); do not mutate existing AgentHub classes
 - `components/ModelExplorer.tsx`, `components/ReportExplorer.tsx` — font normalisation + empty-state replacement
 - New `components/common/EmptyState.tsx`
 
 ---
 
-## Open questions for Alexander (answer before WS-O kicks off)
+## Open questions for Alexander (answer in chat)
 
-1. **Connection bar treatment** — (a) restyled horizontal strip under topbar, or (b) move pickers into sidebar above nav?
-2. **Icon set** — replace playful emoji glyphs (🗂 📊 ⚡ 👁 🌐 …) with monochrome FluentUI 24 px icons?
-3. **SCSS vs `makeStyles`** — migrate Fixer chrome to shared `styles.scss` classes, or stay token-only and re-derive look from `tokens.*`?
-4. **Topbar right cluster** — what lives there? Suggested minimum: Help link, version pill, "Open in Fabric" link. Skip notifications + avatar (host hub already has)?
-5. **Lazy-loading** — worth doing in WS-O, or defer to later perf pass?
-6. **Tabs/EditorGroups integration** — should PBI Fixer pages participate in AgentHub `EditorGroupsRoot`? Most AgentHub-native possible but requires touching `AgentHubLayout` and Lukasz negotiation. In/out for WS-O?
-7. **Routing** — switch from `sessionStorage` to React Router for deep-links?
-8. **Footer slot** — match AgentHub `.sidenav-footer-item` (Report a bug, Open notebook version, version pill)?
-9. **Active-state accent colour** — keep AgentHub's `#005faa` primary, or distinct PBI-Fixer accent (e.g. PBI yellow `#F2C811`)? Identity vs. seamlessness.
-10. **Page-swap motion** — opacity crossfade OK, or instant swaps?
-11. **Disabled "Coming soon" items** — keep showing (italic + muted), or hide until ready (matches AgentHub)?
-12. **Dark mode** — confirm priority. SCSS reuse → "free"; token-only → explicit pass.
+Resolved already (do not re-ask):
+- ~~Icon set~~ — FluentUI 20 px icons shipped in v1.2 (`Database20Regular`, `ChartMultiple20Regular`, …). Optional follow-up: bump to 24 px to match AgentHub size exactly.
+- ~~Dark mode~~ — **not a priority.** Token-only path is fine; no explicit dark-mode pass needed.
+
+Remaining decisions, with context + a recommendation for each:
+
+### Q1. Connection bar treatment
+Today: a horizontal strip with three Comboboxes (Workspace / Semantic Model / Report) sits directly under the header, full-width across the body. AgentHub has no equivalent — its pages have no "connection context" concept, so we have to invent one that *feels* AgentHub-native.
+
+- **Option (a) — restyled horizontal strip:** keep position, change background to AgentHub warm surface `#faf9f8`, add a soft 1 px hairline so it visually reads as a sub-header of the topbar instead of a third stripe. Lowest disruption to muscle memory.
+- **Option (b) — move into sidebar above nav:** stack Workspace / SM / Report vertically as the top section of the sidebar. Frees full horizontal width for the content area, exactly mirrors no-connection-bar AgentHub pages. Loses ~250 px of sidebar height; pickers harder to scan; muscle memory breaks for current users.
+
+**Recommendation: (a).** Cheap visual fix, no UX regression.
+
+### Q2. SCSS classes vs FluentUI `makeStyles` for the chrome
+PBI Fixer chrome currently uses `makeStyles` with `tokens.*`. AgentHub chrome uses SCSS classes in `styles.scss` (`.agenthub-sidenav`, `.sidenav-item`, etc.).
+
+- **Migrate to shared SCSS classes:** automatic visual parity — every redesign Lukasz ships in `styles.scss` reaches the Fixer for free. Cost: one-time refactor of `PbiFixerNav.tsx` + `PbiFixerPage.tsx` to use `className` instead of `makeStyles`.
+- **Stay on `makeStyles` + tokens:** Fixer stays self-contained; no shared-file ownership conflict with Lukasz; but every Lukasz redesign forces a manual re-derive in our token map.
+
+**Recommendation: migrate to shared SCSS classes.** One-time cost, prevents permanent drift. Fixer chrome should not own its own visual language.
+
+### Q3. Topbar right cluster
+AgentHub topbar has icons (Help, Notifications, Chat) + avatar on the right. PBI Fixer topbar today is empty on the right. The host AgentHub topbar already shows the avatar one tier up, so we don't need to duplicate that.
+
+Proposed minimum content:
+- Help link → GitHub README of `pbi_fixer`
+- Version pill (`v0.x` from `utils/version.ts`)
+- "Open in Fabric" link (deep-links the currently-selected workspace/SM/report into Fabric)
+
+**Recommendation: ship those three.** Skip notifications + avatar (host hub already provides them). Anything else you want there?
+
+### Q4. Lazy-loading PBI Fixer pages
+AgentHub pages each have their own webpack chunk + `preload()` on hover. PBI Fixer today bundles all 15 pages in a single chunk.
+
+- **Lazy-load now (in WS-O):** mirrors AgentHub pattern, ~30–50 % smaller initial bundle, faster first paint. Adds Suspense boundaries you have to handle (loading spinners, error boundaries).
+- **Defer to a later perf pass:** Fixer bundle isn't huge today; the win is modest.
+
+**Recommendation: defer.** WS-O is already big; keep this for a dedicated perf pass when bundle size becomes a real complaint.
+
+### Q5. Tabs / EditorGroups integration
+AgentHub uses `EditorTabsProvider` + `EditorGroupsRoot` so users can open multiple pages as tabs, split the view, drag-reorder. PBI Fixer today has only one active page at a time.
+
+- **Integrate:** most AgentHub-native possible — a Fixer page would behave exactly like any other AgentHub item. Big payoff for power users.
+- **Cost:** requires touching `AgentHubLayout.tsx` (Lukasz's territory), agreeing on a contract for how a Fixer page registers as a tab, chunky refactor of `PbiFixerPage.tsx` (it can no longer assume it owns the whole content area).
+
+**Recommendation: out of scope for WS-O.** Park as a separate workstream after WS-O lands. Needs Lukasz alignment before sizing.
+
+### Q6. Routing — React Router vs sessionStorage
+Today the active page is stored in `sessionStorage` (`pbiFixer.activeNav`). URLs do not change. You can't deep-link to `#/agent-hub/pbifixer/diagram` from a doc or chat.
+
+- **Switch to React Router:** deep-links work, browser back/forward navigates between Fixer pages, easier to share specific tabs.
+- **Stay on sessionStorage:** simpler, Fixer remains a sub-app rather than a route-aware citizen.
+
+**Recommendation: switch to React Router.** Cheap win, big UX dividend (paste a deep-link to a Diagram of a specific dataset in an email and it just works).
+
+### Q7. Footer slot in the Fixer sidebar
+AgentHub sidebar has a footer slot (`.sidenav-footer-item`) for items like Help / Sign-out / Settings. The Fixer sidebar today has nothing at the bottom.
+
+If About moves to the AgentHub shell footer (already decided in Open bugs / UX tasks → WS-L revised), the Fixer sidebar footer can host:
+- "Report a bug" → GitHub Issues
+- "Open notebook version" → link to the Python notebook source
+- Fixer version pill
+
+**Recommendation: yes, add a footer slot** with those three. Mirrors AgentHub's pattern.
+
+### Q8. Active-state accent colour
+AgentHub uses `#005faa` (primary blue) for the active-page accent bar.
+
+- **Reuse `#005faa`:** maximum seamlessness — the Fixer disappears into AgentHub's visual language. Best for users who use multiple AgentHub items.
+- **Pick a distinct PBI accent (e.g. PBI yellow `#F2C811`):** users *see* they're inside the Fixer surface. Helps onboarding and screenshots.
+
+**Recommendation: reuse `#005faa`.** Topbar title "PBI Fixer" already provides the identity cue.
+
+### Q9. Page-swap motion
+When the active page changes (e.g. you click Diagram → Memory):
+
+- **Opacity crossfade (~120 ms):** matches AgentHub's motion language. Smoother on the eye.
+- **Instant swap:** no transition. Slightly faster; some users find motion annoying on dense data grids.
+
+**Recommendation: opacity crossfade.** 120 ms is fast enough not to feel laggy.
+
+### Q10. Disabled "Coming soon" items in the nav
+Today the Fixer shows nav items with `ready: false` as italic + muted (currently: Script Runner, About). AgentHub never lists unfinished pages — they're hidden until ready.
+
+- **Keep showing (current behaviour):** users see the roadmap. Helps when demoing upcoming features.
+- **Hide until ready:** matches AgentHub. Cleaner nav.
+
+**Recommendation: hide until ready.** Matches AgentHub's pattern. CHANGELOG / PLAN already documents the roadmap for stakeholders.
 
 ---
 

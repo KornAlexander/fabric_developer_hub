@@ -100,6 +100,10 @@ const useStyles = makeStyles({
     width: "100%",
     borderCollapse: "collapse",
     fontSize: tokens.fontSizeBase200,
+    // WS-N v0.45 — explicitly inherit Fluent's base font so Type/Source
+    // columns don't pick up the user-agent table default (which can
+    // render as a tighter / monospace-looking face on some browsers).
+    fontFamily: tokens.fontFamilyBase,
   },
   th: {
     textAlign: "left",
@@ -109,12 +113,28 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground2,
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
     fontWeight: tokens.fontWeightSemibold,
+    fontFamily: tokens.fontFamilyBase,
     zIndex: 1,
   },
   td: {
     ...shorthands.padding("4px", "10px"),
     borderBottom: `1px solid ${tokens.colorNeutralStroke3}`,
     verticalAlign: "middle",
+    fontFamily: tokens.fontFamilyBase,
+  },
+  tdObject: {
+    // Object identifiers stay in the monospace face for clarity
+    // (e.g. ``Orders[Order Date]``).
+    fontFamily: tokens.fontFamilyMonospace,
+    fontSize: tokens.fontSizeBase100,
+    color: tokens.colorNeutralForeground2,
+  },
+  tdExistingFallback: {
+    // Show the source caption as a muted hint when the culture file
+    // doesn't yet have an entry for this object — makes it obvious
+    // what the user currently sees in the report.
+    color: tokens.colorNeutralForeground3,
+    fontStyle: "italic",
   },
   badge: {
     display: "inline-flex",
@@ -176,6 +196,7 @@ export const TranslationsPage: React.FC<PageProps> = ({
   const [confirmOpen, setConfirmOpen] = useState<boolean>(false);
   const [applyError, setApplyError] = useState<string>("");
   const [applyInfo, setApplyInfo] = useState<string>("");
+  const [applying, setApplying] = useState<boolean>(false);
 
   // Model load — driven by the selected dataset from the outer shell.
   useEffect(() => {
@@ -365,6 +386,9 @@ export const TranslationsPage: React.FC<PageProps> = ({
   const handleApply = useCallback(async () => {
     setApplyError("");
     setApplyInfo("");
+    // Close confirm dialog immediately so the user sees status banner.
+    setConfirmOpen(false);
+    setApplying(true);
     const toApply = rows.filter((r) => r.accepted).map(({ accepted, edited, ...rest }) => rest);
     try {
       const res = await applyTranslations(auth, {
@@ -375,11 +399,11 @@ export const TranslationsPage: React.FC<PageProps> = ({
       });
       const created = res.createdCultureFile ? " (new culture file created)" : "";
       setApplyInfo(`Applied ${res.applied} translation(s) to ${targetCulture}${created}.`);
-      setConfirmOpen(false);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setApplyError(msg);
-      setConfirmOpen(false);
+    } finally {
+      setApplying(false);
     }
   }, [auth, rows, workspaceId, datasetId, targetCulture]);
 
@@ -461,7 +485,14 @@ export const TranslationsPage: React.FC<PageProps> = ({
           <MessageBarBody><MessageBarTitle>Propose failed</MessageBarTitle> {proposeError}</MessageBarBody>
         </MessageBar>
       )}
-      {applyInfo && (
+      {applying && (
+        <MessageBar intent="info">
+          <MessageBarBody>
+            <Spinner size="tiny" /> Applying {acceptedCount} translation(s) to {targetCulture}…
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      {!applying && applyInfo && (
         <MessageBar intent="success">
           <MessageBarBody>{applyInfo}</MessageBarBody>
         </MessageBar>
@@ -517,9 +548,13 @@ export const TranslationsPage: React.FC<PageProps> = ({
                   return (
                     <tr key={`${r.objectType}::${r.objectPath}`}>
                       <td className={styles.td}>{r.objectType}</td>
-                      <td className={styles.td}><code>{r.objectPath}</code></td>
+                      <td className={mergeClasses(styles.td, styles.tdObject)}>{r.objectPath}</td>
                       <td className={styles.td}>{r.sourceCaption}</td>
-                      <td className={styles.td}>{r.existingCaption ?? ""}</td>
+                      <td className={styles.td}>
+                        {hasExisting
+                          ? r.existingCaption
+                          : <span className={styles.tdExistingFallback}>{r.sourceCaption}</span>}
+                      </td>
                       <td className={styles.td}>
                         <Input
                           className={styles.editInput}
@@ -559,7 +594,7 @@ export const TranslationsPage: React.FC<PageProps> = ({
               <DialogTrigger disableButtonEnhancement>
                 <Button appearance="secondary">Cancel</Button>
               </DialogTrigger>
-              <Button appearance="primary" onClick={handleApply}>Apply</Button>
+              <Button appearance="primary" disabled={applying} onClick={handleApply}>Apply</Button>
             </DialogActions>
           </DialogBody>
         </DialogSurface>
