@@ -843,6 +843,26 @@ _BUILTIN_GLOSSARY: dict[str, dict[str, str]] = {
         "month": "Mes", "day": "Día", "price": "Precio", "cost": "Coste",
         "profit": "Beneficio", "store": "Tienda", "employee": "Empleado",
     },
+    "ja-JP": {
+        "sales": "売上", "revenue": "収益", "product": "製品",
+        "products": "製品", "customer": "顧客", "customers": "顧客",
+        "order": "注文", "orders": "注文", "date": "日付",
+        "amount": "金額", "total": "合計", "quantity": "数量",
+        "name": "名前", "category": "カテゴリ", "region": "地域",
+        "country": "国", "city": "市", "year": "年",
+        "month": "月", "day": "日", "price": "価格", "cost": "原価",
+        "profit": "利益", "store": "店舗", "employee": "従業員",
+        "segment": "セグメント", "state": "州", "province": "県",
+        "discount": "割引", "currency": "通貨", "tax": "税",
+        "id": "ID", "code": "コード", "type": "種類", "status": "状態",
+        "sum": "合計", "average": "平均", "count": "件数", "min": "最小",
+        "max": "最大", "key": "キー", "value": "値", "description": "説明",
+        "address": "住所", "phone": "電話", "email": "メール",
+        "supplier": "仕入先", "vendor": "ベンダー", "invoice": "請求書",
+        "shipment": "出荷", "delivery": "配送", "warehouse": "倉庫",
+        "stock": "在庫", "inventory": "在庫", "currency": "通貨",
+        "department": "部門", "manager": "管理者", "title": "役職",
+    },
 }
 
 
