@@ -83,7 +83,7 @@ const PbiFixerPage = lazyWithPreload(
     "PbiFixerPage",
 );
 import { NAV_ITEMS as PBIFIXER_NAV_ITEMS, NAV_GROUPS as PBIFIXER_NAV_GROUPS, DEFAULT_NAV_KEY as PBIFIXER_DEFAULT_NAV, type NavKey as PbiFixerNavKey, type NavGroup as PbiFixerNavGroup } from "../PbiFixer";
-import { useGitHubAuth } from "./useGitHubAuth";
+import { useGitHubAuth, GitHubAuth } from "./useGitHubAuth";
 import { ItemProvider, useItemContext } from "./ItemContext";
 import { WORKLOAD_VERSION } from "../../version";
 import { SearchProvider, useSearch, searchPlaceholderFor, isFilterScope, type SearchScope } from "./SearchContext";
@@ -522,11 +522,87 @@ function TopbarItemActions({
     );
 }
 
-export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId }: AgentHubLayoutProps) {
+// ── Wrapper component ────────────────────────────────────────────
+// Splits the layout into an unauthenticated **gate** and an authenticated
+// **body**. Without this split, the body's ~20 hooks were declared AFTER
+// an early ``if (!auth.githubToken) return <gate/>``. When the GitHub
+// device-flow completed, ``auth.githubToken`` flipped null → string,
+// making React run far MORE hooks on the second render than the first
+// (Rules of Hooks violation → minified React error #310). React then
+// unmounted the entire tree, leaving an empty white iframe ("grey
+// screen") that only recovered after a full page reload — exactly the
+// bug B5 in the PBI Fixer PLAN.md. By moving the gate into its own
+// component, the body never mounts until auth is present, so its hook
+// list is invariant for the lifetime of the component.
+export function AgentHubLayout(props: AgentHubLayoutProps) {
+    const auth = useGitHubAuth();
+    if (!auth.githubToken) {
+        return <AgentHubAuthGate auth={auth} workloadClient={props.workloadClient} />;
+    }
+    return <AgentHubLayoutAuthed {...props} auth={auth} />;
+}
+
+function AgentHubAuthGate({ auth, workloadClient }: { auth: GitHubAuth; workloadClient: WorkloadClientAPI }) {
+    return (
+        <div className="agenthub-root">
+            <div className="agenthub-auth-gate">
+                <BrainCircuit24Regular style={{ fontSize: 48, color: "#0078d4" }} />
+                <Text size={700} weight="bold">Developer Hub</Text>
+                <Body1 style={{ color: "#605e5c", textAlign: "center" }}>
+                    Sign in with GitHub to access the Agent Dashboard.
+                    <br />A GitHub Copilot subscription is required.
+                </Body1>
+
+                {auth.deviceFlow ? (
+                    <div className="agenthub-device-flow">
+                        <Body1>Enter this code at GitHub:</Body1>
+                        <code className="device-code-display">{auth.deviceFlow.userCode}</code>
+                        {auth.codeCopied && (
+                            <Text size={200} style={{ color: "#0ea50e" }}>Code copied to clipboard automatically</Text>
+                        )}
+                        <Button appearance="subtle" size="small" onClick={auth.copyCode}>
+                            Copy code again
+                        </Button>
+                        <a
+                            href={auth.deviceFlow.verificationUri}
+                            target="_blank"
+                            rel="noreferrer noopener"
+                            className="github-verify-link"
+                            onClick={async (e) => {
+                                e.preventDefault();
+                                try {
+                                    await workloadClient.navigation.openBrowserTab({
+                                        url: auth.deviceFlow!.verificationUri,
+                                        queryParams: {},
+                                    });
+                                } catch {
+                                    window.open(auth.deviceFlow!.verificationUri, '_blank', 'noopener,noreferrer');
+                                }
+                            }}
+                        >
+                            Open {auth.deviceFlow.verificationUri}
+                        </a>
+                        {auth.isPolling && (
+                            <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
+                                <Spinner size="tiny" />
+                                <Text size={200} style={{ color: "#605e5c" }}>Waiting for authorization...</Text>
+                            </div>
+                        )}
+                    </div>
+                ) : (
+                    <Button appearance="primary" size="large" onClick={auth.startDeviceFlow}>
+                        Sign in with GitHub
+                    </Button>
+                )}
+            </div>
+        </div>
+    );
+}
+
+function AgentHubLayoutAuthed({ workloadClient, itemObjectId: routeItemObjectId, auth }: AgentHubLayoutProps & { auth: GitHubAuth }) {
     const history = useHistory();
     const location = useLocation();
     const match = useRouteMatch();
-    const auth = useGitHubAuth();
 
     // Extract workspaceObjectId from ?ws= query param (set by index.worker.ts).
     // Recompute on every URL change because the workload SDK navigates to
@@ -587,64 +663,6 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
         })();
         return () => { cancelled = true; };
     }, [auth.githubToken]);
-
-    // ── GitHub auth gate ──────────────────────────────────────────
-    if (!auth.githubToken) {
-        return (
-            <div className="agenthub-root">
-                <div className="agenthub-auth-gate">
-                    <BrainCircuit24Regular style={{ fontSize: 48, color: "#0078d4" }} />
-                    <Text size={700} weight="bold">Developer Hub</Text>
-                    <Body1 style={{ color: "#605e5c", textAlign: "center" }}>
-                        Sign in with GitHub to access the Agent Dashboard.
-                        <br />A GitHub Copilot subscription is required.
-                    </Body1>
-
-                    {auth.deviceFlow ? (
-                        <div className="agenthub-device-flow">
-                            <Body1>Enter this code at GitHub:</Body1>
-                            <code className="device-code-display">{auth.deviceFlow.userCode}</code>
-                            {auth.codeCopied && (
-                                <Text size={200} style={{ color: "#0ea50e" }}>Code copied to clipboard automatically</Text>
-                            )}
-                            <Button appearance="subtle" size="small" onClick={auth.copyCode}>
-                                Copy code again
-                            </Button>
-                            <a
-                                href={auth.deviceFlow.verificationUri}
-                                target="_blank"
-                                rel="noreferrer noopener"
-                                className="github-verify-link"
-                                onClick={async (e) => {
-                                    e.preventDefault();
-                                    try {
-                                        await workloadClient.navigation.openBrowserTab({
-                                            url: auth.deviceFlow!.verificationUri,
-                                            queryParams: {},
-                                        });
-                                    } catch {
-                                        window.open(auth.deviceFlow!.verificationUri, '_blank', 'noopener,noreferrer');
-                                    }
-                                }}
-                            >
-                                Open {auth.deviceFlow.verificationUri}
-                            </a>
-                            {auth.isPolling && (
-                                <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
-                                    <Spinner size="tiny" />
-                                    <Text size={200} style={{ color: "#605e5c" }}>Waiting for authorization...</Text>
-                                </div>
-                            )}
-                        </div>
-                    ) : (
-                        <Button appearance="primary" size="large" onClick={auth.startDeviceFlow}>
-                            Sign in with GitHub
-                        </Button>
-                    )}
-                </div>
-            </div>
-        );
-    }
 
     // ── Main layout (sidebar + top bar + content) ─────────────────
     const [sidebarOpen, setSidebarOpen] = useState(false);
