@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useCallback, useEffect, Suspense, lazy } from "react";
-import { useHistory, useRouteMatch } from "react-router-dom";
+import { useHistory, useLocation, useRouteMatch } from "react-router-dom";
 import "../../styles.scss";
 import { EditorTabsProvider, useEditorTabs, type TabDescriptor, descriptorFromPath, makeNewSessionDescriptor, isReloadNavigation } from "./EditorTabs/EditorTabsContext";
 import { EditorGroupsRoot } from "./EditorTabs/EditorGroupsRoot";
@@ -524,14 +524,31 @@ function TopbarItemActions({
 
 export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId }: AgentHubLayoutProps) {
     const history = useHistory();
+    const location = useLocation();
     const match = useRouteMatch();
     const auth = useGitHubAuth();
 
-    // Extract workspaceObjectId from ?ws= query param (set by index.worker.ts)
+    // Extract workspaceObjectId from ?ws= query param (set by index.worker.ts).
+    // Recompute on every URL change because the workload SDK navigates to
+    // the bootstrap path (which carries ?ws=...) AFTER the React app mounts.
+    // Also tolerate a malformed double-? URL (Fabric host occasionally appends
+    // ?experience=... to a URL that already has a query string), by stripping
+    // anything after a stray '?' inside the ws value.
     const workspaceObjectId = useMemo(() => {
-        const params = new URLSearchParams(window.location.search);
-        return params.get("ws") || sessionStorage.getItem("workspace_id") || null;
-    }, []);
+        const search = window.location.search || "";
+        const params = new URLSearchParams(search);
+        let raw = params.get("ws")
+            || sessionStorage.getItem("agenthub_workspace_id")
+            || sessionStorage.getItem("workspace_id")
+            || "";
+        if (raw.includes("?")) raw = raw.split("?")[0];
+        if (raw.includes("&")) raw = raw.split("&")[0];
+        const trimmed = raw.trim();
+        return trimmed || null;
+        // location.search & location.pathname are intentional deps so the value
+        // refreshes on every navigation.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [location.search, location.pathname]);
 
     const currentPath = history.location.pathname;
     let activePage = "newsession";
