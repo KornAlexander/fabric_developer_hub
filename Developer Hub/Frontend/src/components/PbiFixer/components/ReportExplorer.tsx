@@ -5,6 +5,8 @@ import React, { useState, useCallback, useMemo, useEffect, useRef } from "react"
 import {
   Button,
   Input,
+  Dropdown,
+  Option,
   Spinner,
   makeStyles,
   shorthands,
@@ -36,6 +38,52 @@ import {
   getReportEmbedToken,
   PbiAuth,
 } from "../services";
+import { updateVisualProperties } from "../services/fixersApi";
+
+// PBIR ``visualType`` catalogue (subset; covers the most common edits
+// like Pie → Clustered Bar). Values are the internal strings the engine
+// writes into ``visual.json``.
+const VISUAL_TYPE_OPTIONS: { value: string; label: string }[] = [
+  { value: "barChart", label: "Stacked Bar" },
+  { value: "clusteredBarChart", label: "Clustered Bar" },
+  { value: "hundredPercentStackedBarChart", label: "100% Stacked Bar" },
+  { value: "columnChart", label: "Stacked Column" },
+  { value: "clusteredColumnChart", label: "Clustered Column" },
+  { value: "hundredPercentStackedColumnChart", label: "100% Stacked Column" },
+  { value: "lineChart", label: "Line" },
+  { value: "areaChart", label: "Area" },
+  { value: "stackedAreaChart", label: "Stacked Area" },
+  { value: "lineStackedColumnComboChart", label: "Line + Stacked Column" },
+  { value: "lineClusteredColumnComboChart", label: "Line + Clustered Column" },
+  { value: "ribbonChart", label: "Ribbon" },
+  { value: "waterfallChart", label: "Waterfall" },
+  { value: "funnel", label: "Funnel" },
+  { value: "scatterChart", label: "Scatter" },
+  { value: "pieChart", label: "Pie" },
+  { value: "donutChart", label: "Donut" },
+  { value: "treemap", label: "Treemap" },
+  { value: "map", label: "Map" },
+  { value: "filledMap", label: "Filled Map" },
+  { value: "shapeMap", label: "Shape Map" },
+  { value: "tableEx", label: "Table" },
+  { value: "pivotTable", label: "Matrix" },
+  { value: "card", label: "Card" },
+  { value: "multiRowCard", label: "Multi-row Card" },
+  { value: "kpi", label: "KPI" },
+  { value: "gauge", label: "Gauge" },
+  { value: "slicer", label: "Slicer" },
+  { value: "advancedSlicerVisual", label: "Slicer (new)" },
+  { value: "textbox", label: "Text box" },
+  { value: "image", label: "Image" },
+  { value: "shape", label: "Shape" },
+  { value: "actionButton", label: "Button" },
+  { value: "decompositionTreeVisual", label: "Decomposition Tree" },
+  { value: "qnaVisual", label: "Q&A" },
+];
+
+function visualTypeLabel(value: string): string {
+  return VISUAL_TYPE_OPTIONS.find((o) => o.value === value)?.label ?? value;
+}
 
 // ---------------------------------------------------------------------------
 // Styles
@@ -96,20 +144,25 @@ const useStyles = makeStyles({
     flex: 1,
     ...shorthands.gap("8px"),
     minWidth: 0,
+    minHeight: 0,
+    overflow: "hidden",
   },
   previewPanel: {
     ...shorthands.border("1px", "solid", BORDER_COLOR),
     ...shorthands.borderRadius("8px"),
     ...shorthands.padding("8px"),
     backgroundColor: SECTION_BG,
-    minHeight: "400px",
     flex: 1,
+    minHeight: 0,
     display: "flex",
     flexDirection: "column",
+    position: "relative",
+    isolation: "isolate" as const,
+    overflow: "hidden",
   },
   previewSurface: {
     flex: 1,
-    minHeight: "480px",
+    minHeight: 0,
     display: "flex",
     alignItems: "stretch",
     justifyContent: "stretch",
@@ -135,9 +188,11 @@ const useStyles = makeStyles({
     ...shorthands.padding("8px"),
     backgroundColor: SECTION_BG,
     flex: "0 0 auto",
-    minHeight: "180px",
-    maxHeight: "320px",
+    minHeight: "200px",
+    maxHeight: "360px",
     overflowY: "auto",
+    position: "relative",
+    zIndex: 1,
   },
   sectionLabel: {
     fontSize: "12px",
@@ -350,10 +405,10 @@ const ReportPreview: React.FC<ReportPreviewProps> = ({
   }
 
   return (
-    <div style={{ position: "relative", width: "100%", height: "100%", minHeight: 480 }}>
+    <div style={{ position: "relative", width: "100%", height: "100%" }}>
       <div
         ref={containerRef}
-        style={{ width: "100%", height: "100%", minHeight: 480 }}
+        style={{ width: "100%", height: "100%" }}
       />
       {embedLoading && (
         <div style={{
@@ -424,6 +479,79 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
     if (!selectedKey || !reportData || !selectedKey.startsWith("visual:")) return null;
     return getVisualProperties(reportData, selectedKey);
   }, [selectedKey, reportData]);
+
+  // ── WS-Q v0.42 — editable visual / page properties ─────────────────
+  type VisualEdit = { visualType?: string; x?: number; y?: number; width?: number; height?: number };
+  type PageEdit = { pageWidth?: number; pageHeight?: number };
+  const [visualEdit, setVisualEdit] = useState<VisualEdit>({});
+  const [pageEdit, setPageEdit] = useState<PageEdit>({});
+  const [savingProps, setSavingProps] = useState(false);
+
+  // Reset staged edits whenever the user picks a different node.
+  useEffect(() => {
+    setVisualEdit({});
+    setPageEdit({});
+  }, [selectedKey]);
+
+  const visualEditDirty =
+    (visualEdit.visualType !== undefined && visualEdit.visualType !== visualProps?.type) ||
+    (visualEdit.x !== undefined && visualEdit.x !== visualProps?.x) ||
+    (visualEdit.y !== undefined && visualEdit.y !== visualProps?.y) ||
+    (visualEdit.width !== undefined && visualEdit.width !== visualProps?.width) ||
+    (visualEdit.height !== undefined && visualEdit.height !== visualProps?.height);
+
+  const pageEditDirty =
+    (pageEdit.pageWidth !== undefined && pageEdit.pageWidth !== pageProps?.width) ||
+    (pageEdit.pageHeight !== undefined && pageEdit.pageHeight !== pageProps?.height);
+
+  const handleSaveProps = useCallback(async () => {
+    if (!reportData?.workspaceId || !reportData?.reportId) return;
+    setSavingProps(true);
+    try {
+      if (visualProps && visualEditDirty) {
+        await updateVisualProperties(auth, {
+          workspaceId: reportData.workspaceId,
+          reportId: reportData.reportId,
+          page: visualProps.pageName,
+          visual: visualProps.internalName,
+          visualType: visualEdit.visualType,
+          x: visualEdit.x,
+          y: visualEdit.y,
+          width: visualEdit.width,
+          height: visualEdit.height,
+        });
+      } else if (pageProps && pageEditDirty) {
+        await updateVisualProperties(auth, {
+          workspaceId: reportData.workspaceId,
+          reportId: reportData.reportId,
+          page: pageProps.internalName,
+          visual: "*",
+          pageWidth: pageEdit.pageWidth,
+          pageHeight: pageEdit.pageHeight,
+        });
+      } else {
+        return;
+      }
+      // Reload the definition so the tree + preview reflect the change.
+      const data = await loadReportDefinition(
+        auth,
+        reportData.workspaceId,
+        reportData.reportId,
+        reportData.reportId,
+      );
+      setReportData(data);
+      setVisualEdit({});
+      setPageEdit({});
+      setStatus({ msg: "Saved", color: "#34c759" });
+    } catch (err) {
+      setStatus({
+        msg: `Save failed: ${err instanceof Error ? err.message : String(err)}`,
+        color: "#ff3b30",
+      });
+    } finally {
+      setSavingProps(false);
+    }
+  }, [auth, reportData, visualProps, pageProps, visualEdit, pageEdit, visualEditDirty, pageEditDirty]);
 
   // ---------------------------------------------------------------------------
   // Handlers
@@ -618,20 +746,116 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
                 <PropRow label="Display Name" value={pageProps.displayName} />
                 <PropRow label="Visual Count" value={String(pageProps.visualCount)} />
                 <PropRow label="Visual Types" value={pageProps.visualTypeSummary} />
-                <PropRow label="Dimensions" value={`${pageProps.width} \u00d7 ${pageProps.height}`} />
+                <EditableNumberRow
+                  label="Width"
+                  current={pageProps.width}
+                  pending={pageEdit.pageWidth}
+                  onChange={(v) => setPageEdit((e) => ({ ...e, pageWidth: v }))}
+                />
+                <EditableNumberRow
+                  label="Height"
+                  current={pageProps.height}
+                  pending={pageEdit.pageHeight}
+                  onChange={(v) => setPageEdit((e) => ({ ...e, pageHeight: v }))}
+                />
                 <PropRow label="Hidden" value={String(pageProps.hidden)} />
+                {pageEditDirty && (
+                  <div className={styles.saveRow}>
+                    <Button
+                      appearance="primary"
+                      size="small"
+                      onClick={handleSaveProps}
+                      disabled={savingProps}
+                      icon={savingProps ? <Spinner size="tiny" /> : undefined}
+                    >
+                      Save changes
+                    </Button>
+                    <Button
+                      appearance="secondary"
+                      size="small"
+                      onClick={() => setPageEdit({})}
+                      disabled={savingProps}
+                    >
+                      Discard
+                    </Button>
+                  </div>
+                )}
               </>
             )}
 
             {visualProps && (
               <>
-                <PropRow label="Type" value={visualProps.displayType} />
+                <div className={styles.propRow}>
+                  <span className={styles.propLabel}>Type</span>
+                  <span className={styles.propValue} style={{ flex: 1 }}>
+                    <Dropdown
+                      size="small"
+                      value={visualTypeLabel(visualEdit.visualType ?? visualProps.type)}
+                      selectedOptions={[visualEdit.visualType ?? visualProps.type]}
+                      onOptionSelect={(_, data) => {
+                        if (data.optionValue) {
+                          setVisualEdit((e) => ({ ...e, visualType: data.optionValue }));
+                        }
+                      }}
+                      style={{ minWidth: 220 }}
+                    >
+                      {VISUAL_TYPE_OPTIONS.map((o) => (
+                        <Option key={o.value} value={o.value} text={o.label}>
+                          {o.label}
+                        </Option>
+                      ))}
+                    </Dropdown>
+                  </span>
+                </div>
                 <PropRow label="Internal Name" value={visualProps.internalName} />
                 <PropRow label="Page" value={visualProps.pageName} />
                 <PropRow label="Title" value={visualProps.title} />
-                <PropRow label="Position" value={`X: ${visualProps.x}, Y: ${visualProps.y}`} />
-                <PropRow label="Size" value={`${visualProps.width} \u00d7 ${visualProps.height}`} />
+                <EditableNumberRow
+                  label="X"
+                  current={visualProps.x}
+                  pending={visualEdit.x}
+                  onChange={(v) => setVisualEdit((e) => ({ ...e, x: v }))}
+                />
+                <EditableNumberRow
+                  label="Y"
+                  current={visualProps.y}
+                  pending={visualEdit.y}
+                  onChange={(v) => setVisualEdit((e) => ({ ...e, y: v }))}
+                />
+                <EditableNumberRow
+                  label="Width"
+                  current={visualProps.width}
+                  pending={visualEdit.width}
+                  onChange={(v) => setVisualEdit((e) => ({ ...e, width: v }))}
+                />
+                <EditableNumberRow
+                  label="Height"
+                  current={visualProps.height}
+                  pending={visualEdit.height}
+                  onChange={(v) => setVisualEdit((e) => ({ ...e, height: v }))}
+                />
                 <PropRow label="Hidden" value={String(visualProps.hidden)} />
+                {visualEditDirty && (
+                  <div className={styles.saveRow}>
+                    <Button
+                      appearance="primary"
+                      size="small"
+                      onClick={handleSaveProps}
+                      disabled={savingProps}
+                      icon={savingProps ? <Spinner size="tiny" /> : undefined}
+                    >
+                      Save changes
+                    </Button>
+                    <Button
+                      appearance="secondary"
+                      size="small"
+                      onClick={() => setVisualEdit({})}
+                      disabled={savingProps}
+                    >
+                      Discard
+                    </Button>
+                  </div>
+                )}
                 {visualProps.usedObjects.length > 0 && (
                   <div style={{ marginTop: "8px" }}>
                     <div className={styles.sectionLabel} style={{ marginBottom: "4px" }}>Used Objects</div>
@@ -695,6 +919,44 @@ const PropRow: React.FC<{ label: string; value: string }> = ({ label, value }) =
     <div className={styles.propRow}>
       <span className={styles.propLabel}>{label}</span>
       <span className={styles.propValue}>{value}</span>
+    </div>
+  );
+};
+
+interface EditableNumberRowProps {
+  label: string;
+  current: number;
+  pending: number | undefined;
+  onChange: (v: number | undefined) => void;
+}
+
+const EditableNumberRow: React.FC<EditableNumberRowProps> = ({
+  label,
+  current,
+  pending,
+  onChange,
+}) => {
+  const styles = useStyles();
+  const value = pending ?? current;
+  return (
+    <div className={styles.propRow}>
+      <span className={styles.propLabel}>{label}</span>
+      <span className={styles.propValue} style={{ flex: 1 }}>
+        <Input
+          size="small"
+          type="number"
+          value={String(Math.round(value))}
+          onChange={(_, data) => {
+            const n = data.value === "" ? undefined : Number(data.value);
+            if (n === undefined || Number.isNaN(n)) {
+              onChange(undefined);
+            } else {
+              onChange(n);
+            }
+          }}
+          style={{ width: 110 }}
+        />
+      </span>
     </div>
   );
 };

@@ -210,6 +210,7 @@ collide on the same line, last edit wins; re-run the loser workstream against th
 | WS-L | About | ⬜ not started | — | stub | `false` |
 | WS-M | Prototype | ✅ shipped | v0.16 | `PrototypePage.tsx` | `true` |
 | WS-N | Integration sweep | 🟡 partial | v0.12–v0.16 | n/a | n/a |
+| WS-Q | Editable visual / page properties (type / position / size) + preview overlap fix | ✅ shipped | **v0.42** | `ReportExplorer.tsx`, `services/fixersApi.ts`, **backend `agenthub_controller.py` `/pbi-fixer/visual/update`** | `true` |
 
 Legend: ✅ shipped • 🟡 partial • ⬜ not started
 

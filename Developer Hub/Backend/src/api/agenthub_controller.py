@@ -1292,6 +1292,202 @@ async def pbi_fixer_fixers_apply(
     }
 
 
+# ---------------------------------------------------------------------------
+# WS-Q v0.42 — editable visual properties (type / position / size)
+# ---------------------------------------------------------------------------
+
+
+class VisualUpdateRequest(BaseModel):
+    workspaceId: str
+    reportId: str
+    page: str
+    visual: str
+    visualType: str | None = None
+    x: float | None = None
+    y: float | None = None
+    width: float | None = None
+    height: float | None = None
+    # Page-level edits (only used when ``visual`` is empty / "*").
+    pageWidth: float | None = None
+    pageHeight: float | None = None
+
+
+@router.post("/pbi-fixer/visual/update")
+async def pbi_fixer_visual_update(
+    payload: VisualUpdateRequest,
+    request: Request,
+    ctx: AuthorizationContext | None = Depends(require_user),
+):
+    """Patch a single visual's ``visualType`` / position, or a page's size.
+
+    Round-trips the report definition via Fabric REST (``getDefinition``
+    / ``updateDefinition``) and rewrites the matching ``visual.json`` /
+    ``page.json`` part.
+    """
+    import base64
+    import json as _json
+
+    import httpx
+
+    user_id = _user_key_from_context(ctx)
+    _rate_limit(user_id, "pbi_fixer_visual_update")
+
+    mcp_tokens = await _mcp_tokens(request)
+    if not mcp_tokens:
+        raise HTTPException(400, "Fabric token required")
+    fabric_token = mcp_tokens.get("FABRIC_API_TOKEN")
+    if not fabric_token:
+        raise HTTPException(401, "No Fabric OBO token available")
+
+    base = (
+        f"{_FABRIC_API_ROOT}/workspaces/{payload.workspaceId}"
+        f"/reports/{payload.reportId}"
+    )
+    get_url = f"{base}/getDefinition"
+
+    async def _follow_lro(client: httpx.AsyncClient, resp: httpx.Response) -> httpx.Response:
+        attempts = 0
+        while resp.status_code == 202 and attempts < 30:
+            attempts += 1
+            location = resp.headers.get("Location") or resp.headers.get("Operation-Location")
+            if not location:
+                break
+            try:
+                retry_after = float(resp.headers.get("Retry-After", "2"))
+            except ValueError:
+                retry_after = 2.0
+            await asyncio.sleep(min(retry_after, 5.0))
+            resp = await client.get(location, headers={"Authorization": f"Bearer {fabric_token}"})
+        if (
+            resp.status_code == 200
+            and resp.headers.get("content-type", "").startswith("application/json")
+        ):
+            try:
+                body = resp.json()
+            except Exception:
+                body = None
+            if isinstance(body, dict) and body.get("status") == "Failed":
+                err = body.get("error") or {}
+                raise HTTPException(
+                    502,
+                    f"Fabric LRO failed [{err.get('errorCode', '')}]: {err.get('message', '')}",
+                )
+            if (
+                isinstance(body, dict)
+                and body.get("status") in ("Succeeded", "Completed")
+                and "definition" not in body
+            ):
+                location = (resp.url and str(resp.url)) or location
+                try:
+                    rr = await client.get(
+                        f"{location.rstrip('/')}/result",
+                        headers={"Authorization": f"Bearer {fabric_token}"},
+                    )
+                    if rr.status_code < 400:
+                        resp = rr
+                except httpx.HTTPError:
+                    pass
+        return resp
+
+    page_only = not payload.visual or payload.visual == "*"
+    target_visual_path = (
+        f"definition/pages/{payload.page}/visuals/{payload.visual}/visual.json"
+    )
+    target_page_path = f"definition/pages/{payload.page}/page.json"
+
+    changes: list[dict] = []
+
+    async with httpx.AsyncClient(timeout=120.0, follow_redirects=False) as client:
+        try:
+            resp = await client.post(
+                get_url,
+                headers={
+                    "Authorization": f"Bearer {fabric_token}",
+                    "Content-Type": "application/json",
+                },
+                json={},
+            )
+        except httpx.HTTPError as exc:
+            raise HTTPException(502, f"getDefinition failed: {exc}") from exc
+        resp = await _follow_lro(client, resp)
+        if resp.status_code >= 400:
+            raise HTTPException(resp.status_code, f"getDefinition: {resp.text}")
+        try:
+            def_body = resp.json()
+        except Exception as exc:
+            raise HTTPException(502, f"getDefinition returned non-JSON: {exc}") from exc
+
+        parts = list((def_body.get("definition") or {}).get("parts") or [])
+        if not parts:
+            raise HTTPException(502, "Definition has no parts")
+
+        new_parts = [{**p} for p in parts]
+        touched = False
+
+        for p in new_parts:
+            path = p.get("path", "")
+            try:
+                doc_str = base64.b64decode(p.get("payload", "")).decode("utf-8")
+                doc = _json.loads(doc_str)
+            except Exception:
+                continue
+
+            if not page_only and path == target_visual_path:
+                vis = doc.get("visual") or {}
+                if payload.visualType and vis.get("visualType") != payload.visualType:
+                    changes.append({"field": "visualType", "before": vis.get("visualType"), "after": payload.visualType})
+                    vis["visualType"] = payload.visualType
+                    doc["visual"] = vis
+                pos = doc.get("position") or {}
+                for field, val in (("x", payload.x), ("y", payload.y), ("width", payload.width), ("height", payload.height)):
+                    if val is None:
+                        continue
+                    if pos.get(field) != val:
+                        changes.append({"field": f"position.{field}", "before": pos.get(field), "after": val})
+                        pos[field] = val
+                doc["position"] = pos
+                p["payload"] = base64.b64encode(_json.dumps(doc, indent=2).encode("utf-8")).decode("ascii")
+                p["payloadType"] = p.get("payloadType") or "InlineBase64"
+                touched = True
+            elif page_only and path == target_page_path:
+                for field, val in (("width", payload.pageWidth), ("height", payload.pageHeight)):
+                    if val is None:
+                        continue
+                    if doc.get(field) != val:
+                        changes.append({"field": f"page.{field}", "before": doc.get(field), "after": val})
+                        doc[field] = val
+                p["payload"] = base64.b64encode(_json.dumps(doc, indent=2).encode("utf-8")).decode("ascii")
+                p["payloadType"] = p.get("payloadType") or "InlineBase64"
+                touched = True
+
+        if not touched:
+            raise HTTPException(404, f"Target part not found: {target_visual_path if not page_only else target_page_path}")
+
+        if not changes:
+            return {"applied": False, "changes": [], "log": ["No-op: requested values match current state."]}
+
+        try:
+            up = await client.post(
+                f"{base}/updateDefinition",
+                headers={
+                    "Authorization": f"Bearer {fabric_token}",
+                    "Content-Type": "application/json",
+                },
+                json={"definition": {"parts": new_parts}},
+            )
+        except httpx.HTTPError as exc:
+            raise HTTPException(502, f"updateDefinition failed: {exc}") from exc
+        up = await _follow_lro(client, up)
+        if up.status_code >= 400:
+            raise HTTPException(up.status_code, f"updateDefinition: {up.text}")
+
+    return {
+        "applied": True,
+        "changes": changes,
+        "log": [f"Updated {len(changes)} field(s) on {payload.page}/{payload.visual or '*'}"],
+    }
+
+
 async def _fetch_workspace_snapshot(
     user_id: str,
     workspace_id: str,
