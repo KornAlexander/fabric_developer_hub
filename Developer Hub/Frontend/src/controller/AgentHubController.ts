@@ -179,6 +179,99 @@ export async function callAuthAcquireAccessToken(workloadClient: WorkloadClientA
     });
 }
 
+// ───────────────────────────────────────────────────────────────────────
+// Cached Fabric-token accessor.
+//
+// Without this, every page in the Developer Hub (Orchestrator, Mission
+// Control, Dashboard, Save dialog, PBI Fixer, …) called
+// ``workloadClient.auth.acquireAccessToken`` independently on mount —
+// and PBI Fixer + the Save dialog passed ``additionalScopesToConsent``,
+// which is precisely what triggers the Fabric host's "Additional
+// authentication required" overlay. Result: every tab swap re-prompted
+// the user for SSO.
+//
+// We now keep ONE module-level cache:
+//   • If a non-expired token is in memory we return it instantly.
+//   • Otherwise we issue a single ``acquireAccessToken`` call and dedupe
+//     concurrent callers via an in-flight promise.
+//   • Scopes are only sent on the very first call (or whenever the cache
+//     is cold) — once the user has consented, subsequent calls do not
+//     need to repeat them, so the SDK stays silent.
+// ───────────────────────────────────────────────────────────────────────
+type CachedToken = { token: string; expires: number };
+let _fabricTokenCache: CachedToken | null = null;
+let _fabricTokenInflight: Promise<string | undefined> | null = null;
+// The first call may need to ask for consent for the union of scopes used
+// across the hub (Workspace.Read.All, Item.Read.All, Power BI Dataset/
+// Workspace/Report.Read.All). After consent is granted, the token is
+// reusable for all of these, so subsequent calls don't need to send them.
+const FABRIC_CONSENT_SCOPES: readonly string[] = [
+    "https://api.fabric.microsoft.com/Workspace.Read.All",
+    "https://api.fabric.microsoft.com/Item.Read.All",
+    "https://analysis.windows.net/powerbi/api/Dataset.Read.All",
+    "https://analysis.windows.net/powerbi/api/Workspace.Read.All",
+    "https://analysis.windows.net/powerbi/api/Report.Read.All",
+];
+
+function decodeJwtExp(token: string): number | null {
+    try {
+        const parts = token.split('.');
+        if (parts.length < 2) return null;
+        // Base64URL → Base64
+        const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+        const pad = b64.length % 4 === 0 ? b64 : b64 + '='.repeat(4 - (b64.length % 4));
+        const payload = JSON.parse(atob(pad));
+        return typeof payload?.exp === 'number' ? payload.exp * 1000 : null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Get a Fabric/PowerBI access token, reusing the cached one when still
+ * valid (>60 s remaining). Safe to call from any page or tab — concurrent
+ * callers share a single in-flight promise, so the workload host's SSO
+ * overlay shows AT MOST once per token lifetime (≈1 hour).
+ *
+ * @param workloadClient SDK client
+ * @param forceRefresh   bypass the cache (e.g. after 401)
+ */
+export async function getFabricTokenCached(workloadClient: WorkloadClientAPI, forceRefresh = false): Promise<string | undefined> {
+    const now = Date.now();
+    if (!forceRefresh && _fabricTokenCache && _fabricTokenCache.expires - now > 60_000) {
+        return _fabricTokenCache.token;
+    }
+    if (_fabricTokenInflight) return _fabricTokenInflight;
+
+    // Cold cache: include the consent scopes so the FIRST call gets the
+    // union of permissions every page in the hub needs. Warm cache (just
+    // expired): omit scopes — the user already consented in this session.
+    const isColdCache = !_fabricTokenCache;
+    _fabricTokenInflight = (async () => {
+        try {
+            const result = await workloadClient.auth.acquireAccessToken({
+                additionalScopesToConsent: isColdCache ? [...FABRIC_CONSENT_SCOPES] : null,
+                claimsForConditionalAccessPolicy: "",
+            });
+            const token = result?.token;
+            if (token) {
+                const exp = decodeJwtExp(token) ?? (Date.now() + 50 * 60_000);
+                _fabricTokenCache = { token, expires: exp };
+            }
+            return token;
+        } finally {
+            _fabricTokenInflight = null;
+        }
+    })();
+    return _fabricTokenInflight;
+}
+
+/** Wipe the cached Fabric token (call on sign-out or after a 401). */
+export function clearFabricTokenCache(): void {
+    _fabricTokenCache = null;
+    _fabricTokenInflight = null;
+}
+
 /**
  * Calls the 'navigation.onBeforeNavigateAway' function from the WorkloadClientAPI
  * to register a callback preventing navigation to a specific URL.

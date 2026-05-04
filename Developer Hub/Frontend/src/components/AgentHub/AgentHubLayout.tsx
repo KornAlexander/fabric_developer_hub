@@ -87,7 +87,7 @@ import { useGitHubAuth, GitHubAuth } from "./useGitHubAuth";
 import { ItemProvider, useItemContext } from "./ItemContext";
 import { WORKLOAD_VERSION } from "../../version";
 import { SearchProvider, useSearch, searchPlaceholderFor, isFilterScope, type SearchScope } from "./SearchContext";
-import { callAuthAcquireAccessToken } from "../../controller/AgentHubController";
+import { getFabricTokenCached } from "../../controller/AgentHubController";
 import * as api from "../../controller/AgentHubApi";
 import {
     setPreloaded,
@@ -288,20 +288,11 @@ function TopbarItemActions({
         try {
             // The /api/workspaces backend endpoint requires a Fabric OBO
             // token (GitHub token alone returns "Invalid Fabric token").
-            // Acquire one via the workload SDK — this runs in response
-            // to the user clicking "Save to workspace…", so the consent
-            // overlay (if any) shows in a context the user expects.
-            const fabricScopes = [
-                "https://api.fabric.microsoft.com/Workspace.Read.All",
-                "https://api.fabric.microsoft.com/Item.Read.All",
-            ];
+            // Use the cached accessor so we don't re-trigger the Fabric
+            // host's consent overlay every time the Save dialog opens.
             let fabricToken: string | undefined;
             try {
-                const res = await workloadClient.auth.acquireAccessToken({
-                    additionalScopesToConsent: fabricScopes,
-                    claimsForConditionalAccessPolicy: "",
-                });
-                fabricToken = res?.token;
+                fabricToken = await getFabricTokenCached(workloadClient);
             } catch (e) {
                 // Fall through — backend will reject with a clear error
                 // surfaced via errorMsg below.
@@ -730,8 +721,7 @@ function AgentHubLayoutAuthed({ workloadClient, itemObjectId: routeItemObjectId,
                 fetchPromise = (async () => {
                     let fabricToken: string | undefined;
                     try {
-                        const t = await callAuthAcquireAccessToken(workloadClient);
-                        fabricToken = t.token;
+                        fabricToken = await getFabricTokenCached(workloadClient);
                     } catch { /* best-effort */ }
                     const data = await api.listSessions({ githubToken, fabricToken });
                     setPreloaded(key, data);

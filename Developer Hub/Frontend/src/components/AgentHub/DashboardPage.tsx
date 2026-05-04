@@ -37,7 +37,7 @@ import {
 } from "@fluentui/react-icons";
 import { WorkloadClientAPI } from "@ms-fabric/workload-client";
 import * as api from "../../controller/AgentHubApi";
-import { callAuthAcquireAccessToken } from "../../controller/AgentHubController";
+import { getFabricTokenCached } from "../../controller/AgentHubController";
 import { useItemContext } from "./ItemContext";
 import { readPreloaded, setPreloaded } from "./pagePreloadCache";
 import { useSearch } from "./SearchContext";
@@ -126,8 +126,7 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
             // backend falls back to an Authorization hash and returns nothing.
             let fabricToken: string | undefined;
             try {
-                const tok = await callAuthAcquireAccessToken(workloadClient, undefined);
-                fabricToken = tok?.token;
+                fabricToken = await getFabricTokenCached(workloadClient);
             } catch (e) {
                 console.warn("Could not acquire Fabric token for sessions list:", e);
             }
@@ -271,8 +270,7 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
         try {
             let fabricToken: string | undefined;
             try {
-                const tok = await callAuthAcquireAccessToken(workloadClient, undefined);
-                fabricToken = tok?.token;
+                fabricToken = await getFabricTokenCached(workloadClient);
             } catch { /* best-effort */ }
             await api.cancelSession(job.id, { githubToken, fabricToken });
             setPendingCancel(null);

@@ -41,6 +41,7 @@ import {
 import { DEFAULT_NAV_KEY, NavKey } from "../types/nav";
 import type { PageProps } from "../types/shared";
 import * as api from "../../../controller/AgentHubApi";
+import { getFabricTokenCached } from "../../../controller/AgentHubController";
 import { PBI_FIXER_VERSION } from "../utils/version";
 
 const STORAGE_NAV_KEY = "pbiFixer.activeNav";
@@ -294,20 +295,10 @@ export const PbiFixerPage: React.FC<PbiFixerPageProps> = ({
   const acquireToken = useCallback(async () => {
     setTokenLoading(true);
     setTokenError("");
-    const fabricScopes = [
-      "https://api.fabric.microsoft.com/Workspace.Read.All",
-      "https://api.fabric.microsoft.com/Item.Read.All",
-      "https://analysis.windows.net/powerbi/api/Dataset.Read.All",
-      "https://analysis.windows.net/powerbi/api/Workspace.Read.All",
-      "https://analysis.windows.net/powerbi/api/Report.Read.All",
-    ];
     try {
-      const result = await workloadClient.auth.acquireAccessToken({
-        additionalScopesToConsent: fabricScopes,
-        claimsForConditionalAccessPolicy: "",
-      });
-      if (result?.token) {
-        setAccessToken(result.token);
+      const token = await getFabricTokenCached(workloadClient);
+      if (token) {
+        setAccessToken(token);
       } else {
         setTokenError("No token returned");
       }

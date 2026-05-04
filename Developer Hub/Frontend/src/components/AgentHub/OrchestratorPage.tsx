@@ -42,7 +42,7 @@ import {
     Search20Regular,
 } from "@fluentui/react-icons";
 import { WorkloadClientAPI } from "@ms-fabric/workload-client";
-import { callAuthAcquireAccessToken, callDatahubOpen } from "../../controller/AgentHubController";
+import { callAuthAcquireAccessToken, callDatahubOpen, getFabricTokenCached } from "../../controller/AgentHubController";
 import * as api from "../../controller/AgentHubApi";
 import type { Workspace } from "../../controller/AgentHubApi";
 import type { Plan } from "./plan";
@@ -588,8 +588,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
 
     async function getFabricToken(): Promise<string | undefined> {
         try {
-            const accessToken = await callAuthAcquireAccessToken(workloadClient);
-            return accessToken.token;
+            return await getFabricTokenCached(workloadClient);
         } catch (e) {
             console.warn("Could not acquire Fabric token:", e);
             return undefined;

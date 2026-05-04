@@ -52,7 +52,7 @@ import {
 import type { WorkloadClientAPI } from "@ms-fabric/workload-client";
 
 import * as api from "../../../controller/AgentHubApi";
-import { callAuthAcquireAccessToken } from "../../../controller/AgentHubController";
+import { getFabricTokenCached } from "../../../controller/AgentHubController";
 import { TaskPromptRecap } from "../TaskPromptRecap";
 import { TeamPanel } from "../team/TeamPanel";
 import { ApprovalCard } from "../approvals/ApprovalCard";
@@ -124,8 +124,8 @@ export function MissionControlPage({
         let cancelled = false;
         (async () => {
             try {
-                const tk = await callAuthAcquireAccessToken(workloadClient);
-                if (!cancelled) setFabricToken(tk?.token);
+                const tk = await getFabricTokenCached(workloadClient);
+                if (!cancelled) setFabricToken(tk);
             } catch { /* best-effort */ }
         })();
         return () => { cancelled = true; };
