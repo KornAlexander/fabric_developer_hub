@@ -54,6 +54,28 @@ Tracked here so they're not lost between sessions. Several are AgentHub-shell sc
 - **B5. GitHub sign-in greys out the hub.** When signing in with GitHub on a "create item" task in Developer Hub, the whole hub greys out and only recovers after a full page refresh. Reproduce the flow (create item → sign into GitHub → verify hub stays interactive). Likely a missing post-auth message handler or modal-overlay state that doesn't get cleared on the OAuth popup return.
 - **B6. SSO prompted per tab.** Each new tab re-prompts for SSO. Either make SSO **silent/transparent** for tabs after the first, or — preferably — **single sign-on once for the whole Developer Hub** and share the token across tabs (e.g. via shared MSAL cache, broadcast channel, or service-worker token broker). If sharing across tabs is not possible (e.g. cross-origin iframes with strict storage isolation), document the technical reason in [CHANGELOG.md](CHANGELOG.md) so we stop revisiting the question.
 
+### Workload icon — replace the generic briefcase / "weird bag" — **WS-O-ICON (proposal)**
+
+The Fabric host's *Additional authentication or authorization required* trust dialog (and the workload card / favicon / AgentHub item icon) currently renders the stock `briefcase.png` shipped with the workload SDK template — that's the small bag icon users keep asking about. Single source of truth:
+
+- `Developer Hub/Frontend/Package/Product.json` — fields:
+  - `favicon` → browser tab favicon
+  - `icon.name` → top-level workload icon (the one shown in the trust dialog + workload chooser)
+  - `homePage.newSection.customActions[*].icon.name` → home-page "New" tile
+- `Developer Hub/Frontend/Package/AgentHubItem.json` — per-item icons (currently `execute.png`, separate concern)
+- All assets live in `Developer Hub/Frontend/Package/assets/images/` (today: `briefcase.png`, `dial.png`, `execute.png`, `BannerMedium.png`, `learningMaterial.png`, `fabricUX.jpg`, `AgentHub1.png`, `AgentHub2.png`).
+
+Swap is a one-file commit (drop a new PNG, point `Product.json` at it, rebuild the manifest). Rough proposals — **pick one, don't implement all**:
+
+- **P1 — Hammer + sparkle.** Reads as "developer tool that fixes things" — direct nod to the PBI Fixer feature set. Cheap to draw in Fluent style.
+- **P2 — Toolbox with a small spark / star.** Generalises better than a hammer (we're more than just fixers), still toolish.
+- **P3 — Stylised "DH" monogram.** Brandable, future-proof, matches the "Developer Hub" name. Risk: looks generic without colour.
+- **P4 — Robot / agent head with a wrench overlay.** Communicates the agent-driven nature of the hub. Risk: "AI robot" iconography is overused in 2026.
+- **P5 — Power BI yellow square + plug icon.** Strong PBI association, but locks the brand to PBI even though the hub is broader (Fabric-wide).
+- **P6 — Fluent "Wrench" or "Toolbox" glyph from the FluentUI 2 icon set, exported at 32 / 48 / 96 px PNG.** Zero design budget, instantly on-brand with the rest of Fabric. Likely the highest-ROI option — recommend this as default unless we have a designer cycle for P1–P5.
+
+Acceptance for whichever option is picked: replace `briefcase.png` (or add a new file and re-point `Product.json`), confirm the trust dialog + Fabric favicon + home-page tile all show the new glyph after `docker compose --profile prod build frontend` + recreate.
+
 ### Move "About" out of PBI Fixer into the Developer Hub shell — **WS-L revised**
 The current plan has WS-L scoped as a Fixer-only About page. New requirement: **About belongs to the whole Developer Hub**, not the Fixer.
 
@@ -94,29 +116,164 @@ cohesive batch — the Variance fixer depends on PY measures + Calendar + a Meas
 present, so they ship together. Also surface as a **one-click "Apply IBCS"** macro that runs
 the full chain in order.
 
+#### Spike result (May 5 2026) — backend approach locked
+
+**Decision: dedicated `pbi-fixer-tom` sidecar container (Python 3.11 + `sempy-labs`), called from the FastAPI backend over the docker-compose network.**
+
+Decisions (with Alexander):
+1. **Approach** — sidecar with `sempy-labs`. Backend stays Python 3.13. Hard blocker: `semantic-link-labs/pyproject.toml` declares `requires-python = ">=3.10,<3.12"`, so adding it to the main backend would require a Python downgrade across the whole service. Sidecar isolates the .NET / pythonnet / mono dependency chain (~500 MB) from the lean FastAPI image.
+2. **API shape** — one generic `POST /run-fixer` endpoint on the sidecar. Body: `{fixerId, workspaceId, datasetId, args}`. Backend dispatches without per-fixer routing changes.
+3. **Auth** — backend forwards the existing OBO `PBI_API_TOKEN` (Power BI audience) to the sidecar as `X-PBI-Token`. Sidecar uses it for the XMLA write connection. Token never leaves the docker network.
+4. **Code reuse** — fixers are **rewritten** as sidecar-native functions (NOT vendored from `PBI-Fixer/pbi_fixer/src/`). Original scripts stay as the reference implementation; sidecar versions are tighter, async-friendly, and only depend on `sempy_labs.tom`. This avoids dragging the entire `pbi_fixer` package + its CLI deps into the sidecar.
+5. **First fixer to ship** — Add Measure Table (~150 LOC original, single calculated table `= {BLANK()}`). Smallest fixer that exercises the whole roundtrip, de-risks every later fixer.
+6. **Calc groups deferred** — Time Intelligence + Units calc-group fixers are **out of v1**. IBCS Variance still works without them; revisit after v1 ships.
+
+#### Architecture
+
+```
+┌──────────────────────┐    HTTP (internal)     ┌──────────────────────────┐
+│ developerhub-backend │ ─────────────────────► │ pbi-fixer-tom            │
+│ (Python 3.13)        │   POST /run-fixer       │ (Python 3.11 +           │
+│                      │   X-PBI-Token: <obo>    │  sempy-labs + .NET 6)    │
+│ /pbi-fixer/ibcs/...  │ ◄───────────────────── │                          │
+└──────────────────────┘    {findings, log}      │ /run-fixer dispatcher    │
+                                                  │  └─ measure_table()      │
+                                                  │  └─ py_measures()        │
+                                                  │  └─ calendar()           │
+                                                  │  └─ ibcs_variance()      │
+                                                  │  └─ ...                  │
+                                                  └──────────────────────────┘
+```
+
+- **Service name:** `pbi-fixer-tom` (matches sibling `developerhub-backend`, `developerhub-frontend` naming).
+- **Port:** internal-only on the compose network; not exposed to host.
+- **Health:** `GET /health` returns `{ok: true, sempy_labs_version, dotnet_version}` so backend can verify wiring on startup.
+- **Logging:** sidecar streams to its container log; backend tags every dispatch with `correlation_id` so traces line up.
+
+#### Sidecar `Dockerfile` sketch
+
+```dockerfile
+FROM mcr.microsoft.com/dotnet/runtime:6.0 AS dotnet
+FROM python:3.11-slim
+COPY --from=dotnet /usr/share/dotnet /usr/share/dotnet
+ENV DOTNET_ROOT=/usr/share/dotnet PATH="$PATH:/usr/share/dotnet"
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libicu72 ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY pyproject.toml uv.lock ./
+RUN pip install --no-cache-dir uv && uv sync --frozen
+COPY src/ ./src/
+EXPOSE 5100
+CMD ["python", "src/main.py"]
+```
+
+Sidecar deps (`pyproject.toml`):
+```
+fastapi, uvicorn, semantic-link-labs>=0.14.0, semantic-link-sempy>=0.14.0
+```
+
+#### Sidecar API contract
+
+```http
+POST /run-fixer
+Headers: X-PBI-Token: <power-bi-audience-OBO>
+         X-Correlation-Id: <uuid>
+Body:    { "fixerId": "ibcs.measure_table",
+           "workspaceId": "...", "datasetId": "...",
+           "scanOnly": false,
+           "args": { ... fixer-specific ... } }
+Response 200: { "applied": true,
+                "findings": [ {object: "MeasureTable", before: null, after: "created"} ],
+                "log": ["..."] }
+Response 4xx/5xx: { "error": "...", "log": [...] }
+```
+
+`fixerId` registry inside sidecar:
+- `ibcs.measure_table` — Add empty measure-organization table
+- `ibcs.py_measures` — Add `PY`, `Δ PY`, `Δ PY %`, `Max Green PY`, `Max Red AC` for each AC measure
+- `ibcs.calendar` — Add CalcCalendar table + hierarchy + sort-by + auto-detected FK relationships
+- `ibcs.variance` — IBCS Variance visual transform (uses `add_measure` if PY/Δ missing)
+- `ibcs.fix_charts` — Unified chart cleanup (PBIR, but goes through sidecar for consistency)
+- `ibcs.theme` — Push IBCS theme JSON
+
+(Calc-group fixers `ibcs.ti_calcgroup`, `ibcs.units_calcgroup` reserved but **not implemented in v1**.)
+
+#### Backend changes
+
+- New module `Backend/src/services/agenthub/pbi_fixer_sidecar.py`:
+  - `async def call_fixer(fixer_id, workspace_id, dataset_id, args, *, scan_only, pbi_token, correlation_id) -> SidecarResult`
+  - Resolves sidecar URL from env (`PBI_FIXER_TOM_URL=http://pbi-fixer-tom:5100`).
+  - 120s timeout (TOM model open + commit can take 30–60s on a cold semantic model).
+  - Maps sidecar errors to HTTP 502 with the sidecar log embedded.
+- New endpoint `POST /api/pbi-fixer/ibcs/{fixer}` in `agenthub_controller.py`:
+  - Reuses existing `_mcp_tokens(request)` to get `PBI_API_TOKEN`.
+  - Reuses existing `_rate_limit(user_id, "pbi_fixer_ibcs")` budget.
+  - Forwards to sidecar.
+
+#### Frontend changes
+
+- New service `Frontend/src/components/PbiFixer/services/ibcsApi.ts`:
+  - `runIbcsFixer(fixerId, {workspaceId, datasetId, scanOnly, ...args})`
+  - One thin function reused by every IBCS fixer card.
+- Existing `FixerPage.tsx`: append IBCS rows that call `runIbcsFixer`.
+
+#### Ship order (each = independent commit + version bump)
+
+| # | Fixer | Sidecar fn | Size | Notes |
+|---|---|---|---|---|
+| 1 | **Add Measure Table** | `measure_table()` | S | Proves whole sidecar roundtrip; ship + soak |
+| 2 | **Add PY Measures** | `py_measures()` | S | Builds on #1; needed by IBCS Variance |
+| 3 | **Add Calculated Calendar** | `calendar()` | M | Hierarchy + auto-FK detection |
+| 4 | **Apply IBCS Theme** | `theme()` | S | Pure REST internally, but routed through sidecar for consistent observability |
+| 5 | **Fix All Charts (IBCS pass)** | `fix_charts()` | M | PBIR mutation |
+| 6 | **Fix IBCS Variance** | `variance()` | XL | 771-line original; port in 3 PRs (visual props / measure attach / error bars) |
+| 7 | **One-click "Apply IBCS"** macro | backend orchestration | M | Sequential dispatch of #1 → #6, transactional rollback (capture & redeploy previous TMDL on any step failure) |
+
+Each step ships behind a feature flag (`PBI_FIXER_IBCS_STEP_<N>=true` in `docker-compose.yaml`) so the chain can advance one fixer at a time without exposing half-built fixers in the UI.
+
+#### Acceptance gates per step
+
+For each fixer ship: (a) sidecar unit test against a recorded XMLA mock, (b) E2E test against the demo "Bad Report - Testing" model in a dev workspace, (c) frontend-visible scan-only run that previews findings before apply, (d) version bump + memory file update.
+
+#### Risks / open questions
+- **Sidecar startup time.** First TOM call after container boot warms up the .NET runtime; expect a 5–10s cold start. Mitigate by hitting `/health` from backend on startup so the .NET runtime is already JIT'd before the first user click.
+- **PBI_API_TOKEN audience.** Verify the existing OBO grant chain produces a token usable for XMLA writes (some tenants restrict workload-OBO tokens to read-only scopes). If not, may need an additional consent prompt for `https://analysis.windows.net/powerbi/api/.default`. **First ship-blocker to validate.**
+- **Container image size.** Estimated 800 MB–1 GB for sidecar (Python 3.11 + .NET 6 + sempy-labs + native libs). Acceptable for a dev workload but flag for production hardening.
+- **IBCS Variance is 771 lines.** Port in 3 chunks (visual-property mutations / measure attachment / error-bar styling) to keep diffs reviewable.
+- **Auto-FK detection** for Calendar relationships: replicate the Python `tom.model.Tables` walk via sempy-labs — find every column where `data_type==DateTime` and `is_key==False`, propose `add_relationship from=Table[Col] to=CalcCalendar[Date]`. Show the proposal list in a confirmation step before apply (no silent multi-relationship writes).
+
+#### Deferred until after WS-E-IBCS lands
+- Calc-group fixers (Time Intelligence + Units) — IBCS Variance still works without them.
+- Real `tom.format_dax_expression` (DAX prettifier) — not on the IBCS path.
+- Bulk undo / version snapshots — manual revert via Fabric portal is the v1 escape hatch.
+
+#### Owns
+- `pbi-fixer-tom/` (NEW directory at repo root in Fabric_Developer_Hub) — sidecar source + Dockerfile + tests
+- `Fabric_Developer_Hub/Developer Hub/docker-compose.yaml` — add `pbi-fixer-tom` service
+- `Backend/src/services/agenthub/pbi_fixer_sidecar.py` — **NEW** HTTP client to sidecar
+- `Backend/src/api/agenthub_controller.py` — append `/pbi-fixer/ibcs/{fixer}` POST endpoint
+- `Frontend/src/components/PbiFixer/services/ibcsApi.ts` — **NEW** (one fn per fixer + macro)
+- `Frontend/src/components/PbiFixer/components/pages/FixerPage.tsx` — append IBCS fixer rows
+- `Frontend/src/components/PbiFixer/utils/version.ts` — bumped per fixer ship
+
+#### What was NOT done in this spike
+No code shipped. This spike is purely the architectural decision + revised ship order + sidecar contract. Implementation kicks off with step 1 (Add Measure Table) when Alexander gives the go-ahead. The very first thing to validate is whether the existing OBO `PBI_API_TOKEN` is XMLA-write-capable — if not, the auth chain needs adjustment before any fixer code is meaningful.
+
+---
+
+#### Original IBCS scope reference (kept for context)
+
 | Fixer | Python File | Lines | Notes |
 |---|---|---|---|
-| **Add Calculated Calendar Table** | `_Add_CalculatedTable_Calendar.py` | ~290 | DAX `CALENDARAUTO`, full date hierarchy + sort-by-column, **auto-detects fact-table date columns and creates Many→One relationships to `CalcCalendar[Date]`**. Backend bridge required (TOM `add_relationship`, calculated tables) |
+| **Add Calculated Calendar Table** | `_Add_CalculatedTable_Calendar.py` | ~290 | DAX `CALENDARAUTO`, full date hierarchy + sort-by-column, **auto-detects fact-table date columns and creates Many→One relationships to `CalcCalendar[Date]`** |
 | **Add Measure Table** | `_Add_CalculatedTable_MeasureTable.py` | ~150 | Empty calculated table for measure organization |
-| **Add CalcGroup — Time Intelligence** | `_Add_CalcGroup_TimeIntelligence.py` | ~200 | YTD / MTD / QTD / PY / YoY calc-group items |
-| **Add CalcGroup — Units** | `_Add_CalcGroup_Units.py` | ~150 | k / M / B unit scaling calc group |
+| **Add CalcGroup — Time Intelligence** | `_Add_CalcGroup_TimeIntelligence.py` | ~200 | YTD / MTD / QTD / PY / YoY calc-group items — **deferred (post-v1)** |
+| **Add CalcGroup — Units** | `_Add_CalcGroup_Units.py` | ~150 | k / M / B unit scaling calc group — **deferred (post-v1)** |
 | **Add PY Measures** | `_Add_PYMeasures.py` | ~150 | Generates `PY`, `Δ PY`, `Δ PY %`, `Max Green PY`, `Max Red AC` for every detected AC measure (prerequisite for IBCS Variance) |
 | **Fix IBCS Variance** | `_Fix_IBCSVariance.py` | **771** | Transforms column charts → IBCS variance: ensures PY measures exist, adds them to visual, sets **error bars (red `#FF0000`)**, overlap, labels, AC/PY colors, axes, sorting. Largest single fixer in the suite |
 | **Fix All Charts (IBCS pass)** | `_Fix_Charts.py` | ~200 | Unified IBCS-friendly cleanup across Bar/Column/Line: no gridlines, data labels on, clean axes |
 | **Apply IBCS Theme** | (theme JSON in `_report_theme.py`) | ~100 | Push IBCS-compliant report theme |
-
-**Priority: P0** — these are the headline features. Ship in this exact dependency order:
-Calendar → Measure Table → CalcGroups → PY Measures → IBCS Variance → Fix Charts → Theme.
-All require the **TMDL/PBIR round-trip backend pattern** (already shipped in v0.40/v0.41 for
-translations + simple SM fixers); the additional unknown is whether the TMDL writer can emit
-**calculated tables**, **calculation groups**, and **relationships** (current `tmdl_translations.py`
-only mutates cultures). Spike that question first before sizing the batch.
-
-**Backend bridge gap:** TOM-level operations (`tom.add_relationship`, calc-group creation,
-calculated-table creation) may need a real sempy-labs runtime in the backend container —
-TMDL emission alone could be enough for tables + relationships, but calc groups need
-`calculationGroup` blocks in TMDL which `tmdl_translations.py` doesn't model yet. **Decide
-spike vs. real sempy-labs install before starting.**
 
 ### Report fixers (not yet ported)
 
@@ -186,8 +343,8 @@ Lower-priority parity items still missing from the existing TS components:
 - Scan mode (BPA badges on tree items)
 
 ### Report Explorer
-- Live report preview / thumbnail (Python uses `exportToFile` API)
-- Editable properties save-back (pending state exists, no write)
+- ~~Live report preview / thumbnail~~ — **shipped.** Live, interactive Power BI report embed (not a thumbnail) via short-lived embed token minted server-side; `Load Report` / post-Save bumps a refresh key for fresh embed. See `ReportPreview` in `ReportExplorer.tsx` + `getReportEmbedToken` in `services/fabricApi.ts`.
+- ~~Editable properties save-back~~ — **shipped (WS-Q v0.42).** `handleSaveProps` calls `updateVisualProperties` (visual + page) → backend `/pbi-fixer/visual/update` → Fabric REST `updateDefinition` LRO. Preview refreshes on save (WS-Q v0.43).
 - Per-visual quick-fix buttons in properties panel
 - Scan mode badges (counts shown, scan execution missing)
 - Visual config JSON preview
