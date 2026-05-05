@@ -65,11 +65,6 @@ function ComingSoon(props: { navKey: NavKey; detail: string }) {
 // WS-J replaces the Diagram stub with the real page — see
 // ``DiagramPage.tsx``. Re-exported from ``pages/index.ts``.
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-export const ScriptRunnerPage: React.FC<PageProps> = (_props) => (
-  <ComingSoon navKey="scriptRunner" detail="Tabular Editor C# + Python macros" />
-);
-
 // WS-M replaces the Prototype stub with the real page — see
 // ``PrototypePage.tsx``. Re-exported from ``pages/index.ts``.
 

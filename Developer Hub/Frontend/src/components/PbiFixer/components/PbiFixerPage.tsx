@@ -33,7 +33,6 @@ import {
   TranslationsPage,
   DeltaPage,
   DiagramPage,
-  ScriptRunnerPage,
   PrototypePage,
   ReversePrototypePage,
   SempyRunnerPage,
@@ -491,7 +490,6 @@ export const PbiFixerPage: React.FC<PbiFixerPageProps> = ({
       case "translations": return <TranslationsPage key={remountKey} {...pageProps} />;
       case "delta":        return <DeltaPage        key={remountKey} {...pageProps} />;
       case "diagram":      return <DiagramPage      key={remountKey} {...pageProps} />;
-      case "scriptRunner": return <ScriptRunnerPage key={remountKey} {...pageProps} />;
       case "prototype":    return <PrototypePage    key={remountKey} {...pageProps} />;
       case "reversePrototype": return <ReversePrototypePage key={remountKey} {...pageProps} />;
       case "sempyRunner":  return <SempyRunnerPage  key={remountKey} {...pageProps} />;
@@ -507,7 +505,7 @@ export const PbiFixerPage: React.FC<PbiFixerPageProps> = ({
   // Report" picker — most functions accept either and the two items
   // typically share the same name in the same folder.
   const isReportScoped = activeNav === "report" || activeNav === "reportBpa" || activeNav === "reversePrototype";
-  const needsBothPickers = activeNav === "fixer" || activeNav === "sempyRunner" || activeNav === "scriptRunner";
+  const needsBothPickers = activeNav === "fixer" || activeNav === "sempyRunner";
   const showDatasetPicker = !needsBothPickers && !isReportScoped;
   const showReportPicker = !needsBothPickers && isReportScoped;
   const showPairPicker = needsBothPickers;

@@ -7,10 +7,10 @@
       "path": "/agenthub-item-editor"
     },
     "icon": {
-      "name": "assets/images/developerHub.png"
+      "name": "assets/images/execute.png"
     },
     "activeIcon": {
-      "name": "assets/images/developerHub.png"
+      "name": "assets/images/execute.png"
     },
     "contextMenuItems": [
       {

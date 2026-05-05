@@ -20,7 +20,6 @@ import {
   Translate20Regular,
   ArrowSwap20Regular,
   Flowchart20Regular,
-  Code20Regular,
   Beaker20Regular,
   ArrowImport20Regular,
   Flash20Regular,
@@ -37,7 +36,6 @@ export type NavKey =
   | "translations"
   | "delta"
   | "diagram"
-  | "scriptRunner"
   | "prototype"
   | "reversePrototype"
   | "sempyRunner";
@@ -93,7 +91,6 @@ const ALL_NAV_ITEMS: NavItem[] = [
 
   // Automation
   { key: "fixer",            label: "Fixer",             icon: <Wrench20Regular />,          group: "automation",   ready: true  },
-  { key: "scriptRunner",     label: "Script Runner",     icon: <Code20Regular />,            group: "automation",   ready: false },
   { key: "sempyRunner",      label: "Sempy Runner",      icon: <Flash20Regular />,           group: "automation",   ready: true  },
 ];
 

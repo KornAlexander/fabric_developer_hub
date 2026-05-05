@@ -21,7 +21,6 @@
 | WS-G | Translations + Auto-Translate | ✅ shipped + backend apply | v0.11 → v0.40 |
 | WS-I | Delta Analyzer | ✅ shipped | v0.24 |
 | WS-J | Diagram (SVG canvas) | ✅ shipped | v0.19–v0.20 |
-| WS-K | Script Runner (Monaco) | ⬜ not started | — |
 | WS-L | About — **moved to AgentHub shell** (was Fixer page) | ✅ shipped | (AgentHub footer) |
 | WS-M | Prototype | ✅ shipped | v0.16 |
 | WS-N | Integration sweep | 🟡 partial | v0.36–v0.37 |
@@ -314,29 +313,11 @@ Lower-priority parity items still missing from the existing TS components:
 > Shipped items moved out of this backlog: live Power BI embed (WS-Q v0.43), visual + page property save-back (WS-Q v0.42 — `updateVisualProperties` → `/pbi-fixer/visual/update`), measure property save-back (TMDL `updateMeasureProperties`). See [CHANGELOG.md](CHANGELOG.md).
 
 ### Other tabs not yet planned as standalone WSes
-None — all originally-identified tabs are covered: Fixer (WS-E), Perspectives (WS-F), Translations (WS-G), Model BPA (WS-C), Report BPA (WS-D), Memory/Vertipaq (WS-B), Delta (WS-I), Prototype (WS-M), Diagram (WS-J), Script Runner (WS-K). About moved out to the AgentHub shell (WS-L revised). Visual Properties editor shipped as WS-Q.
+None — all originally-identified tabs are covered: Fixer (WS-E), Perspectives (WS-F), Translations (WS-G), Model BPA (WS-C), Report BPA (WS-D), Memory/Vertipaq (WS-B), Delta (WS-I), Prototype (WS-M), Diagram (WS-J). About moved out to the AgentHub shell (WS-L revised). Visual Properties editor shipped as WS-Q. **Script Runner (former WS-K) explicitly removed May 2026** — see Non-Goals.
 
 ---
 
 ## Open workstreams
-
-### WS-K — Script Runner page
-Monaco editor + Run button → backend eval endpoint. **Full-power**, feature-flagged on `PBI_FIXER_ENABLE_SCRIPT_RUNNER`. See **Appendix A** for security rationale.
-
-**Owns:**
-- `components/pages/ScriptRunnerPage.tsx`
-- `Backend/agenthub/controllers/script_runner_controller.py`
-
-**Acceptance:**
-- [ ] Python REPL runs with `sempy`, `sempy_labs`, forwarded OBO tokens
-- [ ] TS runner option (sandboxed worker) for quick DAX queries
-- [ ] Streaming output (SSE or chunked)
-- [ ] Red banner: "⚠ Full-power execution — runs as you, with your tokens. Local dev only."
-- [ ] Disabled in UI + backend when env flag not `true`
-
-**Dependencies:** WS-A only.
-
----
 
 ### WS-L — About page (revised — Developer Hub shell, not Fixer) — ✅ shipped
 About lives in the AgentHub shell footer above Support (`AboutPage.tsx` + `AgentHubLayout.tsx` `sidenav-footer-item`). Fixer-level page deleted, `about` NavKey removed from `types/nav.tsx`. Content polish (authors / credits / single-source hub version) tracked as low-prio follow-up in the section above.
@@ -344,7 +325,6 @@ About lives in the AgentHub shell footer above Support (`AboutPage.tsx` + `Agent
 ---
 
 ### WS-N — Integration sweep (remaining work)
-- [ ] Install Monaco shared deps for WS-K (when WS-K starts)
 - [ ] Final smoke pass after each integration batch
 - [x] LLM-backed translation propose endpoint (replaces glossary stub) — `Backend/src/api/agenthub_controller.py` (`_llm_translate_batch` + `pbi_fixer_translations_propose`); user-supplied `glossary` forwarded as preferred terminology, batched single Copilot call per culture, JSON response, fallback to source on failure. Frontend payload shape unchanged.
 
@@ -394,19 +374,9 @@ All other workstreams add to their own files + append-only exports from `types/s
 
 ---
 
-# Appendix A — Script Runner (WS-K) Decision & Security Note
+# Appendix A — Script Runner (WS-K) — ❌ removed May 2026
 
-**Decision (Alexander, April 23 2026):** include Script Runner as **full-power** — Monaco editor in frontend, Python REPL in backend, access to `sempy`, `sempy_labs`, workspace Fabric/PBI tokens, container filesystem. No sandbox.
-
-**What is Script Runner?** Tab with code editor + Run button. User writes arbitrary Python (or TS) and executes against currently-selected workspace/model/report. Typical use: one-off TOM tweaks, ad-hoc DAX, testing a fixer before wrapping into the Fixer page, debugging customer models in-session.
-
-**Why in PLAN.md not README.md:** `Developer Hub/README.md` is shared with upstream maintainer (Lukasz). Script Runner is a power-user, security-sensitive backdoor → keep internal. Add a short note in `Developer Hub/README.md` pointing maintainers here. Do not ship enabled by default; gate on env var `PBI_FIXER_ENABLE_SCRIPT_RUNNER=true` in `docker-compose.yaml`.
-
-**Security acknowledgements:**
-- Code runs with backend service identity + forwarded user OBO tokens → full Fabric/PBI/OneLake access as the user.
-- Arbitrary filesystem, network, subprocess access inside the container.
-- No I/O sanitization — scripts can print tokens if asked.
-- Acceptable **only** because Developer Hub runs locally against the user's own tenant. Never enable in shared/hosted deployments.
+Script Runner was scoped as a full-power Monaco editor + backend Python REPL with forwarded OBO tokens. Removed at user request — not a fan, security surface not worth the maintenance. Frontend stub, `scriptRunner` NavKey + nav row, `PbiFixerPage` switch case, and `Code20Regular` icon import all deleted in v0.56. No backend code was ever shipped. Listed under Non-Goals so it does not get re-proposed.
 
 ---
 
@@ -418,149 +388,26 @@ All other workstreams add to their own files + append-only exports from `types/s
 
 ## Locked decisions (kept for reference)
 
-The 10 decisions below were locked in May 2026 and shipped across v0.52\u2013v0.55. Side-by-side comparison, phase plan, and per-decision implications removed (kept in git history).
+The 10 decisions below were locked in May 2026 and shipped across v0.52–v0.55. Side-by-side comparison, phase plan, and per-decision implications removed (kept in git history).
 
 | # | Decision | Notes |
 |---|---|---|
-| 1 | Connection bar \u2014 restyle in place | AgentHub warm `#faf9f8` + 1 px hairline so it reads as topbar sub-header. |
+| 1 | Connection bar — restyle in place | AgentHub warm `#faf9f8` + 1 px hairline so it reads as topbar sub-header. |
 | 2 | Migrate Fixer chrome to shared SCSS classes | `PbiFixerNav.tsx` + `PbiFixerPage.tsx` now use `pbifixer-subnav-item` / shared sidenav classes. |
-| 3 | Topbar right cluster \u2014 skip entirely | Host AgentHub topbar covers the right side. |
-| 4 | Lazy-loading \u2014 deferred | Park for a dedicated perf pass when bundle size becomes a complaint. |
-| 5 | EditorGroups / tabs integration \u2014 separate workstream | Needs Lukasz alignment before sizing. |
+| 3 | Topbar right cluster — skip entirely | Host AgentHub topbar covers the right side. |
+| 4 | Lazy-loading — deferred | Park for a dedicated perf pass when bundle size becomes a complaint. |
+| 5 | EditorGroups / tabs integration — separate workstream | Needs Lukasz alignment before sizing. |
 | 6 | URL-driven nav, drop sessionStorage | `?nav=` query is the source of truth; `popstate` listener wires browser back/forward. `pbiFixer.expandedGroups` sessionStorage entry intentionally kept. |
-| 7 | Sidebar footer \u2014 leave empty | No "Report a bug" / version pill in the Fixer sidebar bottom. |
-| 8 | AgentHub blue (`#005faa`) everywhere \u2014 including text | Partial: `#555` `propLabel` swapped to `tokens.colorNeutralForeground2`; full audit across status / link colors still pending. |
-| 9 | Page-swap motion \u2014 crossfade matching AgentHub | ~120 ms opacity crossfade on nav change. |
+| 7 | Sidebar footer — leave empty | No "Report a bug" / version pill in the Fixer sidebar bottom. |
+| 8 | AgentHub blue (`#005faa`) everywhere — including text | Partial: `#555` `propLabel` swapped to `tokens.colorNeutralForeground2`; full audit across status / link colors still pending. |
+| 9 | Page-swap motion — crossfade matching AgentHub | ~120 ms opacity crossfade on nav change. |
 | 10 | Hide nav items with `ready: false` | `NAV_ITEMS` in `types/nav.tsx` exports the filtered subset; `ALL_NAV_ITEMS_REGISTRY` keeps the full registry for `NavKey` resolution. |
-
-<!-- Removed in audit (May 5 2026): the original Side-by-side comparison, Phase 1/2/3 alignment plan, Owns/Acceptance lists, and Implications section. All shipped across v0.52\u2013v0.55. The line below is a placeholder so the heading boundary is preserved.
-
-### Removed sections (see git history)
-| Aspect | AgentHub | PBI Fixer (pre-WS-O) |
-|---|---|---|
-| Width | 224 px, animated collapse | 220 px, no collapse |
-| Background | `#f4f3f2` (warm grey) | `tokens.colorNeutralBackground2` (cooler) |
-| Border-right | None — background contrast separates | 1 px `colorNeutralStroke2` divider |
-| Item shape | `border-radius: 8px`, `margin: 2px 10px`, padding `8px 12px` | `borderRadiusMedium` (4 px), `padding: 6px 10px` |
-| Hover | `rgba(233, 232, 231, 0.6)`, icon recolours | `colorNeutralBackground3Hover`, no icon recolour |
-| Active | White card + 3 px primary accent bar + box-shadow + icon turns primary blue + animated slide-in | Subtle tint, semibold text, no accent bar, no animation |
-| Icons | FluentUI 24 px regular icons | FluentUI 20 px regular icons (matches AgentHub family, smaller size) |
-| Section dividers | `.sidenav-section-label` uppercase 11 px, `.sidenav-rail-divider` between groups | Single uppercase "PBI Fixer" header |
-| Footer | `.sidenav-footer-item` slot | None |
-| Keyboard | Tab + Enter/Space; arrow-key tree nav not present | Same; no arrow-key nav |
-
-### Topbar / header
-| Aspect | AgentHub `.agenthub-topbar` | PBI Fixer `styles.header` |
-|---|---|---|
-| Height | 48 px fixed | Implicit (~36 px), padding-driven |
-| Background | `#faf9f8` warm | `colorNeutralBackground1` (white) |
-| Layout | left = brand + search; right = icon cluster + avatar | left = title + version; nothing right |
-| Search | Global search box with scope chips | None |
-| Right cluster | 24 px icons (Help, Notifications, Chat) + 28 px avatar | None |
-
-### Connection bar (PBI Fixer only)
-- AgentHub has no equivalent. PBI Fixer puts a 3-combobox bar (Workspace / SM / Report) directly under header, full-width.
-- Visual mismatch: bar uses same bg as content → topbar / connection bar / content look like one continuous slab.
-
-### Page content surface
-| Aspect | AgentHub | PBI Fixer |
-|---|---|---|
-| Padding | Mostly `24px` outer with cards | `12px 16px` (denser) |
-| Card pattern | Soft cards `border-radius: 12px`, subtle shadow | Mostly flat panels, dense Fluent DataGrids |
-| Empty/loading | Branded states with illustration + CTA | Generic Fluent `Spinner` + grey text |
-| Font | Inherited Segoe UI | Inherited **except** ModelExplorer / ReportExplorer tree rows + DAX preview (custom font stack leaks) |
-
-### Motion / micro-interactions
-- AgentHub: consistent 120–200 ms cubic-bezier(0.33, 0, 0.67, 1) — sidebar collapse, accent bar slide-in, hover.
-- PBI Fixer: **no transitions** anywhere — instant snaps.
-
-### Tech stack split
-- AgentHub: SCSS classes (`styles.scss`, BEM-ish). PBI Fixer: FluentUI `makeStyles` with `tokens.*`. Zero overlap.
-- Result: theming changes in `styles.scss` do **not** reach PBI Fixer. Surfaces diverge with every Lukasz redesign unless we share classes or re-derive from tokens.
-
----
-
-## Proposed alignment plan
-
-### Phase 1 — Visual parity (no behavioural change)
-1. Switch PBI Fixer sidebar to AgentHub class language. Replace `makeStyles` rules with shared `.agenthub-sidenav`, `.sidenav-item`, `.sidenav-item--active`, `.sidenav-section-label`, `.sidenav-rail-divider`. Keeps markup React-controlled, pulls styling from shared SCSS → automatic theming parity.
-2. ~~Replace emoji glyphs with FluentUI icons.~~ **Done in v1.2** — nav uses FluentUI 20 px regular icons (`Database20Regular`, `ChartMultiple20Regular`, `Wrench20Regular`, `DatabaseSearch20Regular`, `DocumentSearch20Regular`, `Storage20Regular`, `Eye20Regular`, `Translate20Regular`, `ArrowSwap20Regular`, `Flowchart20Regular`, `Code20Regular`, `Beaker20Regular`, `ArrowImport20Regular`, `Flash20Regular`, `Info20Regular`). Optional follow-up: bump to 24 px to match AgentHub size exactly.
-3. Promote active-page accent bar (3 px primary + white card + icon recolour matching `.sidenav-item--active`).
-4. Add slide-in accent animation (`@keyframes sidenavAccentIn` — already in SCSS).
-5. Topbar redesign: move title + version into `.agenthub-topbar`-styled strip. Right-side cluster: Help link to GitHub README, notifications dot for fixer-run results (placeholder), build/version pill. 48 px height + warm `#faf9f8`.
-6. Reframe connection bar — two options (see open questions): (a) restyled horizontal strip under topbar with warm surface palette + 1 px hairline → reads as topbar sub-header; (b) move pickers into sidebar above nav (Workspace / SM / Report stacked), content area gets full width.
-7. Page content padding: bump from `12px 16px` to `24px`. Audit each page for double-padding regressions.
-8. Font normalisation: strip leftover hard-coded `fontFamily` in `ModelExplorer.tsx` / `ReportExplorer.tsx` tree rows + filter input + properties panels.
-9. Shared empty/loading states: replace bare `Spinner` + grey text with reusable `<EmptyState />` styled like AgentHub.
-
-### Phase 2 — Motion + interaction parity
-1. Adopt AgentHub motion curve for hover, active, Others expand/collapse.
-2. Soft fade/slide on page swap (~120 ms opacity crossfade, no horizontal motion → avoid disorienting on dense grids).
-3. Arrow-key tree navigation (↑/↓ select, →/← expand/collapse Others, Enter activate).
-
-### Phase 3 — Optional behavioural lifts (decide per question)
-1. Make PBI Fixer pages **lazy-loaded chunks** with `preload()`-on-hover, mirroring `AgentHubLayout` `lazyWithPreload`.
-2. Hook PBI Fixer into `EditorTabsProvider` / `EditorGroupsRoot` so Fixer pages open in tabs alongside AgentHub pages. Big payoff, big refactor — needs Lukasz alignment.
-3. Right-click context menu on Fixer nav items reusing `SideNavContextMenu`.
-4. Route PBI Fixer nav state through React Router (instead of `sessionStorage`) for deep-links.
-
-### Out of scope for WS-O
-- Search bar in Fixer topbar (no PBI-Fixer search index).
-- Avatar / sign-out in Fixer topbar (host AgentHub topbar already has it).
-- Replacing FluentUI v9 components with custom SCSS (only restyle chrome).
-
-### Acceptance (proposed)
-- [ ] Sidebar visually indistinguishable from AgentHub at first glance
-- [ ] Topbar matches AgentHub 48 px warm-surface pattern
-- [ ] Connection bar restyled (option a or b per open question), no third visual stripe
-- [ ] All transitions use shared cubic-bezier curve
-- [ ] No remaining hard-coded `fontFamily` in tree rows / properties panels
-- [ ] Light + dark mode both render parity with AgentHub home
-
-### Owns (proposed)
-- `components/PbiFixerNav.tsx` — rewrite styling to use shared SCSS classes
-- `components/PbiFixerPage.tsx` — header + connection-bar restyle, content padding
-- `types/nav.tsx` — already uses `React.ReactNode` icons (v1.2). No further work.
-- `styles.scss` — only **append** new classes if needed (e.g. `.pbifixer-connection-bar`); do not mutate existing AgentHub classes
-- `components/ModelExplorer.tsx`, `components/ReportExplorer.tsx` — font normalisation + empty-state replacement
-- New `components/common/EmptyState.tsx`
-
----
-
-## WS-O decisions (locked, May 2026)
-
-All open questions answered by Alexander. WS-O scope below; older question/recommendation text removed (kept in git history).
-
-| # | Decision | Notes |
-|---|---|---|
-| 1 | **Connection bar — restyle in place (option a)** | Keep position, change bg to AgentHub warm `#faf9f8` + 1 px hairline so it reads as topbar sub-header. |
-| 2 | **Migrate Fixer chrome to shared SCSS classes** | Refactor `PbiFixerNav.tsx` + `PbiFixerPage.tsx` to `className` against `.agenthub-sidenav`, `.sidenav-item`, `.sidenav-item--active`, etc. Drop the corresponding `makeStyles` rules. |
-| 3 | **Topbar right cluster — skip entirely** | No Help / version / Open-in-Fabric. Host AgentHub topbar covers the right side. |
-| 4 | **Lazy-loading — defer** | Out of WS-O. Park for a dedicated perf pass when bundle size becomes a complaint. |
-| 5 | **EditorGroups / tabs integration — out of scope for WS-O** | Park as a separate workstream after WS-O lands. Needs Lukasz alignment before sizing. |
-| 6 | **Switch nav to React Router** | URL-driven Fixer nav state; deep-links like `#/agent-hub/pbifixer/diagram` work. Browser back/forward navigates between pages. Drop `sessionStorage["pbiFixer.activeNav"]` (keep `pbiFixer.othersExpanded` if still relevant). |
-| 7 | **Sidebar footer — leave empty** | No "Report a bug", "Open notebook", or version pill in the Fixer sidebar bottom. |
-| 8 | **AgentHub blue (`#005faa`) applies everywhere — including text** | Not just the accent bar. Audit every text color, link color, heading color, focus ring across the Fixer surfaces and align to the AgentHub blue palette. Replaces stray `colorBrandForeground*` / `tokens.colorBrand*` overrides where they diverge from `#005faa`. |
-| 9 | **Page-swap motion — crossfade matching AgentHub** | ~120 ms opacity crossfade on `activeNav` change. No horizontal slide. |
-| 10 | **Hide nav items with `ready: false`** | Matches AgentHub (never advertises unfinished pages). `NAV_ITEMS` filter at render time. CHANGELOG/PLAN remain the roadmap source for stakeholders. |
-
-### Implications for WS-O Owns / Acceptance
-
-Update the WS-O Owns + Acceptance lists above to reflect these decisions:
-- **Owns adds:** routing wiring (likely a small `PbiFixerRouter.tsx` mounting React Router routes for each `NavKey`).
-- **Owns drops:** topbar right cluster components, Fixer-sidebar footer components.
-- **Acceptance adds:**
-  - [ ] Deep-link `#/agent-hub/pbifixer/<navKey>` routes correctly on first load
-  - [ ] Browser back/forward navigates between Fixer pages
-  - [ ] All visible text uses AgentHub blue palette (no rogue brand colors leaking) — partial: hard-coded `#555` `propLabel` text in `ModelExplorer.tsx` + `ReportExplorer.tsx` swapped for `tokens.colorNeutralForeground2` (May 5 2026); full `#005faa` audit across status colors / link colors still pending
-  - [x] Nav items with `ready: false` do not render in the sidebar — `NAV_ITEMS` in `types/nav.tsx` now exports the filtered subset; full registry kept under `ALL_NAV_ITEMS_REGISTRY` so the `NavKey` union and any deep-link logic still resolve `scriptRunner` (May 5 2026)
-- **Acceptance drops:**
-  - Topbar right cluster, sidebar footer, dark-mode parity, lazy-loading, EditorGroups integration.
 
 ---
 
 ## Non-Goals (explicitly out of scope for v0.x)
 - v1.0 — requires explicit green light from Alexander
+- **Script Runner / arbitrary code execution** — removed May 2026 (was WS-K). Don't propose again.
 - Custom BPA rule authoring (use sempy-labs default ruleset; `rulesetUrl?` param reserved, no UI)
 - Offline mode
 - Mobile layout
