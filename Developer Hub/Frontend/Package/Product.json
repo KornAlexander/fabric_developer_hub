@@ -38,7 +38,7 @@
             }
         ]},
         "recommendedItemTypes": [
-          "AgentHubItem"
+          "DeveloperHubDashboard"
         ]
     },
     "createExperience": {
@@ -53,16 +53,17 @@
           "icon_small": {
             "name": "assets/images/dial.png"
           },
-          "onClick": {
-            "action": "open.agentHub"
-          },
           "availableIn": [
             "home",
             "create-hub",
             "workspace-plus-new",
             "workspace-plus-new-teams"
           ],
-          "itemType": "AgentHubItem"
+          "itemType": "DeveloperHubDashboard",
+          "createItemDialogConfig": {
+            "onCreationFailure": { "action": "item.onCreationFailure" },
+            "onCreationSuccess": { "action": "item.onCreationSuccess" }
+          }
         }
       ]
     },

@@ -10,24 +10,14 @@
 
 ## Delivery status snapshot
 
+Shipped workstreams (WS-A, WS-C, WS-D, WS-E, WS-F, WS-G, WS-I, WS-J, WS-L, WS-M, WS-O, WS-Q, plus Explorer parity batches v0.59 + v0.60) live in [CHANGELOG.md](CHANGELOG.md). Open work below.
+
 | WS | Feature | Status | Version |
 |----|---------|--------|---------|
-| WS-A | Shell / nav / theming | ✅ shipped | v0.1–v0.5 |
 | WS-B | Memory Analyzer | 🟡 partial (Phase 2) | v0.18 |
-| WS-C | Model BPA | ✅ shipped | v0.12 |
-| WS-D | Report BPA | ✅ shipped | v0.13 |
-| WS-E | Fixer Execution | ✅ shipped + backend apply | v0.14 → v0.41 |
-| WS-F | Perspectives | ✅ shipped (write-back deferred) | v0.15 |
-| WS-G | Translations + Auto-Translate | ✅ shipped + backend apply | v0.11 → v0.40 |
-| WS-I | Delta Analyzer | ✅ shipped | v0.24 |
-| WS-J | Diagram (SVG canvas) | ✅ shipped | v0.19–v0.20 |
-| WS-L | About — **moved to AgentHub shell** (was Fixer page) | ✅ shipped | (AgentHub footer) |
-| WS-M | Prototype | ✅ shipped | v0.16 |
 | WS-N | Integration sweep | 🟡 partial | v0.36–v0.37 |
-| WS-Q | Editable visual / page properties | ✅ shipped | v0.42–v0.43 |
-| WS-O | Design alignment with AgentHub | ✅ shipped | v0.55 |
 
-Legend: ✅ shipped • 🟡 partial • ⬜ not started • 📋 proposed (open questions)
+Legend: 🟡 partial • ⬜ not started • 📋 proposed (open questions)
 
 **Deferred work across shipped WSes** (require sempy-labs/AMO/XMLA backend bridge):
 - WS-B: per-column storage stats, Partitions, Hierarchies
@@ -47,32 +37,14 @@ Tracked here so they're not lost between sessions. Several are AgentHub-shell sc
 - **B1. Empty Description on items.** Allow item creation / edit with an empty Description field. Backend / `ItemContext.createItem` already passes `description || ""`, so the empty path is supported in code — likely a UI validation in the create dialog. Verify in the actual create dialog (Fabric host or in-workload).
 - **B2. Placeholder below the Fixer.** Stray placeholder element renders below the Fixer panel — delete it.
 - **B3. Close button.** Test the close button in the Fixer view. If it does not actually close the surface (or behaves inconsistently with other AgentHub items), wire it up. If the button is non-functional and not needed, remove it instead.
-- ~~**B4. AgentHub item persistence.**~~ — **closed.** Persistence shipped via WL-1 (manifest → `/agenthub-item-editor/:itemObjectId` route; `AGENTHUB_DATA_DIR` bind-mounted to `./Backend/.data`; `schema_version` field on `AgentHubMetadata`). See [Developer Hub PLAN.md WL-1 C1–C3, C8](../../../../PLAN.md#wl-1--research-findings--gap-analysis-april-24-2026). Final manual + Playwright validation tracked there as C4 / C5.
-
 ### AgentHub-shell — bugs (coordinate with WS-O / Lukasz)
 - **B5. GitHub sign-in greys out the hub.** When signing in with GitHub on a "create item" task in Developer Hub, the whole hub greys out and only recovers after a full page refresh. Reproduce the flow (create item → sign into GitHub → verify hub stays interactive). Likely a missing post-auth message handler or modal-overlay state that doesn't get cleared on the OAuth popup return.
 - **B6. SSO prompted per tab.** Each new tab re-prompts for SSO. Either make SSO **silent/transparent** for tabs after the first, or — preferably — **single sign-on once for the whole Developer Hub** and share the token across tabs (e.g. via shared MSAL cache, broadcast channel, or service-worker token broker). If sharing across tabs is not possible (e.g. cross-origin iframes with strict storage isolation), document the technical reason in [CHANGELOG.md](CHANGELOG.md) so we stop revisiting the question.
 
-### Workload icon — replace the generic briefcase / "weird bag" — **WS-O-ICON** ✅ shipped
-
-Custom `developerHub.png` ships at [`Frontend/Package/assets/images/developerHub.png`](../../../../Package/assets/images/developerHub.png) and is wired into `Product.json` for both `favicon` and `icon.name` (top-level workload icon shown in the trust dialog + workload chooser + "New" tile). Stock `briefcase.png` removed from the assets folder.
-
-Verify after next `docker compose --profile prod build frontend`: trust dialog, Fabric favicon, and home-page tile all render the new glyph.
-
-### Move "About" out of PBI Fixer into the Developer Hub shell — **WS-L revised** ✅ shipped
-
-**Status:** Done. About lives in the AgentHub shell footer above Support; Fixer-level page deleted; `about` NavKey removed from `types/nav.tsx`.
-
-Files in place:
-- [`Frontend/src/components/AgentHub/AboutPage.tsx`](../../AgentHub/AboutPage.tsx)
-- [`Frontend/src/components/AgentHub/AgentHubLayout.tsx`](../../AgentHub/AgentHubLayout.tsx) — `sidenav-footer-item` opens About via `openTab({ id: "about", kind: "about", … })`
-- `Frontend/src/components/PbiFixer/components/pages/AboutPage.tsx` — deleted
-
-Follow-up (low-prio): confirm About content lists Lukasz + Alexander as authors and credits Michael Kovalsky for `semantic-link-labs`; confirm a single source-of-truth hub version (workload version constant lives in topbar — see WL-1 C8).
-
-### WS-O design alignment — ✅ shipped (v0.52–v0.55)
-
-All 10 locked WS-O decisions landed across v0.52–v0.55. See [CHANGELOG.md](CHANGELOG.md). Remaining low-prio polish: full `#005faa` audit across status / link colors (decision #8), and the Phase 1 "font color + sizes" sweep can be reopened opportunistically if any divergence is reported.
+### Low-prio polish (open follow-ups)
+- **Brand-color audit** — full `#005faa` audit across remaining status / link colors. `#555` `propLabel` already swapped to `tokens.colorNeutralForeground2`; rest still pending.
+- **About content** — confirm About lists Lukasz + Alexander as authors, credits Michael Kovalsky for `semantic-link-labs`, and surfaces a single source-of-truth hub version (workload version constant lives in topbar — see WL-1 C8).
+- **Workload icon verify** — after next `docker compose --profile prod build frontend`: trust dialog, Fabric favicon, and home-page tile render the new `developerHub.png` glyph.
 
 ---
 
@@ -291,38 +263,23 @@ No code shipped. This spike is purely the architectural decision + revised ship 
 
 ## Explorer / Tab gaps (parity backlog)
 
-Lower-priority parity items still missing from the existing TS components:
+Batch 1 (v0.59), Batch 2 (v0.60) and Batch 3 (v0.61) shipped — see [CHANGELOG.md](CHANGELOG.md). Remaining items below stay deferred — each is a self-contained workstream rather than a localized UI tweak.
 
 ### Model Explorer
-- DAX formatting (Python uses TOM `format_dax_expression`)
-- Table data preview (TOPN DAX query + render)
-- ~~Editable properties (XMLA/TOM write-back)~~ — **measure write-back shipped.** `updateMeasureProperties` in [`services/fabricApi.ts`](services/fabricApi.ts) patches `expression` / `formatString` / `description` / `displayFolder` / `isHidden` per-measure via TMDL round-trip; wired into `ModelExplorer.tsx` `handleSaveEdits`. Column / table / relationship property edits still TODO.
-- Multi-model support (types defined, logic stubbed)
-- Perspective filtering (filter tree by perspective)
-- Hierarchy levels rendering in tree (hierarchies parsed in `fabricApi.ts`, levels not yet emitted into the tree)
-- Partition details in properties (count shown, properties not expanded)
-- Right-click context menu actions
-- Scan mode (BPA badges on tree items)
+- **Multi-model support** — types support it (`ModelData.datasetName?`), but the picker, connection bar, and shared `ResolvedIds` state are all keyed off a single workspace+dataset pair. Would require a tab/list UI for switching between loaded models (or side-by-side compare) plus careful eviction of pending edits when the active model changes. Not on the IBCS critical path.
+- **Scan mode (BPA badges on tree items)** — currently scans live on the dedicated BPA pages (Model BPA / Report BPA), and `buildModelTree` accepts a `_scanResults` arg that's still ignored. Wiring would mean: (a) trigger a scan from the explorer toolbar (reusing `modelBpaApi.runScan`), (b) plumb the results into the tree builder via the existing `scanResults` parameter, (c) overlay rule-violation count badges on each tree row. Deferred until BPA scans become a "live alongside the explorer" UX rather than a separate page.
 
 ### Report Explorer
-- Per-visual quick-fix buttons in properties panel
-- Scan mode badges (counts shown, scan execution missing — `scanResults` is an empty `useState`)
-- Visual config JSON preview
-- Drag-and-drop page reorder
-
-> Shipped items moved out of this backlog: live Power BI embed (WS-Q v0.43), visual + page property save-back (WS-Q v0.42 — `updateVisualProperties` → `/pbi-fixer/visual/update`), measure property save-back (TMDL `updateMeasureProperties`). See [CHANGELOG.md](CHANGELOG.md).
+- **Per-visual quick-fix scoping** ⏸ — v0.61 ships report-wide quick-fix buttons in the visual props pane (filtered by `appliesTo: VisualType[]` on each `backendFixer({...})` entry), but applying still scans the whole report. True single-visual scoping needs a `targetPath?: {page, visual}` arg on `/api/pbi-fixer/fixers/apply` plus per-handler scope filtering in `pbi_fixer_handlers.py`. Deferred as a follow-up workstream.
+- **Drag-and-drop page reorder** ⏸ — v0.61 attempted HTML5 drag, v0.63–0.65 attempted pointer events with `setPointerCapture` and global window listeners. **All variants blocked by the Fabric workload-iframe host** (Fabric Shell either intercepts dragstart and throws "UnknownError: Could not handle exception", or swallows pointermove/pointerup before they reach the iframe). Backend endpoint `POST /api/pbi-fixer/report/pages/reorder` works correctly when called directly. UI removed in v0.66; reorder still possible via direct REST call. **Future approach:** explicit "Reorder pages" dialog with up/down arrow buttons on each page row (no native drag), or per-page "Move up/Move down" context-menu actions. Will not need any browser drag APIs.
+- **Scan mode badges in report tree** — same shape as the model-explorer scan-mode item: `scanResults` is an empty `useState`, badge slots exist in `buildReportTree` but never get populated. Fix is parallel to the model side — wire up the existing `reportBpaApi.runScan` from the toolbar and feed the results into the tree builder. Deferred so model + report scan-mode ship as one consistent UX, not two divergent halves.
 
 ### Other tabs not yet planned as standalone WSes
-None — all originally-identified tabs are covered: Fixer (WS-E), Perspectives (WS-F), Translations (WS-G), Model BPA (WS-C), Report BPA (WS-D), Memory/Vertipaq (WS-B), Delta (WS-I), Prototype (WS-M), Diagram (WS-J). About moved out to the AgentHub shell (WS-L revised). Visual Properties editor shipped as WS-Q. **Script Runner (former WS-K) explicitly removed May 2026** — see Non-Goals.
+None — all originally-identified tabs are covered.
 
 ---
 
 ## Open workstreams
-
-### WS-L — About page (revised — Developer Hub shell, not Fixer) — ✅ shipped
-About lives in the AgentHub shell footer above Support (`AboutPage.tsx` + `AgentHubLayout.tsx` `sidenav-footer-item`). Fixer-level page deleted, `about` NavKey removed from `types/nav.tsx`. Content polish (authors / credits / single-source hub version) tracked as low-prio follow-up in the section above.
-
----
 
 ### WS-N — Integration sweep (remaining work)
 - [ ] Final smoke pass after each integration batch
@@ -374,40 +331,9 @@ All other workstreams add to their own files + append-only exports from `types/s
 
 ---
 
-# Appendix A — Script Runner (WS-K) — ❌ removed May 2026
-
-Script Runner was scoped as a full-power Monaco editor + backend Python REPL with forwarded OBO tokens. Removed at user request — not a fan, security surface not worth the maintenance. Frontend stub, `scriptRunner` NavKey + nav row, `PbiFixerPage` switch case, and `Code20Regular` icon import all deleted in v0.56. No backend code was ever shipped. Listed under Non-Goals so it does not get re-proposed.
-
----
-
-# Appendix B — WS-O — Design Alignment with AgentHub (✅ shipped v0.52–v0.55)
-
-> Historical reference. Original side-by-side analysis, phase plan, and the 10 locked decisions are preserved in git history; the implementation summary now lives in [CHANGELOG.md](CHANGELOG.md) under v0.52–v0.55.
->
-> Outstanding low-prio polish (audited May 2026): full `#005faa` audit across status / link colors (decision #8 — `#555` `propLabel` swapped to `tokens.colorNeutralForeground2`; brand-color audit across the rest still pending).
-
-## Locked decisions (kept for reference)
-
-The 10 decisions below were locked in May 2026 and shipped across v0.52–v0.55. Side-by-side comparison, phase plan, and per-decision implications removed (kept in git history).
-
-| # | Decision | Notes |
-|---|---|---|
-| 1 | Connection bar — restyle in place | AgentHub warm `#faf9f8` + 1 px hairline so it reads as topbar sub-header. |
-| 2 | Migrate Fixer chrome to shared SCSS classes | `PbiFixerNav.tsx` + `PbiFixerPage.tsx` now use `pbifixer-subnav-item` / shared sidenav classes. |
-| 3 | Topbar right cluster — skip entirely | Host AgentHub topbar covers the right side. |
-| 4 | Lazy-loading — deferred | Park for a dedicated perf pass when bundle size becomes a complaint. |
-| 5 | EditorGroups / tabs integration — separate workstream | Needs Lukasz alignment before sizing. |
-| 6 | URL-driven nav, drop sessionStorage | `?nav=` query is the source of truth; `popstate` listener wires browser back/forward. `pbiFixer.expandedGroups` sessionStorage entry intentionally kept. |
-| 7 | Sidebar footer — leave empty | No "Report a bug" / version pill in the Fixer sidebar bottom. |
-| 8 | AgentHub blue (`#005faa`) everywhere — including text | Partial: `#555` `propLabel` swapped to `tokens.colorNeutralForeground2`; full audit across status / link colors still pending. |
-| 9 | Page-swap motion — crossfade matching AgentHub | ~120 ms opacity crossfade on nav change. |
-| 10 | Hide nav items with `ready: false` | `NAV_ITEMS` in `types/nav.tsx` exports the filtered subset; `ALL_NAV_ITEMS_REGISTRY` keeps the full registry for `NavKey` resolution. |
-
----
-
 ## Non-Goals (explicitly out of scope for v0.x)
 - v1.0 — requires explicit green light from Alexander
-- **Script Runner / arbitrary code execution** — removed May 2026 (was WS-K). Don't propose again.
+- **Script Runner / arbitrary code execution** — removed May 2026 (was WS-K). 
 - Custom BPA rule authoring (use sempy-labs default ruleset; `rulesetUrl?` param reserved, no UI)
 - Offline mode
 - Mobile layout

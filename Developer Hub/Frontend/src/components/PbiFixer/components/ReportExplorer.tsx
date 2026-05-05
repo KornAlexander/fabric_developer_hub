@@ -16,6 +16,7 @@ import {
   Search20Regular,
   ArrowExpand20Regular,
   ArrowCollapseAll20Regular,
+  Wrench20Regular,
 } from "@fluentui/react-icons";
 import {
   ReportData,
@@ -40,6 +41,7 @@ import {
   PbiAuth,
 } from "../services";
 import { updateVisualProperties } from "../services/fixersApi";
+import { FIXERS, type Fixer, type FixerContext, type FixerResult } from "../fixers";
 
 // PBIR ``visualType`` catalogue (subset; covers the most common edits
 // like Pie → Clustered Bar). Values are the internal strings the engine
@@ -196,11 +198,13 @@ const useStyles = makeStyles({
     zIndex: 1,
   },
   sectionLabel: {
-    fontSize: "12px",
-    fontWeight: "600",
-    color: ICON_ACCENT,
-    textTransform: "uppercase" as const,
-    letterSpacing: "0.5px",
+    // v0.70 — mirror Fluent <Field label="…"> styling used by the
+    // Workspace / Semantic Model toolbar fields (small neutral label,
+    // no uppercase, no accent colour) instead of the previous
+    // accented all-caps section header.
+    fontSize: "14px",
+    fontWeight: tokens.fontWeightSemibold,
+    color: tokens.colorNeutralForeground1,
     marginBottom: "4px",
   },
   propRow: {
@@ -468,6 +472,18 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
   // to mint a fresh embed token + reset the iframe so PBIR changes show up.
   const [previewNonce, setPreviewNonce] = useState(0);
 
+  // v0.61 — per-visual quick-fix run state.
+  const [runningFixerId, setRunningFixerId] = useState<string | null>(null);
+  // v0.73 — report-wide fixer scan state. Keyed by fixer id; only
+  // entries with findings.length > 0 are surfaced. Independent from
+  // ``scanResults`` (tree-node violation counter, Record<string, number>).
+  const [fixerScanResults, setFixerScanResults] = useState<Record<string, FixerResult>>({});
+  const [fixerScanning, setFixerScanning] = useState(false);
+  const [fixerScanRanOnce, setFixerScanRanOnce] = useState(false);
+  // v0.61–0.65 attempted drag-and-drop page reorder; removed in v0.66 because
+  // the Fabric workload-iframe host intercepts/breaks both HTML5 drag and
+  // pointer-event-based drag. Backend endpoint kept; UI parked in PLAN.md.
+
   // Build tree
   const treeResult = useMemo<TreeBuildResult>(() => {
     if (!reportData) return { options: [], keyMap: {} };
@@ -562,6 +578,164 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
       setSavingProps(false);
     }
   }, [auth, reportData, visualProps, pageProps, visualEdit, pageEdit, visualEditDirty, pageEditDirty]);
+
+  // ── v0.61 — per-visual quick-fix runner ──────────────────────────────
+  // Calls the existing report-wide apply flow; the report-scoped fixers
+  // currently scan the entire report (no per-visual scoping in the apply
+  // endpoint yet), so this is just a discoverable shortcut from the
+  // visual props pane. Reloads the definition + bumps the embed nonce on
+  // success so the live preview reflects the change immediately.
+  const runQuickFixer = useCallback(
+    async (fixer: Fixer) => {
+      if (!reportData?.workspaceId || !reportData?.reportId) return;
+      setRunningFixerId(fixer.id);
+      setStatus({ msg: `Running ${fixer.title}…`, color: GRAY_COLOR });
+      try {
+        const ctx: FixerContext = {
+          auth,
+          workspaceId: reportData.workspaceId,
+          reportId: reportData.reportId,
+          report: reportData,
+        };
+        const result = await fixer.apply(ctx);
+        if (result.applied) {
+          const data = await loadReportDefinition(
+            auth,
+            reportData.workspaceId,
+            reportData.reportId,
+            reportData.reportId,
+          );
+          setReportData(data);
+          setPreviewNonce((n) => n + 1);
+          setStatus({
+            msg: `Applied ${fixer.title} — ${result.findings.length} change(s) report-wide`,
+            color: "#34c759",
+          });
+        } else {
+          setStatus({
+            msg: `${fixer.title}: ${result.findings.length} finding(s), nothing applied`,
+            color: result.findings.length ? "#ff9f0a" : GRAY_COLOR,
+          });
+        }
+      } catch (err) {
+        setStatus({
+          msg: `Quick fix failed: ${err instanceof Error ? err.message : String(err)}`,
+          color: "#ff3b30",
+        });
+      } finally {
+        setRunningFixerId(null);
+      }
+    },
+    [auth, reportData],
+  );
+
+  // Filter the global fixer registry down to the ones whose `appliesTo`
+  // includes the currently selected visual's type (or that have no
+  // `appliesTo` and are therefore generic to all visuals).
+  const applicableFixers = useMemo<Fixer[]>(() => {
+    if (!visualProps) return [];
+    const vt = visualProps.type;
+    return FIXERS.filter((f) => {
+      if (f.scope !== "report") return false;
+      if (f.mode !== "backend") return false;
+      if (!f.appliesTo || f.appliesTo.length === 0) return true;
+      return f.appliesTo.includes(vt);
+    });
+  }, [visualProps]);
+
+  // v0.73 \u2014 Report-wide fixer scan. Runs every backend report-scoped
+  // fixer in scan-only mode and surfaces only those reporting findings.
+  const reportFixers = useMemo<Fixer[]>(
+    () => FIXERS.filter((f) => f.scope === "report" && f.mode === "backend"),
+    []
+  );
+
+  const buildReportFixerCtx = useCallback((): FixerContext | null => {
+    if (!reportData?.workspaceId || !reportData?.reportId) return null;
+    return {
+      auth,
+      workspaceId: reportData.workspaceId,
+      reportId: reportData.reportId,
+      report: reportData,
+    };
+  }, [auth, reportData]);
+
+  const handleScanReportFixers = useCallback(async () => {
+    const ctx = buildReportFixerCtx();
+    if (!ctx) {
+      setStatus({ msg: "Load a report first", color: "#ff3b30" });
+      return;
+    }
+    setFixerScanning(true);
+    setStatus({ msg: `Scanning ${reportFixers.length} report fixer(s)\u2026`, color: GRAY_COLOR });
+    try {
+      const entries = await Promise.all(
+        reportFixers.map(async (fx) => {
+          try {
+            const res = await fx.scan(ctx);
+            return [fx.id, res] as const;
+          } catch (err) {
+            return [fx.id, { findings: [], applied: false, log: [`scan error: ${err instanceof Error ? err.message : String(err)}`] }] as const;
+          }
+        })
+      );
+      const next: Record<string, FixerResult> = {};
+      for (const [id, res] of entries) next[id] = res;
+      setFixerScanResults(next);
+      setFixerScanRanOnce(true);
+      const withFindings = entries.filter(([, r]) => r.findings.length > 0).length;
+      setStatus({
+        msg: withFindings === 0
+          ? "Scan complete \u2014 no report issues found"
+          : `Scan complete \u2014 ${withFindings} fixer(s) with issues`,
+        color: withFindings === 0 ? "#34c759" : "#ff9500",
+      });
+    } finally {
+      setFixerScanning(false);
+    }
+  }, [buildReportFixerCtx, reportFixers]);
+
+  const handleApplyReportFixer = useCallback(async (fx: Fixer) => {
+    const ctx = buildReportFixerCtx();
+    if (!ctx) return;
+    setRunningFixerId(fx.id);
+    setStatus({ msg: `Applying ${fx.title}\u2026`, color: GRAY_COLOR });
+    try {
+      const res = await fx.apply(ctx);
+      let rescan: FixerResult | null = null;
+      try {
+        rescan = await fx.scan(ctx);
+      } catch { /* ignore */ }
+      setFixerScanResults((prev) => ({ ...prev, [fx.id]: rescan ?? { ...res, applied: false } }));
+      if (res.applied && reportData?.workspaceId && reportData?.reportId) {
+        try {
+          const data = await loadReportDefinition(
+            auth,
+            reportData.workspaceId,
+            reportData.reportId,
+            reportData.reportId,
+          );
+          setReportData(data);
+          setPreviewNonce((n) => n + 1);
+        } catch { /* keep existing report on reload failure */ }
+      }
+      setStatus({
+        msg: res.applied
+          ? `Applied ${fx.title} \u2014 ${res.findings.length} change(s)`
+          : `${fx.title}: ${res.findings.length} finding(s), nothing applied`,
+        color: res.applied ? "#34c759" : (res.findings.length ? "#ff9500" : GRAY_COLOR),
+      });
+    } catch (err) {
+      setStatus({ msg: `Apply failed: ${err instanceof Error ? err.message : String(err)}`, color: "#ff3b30" });
+    } finally {
+      setRunningFixerId(null);
+    }
+  }, [auth, buildReportFixerCtx, reportData]);
+
+  const reportFixersWithFindings = useMemo(
+    () => reportFixers.filter((f) => (fixerScanResults[f.id]?.findings.length ?? 0) > 0),
+    [reportFixers, fixerScanResults]
+  );
 
   // ---------------------------------------------------------------------------
   // Handlers
@@ -672,7 +846,7 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
           disabled={loading}
           icon={loading ? <Spinner size="tiny" /> : undefined}
         >
-          Load Report
+          {loading ? "Loading Report" : "Load Report"}
         </Button>
         <Button
           appearance="subtle"
@@ -690,7 +864,18 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
         >
           Collapse All
         </Button>
-        {status.msg && (
+        <Button
+          appearance="subtle"
+          icon={fixerScanning ? <Spinner size="tiny" /> : <Wrench20Regular />}
+          onClick={handleScanReportFixers}
+          disabled={!reportData || fixerScanning}
+        >
+          {fixerScanning ? "Scanning" : "Scan report fixes"}
+        </Button>
+        {/* v0.69 — toolbar status pill is reserved for ERRORS only.
+            Loading state is conveyed by the primary button's spinner + label;
+            success/info messages would just clutter the toolbar. */}
+        {status.msg && (status.color === "#ff3b30" || status.color === "#a4262c") && (
           <span
             className={styles.statusBar}
             style={{ background: `${status.color}1a`, color: status.color }}
@@ -792,6 +977,7 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
                     </Button>
                   </div>
                 )}
+                <JsonPreview label="Page JSON" data={pageProps.rawJson} />
               </>
             )}
 
@@ -894,6 +1080,42 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
                     ))}
                   </div>
                 )}
+                {(() => {
+                  // v0.73 — visual-scoped quick fixes are now scan-gated:
+                  // only fixers that returned findings on the most recent
+                  // report-wide scan AND apply to the selected visual's
+                  // type are surfaced here.
+                  const visualFixers = fixerScanRanOnce
+                    ? applicableFixers.filter((fx) => (fixerScanResults[fx.id]?.findings.length ?? 0) > 0)
+                    : [];
+                  if (visualFixers.length === 0) return null;
+                  return (
+                    <div style={{ marginTop: "8px" }}>
+                      <div className={styles.sectionLabel} style={{ marginBottom: "4px" }}>
+                        Quick fixes for this visual
+                      </div>
+                      <div style={{ fontSize: 11, color: GRAY_COLOR, marginBottom: 6, fontStyle: "italic" }}>
+                        Runs the fixer report-wide (per-visual scoping pending — see PLAN.md).
+                      </div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                        {visualFixers.map((fx) => (
+                          <Button
+                            key={fx.id}
+                            appearance="secondary"
+                            size="small"
+                            disabled={runningFixerId !== null}
+                            icon={runningFixerId === fx.id ? <Spinner size="tiny" /> : undefined}
+                            onClick={() => void runQuickFixer(fx)}
+                            style={{ justifyContent: "flex-start", textAlign: "left" }}
+                          >
+                            {fx.title} ({fixerScanResults[fx.id]?.findings.length ?? 0})
+                          </Button>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
+                <JsonPreview label="Visual JSON" data={visualProps.rawJson} />
               </>
             )}
 
@@ -911,6 +1133,55 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
                 <Button appearance="secondary" size="small" onClick={handleDiscard}>
                   {"\u2718"} Discard
                 </Button>
+              </div>
+            )}
+            {/* v0.73 — report-wide fixer scan results, rendered below the
+                properties panel content. Only fixers with findings appear. */}
+            {fixerScanRanOnce && (
+              <div style={{ marginTop: "16px", paddingTop: "8px", borderTop: `1px solid ${BORDER_COLOR}` }}>
+                <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>
+                  Quick fixes — {reportFixersWithFindings.length} issue type(s)
+                </div>
+                {reportFixersWithFindings.length === 0 ? (
+                  <div style={{ fontSize: 12, color: GRAY_COLOR, fontStyle: "italic" }}>
+                    No report issues found.
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {reportFixersWithFindings.map((fx) => {
+                      const r = fixerScanResults[fx.id];
+                      const count = r?.findings.length ?? 0;
+                      const busy = runningFixerId === fx.id;
+                      return (
+                        <div key={fx.id} style={{ display: "flex", flexDirection: "column", gap: 2, padding: "6px 8px", background: SECTION_BG, borderRadius: 4 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <span style={{ fontSize: 12, fontWeight: 600, flex: 1 }}>{fx.title}</span>
+                            <span style={{ fontSize: 11, color: GRAY_COLOR }}>{count} finding{count === 1 ? "" : "s"}</span>
+                            <Button
+                              appearance="primary"
+                              size="small"
+                              disabled={busy || runningFixerId !== null}
+                              icon={busy ? <Spinner size="tiny" /> : undefined}
+                              onClick={() => void handleApplyReportFixer(fx)}
+                            >
+                              Apply
+                            </Button>
+                          </div>
+                          {r && r.findings.length > 0 && (
+                            <div style={{ fontSize: 11, color: GRAY_COLOR, fontFamily: "monospace", maxHeight: 80, overflow: "auto" }}>
+                              {r.findings.slice(0, 5).map((f, i) => (
+                                <div key={i}>• {f.objectPath}{f.detail ? ` — ${f.detail}` : ""}</div>
+                              ))}
+                              {r.findings.length > 5 && (
+                                <div style={{ fontStyle: "italic" }}>… +{r.findings.length - 5} more</div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -969,6 +1240,62 @@ const EditableNumberRow: React.FC<EditableNumberRowProps> = ({
           style={{ width: 110 }}
         />
       </span>
+    </div>
+  );
+};
+
+const JsonPreview: React.FC<{ label: string; data: unknown }> = ({ label, data }) => {
+  const [open, setOpen] = useState(false);
+  if (data === undefined || data === null) return null;
+  let pretty = "";
+  try { pretty = JSON.stringify(data, null, 2); } catch { pretty = String(data); }
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div
+        style={{
+          fontSize: 12,
+          fontWeight: 600,
+          cursor: "pointer",
+          padding: "4px 0",
+          color: GRAY_COLOR,
+          userSelect: "none",
+        }}
+        onClick={() => setOpen((v) => !v)}
+      >
+        {open ? "\u25bc" : "\u25b6"} {label}
+        {open && (
+          <Button
+            appearance="subtle"
+            size="small"
+            style={{ marginLeft: 8 }}
+            onClick={(e) => {
+              e.stopPropagation();
+              navigator.clipboard.writeText(pretty);
+            }}
+          >
+            Copy
+          </Button>
+        )}
+      </div>
+      {open && (
+        <pre
+          style={{
+            margin: 0,
+            padding: 8,
+            background: "#f6f8fa",
+            border: "1px solid #d0d7de",
+            borderRadius: 4,
+            fontSize: 11,
+            fontFamily: "monospace",
+            maxHeight: 280,
+            overflow: "auto",
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+          }}
+        >
+          {pretty}
+        </pre>
+      )}
     </div>
   );
 };

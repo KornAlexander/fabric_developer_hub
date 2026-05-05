@@ -1,5 +1,5 @@
 {
-    "name": "AgentHubItem",
+    "name": "DeveloperHubDashboard",
     "displayName": "AgentHubItem_DisplayName",
     "displayNamePlural": "AgentHubItem_DisplayName_Plural",
     "version": "1.100",
@@ -7,10 +7,10 @@
       "path": "/agenthub-item-editor"
     },
     "icon": {
-      "name": "assets/images/execute.png"
+      "name": "assets/images/developerHub.png"
     },
     "activeIcon": {
-      "name": "assets/images/execute.png"
+      "name": "assets/images/developerHub.png"
     },
     "contextMenuItems": [
       {

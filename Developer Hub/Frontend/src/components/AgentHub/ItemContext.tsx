@@ -37,7 +37,7 @@ export function useItemContext() {
     return useContext(ItemContext);
 }
 
-const ITEM_TYPE = (process.env.WORKLOAD_NAME || "Org.AgentHub") + ".AgentHubItem";
+const ITEM_TYPE = (process.env.WORKLOAD_NAME || "Org.DeveloperHub") + ".DeveloperHubDashboard";
 const STORAGE_KEY_ITEM_ID = "agenthub_item_id";
 const STORAGE_KEY_WORKSPACE_ID = "agenthub_workspace_id";
 
@@ -64,17 +64,34 @@ export function ItemProvider({ workloadClient, workspaceObjectId, routeItemObjec
 
     const loadItem = useCallback(async (objectId: string) => {
         setItemLoading(true);
+        const defaultSettings: AgentHubSettings = {
+            defaultModel: "gpt-4o",
+            maxRounds: 15,
+            verboseDefault: true,
+        };
         try {
             const result = await callItemGet(objectId, workloadClient);
+            if (!result) {
+                // SDK call failed (auth / network / item not yet
+                // visible to the workload backend). Fall back to
+                // defaults so the UI still renders cleanly — settings
+                // will get persisted on the next user-initiated save.
+                console.warn(`[ItemContext] callItemGet returned null for ${objectId}; using defaults`);
+                setSettings(defaultSettings);
+                setItemObjectId(objectId);
+                sessionStorage.setItem(STORAGE_KEY_ITEM_ID, objectId);
+                return;
+            }
             const item = convertGetItemResultToWorkloadItem<AgentHubPayload>(result);
             const meta = item.extendedMetdata?.["agenthub-metadata"];
-            if (meta) {
-                setSettings({
-                    defaultModel: meta.defaultModel ?? "gpt-4o",
-                    maxRounds: meta.maxRounds ?? 15,
-                    verboseDefault: meta.verboseDefault ?? true,
-                });
-            }
+            const loadedSettings: AgentHubSettings = meta
+                ? {
+                    defaultModel: meta.defaultModel ?? defaultSettings.defaultModel,
+                    maxRounds: meta.maxRounds ?? defaultSettings.maxRounds,
+                    verboseDefault: meta.verboseDefault ?? defaultSettings.verboseDefault,
+                }
+                : defaultSettings;
+            setSettings(loadedSettings);
             setItemObjectId(objectId);
             sessionStorage.setItem(STORAGE_KEY_ITEM_ID, objectId);
             // v1.11: persist the item's workspace id so the Close
@@ -84,8 +101,28 @@ export function ItemProvider({ workloadClient, workspaceObjectId, routeItemObjec
                 setEffectiveWorkspaceId(item.workspaceId);
                 sessionStorage.setItem(STORAGE_KEY_WORKSPACE_ID, item.workspaceId);
             }
+            // v1.32: if the item has no payload yet (just got created
+            // by the host's "+ New" wizard), eagerly persist the
+            // default payload so the workload backend has something
+            // to work with — mirrors how native Fabric items behave.
+            if (!meta) {
+                try {
+                    const payload: AgentHubPayload = {
+                        "agenthub-metadata": { ...defaultSettings, configuredAgents: [] },
+                    };
+                    await callItemUpdate(objectId, payload, workloadClient);
+                } catch (err) {
+                    console.warn("[ItemContext] initial payload write failed (non-fatal):", err);
+                }
+            }
         } catch (err) {
             console.error("Failed to load item:", err);
+            // Don't leave the UI in a broken state — fall back to
+            // defaults so the user can keep working. They'll see a
+            // Power BI Fixer / Settings page, not a TypeError.
+            setSettings(defaultSettings);
+            setItemObjectId(objectId);
+            sessionStorage.setItem(STORAGE_KEY_ITEM_ID, objectId);
         } finally {
             setItemLoading(false);
         }

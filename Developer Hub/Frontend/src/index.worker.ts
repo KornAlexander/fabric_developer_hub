@@ -22,6 +22,30 @@ export async function initialize(params: InitParams) {
 
             case 'item.onCreationSuccess':
                 const { item: createdItem } = data as any;
+                // v1.32: eagerly persist a default workload payload so
+                // the item shows up in the workspace as a "real" item
+                // immediately, mirroring how native Fabric items
+                // behave. Otherwise the editor opens an item with no
+                // payload and the first ``getItem`` call fails.
+                try {
+                    await workloadClient.itemCrud.updateItem({
+                        objectId: createdItem.objectId,
+                        etag: undefined,
+                        payload: {
+                            workloadPayload: JSON.stringify({
+                                "agenthub-metadata": {
+                                    defaultModel: "gpt-4o",
+                                    maxRounds: 15,
+                                    verboseDefault: true,
+                                    configuredAgents: [],
+                                },
+                            }),
+                            payloadContentType: "InlineJson",
+                        },
+                    });
+                } catch (e) {
+                    console.warn("[onCreationSuccess] initial payload write failed (non-fatal):", e);
+                }
                 await workloadClient.navigation.navigate('host', {
                     path: `/groups/${createdItem.folderObjectId}/${createdItem.itemType}/${createdItem.objectId}`,
                 });

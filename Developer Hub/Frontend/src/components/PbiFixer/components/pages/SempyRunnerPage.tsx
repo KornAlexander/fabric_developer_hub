@@ -325,8 +325,9 @@ export const SempyRunnerPage: React.FC<PageProps> = ({
                   );
                 }
                 const placeholder = auto ? `auto: ${auto}` : (p.default !== undefined ? `default: ${p.default}` : "");
+                const hint = p.hint || (auto ? "Auto-bound from connection bar — override if needed." : "\u00a0");
                 return (
-                  <Field key={p.name} label={label} hint={p.hint || (auto ? "Auto-bound from connection bar — override if needed." : undefined)}>
+                  <Field key={p.name} label={label} hint={hint}>
                     <Input
                       value={ov !== undefined ? String(ov) : (auto ?? (p.default !== undefined ? String(p.default) : ""))}
                       placeholder={placeholder}

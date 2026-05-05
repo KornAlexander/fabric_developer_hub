@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import time
 import uuid
@@ -905,6 +906,83 @@ async def _llm_translate_batch(
         return list(captions)
 
 
+# ─────────────────────────────────────────────────────────────────────
+#  PBI Fixer → SLL Sidecar (semantic-link-labs by Michael Kovalsky)
+#
+#  Thin pass-through to the standalone ``sll-sidecar`` container which
+#  hosts ``run_model_bpa`` and ``vertipaq_analyzer`` over a Service
+#  Principal-bound XMLA endpoint. The frontend never talks to the
+#  sidecar directly — these proxies forward the body, surface upstream
+#  errors verbatim, and apply the standard rate-limit / auth gate.
+# ─────────────────────────────────────────────────────────────────────
+
+
+class _SllRequest(BaseModel):
+    workspace: str  # workspace name OR id (sempy_labs accepts both)
+    dataset: str    # dataset name OR id
+
+
+class _SllVertipaqRequest(_SllRequest):
+    read_stats_from_data: bool = False
+
+
+def _sll_base_url() -> str:
+    return os.environ.get("SLL_SIDECAR_URL", "http://sll-sidecar:5100").rstrip("/")
+
+
+async def _sll_post(path: str, body: dict, *, timeout: float = 300.0) -> dict:
+    """POST to the SLL sidecar and surface its JSON response (or
+    HTTPException on failure). vertipaq runs can be slow on large
+    models, hence the generous default timeout."""
+    import httpx
+
+    url = f"{_sll_base_url()}{path}"
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(url, json=body)
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"SLL sidecar unreachable: {exc}") from exc
+    if resp.status_code >= 400:
+        # Forward the sidecar's structured error so the UI can show it.
+        try:
+            detail = resp.json().get("detail", resp.text)
+        except Exception:  # noqa: BLE001
+            detail = resp.text
+        raise HTTPException(resp.status_code, f"SLL sidecar: {detail}")
+    return resp.json()
+
+
+@router.post("/pbi-fixer/sll/model-bpa")
+async def pbi_fixer_sll_model_bpa(
+    payload: _SllRequest,
+    request: Request,
+    ctx: AuthorizationContext | None = Depends(require_user),
+):
+    """Run ``sempy_labs.run_model_bpa`` against the target semantic
+    model and return the raw rule-violation DataFrame as rows + columns.
+
+    Note: the sidecar uses a Service Principal — the user's OBO Fabric
+    token is *not* forwarded. The SP must be a member of the workspace.
+    """
+    user_id = _user_key_from_context(ctx)
+    _rate_limit(user_id, "pbi_fixer_sll_model_bpa")
+    return await _sll_post("/sll/model-bpa", payload.model_dump())
+
+
+@router.post("/pbi-fixer/sll/vertipaq")
+async def pbi_fixer_sll_vertipaq(
+    payload: _SllVertipaqRequest,
+    request: Request,
+    ctx: AuthorizationContext | None = Depends(require_user),
+):
+    """Run ``sempy_labs.vertipaq_analyzer`` and return the literal HTML
+    blocks Michael's library renders into a notebook (one concatenated
+    document, sections separated by ``<hr/>``)."""
+    user_id = _user_key_from_context(ctx)
+    _rate_limit(user_id, "pbi_fixer_sll_vertipaq")
+    return await _sll_post("/sll/vertipaq", payload.model_dump(), timeout=600.0)
+
+
 @router.post("/pbi-fixer/translations/propose", response_model=TranslationProposeResponse)
 async def pbi_fixer_translations_propose(
     payload: TranslationProposeRequest,
@@ -1541,6 +1619,182 @@ async def pbi_fixer_visual_update(
         "applied": True,
         "changes": changes,
         "log": [f"Updated {len(changes)} field(s) on {payload.page}/{payload.visual or '*'}"],
+    }
+
+
+# ---------------------------------------------------------------------------
+# v0.61 — drag-and-drop page reorder
+# ---------------------------------------------------------------------------
+
+
+class PagesReorderRequest(BaseModel):
+    workspaceId: str
+    reportId: str
+    pageOrder: list[str]
+
+
+@router.post("/pbi-fixer/report/pages/reorder")
+async def pbi_fixer_pages_reorder(
+    payload: PagesReorderRequest,
+    request: Request,
+    ctx: AuthorizationContext | None = Depends(require_user),
+):
+    """Reorder report pages by mutating the ``pages.json`` part's ``pageOrder`` array.
+
+    Mirrors the v0.42 ``/visual/update`` LRO pattern: ``getDefinition`` →
+    patch the single ``definition/pages.json`` part → ``updateDefinition``.
+    Body ``pageOrder`` is the desired final ordering (page internal names).
+    Pages present in the file but missing from the request are appended at
+    the end (preserving their relative order); unknown names are dropped.
+    """
+    import base64
+    import json as _json
+
+    import httpx
+
+    user_id = _user_key_from_context(ctx)
+    _rate_limit(user_id, "pbi_fixer_pages_reorder")
+
+    if not payload.pageOrder:
+        raise HTTPException(400, "pageOrder must be a non-empty list")
+
+    mcp_tokens = await _mcp_tokens(request)
+    if not mcp_tokens:
+        raise HTTPException(400, "Fabric token required")
+    fabric_token = mcp_tokens.get("FABRIC_API_TOKEN")
+    if not fabric_token:
+        raise HTTPException(401, "No Fabric OBO token available")
+
+    base = (
+        f"{_FABRIC_API_ROOT}/workspaces/{payload.workspaceId}"
+        f"/reports/{payload.reportId}"
+    )
+
+    async def _follow_lro(client: httpx.AsyncClient, resp: httpx.Response) -> httpx.Response:
+        attempts = 0
+        while resp.status_code == 202 and attempts < 30:
+            attempts += 1
+            location = resp.headers.get("Location") or resp.headers.get("Operation-Location")
+            if not location:
+                break
+            try:
+                retry_after = float(resp.headers.get("Retry-After", "2"))
+            except ValueError:
+                retry_after = 2.0
+            await asyncio.sleep(min(retry_after, 5.0))
+            resp = await client.get(location, headers={"Authorization": f"Bearer {fabric_token}"})
+        if (
+            resp.status_code == 200
+            and resp.headers.get("content-type", "").startswith("application/json")
+        ):
+            try:
+                body = resp.json()
+            except Exception:
+                body = None
+            if isinstance(body, dict) and body.get("status") == "Failed":
+                err = body.get("error") or {}
+                raise HTTPException(
+                    502,
+                    f"Fabric LRO failed [{err.get('errorCode', '')}]: {err.get('message', '')}",
+                )
+            if (
+                isinstance(body, dict)
+                and body.get("status") in ("Succeeded", "Completed")
+                and "definition" not in body
+            ):
+                location = (resp.url and str(resp.url)) or location
+                try:
+                    rr = await client.get(
+                        f"{location.rstrip('/')}/result",
+                        headers={"Authorization": f"Bearer {fabric_token}"},
+                    )
+                    if rr.status_code < 400:
+                        resp = rr
+                except httpx.HTTPError:
+                    pass
+        return resp
+
+    async with httpx.AsyncClient(timeout=120.0, follow_redirects=False) as client:
+        try:
+            resp = await client.post(
+                f"{base}/getDefinition",
+                headers={
+                    "Authorization": f"Bearer {fabric_token}",
+                    "Content-Type": "application/json",
+                },
+                json={},
+            )
+        except httpx.HTTPError as exc:
+            raise HTTPException(502, f"getDefinition failed: {exc}") from exc
+        resp = await _follow_lro(client, resp)
+        if resp.status_code >= 400:
+            raise HTTPException(resp.status_code, f"getDefinition: {resp.text}")
+        try:
+            def_body = resp.json()
+        except Exception as exc:
+            raise HTTPException(502, f"getDefinition returned non-JSON: {exc}") from exc
+
+        parts = list((def_body.get("definition") or {}).get("parts") or [])
+        if not parts:
+            raise HTTPException(502, "Definition has no parts")
+
+        new_parts = [{**p} for p in parts]
+        touched = False
+        before_order: list[str] = []
+        after_order: list[str] = []
+
+        for p in new_parts:
+            if p.get("path") != "definition/pages.json":
+                continue
+            try:
+                doc_str = base64.b64decode(p.get("payload", "")).decode("utf-8")
+                doc = _json.loads(doc_str)
+            except Exception as exc:
+                raise HTTPException(502, f"pages.json decode failed: {exc}") from exc
+
+            existing = list(doc.get("pageOrder") or [])
+            before_order = list(existing)
+            requested = [n for n in payload.pageOrder if n in existing]
+            tail = [n for n in existing if n not in requested]
+            after_order = requested + tail
+            if after_order == existing:
+                return {
+                    "applied": False,
+                    "pageOrder": after_order,
+                    "log": ["No-op: requested order matches current order."],
+                }
+            doc["pageOrder"] = after_order
+            p["payload"] = base64.b64encode(_json.dumps(doc, indent=2).encode("utf-8")).decode("ascii")
+            p["payloadType"] = p.get("payloadType") or "InlineBase64"
+            touched = True
+            break
+
+        if not touched:
+            raise HTTPException(404, "definition/pages.json not found in report definition")
+
+        try:
+            up = await client.post(
+                f"{base}/updateDefinition",
+                headers={
+                    "Authorization": f"Bearer {fabric_token}",
+                    "Content-Type": "application/json",
+                },
+                json={"definition": {"parts": new_parts}},
+            )
+        except httpx.HTTPError as exc:
+            raise HTTPException(502, f"updateDefinition failed: {exc}") from exc
+        up = await _follow_lro(client, up)
+        if up.status_code >= 400:
+            raise HTTPException(up.status_code, f"updateDefinition: {up.text}")
+
+    return {
+        "applied": True,
+        "pageOrder": after_order,
+        "log": [
+            f"Reordered {len(after_order)} page(s).",
+            f"Before: {before_order}",
+            f"After:  {after_order}",
+        ],
     }
 
 

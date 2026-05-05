@@ -50,6 +50,9 @@ export interface Fixer {
   scope: FixerScope;
   mode: FixerMode;
   bpaRuleIds?: string[];
+  /** PBIR `visualType` values this report-scoped fixer is relevant for.
+   *  Omit (or empty) to mean "applies to any visual" / page-level. v0.61. */
+  appliesTo?: string[];
   scan(ctx: FixerContext): Promise<FixerResult>;
   apply(ctx: FixerContext): Promise<FixerResult>;
 }
@@ -71,6 +74,7 @@ function backendFixer(meta: {
   title: string;
   scope: FixerScope;
   bpaRuleIds?: string[];
+  appliesTo?: string[];
 }): Fixer {
   const call = async (ctx: FixerContext, scanOnly: boolean): Promise<FixerResult> => {
     if (!ctx.auth || !ctx.workspaceId) return emptyResult(["No auth / workspace."]);
@@ -110,6 +114,7 @@ function backendFixer(meta: {
     scope: meta.scope,
     mode: "backend",
     bpaRuleIds: meta.bpaRuleIds,
+    appliesTo: meta.appliesTo,
     scan: (ctx) => call(ctx, true),
     apply: (ctx) => call(ctx, false),
   };
@@ -124,6 +129,7 @@ export const fixPieChart = backendFixer({
   title: "Replace pie / donut / funnel charts with bar charts",
   scope: "report",
   bpaRuleIds: ["Report.PieOrDonut"],
+  appliesTo: ["pieChart", "donutChart", "funnel"],
 });
 
 export const fixPageSize = backendFixer({
@@ -137,12 +143,14 @@ export const fixHideVisualFilters = backendFixer({
   id: "Fix_HideVisualFilters",
   title: "Hide every visual-level filter from the filter pane",
   scope: "report",
+  // No appliesTo → relevant to every visual.
 });
 
 export const fixDisableShowItemsNoData = backendFixer({
   id: "Fix_DisableShowItemsNoData",
   title: "Disable 'Show items with no data' on visual projections",
   scope: "report",
+  // No appliesTo → relevant to every visual.
 });
 
 export const fixRemoveUnusedCustomVisuals = backendFixer({
@@ -246,18 +254,29 @@ export const fixBarChart = backendFixer({
   id: "Fix_BarChart",
   title: "Fix bar chart formatting (axis titles, values, gridlines, data labels)",
   scope: "report",
+  appliesTo: [
+    "barChart",
+    "clusteredBarChart",
+    "hundredPercentStackedBarChart",
+  ],
 });
 
 export const fixColumnChart = backendFixer({
   id: "Fix_ColumnChart",
   title: "Fix column chart formatting (axis titles, values, gridlines, data labels)",
   scope: "report",
+  appliesTo: [
+    "columnChart",
+    "clusteredColumnChart",
+    "hundredPercentStackedColumnChart",
+  ],
 });
 
 export const fixVisualAlignment = backendFixer({
   id: "Fix_VisualAlignment",
   title: "Snap nearly-aligned chart visuals (within 2% of page) to a common position/size",
   scope: "report",
+  // No appliesTo → relevant to every visual.
 });
 
 // P2 SM batch (v0.51)

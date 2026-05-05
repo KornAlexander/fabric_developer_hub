@@ -95,3 +95,35 @@ export async function updateVisualProperties(
   }
   return await res.json();
 }
+
+// ---------------------------------------------------------------------------
+// v0.61 — drag-and-drop page reorder
+// ---------------------------------------------------------------------------
+
+export interface PagesReorderRequest {
+  workspaceId: string;
+  reportId: string;
+  pageOrder: string[];
+}
+
+export interface PagesReorderResponse {
+  applied: boolean;
+  pageOrder: string[];
+  log: string[];
+}
+
+export async function reorderPages(
+  auth: PbiAuth,
+  req: PagesReorderRequest,
+): Promise<PagesReorderResponse> {
+  const res = await fetch(`${BE}/api/pbi-fixer/report/pages/reorder`, {
+    method: "POST",
+    headers: headers(auth),
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`reorderPages failed (${res.status}): ${text}`);
+  }
+  return await res.json();
+}

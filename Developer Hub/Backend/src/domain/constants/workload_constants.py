@@ -5,7 +5,7 @@ from typing import Final
 # needed and the value is genuinely immutable for the lifetime of the process.
 # The Fabric workload manifest pins this value — changing it requires a
 # coordinated manifest re-publish.
-_WORKLOAD_NAME: Final[str] = os.environ.get("WORKLOAD_NAME", "Org.AgentHub")
+_WORKLOAD_NAME: Final[str] = os.environ.get("WORKLOAD_NAME", "Org.DeveloperHub")
 
 
 class WorkloadConstants:
@@ -16,4 +16,4 @@ class WorkloadConstants:
     class ItemTypes:
         """Nested class containing item type constants."""
 
-        AGENTHUB_ITEM: Final[str] = f"{_WORKLOAD_NAME}.AgentHubItem"
+        AGENTHUB_ITEM: Final[str] = f"{_WORKLOAD_NAME}.DeveloperHubDashboard"

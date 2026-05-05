@@ -33,6 +33,7 @@ import {
   ArrowDownload20Regular,
   ArrowSortDown20Regular,
   ArrowSortUp20Regular,
+  Play20Regular,
 } from "@fluentui/react-icons";
 import type { PageProps } from "../../types/shared";
 import {
@@ -46,6 +47,7 @@ import {
   type VertipaqMeasureRow,
   type VertipaqRelationshipRow,
 } from "../../services/memoryApi";
+import { runSllVertipaq, type SllVertipaqResponse } from "../../services/sllApi";
 
 type SectionKey = "summary" | "tables" | "columns" | "measures" | "relationships";
 
@@ -216,6 +218,26 @@ export const MemoryPage: React.FC<PageProps> = ({ auth, workspaceId, datasetId, 
   const [section, setSection] = useState<SectionKey>("summary");
   const [filter, setFilter] = useState("");
 
+  // v0.74 — SLL (sempy_labs.vertipaq_analyzer) live HTML capture.
+  const [sll, setSll] = useState<SllVertipaqResponse | null>(null);
+  const [sllLoading, setSllLoading] = useState(false);
+  const [sllErr, setSllErr] = useState("");
+  const [sllReadStats, setSllReadStats] = useState(false);
+
+  const handleRunSll = useCallback(async () => {
+    if (!workspaceId || !datasetId) return;
+    setSllLoading(true);
+    setSllErr("");
+    try {
+      const r = await runSllVertipaq(auth, workspaceId, datasetId, sllReadStats);
+      setSll(r);
+    } catch (e) {
+      setSllErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSllLoading(false);
+    }
+  }, [auth, workspaceId, datasetId, sllReadStats]);
+
   const load = useCallback(async () => {
     if (!workspaceId || !datasetId) return;
     setLoading(true); setErr("");
@@ -279,16 +301,70 @@ export const MemoryPage: React.FC<PageProps> = ({ auth, workspaceId, datasetId, 
         </Button>
       </div>
 
-      <MessageBar intent="info">
+      <MessageBar intent="success">
         <MessageBarBody>
-          <MessageBarTitle>Storage breakdown coming with the backend bridge</MessageBarTitle>
-          Per-column dictionary/data/segment sizes require the
-          {" "}<code>sempy_labs.vertipaq_analyzer()</code>{" "}
-          XMLA bridge (Phase 1, planned). Phase 2 (this view) ships row counts
-          and structural metadata via the friendly{" "}<code>INFO.VIEW.*</code>{" "}
-          DAX functions that the Power BI REST API permits.
+          <MessageBarTitle>semantic-link-labs · vertipaq_analyzer</MessageBarTitle>
+          The panel below runs Michael Kovalsky&apos;s actual
+          {" "}<code>vertipaq_analyzer()</code>{" "}
+          via the SLL sidecar (Service Principal) and renders its raw
+          HTML output. The structural tabs further down remain available
+          as an offline fallback.
         </MessageBarBody>
       </MessageBar>
+
+      {/* ── v0.74 SLL Vertipaq panel ── */}
+      <div style={{
+        display: "flex", flexDirection: "column", gap: 8,
+        padding: "10px 12px",
+        border: `1px solid ${tokens.colorNeutralStroke2}`,
+        borderRadius: tokens.borderRadiusMedium,
+        backgroundColor: tokens.colorNeutralBackground2,
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <Title3 style={{ margin: 0 }}>vertipaq_analyzer (SLL)</Title3>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, color: tokens.colorNeutralForeground2 }}>
+            <input
+              type="checkbox"
+              checked={sllReadStats}
+              onChange={(e) => setSllReadStats(e.target.checked)}
+              disabled={sllLoading}
+            />
+            read_stats_from_data (slower, full per-column stats)
+          </label>
+          <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
+            {sllLoading && <Spinner size="tiny" label="Running…" />}
+            <Button appearance="primary" icon={<Play20Regular />} onClick={handleRunSll} disabled={sllLoading || !workspaceId || !datasetId}>
+              {sll ? "Re-run" : "Run"}
+            </Button>
+          </div>
+        </div>
+        {sllErr && (
+          <MessageBar intent="error">
+            <MessageBarBody><MessageBarTitle>SLL run failed</MessageBarTitle> {sllErr}</MessageBarBody>
+          </MessageBar>
+        )}
+        {sll && (
+          <div
+            style={{
+              maxHeight: 480,
+              overflow: "auto",
+              padding: 12,
+              backgroundColor: tokens.colorNeutralBackground1,
+              border: `1px solid ${tokens.colorNeutralStroke2}`,
+              borderRadius: tokens.borderRadiusSmall,
+            }}
+            // sempy_labs renders trusted HTML (its own templates + DataFrame.to_html);
+            // safe to inject because the source is the SLL sidecar we control.
+            dangerouslySetInnerHTML={{ __html: sll.html }}
+          />
+        )}
+        {!sll && !sllErr && !sllLoading && (
+          <Text style={{ color: tokens.colorNeutralForeground3 }}>
+            Click <strong>Run</strong> to execute Michael Kovalsky&apos;s actual
+            <code> vertipaq_analyzer</code> against this semantic model.
+          </Text>
+        )}
+      </div>
 
       {err && (
         <MessageBar intent="error">

@@ -251,13 +251,27 @@ export function buildModelTree(
       );
 
       for (const hn of Object.keys(t.hierarchies).sort()) {
-        const lvlStr = (t.hierarchies[hn].levels ?? []).join(" \u2192 ");
+        const lvls = t.hierarchies[hn].levels ?? [];
+        const lvlStr = lvls.join(" \u2192 ");
+        const hKey = `hierarchy:${tName}:${hn}`;
+        const isHExp = expandedNodes.has(hKey);
+        const hMarker = lvls.length > 0 ? (isHExp ? EXPANDED : COLLAPSED) + " " : "";
         items.push({
           indent: 2,
           icon: "hierarchy",
-          label: `${hn}  (${lvlStr})`,
-          key: `hierarchy:${tName}:${hn}`,
+          label: `${hMarker}${hn}  (${lvlStr})`,
+          key: hKey,
         });
+        if (isHExp) {
+          lvls.forEach((lvl, i) => {
+            items.push({
+              indent: 3,
+              icon: "column",
+              label: `${i + 1}. ${lvl}`,
+              key: `level:${tName}:${hn}:${i}`,
+            });
+          });
+        }
       }
 
       for (const ciName of Object.keys(t.calcItems).sort(

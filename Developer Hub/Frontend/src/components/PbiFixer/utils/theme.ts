@@ -3,7 +3,10 @@
 export const FONT_FAMILY = "-apple-system,BlinkMacSystemFont,sans-serif";
 export const TEXT_COLOR = "inherit";
 export const BORDER_COLOR = "#e0e0e0";
-export const ICON_ACCENT = "#FF9500";
+// v0.66 — aligned to AgentHub Fluent brand blue (was "#FF9500" orange).
+// Drives PREVIEW / PROPERTIES section labels, selected tree-item tint,
+// and the "open in Model Explorer" link affordance in ReportExplorer.
+export const ICON_ACCENT = "#0078d4";
 export const GRAY_COLOR = "#999";
 export const SECTION_BG = "#fafafa";
 

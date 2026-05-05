@@ -1,0 +1,11 @@
+# SLL sidecar runtime deps. Versions are pinned loosely so the image
+# stays buildable as Michael ships fixes; tighten when promoting.
+fastapi>=0.115
+uvicorn[standard]>=0.34
+pandas>=2.2
+ipython>=8.18
+# semantic-link (sempy) + semantic-link-labs (sempy_labs) bring the
+# whole TOM/AMO stack via pythonnet. The .NET 8 runtime is provided
+# by the base image.
+semantic-link>=0.10
+semantic-link-labs>=0.10

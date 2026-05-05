@@ -70,6 +70,7 @@ export interface PageProperties {
   hidden: boolean;
   visualCount: number;
   visualTypeSummary: string;
+  rawJson?: unknown;
 }
 
 export interface VisualProperties {
@@ -84,6 +85,7 @@ export interface VisualProperties {
   height: number;
   hidden: boolean;
   usedObjects: { icon: string; table: string; object: string; type: string }[];
+  rawJson?: unknown;
 }
 
 export function getPageProperties(
@@ -112,6 +114,7 @@ export function getPageProperties(
     hidden: p.hidden,
     visualCount: Object.keys(p.visuals).length,
     visualTypeSummary: summary,
+    rawJson: p.rawJson,
   };
 }
 
@@ -149,5 +152,6 @@ export function getVisualProperties(
     height: v.height,
     hidden: v.hidden,
     usedObjects: objects,
+    rawJson: v.rawJson,
   };
 }
