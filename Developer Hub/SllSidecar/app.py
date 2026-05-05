@@ -28,8 +28,33 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
+import types
 from contextlib import contextmanager
 from typing import Any
+
+# ─────────────────────────────────────────────────────────────────────
+#  Stub ``notebookutils`` BEFORE importing sempy_labs. SLL's
+#  ``_base_api`` does ``import notebookutils`` at call time even when
+#  the credential is supplied via ``set_service_principal``. We only
+#  need the import to succeed; the real auth path uses our SP token
+#  provider. ``notebookutils.credentials.getToken`` is only hit for
+#  storage / kusto / blob / keyvault clients we don't use.
+# ─────────────────────────────────────────────────────────────────────
+if "notebookutils" not in sys.modules:
+    _nbu = types.ModuleType("notebookutils")
+    _nbu_creds = types.ModuleType("notebookutils.credentials")
+
+    def _stub_get_token(audience: str) -> str:  # noqa: ARG001
+        raise RuntimeError(
+            "notebookutils.credentials.getToken is not available in the "
+            "SLL sidecar; this code path requires a Fabric runtime."
+        )
+
+    _nbu_creds.getToken = _stub_get_token  # type: ignore[attr-defined]
+    _nbu.credentials = _nbu_creds  # type: ignore[attr-defined]
+    sys.modules["notebookutils"] = _nbu
+    sys.modules["notebookutils.credentials"] = _nbu_creds
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException
@@ -71,9 +96,23 @@ def _sp_context():
         )
     tenant_id, client_id, client_secret = creds
     from sempy.fabric import set_service_principal
+    from sempy_labs._authentication import (
+        ServicePrincipalTokenProvider,
+        token_provider,
+    )
 
-    with set_service_principal(client_id, client_secret, tenant_id):
-        yield
+    sp_provider = ServicePrincipalTokenProvider.from_aad_application_key_authentication(
+        tenant_id=tenant_id,
+        client_id=client_id,
+        client_secret=client_secret,
+    )
+    prior = token_provider.get()
+    token_provider.set(sp_provider)
+    try:
+        with set_service_principal(tenant_id, client_id, client_secret=client_secret):
+            yield
+    finally:
+        token_provider.set(prior)
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -141,7 +180,35 @@ class _VertipaqRequest(_ModelRequest):
 
 @app.get("/health")
 def health() -> dict[str, Any]:
-    return {"ok": True, "configured": _sp_env() is not None}
+    import platform
+
+    machine = platform.machine().lower()
+    # sempy bundles x64 .NET assemblies for AnalysisServices/XmlaTools.
+    # On non-x86_64 hosts the DLLs cannot be loaded and pythonnet/QEMU
+    # crashes the process when emulated, so we surface this clearly.
+    arch_supported = machine in ("x86_64", "amd64")
+    return {
+        "ok": True,
+        "configured": _sp_env() is not None,
+        "arch": machine,
+        "arch_supported": arch_supported,
+    }
+
+
+def _require_supported_arch() -> None:
+    import platform
+
+    machine = platform.machine().lower()
+    if machine not in ("x86_64", "amd64"):
+        raise HTTPException(
+            status_code=501,
+            detail=(
+                f"SLL sidecar host arch '{machine}' is not supported. "
+                "sempy_labs requires x86_64 because Microsoft.AnalysisServices.* "
+                "DLLs are x64-only. Deploy this container to an x86_64 host "
+                "(Linux server, AKS amd64 node, GitHub Actions ubuntu-latest)."
+            ),
+        )
 
 
 @app.post("/sll/model-bpa")
@@ -150,6 +217,7 @@ def model_bpa(req: _ModelRequest) -> dict[str, Any]:
     the DataFrame as JSON-serialisable rows + column metadata. This
     matches how PBI Fixer (Alex's notebook) consumes the function."""
     log.info("run_model_bpa: workspace=%s dataset=%s", req.workspace, req.dataset)
+    _require_supported_arch()
     with _sp_context():
         from sempy_labs import run_model_bpa
 
@@ -182,6 +250,7 @@ def vertipaq(req: _VertipaqRequest) -> dict[str, Any]:
         req.dataset,
         req.read_stats_from_data,
     )
+    _require_supported_arch()
     with _sp_context(), _capture_html() as html_blocks:
         from sempy_labs import vertipaq_analyzer
 
