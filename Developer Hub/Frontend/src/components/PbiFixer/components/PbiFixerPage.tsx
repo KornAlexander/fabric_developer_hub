@@ -285,6 +285,45 @@ export const PbiFixerPage: React.FC<PbiFixerPageProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [reports, reportInput, folderName],
   );
+
+  // Merged Semantic Model + Report picker — used by pages that target
+  // either scope (Fixer, Sempy Runner, Script Runner). A semantic model
+  // and a report typically share the same name in the same folder, and
+  // most sempy / script functions accept either scope, so collapsing
+  // both pickers into one keeps the connection bar uncluttered. We
+  // dedupe by `<folderId>|<name>` and remember whichever ids match.
+  const [pairInput, setPairInput] = useState("");
+  type PairItem = { name: string; folderId?: string | null; datasetId?: string; reportId?: string };
+  const pairItems = useMemo<PairItem[]>(() => {
+    const map = new Map<string, PairItem>();
+    const keyOf = (folderId: string | null | undefined, name: string) => `${folderId ?? ""}|${name}`;
+    for (const d of datasets) {
+      const k = keyOf(d.folderId, d.name);
+      map.set(k, { name: d.name, folderId: d.folderId, datasetId: d.id });
+    }
+    for (const r of reports) {
+      const k = keyOf(r.folderId, r.name);
+      const cur = map.get(k);
+      if (cur) cur.reportId = r.id;
+      else map.set(k, { name: r.name, folderId: r.folderId, reportId: r.id });
+    }
+    return [...map.values()];
+  }, [datasets, reports]);
+  const pairKey = (p: PairItem) => `${p.folderId ?? ""}|${p.name}|${p.datasetId ?? ""}|${p.reportId ?? ""}`;
+  const pairGroups = useMemo(
+    () => groupByFolder(pairItems, pairInput),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pairItems, pairInput, folderName],
+  );
+  // Prefer dataset name when both ids are set (they normally match anyway).
+  const selectedPair = useMemo<PairItem | undefined>(() => {
+    if (!datasetId && !reportId) return undefined;
+    return pairItems.find((p) => (datasetId && p.datasetId === datasetId) || (reportId && p.reportId === reportId));
+  }, [pairItems, datasetId, reportId]);
+  // Keep `pairInput` in sync with whichever scope-specific input changes.
+  useEffect(() => {
+    if (selectedPair) setPairInput(selectedPair.name);
+  }, [selectedPair]);
   const workspaceGroups = useMemo(() => {
     const needle = workspaceInput.toLowerCase();
     return workspaceInput
@@ -464,14 +503,15 @@ export const PbiFixerPage: React.FC<PbiFixerPageProps> = ({
 
   // Only one picker should ever be visible at a time — Report-scoped
   // pages show the Report picker, everything else shows the Semantic
-  // Model picker. Keeps the connection bar uncluttered and avoids the
-  // "which one applies to this page?" ambiguity. Pages that can target
-  // either scope (Fixer, Sempy Runner, Script Runner) show both pickers
-  // so the user can pick whichever the function/script needs.
+  // Model picker. Pages that can target either scope (Fixer, Sempy
+  // Runner, Script Runner) show a SINGLE merged "Semantic Model /
+  // Report" picker — most functions accept either and the two items
+  // typically share the same name in the same folder.
   const isReportScoped = activeNav === "report" || activeNav === "reportBpa" || activeNav === "reversePrototype";
   const needsBothPickers = activeNav === "fixer" || activeNav === "sempyRunner" || activeNav === "scriptRunner";
-  const showDatasetPicker = needsBothPickers || !isReportScoped;
-  const showReportPicker = needsBothPickers || isReportScoped;
+  const showDatasetPicker = !needsBothPickers && !isReportScoped;
+  const showReportPicker = !needsBothPickers && isReportScoped;
+  const showPairPicker = needsBothPickers;
 
   return (
     <div className={styles.root}>
@@ -526,6 +566,67 @@ export const PbiFixerPage: React.FC<PbiFixerPageProps> = ({
             ))}
           </Combobox>
         </Field>
+
+        {showPairPicker && (
+          <Field label="Semantic Model / Report" style={{ flex: "0 0 320px" }}>
+            <Combobox
+              key="pair-picker"
+              value={pairInput}
+              selectedOptions={selectedPair ? [pairKey(selectedPair)] : []}
+              placeholder={
+                !workspaceId
+                  ? "Pick a workspace first"
+                  : itemsLoading
+                  ? "Loading…"
+                  : pairItems.length
+                  ? "Select a semantic model or report"
+                  : "No semantic models or reports found"
+              }
+              onOptionSelect={(_, data) => {
+                const k = data.optionValue || "";
+                const found = pairItems.find((p) => pairKey(p) === k);
+                if (found) {
+                  setDatasetId(found.datasetId || "");
+                  setDatasetInput(found.datasetId ? found.name : "");
+                  setReportId(found.reportId || "");
+                  setReportInput(found.reportId ? found.name : "");
+                  setPairInput(found.name);
+                } else {
+                  setPairInput(data.optionText || "");
+                }
+              }}
+              onChange={(e) => setPairInput((e.target as HTMLInputElement).value)}
+              disabled={!workspaceId || itemsLoading}
+              freeform
+            >
+              {pairGroups.length === 1 && pairGroups[0].folder === ""
+                ? pairGroups[0].items.map((p) => (
+                    <Option key={pairKey(p)} value={pairKey(p)} text={p.name}>
+                      {p.name}
+                      {p.datasetId && p.reportId
+                        ? ""
+                        : p.datasetId
+                        ? " · model only"
+                        : " · report only"}
+                    </Option>
+                  ))
+                : pairGroups.map((g) => (
+                    <OptionGroup key={g.folder || "__root"} label={g.folder || "Root"}>
+                      {g.items.map((p) => (
+                        <Option key={pairKey(p)} value={pairKey(p)} text={p.name}>
+                          {p.name}
+                          {p.datasetId && p.reportId
+                            ? ""
+                            : p.datasetId
+                            ? " · model only"
+                            : " · report only"}
+                        </Option>
+                      ))}
+                    </OptionGroup>
+                  ))}
+            </Combobox>
+          </Field>
+        )}
 
         {showDatasetPicker && (
           <Field label="Semantic Model" style={{ flex: "0 0 260px" }}>

@@ -4,9 +4,9 @@
     "displayName": "Workload_Display_Name",
     "fullDisplayName": "Workload_Full_Display_Name",
     "description": "Workload_Description",
-    "favicon": "assets/images/briefcase.png",
+    "favicon": "assets/images/developerHub.png",
     "icon": {
-    "name": "assets/images/briefcase.png"
+    "name": "assets/images/developerHub.png"
     },
     "homePage": {
       "learningMaterials": [
@@ -30,7 +30,7 @@
             {
                 "title": "NewSection_AgentHub_Title",
                 "icon": {
-                  "name": "assets/images/briefcase.png"
+                  "name": "assets/images/developerHub.png"
                 },
                 "onClick": {
                   "action": "open.agentHub"

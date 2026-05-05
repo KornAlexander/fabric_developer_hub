@@ -98,6 +98,9 @@ Six P2 semantic-model fixers ported from `pbi_fixer/src/`. All are property-muta
 
 Frontend adds six `backendFixer({...})` entries; backend `pbi_fixer_handlers.py` adds six handlers + registry rows. No new API endpoints.
 
+### v0.52 — Merged Semantic Model / Report picker (May 2026)
+On pages that target either scope (Fixer, Sempy Runner, Script Runner) the connection bar now renders a **single** `Semantic Model / Report` picker instead of two separate dropdowns. Items are deduped by `<folderId>|<name>`, so a model and report sharing the same name in the same folder collapse into one option; selecting it sets `datasetId` AND `reportId` simultaneously. Items present on only one side are tagged `· model only` / `· report only` so the user can still target a single scope when needed. Pure UX change in `PbiFixerPage.tsx` — no backend / fixer registry changes.
+
 ## WS-F — Perspectives (v0.15)
 - UX: matrix grid with tri-state checkboxes, add / rename / delete perspective, dirty-change tracker, Apply switch + confirmation dialog.
 - Reads from TMDL semantic-model definition (`getSemanticModelDefinition`) — more robust than `INFO.PERSPECTIVES()` DAX (requires newer compat level, returned 400 on demo model).
