@@ -284,9 +284,18 @@ export const SempyRunnerPage: React.FC<PageProps> = ({
           </div>
 
           {/* ── Param inputs ─────────────────────────────────── */}
-          {fn.params.length > 0 ? (
+          {(() => {
+            // Hide params that are already auto-bound from the connection bar
+            // (workspace / dataset / report) — they would just duplicate the
+            // pickers above. Still render if the auto-bind is empty so the
+            // user can type a value when no connection is selected.
+            const visibleParams = fn.params.filter(p => {
+              const isConnectionBound = p.kind === "workspace" || p.kind === "dataset" || p.kind === "report";
+              return !(isConnectionBound && (autoValue(p) ?? "") !== "");
+            });
+            return visibleParams.length > 0 ? (
             <div className={styles.paramGrid}>
-              {fn.params.map(p => {
+              {visibleParams.map(p => {
                 const auto = autoValue(p);
                 const ov = overrides[p.name];
                 const effective = ov !== undefined ? ov : (auto ?? (p.default !== undefined ? String(p.default) : ""));
@@ -330,9 +339,12 @@ export const SempyRunnerPage: React.FC<PageProps> = ({
             </div>
           ) : (
             <div className={styles.desc}>
-              <em>No parameters — this function takes no arguments.</em>
+              <em>{fn.params.length === 0
+                ? "No parameters — this function takes no arguments."
+                : "All parameters are auto-bound from the connection bar above."}</em>
             </div>
-          )}
+          );
+          })()}
 
           {/* ── Code preview ─────────────────────────────────── */}
           <div className={styles.codeWrap}>

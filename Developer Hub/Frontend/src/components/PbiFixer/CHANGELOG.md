@@ -98,6 +98,9 @@ Six P2 semantic-model fixers ported from `pbi_fixer/src/`. All are property-muta
 
 Frontend adds six `backendFixer({...})` entries; backend `pbi_fixer_handlers.py` adds six handlers + registry rows. No new API endpoints.
 
+### v0.53 — Hide auto-bound Sempy params (May 2026)
+Sempy Runner param grid now hides any param whose `kind` is `workspace` / `dataset` / `report` when the connection bar already provides a value. They were just duplicating the picker above. Empty-state copy is now "All parameters are auto-bound from the connection bar above." when every param resolves to a connection-bar value. Pure UX change in `SempyRunnerPage.tsx` — generated Python is unchanged (auto-bind still flows through `valueFor`).
+
 ### v0.52 — Merged Semantic Model / Report picker (May 2026)
 On pages that target either scope (Fixer, Sempy Runner, Script Runner) the connection bar now renders a **single** `Semantic Model / Report` picker instead of two separate dropdowns. Items are deduped by `<folderId>|<name>`, so a model and report sharing the same name in the same folder collapse into one option; selecting it sets `datasetId` AND `reportId` simultaneously. Items present on only one side are tagged `· model only` / `· report only` so the user can still target a single scope when needed. Pure UX change in `PbiFixerPage.tsx` — no backend / fixer registry changes.
 
