@@ -22,7 +22,7 @@
 | WS-I | Delta Analyzer | ✅ shipped | v0.24 |
 | WS-J | Diagram (SVG canvas) | ✅ shipped | v0.19–v0.20 |
 | WS-K | Script Runner (Monaco) | ⬜ not started | — |
-| WS-L | About — **moved to AgentHub shell** (was Fixer page) | ⬜ not started | — |
+| WS-L | About — **moved to AgentHub shell** (was Fixer page) | ✅ shipped | (AgentHub footer) |
 | WS-M | Prototype | ✅ shipped | v0.16 |
 | WS-N | Integration sweep | 🟡 partial | v0.36–v0.37 |
 | WS-Q | Editable visual / page properties | ✅ shipped | v0.42–v0.43 |
@@ -45,10 +45,10 @@ Legend: ✅ shipped • 🟡 partial • ⬜ not started • 📋 proposed (open
 Tracked here so they're not lost between sessions. Several are AgentHub-shell scope, not just PBI Fixer — call them out and coordinate with the AgentHub workstream where noted.
 
 ### PBI Fixer — bugs
-- **B1. Empty Description on items.** Allow item creation / edit with an empty Description field (currently appears to require a value). Verify both create and update paths.
+- **B1. Empty Description on items.** Allow item creation / edit with an empty Description field. Backend / `ItemContext.createItem` already passes `description || ""`, so the empty path is supported in code — likely a UI validation in the create dialog. Verify in the actual create dialog (Fabric host or in-workload).
 - **B2. Placeholder below the Fixer.** Stray placeholder element renders below the Fixer panel — delete it.
 - **B3. Close button.** Test the close button in the Fixer view. If it does not actually close the surface (or behaves inconsistently with other AgentHub items), wire it up. If the button is non-functional and not needed, remove it instead.
-- **B4. AgentHub item persistence.** Re-verify persistence of the AgentHub item linked to the PBI Fixer — last check showed unstable state. Reproduce on reload + cross-session and confirm.
+- ~~**B4. AgentHub item persistence.**~~ — **closed.** Persistence shipped via WL-1 (manifest → `/agenthub-item-editor/:itemObjectId` route; `AGENTHUB_DATA_DIR` bind-mounted to `./Backend/.data`; `schema_version` field on `AgentHubMetadata`). See [Developer Hub PLAN.md WL-1 C1–C3, C8](../../../../PLAN.md#wl-1--research-findings--gap-analysis-april-24-2026). Final manual + Playwright validation tracked there as C4 / C5.
 
 ### AgentHub-shell — bugs (coordinate with WS-O / Lukasz)
 - **B5. GitHub sign-in greys out the hub.** When signing in with GitHub on a "create item" task in Developer Hub, the whole hub greys out and only recovers after a full page refresh. Reproduce the flow (create item → sign into GitHub → verify hub stays interactive). Likely a missing post-auth message handler or modal-overlay state that doesn't get cleared on the OAuth popup return.
@@ -76,27 +76,16 @@ Swap is a one-file commit (drop a new PNG, point `Product.json` at it, rebuild t
 
 Acceptance for whichever option is picked: replace `briefcase.png` (or add a new file and re-point `Product.json`), confirm the trust dialog + Fabric favicon + home-page tile all show the new glyph after `docker compose --profile prod build frontend` + recreate.
 
-### Move "About" out of PBI Fixer into the Developer Hub shell — **WS-L revised**
-The current plan has WS-L scoped as a Fixer-only About page. New requirement: **About belongs to the whole Developer Hub**, not the Fixer.
+### Move "About" out of PBI Fixer into the Developer Hub shell — **WS-L revised** ✅ shipped
 
-- **Move location:** bottom-left of the AgentHub sidebar, **above "Support"** (matches `.sidenav-footer-item` slot in `styles.scss`).
-- **Delete the About entry from the PBI Fixer nav** (`types/nav.ts` → drop `about` NavKey; `Others` count goes 11 → 10).
-- **Content plan:**
-  - Developer Hub authors: **Lukasz** (upstream maintainer) and **Alexander Korn** (PBI Fixer + extensions)
-  - Credit **Michael Kovalsky** for [`semantic-link-labs`](https://github.com/microsoft/semantic-link-labs) (the engine underneath the Fixer)
-  - Build/version info — pulled from `utils/version.ts` for the Fixer + a hub-level version
-  - Links: GitHub repo, semantic-link-labs repo, IBCS website (since IBCS is a shipped feature), notebook origin (`PBI-Fixer/pbi_fixer/`)
-  - Short license / acknowledgements blurb
-- **Owns (revised):**
-  - `Developer Hub/Frontend/src/components/agenthub/AboutPage.tsx` — **NEW** (hub-level, not Fixer-level)
-  - `Developer Hub/Frontend/src/components/agenthub/AgentHubLayout.tsx` — add About to footer slot above Support
-  - `Developer Hub/Frontend/src/components/PbiFixer/types/nav.ts` — remove `about` NavKey
-  - `Developer Hub/Frontend/src/components/PbiFixer/components/pages/AboutPage.tsx` — **DELETE**
-- **Acceptance:**
-  - [ ] About link appears in Developer Hub left sidebar above Support
-  - [ ] About page lists Lukasz + Alexander as authors, credits Michael Kovalsky for semantic-link-labs
-  - [ ] PBI Fixer "Others" no longer shows About; tab count drops to 10
-  - [ ] Hub version pulled from a single source of truth
+**Status:** Done. About lives in the AgentHub shell footer above Support; Fixer-level page deleted; `about` NavKey removed from `types/nav.tsx`.
+
+Files in place:
+- [`Frontend/src/components/AgentHub/AboutPage.tsx`](../../AgentHub/AboutPage.tsx)
+- [`Frontend/src/components/AgentHub/AgentHubLayout.tsx`](../../AgentHub/AgentHubLayout.tsx) — `sidenav-footer-item` opens About via `openTab({ id: "about", kind: "about", … })`
+- `Frontend/src/components/PbiFixer/components/pages/AboutPage.tsx` — deleted
+
+Follow-up (low-prio): confirm About content lists Lukasz + Alexander as authors and credits Michael Kovalsky for `semantic-link-labs`; confirm a single source-of-truth hub version (workload version constant lives in topbar — see WL-1 C8).
 
 ### WS-O design alignment — **bumped priority** based on user feedback
 Visual alignment between Fixer and AgentHub is now an active complaint, not a "nice to have". Focus the first WS-O slice on the cheapest wins:
@@ -375,16 +364,15 @@ Monaco editor + Run button → backend eval endpoint. **Full-power**, feature-fl
 
 ---
 
-### WS-L — About page (revised — Developer Hub shell, not Fixer)
-Moved out of the PBI Fixer into the AgentHub shell footer (above Support). See **Open bugs / UX tasks → "Move About out of PBI Fixer"** above for full scope, content plan, owns, and acceptance criteria.
-
-**Dependencies:** Coordinate with the AgentHub shell maintainer (Lukasz) — touches `AgentHubLayout.tsx` + `styles.scss` footer slot.
+### WS-L — About page (revised — Developer Hub shell, not Fixer) — ✅ shipped
+About lives in the AgentHub shell footer above Support (`AboutPage.tsx` + `AgentHubLayout.tsx` `sidenav-footer-item`). Fixer-level page deleted, `about` NavKey removed from `types/nav.tsx`. Content polish (authors / credits / single-source hub version) tracked as low-prio follow-up in the section above.
 
 ---
 
 ### WS-N — Integration sweep (remaining work)
 - [ ] Install Monaco shared deps for WS-K (when WS-K starts)
 - [ ] Final smoke pass after each integration batch
+- [x] LLM-backed translation propose endpoint (replaces glossary stub) — `Backend/src/api/agenthub_controller.py` (`_llm_translate_batch` + `pbi_fixer_translations_propose`); user-supplied `glossary` forwarded as preferred terminology, batched single Copilot call per culture, JSON response, fallback to source on failure. Frontend payload shape unchanged.
 
 ---
 

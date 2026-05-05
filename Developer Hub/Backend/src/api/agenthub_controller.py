@@ -809,97 +809,100 @@ class TranslationProposeResponse(BaseModel):
     items: list[TranslationProposalItem]
 
 
-# A tiny built-in glossary keeps propose output deterministic for tests
-# and offline dev. Real LLM-backed translation is deferred to WS-N; the
-# endpoint shape is stable so the client doesn't need to change.
-_BUILTIN_GLOSSARY: dict[str, dict[str, str]] = {
-    "de-DE": {
-        "sales": "Umsatz", "revenue": "Umsatz", "product": "Produkt",
-        "products": "Produkte", "customer": "Kunde", "customers": "Kunden",
-        "order": "Bestellung", "orders": "Bestellungen", "date": "Datum",
-        "amount": "Betrag", "total": "Summe", "quantity": "Menge",
-        "name": "Name", "category": "Kategorie", "region": "Region",
-        "country": "Land", "city": "Stadt", "year": "Jahr",
-        "month": "Monat", "day": "Tag", "price": "Preis", "cost": "Kosten",
-        "profit": "Gewinn", "store": "Filiale", "employee": "Mitarbeiter",
-    },
-    "fr-FR": {
-        "sales": "Ventes", "revenue": "Chiffre d'affaires", "product": "Produit",
-        "products": "Produits", "customer": "Client", "customers": "Clients",
-        "order": "Commande", "orders": "Commandes", "date": "Date",
-        "amount": "Montant", "total": "Total", "quantity": "Quantité",
-        "name": "Nom", "category": "Catégorie", "region": "Région",
-        "country": "Pays", "city": "Ville", "year": "Année",
-        "month": "Mois", "day": "Jour", "price": "Prix", "cost": "Coût",
-        "profit": "Bénéfice", "store": "Magasin", "employee": "Employé",
-    },
-    "es-ES": {
-        "sales": "Ventas", "revenue": "Ingresos", "product": "Producto",
-        "products": "Productos", "customer": "Cliente", "customers": "Clientes",
-        "order": "Pedido", "orders": "Pedidos", "date": "Fecha",
-        "amount": "Importe", "total": "Total", "quantity": "Cantidad",
-        "name": "Nombre", "category": "Categoría", "region": "Región",
-        "country": "País", "city": "Ciudad", "year": "Año",
-        "month": "Mes", "day": "Día", "price": "Precio", "cost": "Coste",
-        "profit": "Beneficio", "store": "Tienda", "employee": "Empleado",
-    },
-    "ja-JP": {
-        "sales": "売上", "revenue": "収益", "product": "製品",
-        "products": "製品", "customer": "顧客", "customers": "顧客",
-        "order": "注文", "orders": "注文", "date": "日付",
-        "amount": "金額", "total": "合計", "quantity": "数量",
-        "name": "名前", "category": "カテゴリ", "region": "地域",
-        "country": "国", "city": "市", "year": "年",
-        "month": "月", "day": "日", "price": "価格", "cost": "原価",
-        "profit": "利益", "store": "店舗", "employee": "従業員",
-        "segment": "セグメント", "state": "州", "province": "県",
-        "discount": "割引", "currency": "通貨", "tax": "税",
-        "id": "ID", "code": "コード", "type": "種類", "status": "状態",
-        "sum": "合計", "average": "平均", "count": "件数", "min": "最小",
-        "max": "最大", "key": "キー", "value": "値", "description": "説明",
-        "address": "住所", "phone": "電話", "email": "メール",
-        "supplier": "仕入先", "vendor": "ベンダー", "invoice": "請求書",
-        "shipment": "出荷", "delivery": "配送", "warehouse": "倉庫",
-        "stock": "在庫", "inventory": "在庫", "currency": "通貨",
-        "department": "部門", "manager": "管理者", "title": "役職",
-    },
-}
+# LLM-backed translation (WS-N, formerly WS-G deferred path).
+#
+# Captions are sent to GitHub Copilot's chat-completions endpoint in a
+# single batch per propose call. The model is instructed to return a
+# JSON array of translations, same length and order as the input. The
+# user-supplied glossary (if any) is injected into the system prompt
+# as preferred terminology. On any failure (missing token, malformed
+# JSON, length mismatch) we fall back to the source caption so the
+# review grid still renders something the user can edit.
+
+# Cheap and fast — translation is short, deterministic-leaning text.
+_TRANSLATE_MODEL = "gpt-4o-mini"
 
 
-def _translate_word(word: str, culture: str, glossary: dict[str, str] | None) -> str:
-    """Translate a single word using the user-supplied glossary first,
-    then the built-in glossary. Falls back to the original word. Case
-    sensitivity is preserved on the first character."""
-    if not word:
-        return word
-    key = word.lower()
-    # User-supplied glossary takes priority (already in target culture).
-    if glossary and key in {k.lower() for k in glossary.keys()}:
-        # Case-insensitive lookup
-        for gk, gv in glossary.items():
-            if gk.lower() == key:
-                translated = gv
-                break
-        else:
-            translated = word
-    else:
-        translated = _BUILTIN_GLOSSARY.get(culture, {}).get(key, word)
-    # Preserve leading capitalization
-    if word[:1].isupper():
-        translated = translated[:1].upper() + translated[1:]
-    return translated
+async def _llm_translate_batch(
+    captions: list[str],
+    culture: str,
+    glossary: dict[str, str] | None,
+    copilot_token: str,
+) -> list[str]:
+    """Translate a batch of captions to ``culture`` via Copilot chat.
 
+    Returns a list of translated strings, same length / order as
+    ``captions``. Falls back to the original caption for any item the
+    model fails to translate cleanly.
+    """
+    if not captions:
+        return []
 
-def _translate_caption(caption: str, culture: str, glossary: dict[str, str] | None) -> str:
-    """Split caption into tokens (keeping spaces / non-letter runs) and
-    translate each word via the glossary chain."""
-    import re
-    # Split on word boundaries but preserve separators.
-    parts = re.split(r"(\W+)", caption)
-    return "".join(
-        _translate_word(p, culture, glossary) if p.isalpha() else p
-        for p in parts
+    glossary_lines = ""
+    if glossary:
+        # Cap size — the prompt should stay well under context.
+        items = list(glossary.items())[:200]
+        glossary_lines = (
+            "\nPreferred terminology (use these exact target translations "
+            "whenever the source word matches, case-insensitive):\n"
+            + "\n".join(f"  {k} -> {v}" for k, v in items)
+        )
+
+    system = (
+        "You translate Power BI / Fabric semantic-model captions "
+        f"into culture '{culture}'. "
+        "Translate each input string idiomatically as it would appear "
+        "in a business intelligence report header, measure name, table "
+        "name, or column name. Keep proper nouns, acronyms, product "
+        "names, and brand names unchanged. Preserve casing style "
+        "(Title Case stays Title Case, ALL CAPS stays ALL CAPS, "
+        "snake_case stays snake_case). Do not add quotes, punctuation, "
+        "or commentary. Output ONLY a JSON object of the exact shape "
+        '{"translations": ["...", "..."]} with the same number of '
+        "items, in the same order, as the input list."
+        + glossary_lines
     )
+    user = json.dumps({"culture": culture, "sources": captions}, ensure_ascii=False)
+
+    body = {
+        "model": _TRANSLATE_MODEL,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        "temperature": 0.2,
+        "response_format": {"type": "json_object"},
+        "stream": False,
+    }
+
+    try:
+        data = await github_chat_controller._call_copilot_api(copilot_token, body)
+        content = (
+            data.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+        )
+        parsed = json.loads(content) if content else {}
+        translations = parsed.get("translations") if isinstance(parsed, dict) else None
+        if not isinstance(translations, list) or len(translations) != len(captions):
+            logger.warning(
+                "LLM translation returned unexpected shape (got %d items, expected %d)",
+                len(translations) if isinstance(translations, list) else -1,
+                len(captions),
+            )
+            return list(captions)
+        return [
+            (str(t) if t is not None and str(t).strip() else captions[i])
+            for i, t in enumerate(translations)
+        ]
+    except HTTPException:
+        # _call_copilot_api raises HTTPException on non-200 — surface
+        # as a 502 to the caller so the review grid can show "translation
+        # service unavailable" instead of silently passing source through.
+        raise
+    except Exception as exc:
+        logger.warning("LLM translation failed, falling back to source: %s", exc)
+        return list(captions)
 
 
 @router.post("/pbi-fixer/translations/propose", response_model=TranslationProposeResponse)
@@ -910,10 +913,13 @@ async def pbi_fixer_translations_propose(
 ):
     """Generate a translation proposal for the given source items.
 
-    For this pass, translation is done via a small deterministic
-    glossary (see ``_BUILTIN_GLOSSARY``). The LLM-backed path described
-    in WS-G will be wired later; the response shape is stable so the
-    frontend review grid doesn't change when that lands.
+    WS-N (formerly WS-G deferred): translation now goes through GitHub
+    Copilot's chat-completions API in a single batched call per culture.
+    The user-supplied ``glossary`` is forwarded to the model as
+    preferred terminology so customer-specific business terms (e.g.
+    "Auftrag" instead of "Bestellung") win over the model's default
+    rendering. The response shape is unchanged so the frontend review
+    grid keeps working without modification.
     """
     user_id = _user_key_from_context(ctx)
     _rate_limit(user_id, "pbi_fixer_translations_propose")
@@ -928,16 +934,21 @@ async def pbi_fixer_translations_propose(
     culture = payload.targetCultures[0]
     glossary = payload.glossary or {}
 
-    items: list[TranslationProposalItem] = []
-    for src in payload.sourceItems:
-        proposed = _translate_caption(src.sourceCaption, culture, glossary)
-        items.append(TranslationProposalItem(
+    copilot_token = await _copilot_token(request)
+
+    captions = [src.sourceCaption for src in payload.sourceItems]
+    translations = await _llm_translate_batch(captions, culture, glossary, copilot_token)
+
+    items = [
+        TranslationProposalItem(
             objectType=src.objectType,
             objectPath=src.objectPath,
             sourceCaption=src.sourceCaption,
             existingCaption=src.existingCaption,
-            proposedCaption=proposed,
-        ))
+            proposedCaption=translations[i],
+        )
+        for i, src in enumerate(payload.sourceItems)
+    ]
 
     return TranslationProposeResponse(culture=culture, items=items)
 
