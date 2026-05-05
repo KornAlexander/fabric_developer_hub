@@ -289,6 +289,15 @@ export const ModelExplorer: React.FC<ModelExplorerProps> = ({
     return m?.expression ?? previewText;
   }, [selectedMeasure, modelData, pendingMeasureEdits, previewText]);
 
+  // v0.77 — partitions render their (potentially long) M expression in the
+  // editable Properties textarea below; hide the top read-only Expression
+  // panel for them so the script isn't shown twice and truncated up top.
+  const selectedNodeType = useMemo(() => {
+    if (!selectedKey) return null;
+    return selectedKey.split(":")[0];
+  }, [selectedKey]);
+  const showPreviewPanel = selectedNodeType !== "partition";
+
   // Build tree
   const treeResult = useMemo<TreeBuildResult>(() => {
     if (!modelData) return { options: [], keyMap: {} };
@@ -1311,6 +1320,7 @@ export const ModelExplorer: React.FC<ModelExplorerProps> = ({
         </div>
 
         <div className={styles.rightPanel}>
+          {showPreviewPanel && (
           <div className={styles.previewPanel}>
             <div className={styles.sectionLabel}>Expression</div>
             {daxRef && (
@@ -1345,6 +1355,7 @@ export const ModelExplorer: React.FC<ModelExplorerProps> = ({
               onChange={selectedMeasure ? (_, d) => setMeasureEdit(selectedMeasure.table, selectedMeasure.measure, "expression", d.value) : undefined}
             />
           </div>
+          )}
 
           <div className={styles.propertiesPanel}>
             <div className={styles.sectionLabel}>Properties</div>
