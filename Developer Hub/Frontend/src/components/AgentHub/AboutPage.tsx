@@ -7,7 +7,7 @@
 //
 // Content owners:
 //   • Lukasz Obst    — creator / maintainer
-//   • Alexander Korn — contributor (Microsoft, Solution Engineer DP)
+//   • Alexander Korn — creator / maintainer
 // Credits:
 //   • Michael Kovalsky — `semantic-link-labs` (the Python library
 //     several PBI Fixer features port from / interoperate with).
@@ -141,7 +141,7 @@ export const AboutPage: React.FC<AboutPageProps> = () => {
             </li>
             <li>
               <Body1Strong>Alexander Korn</Body1Strong>
-              <Body1> — creator &amp; maintainer; Solution Engineer Data Platform, Microsoft.</Body1>{" "}
+              <Body1> — creator &amp; maintainer.</Body1>{" "}
               <Link
                 href="https://www.linkedin.com/in/alexanderkorn/"
                 target="_blank"
