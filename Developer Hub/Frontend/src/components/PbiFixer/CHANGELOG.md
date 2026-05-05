@@ -98,6 +98,9 @@ Six P2 semantic-model fixers ported from `pbi_fixer/src/`. All are property-muta
 
 Frontend adds six `backendFixer({...})` entries; backend `pbi_fixer_handlers.py` adds six handlers + registry rows. No new API endpoints.
 
+### v0.55 — WS-O Decision #6: URL-driven nav, drop sessionStorage (May 2026)
+Closing the last open WS-O item. The PBI Fixer sub-page selection (Model / Report / 13 stubs) is now driven exclusively by the URL `?nav=` query — the legacy `sessionStorage["pbiFixer.activeNav"]` write/read is gone in both `PbiFixerPage.tsx` and `AgentHubLayout.tsx`. A `popstate` listener in `PbiFixerPage` syncs `activeNav` to the URL on browser back/forward so history navigation works as expected. Deep-links like `?nav=delta` continue to land directly on the target page on first load. The `pbiFixer.expandedGroups` sessionStorage entry is intentionally kept (per Decision #6 it is not part of activeNav state). All other WS-O decisions (#1 connection bar warm bg, #2 shared sub-nav classes via `pbifixer-subnav-item` in `AgentHubLayout`, #3 no topbar right cluster, #7 no sidebar footer, #9 120 ms crossfade, #10 `ready: false` filter) were already shipped across earlier versions.
+
 ### v0.54 — User-facing 'dataset' → 'semantic model' (May 2026)
 All user-visible strings now use the official term "semantic model" instead of the legacy "dataset". Changes: (a) `ModelExplorer.tsx` error "Workspace and dataset name required" → "Workspace and semantic model required". (b) `sempyCatalog.ts` description "reports, datasets, lakehouses" → "reports, semantic models, lakehouses". (c) `SempyRunnerPage.tsx` field label maps `kind: "dataset"` to display text `(semantic model)`. Internal Python kwarg names (`dataset=...` in generated sempy code) and `kind: "dataset"` discriminator stay — they are the literal sempy.fabric API surface and cannot change.
 

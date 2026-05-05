@@ -44,8 +44,6 @@ import * as api from "../../../controller/AgentHubApi";
 import { getFabricTokenCached } from "../../../controller/AgentHubController";
 import { PBI_FIXER_VERSION } from "../utils/version";
 
-const STORAGE_NAV_KEY = "pbiFixer.activeNav";
-
 const useStyles = makeStyles({
   root: {
     display: "flex",
@@ -171,8 +169,10 @@ export interface PbiFixerPageProps {
 }
 
 function readNavKey(): NavKey {
-  // 1) URL ``?nav=`` query takes precedence so each editor tab can
-  //    pin its own PBI Fixer sub-page (Model / Report / …).
+  // URL ``?nav=`` query is the single source of truth so each editor
+  // tab pins its own PBI Fixer sub-page (Model / Report / …) and
+  // browser back/forward navigates between them. WS-O Decision #6
+  // dropped the legacy ``sessionStorage["pbiFixer.activeNav"]`` fallback.
   try {
     if (typeof window !== "undefined") {
       const sp = new URLSearchParams(window.location.search);
@@ -186,13 +186,7 @@ function readNavKey(): NavKey {
       }
     }
   } catch { /* ignore */ }
-  try {
-    const raw = sessionStorage.getItem(STORAGE_NAV_KEY);
-    if (!raw) return DEFAULT_NAV_KEY;
-    return raw as NavKey;
-  } catch {
-    return DEFAULT_NAV_KEY;
-  }
+  return DEFAULT_NAV_KEY;
 }
 
 export const PbiFixerPage: React.FC<PbiFixerPageProps> = ({
@@ -223,10 +217,15 @@ export const PbiFixerPage: React.FC<PbiFixerPageProps> = ({
 
   const githubToken = sessionStorage.getItem("github_token") || "";
 
-  // Persist nav state.
+  // WS-O #6: URL ``?nav=`` is the single source of truth. Listen for
+  // browser back/forward (popstate) so navigating history updates the
+  // active sub-page. The host shell still updates the URL on sub-nav
+  // clicks (via the Fabric tabs API), and we react to that here too.
   useEffect(() => {
-    try { sessionStorage.setItem(STORAGE_NAV_KEY, activeNav); } catch { /* ignore */ }
-  }, [activeNav]);
+    const sync = () => setActiveNav(readNavKey());
+    window.addEventListener("popstate", sync);
+    return () => window.removeEventListener("popstate", sync);
+  }, []);
 
   // Note: each PBI Fixer tab is independent now (one tab per nav key).
   // The legacy ``pbifixer:navchange`` cross-tab event is intentionally

@@ -1009,16 +1009,11 @@ function AgentHubShell({
 
     // PBI Fixer sub-nav state — the Power BI Fixer sidebar row expands
     // into a flat tree of 14 pages (Model, Report, Others > 12 stubs).
-    // We keep the selection + expand state here so navigation from the
-    // outer sidebar drives the PBI Fixer page rendering via a window
-    // event + sessionStorage handshake. `PbiFixerPage` listens to both.
-    const [pbiFixerNavKey, setPbiFixerNavKey] = useState<PbiFixerNavKey>(() => {
-        try {
-            const raw = sessionStorage.getItem("pbiFixer.activeNav");
-            if (raw) return raw as PbiFixerNavKey;
-        } catch { /* ignore */ }
-        return PBIFIXER_DEFAULT_NAV;
-    });
+    // We keep the selection here so the outer sidebar can show which
+    // sub-page is active. WS-O Decision #6: URL ``?nav=`` is the single
+    // source of truth (no sessionStorage fallback) so deep-links work
+    // and browser back/forward navigates between Fixer pages.
+    const [pbiFixerNavKey, setPbiFixerNavKey] = useState<PbiFixerNavKey>(PBIFIXER_DEFAULT_NAV);
     // v0.34: themed sub-groups (Model tools / Report tools / Automation)
     // replace the single catch-all "Others" branch. State is a per-group
     // boolean map persisted as JSON in sessionStorage.
@@ -1113,7 +1108,6 @@ function AgentHubShell({
      *  reads the initial activeNav from the URL query so each tab
      *  remembers its own page independently. */
     const handlePbiFixerSubNav = useCallback((key: PbiFixerNavKey) => {
-        try { sessionStorage.setItem("pbiFixer.activeNav", key); } catch { /* ignore */ }
         setPbiFixerNavKey(key);
         const navItem = PBIFIXER_NAV_ITEMS.find((i) => i.key === key);
         const label = navItem?.label ?? key;

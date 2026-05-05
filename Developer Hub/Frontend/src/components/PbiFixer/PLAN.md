@@ -26,7 +26,7 @@
 | WS-M | Prototype | ✅ shipped | v0.16 |
 | WS-N | Integration sweep | 🟡 partial | v0.36–v0.37 |
 | WS-Q | Editable visual / page properties | ✅ shipped | v0.42–v0.43 |
-| WS-O | Design alignment with AgentHub | 📋 proposed | TBD |
+| WS-O | Design alignment with AgentHub | ✅ shipped | v0.55 |
 
 Legend: ✅ shipped • 🟡 partial • ⬜ not started • 📋 proposed (open questions)
 
