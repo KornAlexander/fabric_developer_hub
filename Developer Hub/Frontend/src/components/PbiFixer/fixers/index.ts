@@ -222,6 +222,25 @@ export const fixWholeNumberFormat = backendFixer({
   scope: "sm",
 });
 
+// P1 batch (v0.47-v0.49)
+export const fixAvoidAdding0 = backendFixer({
+  id: "Fix_AvoidAdding0",
+  title: "Strip leading '0+' from measure expressions",
+  scope: "sm",
+});
+
+export const addLastRefreshTable = backendFixer({
+  id: "Add_LastRefreshTable",
+  title: "Add a 'Last Refresh' table + measure (skips if any 'refresh' table exists)",
+  scope: "sm",
+});
+
+export const addMeasuresFromColumns = backendFixer({
+  id: "Add_MeasuresFromColumns",
+  title: "Create measures from columns with summarizeBy ≠ none and hide the source columns",
+  scope: "sm",
+});
+
 export const FIXERS: readonly Fixer[] = Object.freeze([
   // Report (backend)
   fixPieChart,
@@ -239,6 +258,9 @@ export const FIXERS: readonly Fixer[] = Object.freeze([
   fixMeasureFormat,
   fixPercentageFormat,
   fixWholeNumberFormat,
+  fixAvoidAdding0,
+  addLastRefreshTable,
+  addMeasuresFromColumns,
 ]);
 
 export function findFixerForBpaRule(ruleId: string): Fixer | undefined {

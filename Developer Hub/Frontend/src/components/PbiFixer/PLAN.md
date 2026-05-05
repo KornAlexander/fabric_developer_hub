@@ -573,8 +573,8 @@ Update the WS-O Owns + Acceptance lists above to reflect these decisions:
 - **Acceptance adds:**
   - [ ] Deep-link `#/agent-hub/pbifixer/<navKey>` routes correctly on first load
   - [ ] Browser back/forward navigates between Fixer pages
-  - [ ] All visible text uses AgentHub blue palette (no rogue brand colors leaking)
-  - [ ] Nav items with `ready: false` do not render in the sidebar
+  - [ ] All visible text uses AgentHub blue palette (no rogue brand colors leaking) — partial: hard-coded `#555` `propLabel` text in `ModelExplorer.tsx` + `ReportExplorer.tsx` swapped for `tokens.colorNeutralForeground2` (May 5 2026); full `#005faa` audit across status colors / link colors still pending
+  - [x] Nav items with `ready: false` do not render in the sidebar — `NAV_ITEMS` in `types/nav.tsx` now exports the filtered subset; full registry kept under `ALL_NAV_ITEMS_REGISTRY` so the `NavKey` union and any deep-link logic still resolve `scriptRunner` (May 5 2026)
 - **Acceptance drops:**
   - Topbar right cluster, sidebar footer, dark-mode parity, lazy-loading, EditorGroups integration.
 

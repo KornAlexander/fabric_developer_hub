@@ -132,7 +132,8 @@ const useStyles = makeStyles({
   },
   propLabel: {
     fontWeight: "600",
-    color: "#555",
+    // WS-O #8: align with AgentHub neutral foreground tokens — was "#555"
+    color: tokens.colorNeutralForeground2,
     whiteSpace: "nowrap",
     minWidth: "120px",
     paddingRight: "10px",

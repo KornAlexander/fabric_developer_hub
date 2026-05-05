@@ -503,6 +503,378 @@ def fix_hide_foreign_keys(parts: list[Part], scan_only: bool) -> HandlerResult:
     return res
 
 
+# ---------------------------------------------------------------------------
+# Fix_AvoidAdding0 (v0.47)
+# ---------------------------------------------------------------------------
+# Strip a leading "0+" / "0 +" / "0 + " prefix from measure DAX expressions.
+# Original Python: pbi_fixer/src/_Fix_AvoidAdding0.py.
+#
+# Measure expressions in TMDL come in two shapes:
+#   1) inline:   measure 'X' = 0 + COUNTROWS(Foo)
+#   2) block:    measure 'X' =
+#                    0 + COUNTROWS(Foo)
+#                    formatString: #,0
+#
+# For the block form the expression body is the run of indented lines
+# that come after the header up to the first property line (matching
+# ``<indent><word>:`` like ``formatString:``) or the next blank line.
+# The original `0 +` is almost always on a single line — we only need
+# to rewrite the first non-empty line of the body.
+
+_MEASURE_HEADER_LINE = re.compile(
+    r"^([\t ]*)measure\s+(['\"]?)(.+?)\2(\s*=\s*)(.*)$"
+)
+
+
+def _strip_leading_zero_plus(expr: str) -> tuple[str, bool]:
+    """If ``expr`` starts with optional whitespace then ``0`` + ``+`` (any
+    spacing), strip that prefix. Returns ``(new_expr, changed)``."""
+    m = re.match(r"^\s*0\s*\+\s*", expr)
+    if not m:
+        return expr, False
+    return expr[m.end():], True
+
+
+def fix_avoid_adding_zero(parts: list[Part], scan_only: bool) -> HandlerResult:
+    def tx(tname: str, text: str):
+        lines = text.split("\n")
+        findings: list[Finding] = []
+        i = 0
+        # Walk forward — we only ever rewrite a single line per measure
+        # so indices stay stable.
+        while i < len(lines):
+            m = _MEASURE_HEADER_LINE.match(lines[i])
+            if not m:
+                i += 1
+                continue
+            mname = m.group(3)
+            if len(mname) >= 2 and mname[0] == "'" and mname[-1] == "'":
+                mname = mname[1:-1].replace("''", "'")
+            inline_expr = m.group(5)
+            # Inline expression on the header line itself.
+            if inline_expr.strip():
+                new_expr, changed = _strip_leading_zero_plus(inline_expr)
+                if changed:
+                    findings.append(Finding(
+                        object_path=f"'{tname}'[{mname}]",
+                        detail="strip leading '0+' from expression",
+                        before=inline_expr.strip(),
+                        after=new_expr.strip(),
+                    ))
+                    lines[i] = (
+                        m.group(1) + "measure " + m.group(2) + m.group(3) + m.group(2)
+                        + m.group(4) + new_expr
+                    )
+                i += 1
+                continue
+            # Block form: scan for the first non-empty body line that
+            # is NOT a property (``key:``).
+            j = i + 1
+            while j < len(lines):
+                body = lines[j]
+                if not body.strip():
+                    j += 1
+                    continue
+                # Property line ends the expression body.
+                if re.match(r"^[\t ]+\w+:\s", body):
+                    break
+                # Annotation / sub-block keyword lines also end it.
+                if _KEYWORD_PROPS.match(body.strip()):
+                    break
+                # First real expression line — try to strip the prefix.
+                indent = body[: len(body) - len(body.lstrip())]
+                stripped, changed = _strip_leading_zero_plus(body[len(indent):])
+                if changed:
+                    findings.append(Finding(
+                        object_path=f"'{tname}'[{mname}]",
+                        detail="strip leading '0+' from expression",
+                        before=body.strip(),
+                        after=stripped.strip(),
+                    ))
+                    lines[j] = indent + stripped
+                break
+            i = j + 1 if j > i else i + 1
+        return "\n".join(lines), findings, []
+    return _apply_per_table(parts, scan_only, tx)
+
+
+# ---------------------------------------------------------------------------
+# Add_LastRefreshTable (v0.48)
+# ---------------------------------------------------------------------------
+# Add a hidden "Last Refresh" table with one M-partition column + a
+# user-facing measure that surfaces the timestamp of the last refresh.
+# Original Python: pbi_fixer/src/_Add_Table_LastRefresh.py.
+#
+# Skips creation if any existing table name contains "refresh"
+# (case-insensitive). When creating, the measure is placed in the first
+# table whose name contains "measure" if one exists, otherwise on the
+# new "Last Refresh" table itself.
+
+_LR_TABLE_NAME = "Last Refresh"
+_LR_MEASURE_NAME = "Last Refresh Measure"
+_LR_MEASURE_DAX = "\"Last Refresh: \" & MAX('Last Refresh'[Last Refreshes])"
+
+_LR_TABLE_TMDL = (
+    "table 'Last Refresh'\n"
+    "\tisHidden\n"
+    "\n"
+    "\tcolumn 'Last Refreshes'\n"
+    "\t\tdataType: string\n"
+    "\t\tsummarizeBy: none\n"
+    "\t\tsourceColumn: Last Refreshes\n"
+    "\n"
+    "\tpartition 'Last Refresh' = m\n"
+    "\t\tmode: import\n"
+    "\t\tsource = ```\n"
+    "\t\t\tlet\n"
+    "\t\t\t    #\"Today\" = #table({\"Last Refreshes\"}, "
+    "{{DateTime.From(DateTime.LocalNow())}})\n"
+    "\t\t\tin\n"
+    "\t\t\t    #\"Today\"\n"
+    "\t\t\t```\n"
+)
+
+_LR_MEASURE_TMDL_BLOCK = (
+    "\n"
+    "\tmeasure '{name}' = {dax}\n"
+    "\t\tformatString: General\n"
+    "\t\tdisplayFolder: Meta\n"
+)
+
+
+def _find_refresh_tables(parts: list[Part]) -> list[str]:
+    """Return existing table names whose name contains 'refresh'."""
+    found: list[str] = []
+    for p in parts:
+        if not _TABLE_PART.match(p.get("path", "")):
+            continue
+        tname = _table_name(p)
+        if "refresh" in tname.lower():
+            found.append(tname)
+    return found
+
+
+def _find_measure_table(parts: list[Part]) -> Part | None:
+    """Return the first table part whose table name contains 'measure'."""
+    for p in parts:
+        if not _TABLE_PART.match(p.get("path", "")):
+            continue
+        if "measure" in _table_name(p).lower():
+            return p
+    return None
+
+
+def add_last_refresh_table(parts: list[Part], scan_only: bool) -> HandlerResult:
+    new_parts = [{**p} for p in parts]
+    findings: list[Finding] = []
+    log: list[str] = []
+
+    refresh = _find_refresh_tables(new_parts)
+    if refresh:
+        log.append(
+            f"Refresh table already exists ({', '.join(refresh)}) — nothing to add."
+        )
+        return HandlerResult(parts=new_parts, findings=findings, log=log)
+
+    findings.append(Finding(
+        object_path=f"'{_LR_TABLE_NAME}'",
+        detail="add hidden table + 'Last Refreshes' column + M-partition",
+        before="(missing)",
+        after=f"table '{_LR_TABLE_NAME}'",
+    ))
+
+    measure_host_part = _find_measure_table(new_parts)
+    if measure_host_part is not None:
+        host_name = _table_name(measure_host_part)
+        findings.append(Finding(
+            object_path=f"'{host_name}'[{_LR_MEASURE_NAME}]",
+            detail=f"add measure to existing '{host_name}' table",
+            before="(missing)",
+            after=f"measure '{_LR_MEASURE_NAME}' = {_LR_MEASURE_DAX}",
+        ))
+    else:
+        findings.append(Finding(
+            object_path=f"'{_LR_TABLE_NAME}'[{_LR_MEASURE_NAME}]",
+            detail="no measure table found — placing measure on Last Refresh",
+            before="(missing)",
+            after=f"measure '{_LR_MEASURE_NAME}' = {_LR_MEASURE_DAX}",
+        ))
+
+    if scan_only:
+        return HandlerResult(parts=new_parts, findings=findings, log=log)
+
+    # Create the new table part.
+    table_body = _LR_TABLE_TMDL
+    if measure_host_part is None:
+        # Append the measure to the same table.
+        table_body = table_body + _LR_MEASURE_TMDL_BLOCK.format(
+            name=_LR_MEASURE_NAME, dax=_LR_MEASURE_DAX,
+        )
+    new_parts.append({
+        "path": f"definition/tables/{_LR_TABLE_NAME}.tmdl",
+        "payload": _encode(table_body),
+        "payloadType": "InlineBase64",
+    })
+
+    # If a measure-host table exists, append the measure to it.
+    if measure_host_part is not None:
+        try:
+            host_text = _decode(measure_host_part)
+        except Exception:
+            host_text = ""
+        addition = _LR_MEASURE_TMDL_BLOCK.format(
+            name=_LR_MEASURE_NAME, dax=_LR_MEASURE_DAX,
+        )
+        # Make sure we end on a newline before appending.
+        if host_text and not host_text.endswith("\n"):
+            host_text += "\n"
+        new_text = host_text + addition
+        # Find the host part inside ``new_parts`` (it's the same object
+        # because we did a shallow copy of every part).
+        for np in new_parts:
+            if np.get("path") == measure_host_part.get("path"):
+                np["payload"] = _encode(new_text)
+                np["payloadType"] = np.get("payloadType") or "InlineBase64"
+                break
+
+    return HandlerResult(parts=new_parts, findings=findings, log=log)
+
+
+# ---------------------------------------------------------------------------
+# Add_MeasuresFromColumns (v0.49)
+# ---------------------------------------------------------------------------
+# For every column whose ``summarizeBy`` is set to a real aggregation
+# (sum / count / min / max / average / distinctCount), create a measure
+# that wraps the aggregation and hide the source column.
+#
+# Original Python: pbi_fixer/src/_Add_MeasuresFromColumns.py.
+
+_AGG_BY_SUMMARIZEBY = {
+    "sum": "SUM",
+    "count": "COUNT",
+    "min": "MIN",
+    "max": "MAX",
+    "average": "AVERAGE",
+    "distinctcount": "DISTINCTCOUNT",
+}
+
+
+def _table_existing_measure_names(text: str) -> set[str]:
+    names: set[str] = set()
+    for m in re.finditer(
+        r"^[\t ]*measure\s+(['\"]?)(.+?)\1\s*=", text, flags=re.MULTILINE,
+    ):
+        nm = m.group(2)
+        if len(nm) >= 2 and nm[0] == "'" and nm[-1] == "'":
+            nm = nm[1:-1].replace("''", "'")
+        names.add(nm)
+    return names
+
+
+def _format_dax_measure_block(name: str, dax: str, *, display_folder: str) -> str:
+    return (
+        "\n"
+        f"\tmeasure '{name}' = {dax}\n"
+        "\t\tformatString: 0.0\n"
+        f"\t\tdisplayFolder: {display_folder}\n"
+    )
+
+
+def add_measures_from_columns(parts: list[Part], scan_only: bool) -> HandlerResult:
+    new_parts = [{**p} for p in parts]
+    findings: list[Finding] = []
+    log: list[str] = []
+
+    # 1. Pick a measure-host table (first table whose name contains
+    # "measure"). If none, measures go to their source table.
+    measure_host_part = _find_measure_table(new_parts)
+    measure_host_name = _table_name(measure_host_part) if measure_host_part else None
+    if measure_host_name:
+        log.append(f"Auto-detected measure table: '{measure_host_name}'")
+
+    # Track existing measure names per host table to avoid collisions.
+    # Keyed by table name.
+    existing_by_table: dict[str, set[str]] = {}
+    for p in new_parts:
+        if not _TABLE_PART.match(p.get("path", "")):
+            continue
+        try:
+            txt = _decode(p)
+        except Exception:
+            continue
+        existing_by_table[_table_name(p)] = _table_existing_measure_names(txt)
+
+    # Pending measure additions: {host_table_name: [(measure_name, dax), ...]}
+    pending: dict[str, list[tuple[str, str, str]]] = {}
+
+    # 2. Walk every table; for each numeric column with a real summarizeBy,
+    # propose a measure + hide the column.
+    for p in new_parts:
+        if not _TABLE_PART.match(p.get("path", "")):
+            continue
+        try:
+            text = _decode(p)
+        except Exception:
+            continue
+        tname = _table_name(p)
+        lines, blocks = _iter_columns(text)
+        modified = False
+        for hidx, hindent, end, cname in reversed(blocks):
+            props = _read_block_props(lines, hidx, end)
+            sb = (props.get("summarizeBy") or "").strip().lower()
+            if sb in ("", "none", "default"):
+                continue
+            agg = _AGG_BY_SUMMARIZEBY.get(sb)
+            if not agg:
+                continue
+            host = measure_host_name or tname
+            existing = existing_by_table.setdefault(host, set())
+            if cname in existing:
+                continue
+            dax = f"{agg}('{tname}'[{cname}])"
+            findings.append(Finding(
+                object_path=f"'{host}'[{cname}]",
+                detail=f"create measure from column '{tname}'[{cname}] (summarizeBy: {sb})",
+                before=f"column '{tname}'[{cname}] (visible, summarizeBy: {sb})",
+                after=f"measure '{cname}' = {dax}; source column hidden",
+            ))
+            existing.add(cname)
+            pending.setdefault(host, []).append((cname, dax, tname))
+            if not scan_only:
+                # Hide the source column.
+                if (props.get("isHidden") or "").lower() != "true":
+                    end = _patch_block_props(
+                        lines, hidx, hindent, end, {"isHidden": True},
+                    )
+                    modified = True
+        if not scan_only and modified:
+            p["payload"] = _encode("\n".join(lines))
+            p["payloadType"] = p.get("payloadType") or "InlineBase64"
+
+    if scan_only or not pending:
+        return HandlerResult(parts=new_parts, findings=findings, log=log)
+
+    # 3. Append measure blocks to each host table part.
+    for p in new_parts:
+        if not _TABLE_PART.match(p.get("path", "")):
+            continue
+        host = _table_name(p)
+        if host not in pending:
+            continue
+        try:
+            text = _decode(p)
+        except Exception:
+            continue
+        if text and not text.endswith("\n"):
+            text += "\n"
+        for mname, dax, source_table in pending[host]:
+            text += _format_dax_measure_block(mname, dax, display_folder=source_table)
+        p["payload"] = _encode(text)
+        p["payloadType"] = p.get("payloadType") or "InlineBase64"
+
+    return HandlerResult(parts=new_parts, findings=findings, log=log)
+
+
 # =============== Report-side (PBIR JSON) handlers ===========================
 
 import json as _json
@@ -707,6 +1079,9 @@ FIXER_HANDLERS: dict[str, tuple[str, Callable[[list[Part], bool], HandlerResult]
     "Fix_PercentageFormat": ("sm", fix_percentage_format),
     "Fix_WholeNumberFormat": ("sm", fix_whole_number_format),
     "Fix_HideForeignKeys": ("sm", fix_hide_foreign_keys),
+    "Fix_AvoidAdding0": ("sm", fix_avoid_adding_zero),
+    "Add_LastRefreshTable": ("sm", add_last_refresh_table),
+    "Add_MeasuresFromColumns": ("sm", add_measures_from_columns),
     # Report fixers (PBIR JSON)
     "Fix_PieChart": ("report", fix_pie_chart),
     "Fix_PageSize": ("report", fix_page_size),

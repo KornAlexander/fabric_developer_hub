@@ -66,7 +66,14 @@ export interface NavItem {
 //   • Model tools  — analyse / maintain the semantic model
 //   • Report tools — design / inspect reports
 //   • Automation   — execute code (TMSL / C# / Python) against items
-export const NAV_ITEMS: NavItem[] = [
+//
+// WS-O acceptance #10: nav items with `ready: false` MUST NOT render in
+// the sidebar (matches AgentHub — never advertise unfinished pages).
+// We keep the unready entries in `ALL_NAV_ITEMS` so the NavKey union +
+// any deep-link / preselect logic that mentions them still resolves; the
+// public `NAV_ITEMS` export (consumed by `AgentHubLayout` to render the
+// rail) is the filtered subset. CHANGELOG / PLAN remain the roadmap.
+const ALL_NAV_ITEMS: NavItem[] = [
   // Top peers
   { key: "model",            label: "Model",             icon: <Database20Regular />,        group: "peer",         ready: true  },
   { key: "report",           label: "Report",            icon: <ChartMultiple20Regular />,   group: "peer",         ready: true  },
@@ -89,6 +96,15 @@ export const NAV_ITEMS: NavItem[] = [
   { key: "scriptRunner",     label: "Script Runner",     icon: <Code20Regular />,            group: "automation",   ready: false },
   { key: "sempyRunner",      label: "Sempy Runner",      icon: <Flash20Regular />,           group: "automation",   ready: true  },
 ];
+
+/** All nav entries including those gated behind `ready: false`. Use only
+ *  for type-level enumeration; never render this directly. */
+export const ALL_NAV_ITEMS_REGISTRY: NavItem[] = ALL_NAV_ITEMS;
+
+/** Public nav list rendered by the sidebar. Filters out entries that are
+ *  not yet production-ready so the rail never advertises unfinished
+ *  pages (WS-O acceptance #10). */
+export const NAV_ITEMS: NavItem[] = ALL_NAV_ITEMS.filter((i) => i.ready);
 
 /** Ordered list of collapsible groups. Used by the sidebar renderer
  *  to draw a header row + (when expanded) the group's items. */
