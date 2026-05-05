@@ -98,6 +98,9 @@ Six P2 semantic-model fixers ported from `pbi_fixer/src/`. All are property-muta
 
 Frontend adds six `backendFixer({...})` entries; backend `pbi_fixer_handlers.py` adds six handlers + registry rows. No new API endpoints.
 
+### v0.54 — User-facing 'dataset' → 'semantic model' (May 2026)
+All user-visible strings now use the official term "semantic model" instead of the legacy "dataset". Changes: (a) `ModelExplorer.tsx` error "Workspace and dataset name required" → "Workspace and semantic model required". (b) `sempyCatalog.ts` description "reports, datasets, lakehouses" → "reports, semantic models, lakehouses". (c) `SempyRunnerPage.tsx` field label maps `kind: "dataset"` to display text `(semantic model)`. Internal Python kwarg names (`dataset=...` in generated sempy code) and `kind: "dataset"` discriminator stay — they are the literal sempy.fabric API surface and cannot change.
+
 ### v0.53 — Hide auto-bound Sempy params (May 2026)
 Sempy Runner param grid now hides any param whose `kind` is `workspace` / `dataset` / `report` when the connection bar already provides a value. They were just duplicating the picker above. Empty-state copy is now "All parameters are auto-bound from the connection bar above." when every param resolves to a connection-bar value. Pure UX change in `SempyRunnerPage.tsx` — generated Python is unchanged (auto-bind still flows through `valueFor`).
 

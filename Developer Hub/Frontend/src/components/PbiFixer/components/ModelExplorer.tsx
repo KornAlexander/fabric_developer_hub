@@ -230,7 +230,7 @@ export const ModelExplorer: React.FC<ModelExplorerProps> = ({
 
   const handleLoad = useCallback(async () => {
     if (!auth.fabricToken || !workspace || !datasetName) {
-      setStatus({ msg: "Workspace and dataset name required", color: "#ff3b30" });
+      setStatus({ msg: "Workspace and semantic model required", color: "#ff3b30" });
       return;
     }
     setLoading(true);

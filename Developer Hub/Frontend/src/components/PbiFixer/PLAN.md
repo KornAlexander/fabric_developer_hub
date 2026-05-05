@@ -54,27 +54,11 @@ Tracked here so they're not lost between sessions. Several are AgentHub-shell sc
 - **B5. GitHub sign-in greys out the hub.** When signing in with GitHub on a "create item" task in Developer Hub, the whole hub greys out and only recovers after a full page refresh. Reproduce the flow (create item → sign into GitHub → verify hub stays interactive). Likely a missing post-auth message handler or modal-overlay state that doesn't get cleared on the OAuth popup return.
 - **B6. SSO prompted per tab.** Each new tab re-prompts for SSO. Either make SSO **silent/transparent** for tabs after the first, or — preferably — **single sign-on once for the whole Developer Hub** and share the token across tabs (e.g. via shared MSAL cache, broadcast channel, or service-worker token broker). If sharing across tabs is not possible (e.g. cross-origin iframes with strict storage isolation), document the technical reason in [CHANGELOG.md](CHANGELOG.md) so we stop revisiting the question.
 
-### Workload icon — replace the generic briefcase / "weird bag" — **WS-O-ICON (proposal)**
+### Workload icon — replace the generic briefcase / "weird bag" — **WS-O-ICON** ✅ shipped
 
-The Fabric host's *Additional authentication or authorization required* trust dialog (and the workload card / favicon / AgentHub item icon) currently renders the stock `briefcase.png` shipped with the workload SDK template — that's the small bag icon users keep asking about. Single source of truth:
+Custom `developerHub.png` ships at [`Frontend/Package/assets/images/developerHub.png`](../../../../Package/assets/images/developerHub.png) and is wired into `Product.json` for both `favicon` and `icon.name` (top-level workload icon shown in the trust dialog + workload chooser + "New" tile). Stock `briefcase.png` removed from the assets folder.
 
-- `Developer Hub/Frontend/Package/Product.json` — fields:
-  - `favicon` → browser tab favicon
-  - `icon.name` → top-level workload icon (the one shown in the trust dialog + workload chooser)
-  - `homePage.newSection.customActions[*].icon.name` → home-page "New" tile
-- `Developer Hub/Frontend/Package/AgentHubItem.json` — per-item icons (currently `execute.png`, separate concern)
-- All assets live in `Developer Hub/Frontend/Package/assets/images/` (today: `briefcase.png`, `dial.png`, `execute.png`, `BannerMedium.png`, `learningMaterial.png`, `fabricUX.jpg`, `AgentHub1.png`, `AgentHub2.png`).
-
-Swap is a one-file commit (drop a new PNG, point `Product.json` at it, rebuild the manifest). Rough proposals — **pick one, don't implement all**:
-
-- **P1 — Hammer + sparkle.** Reads as "developer tool that fixes things" — direct nod to the PBI Fixer feature set. Cheap to draw in Fluent style.
-- **P2 — Toolbox with a small spark / star.** Generalises better than a hammer (we're more than just fixers), still toolish.
-- **P3 — Stylised "DH" monogram.** Brandable, future-proof, matches the "Developer Hub" name. Risk: looks generic without colour.
-- **P4 — Robot / agent head with a wrench overlay.** Communicates the agent-driven nature of the hub. Risk: "AI robot" iconography is overused in 2026.
-- **P5 — Power BI yellow square + plug icon.** Strong PBI association, but locks the brand to PBI even though the hub is broader (Fabric-wide).
-- **P6 — Fluent "Wrench" or "Toolbox" glyph from the FluentUI 2 icon set, exported at 32 / 48 / 96 px PNG.** Zero design budget, instantly on-brand with the rest of Fabric. Likely the highest-ROI option — recommend this as default unless we have a designer cycle for P1–P5.
-
-Acceptance for whichever option is picked: replace `briefcase.png` (or add a new file and re-point `Product.json`), confirm the trust dialog + Fabric favicon + home-page tile all show the new glyph after `docker compose --profile prod build frontend` + recreate.
+Verify after next `docker compose --profile prod build frontend`: trust dialog, Fabric favicon, and home-page tile all render the new glyph.
 
 ### Move "About" out of PBI Fixer into the Developer Hub shell — **WS-L revised** ✅ shipped
 

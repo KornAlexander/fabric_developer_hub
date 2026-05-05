@@ -299,7 +299,7 @@ export const SempyRunnerPage: React.FC<PageProps> = ({
                 const auto = autoValue(p);
                 const ov = overrides[p.name];
                 const effective = ov !== undefined ? ov : (auto ?? (p.default !== undefined ? String(p.default) : ""));
-                const label = `${p.name}${p.required ? " *" : ""}${p.kind !== "text" && p.kind !== "multiline" ? ` (${p.kind})` : ""}`;
+                const label = `${p.name}${p.required ? " *" : ""}${p.kind !== "text" && p.kind !== "multiline" ? ` (${p.kind === "dataset" ? "semantic model" : p.kind})` : ""}`;
                 if (p.kind === "bool") {
                   return (
                     <Field key={p.name} label={label} hint={p.hint}>
