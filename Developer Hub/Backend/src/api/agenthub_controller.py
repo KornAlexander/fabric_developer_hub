@@ -937,9 +937,13 @@ async def _sll_post(path: str, body: dict, *, timeout: float = 300.0) -> dict:
     import httpx
 
     url = f"{_sll_base_url()}{path}"
+    headers: dict[str, str] = {}
+    token = os.environ.get("SLL_SIDECAR_TOKEN", "").strip()
+    if token:
+        headers["X-Sidecar-Token"] = token
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(url, json=body)
+            resp = await client.post(url, json=body, headers=headers)
     except httpx.HTTPError as exc:
         raise HTTPException(502, f"SLL sidecar unreachable: {exc}") from exc
     if resp.status_code >= 400:

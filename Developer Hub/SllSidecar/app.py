@@ -57,13 +57,32 @@ if "notebookutils" not in sys.modules:
     sys.modules["notebookutils.credentials"] = _nbu_creds
 
 import pandas as pd
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("sll-sidecar")
 
-app = FastAPI(title="SLL Sidecar", version="0.74.0")
+app = FastAPI(title="SLL Sidecar", version="0.76.0")
+
+
+# ─────────────────────────────────────────────────────────────────────
+#  Bearer-token gate (set SIDECAR_AUTH_TOKEN env to enable)
+# ─────────────────────────────────────────────────────────────────────
+
+@app.middleware("http")
+async def _bearer_gate(request: Request, call_next):
+    expected = os.environ.get("SIDECAR_AUTH_TOKEN", "").strip()
+    # /health is always reachable so orchestrators can liveness-probe it.
+    if expected and request.url.path != "/health":
+        provided = request.headers.get("X-Sidecar-Token", "").strip()
+        if provided != expected:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Invalid or missing X-Sidecar-Token"},
+            )
+    return await call_next(request)
 
 
 # ─────────────────────────────────────────────────────────────────────
