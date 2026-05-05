@@ -585,6 +585,35 @@ export function EditorTabsProvider({ children }: { children: React.ReactNode }) 
         } catch { /* quota / disabled storage — silently ignore */ }
     }, [state]);
 
+    // One-shot title refresh on mount. Tabs persisted in sessionStorage
+    // were created by an older build whose label-derivation logic may
+    // have produced different strings (e.g. "ModelBpa" vs "Model BPA",
+    // or "Memory" vs "Memory Analyzer"). On load, re-resolve every
+    // pbifixer:* tab's title via the current descriptorFromPath so cached
+    // titles catch up to the latest naming without the user having to
+    // close + reopen each tab.
+    const titleRefreshDoneRef = useRef(false);
+    useEffect(() => {
+        if (titleRefreshDoneRef.current) return;
+        titleRefreshDoneRef.current = true;
+        for (const g of state.groups) {
+            for (const tab of g.tabs) {
+                if (tab.kind !== "pbifixer") continue;
+                // tab.path looks like "/agent-hub/pbifixer?nav=modelBpa".
+                const idx = tab.path.indexOf("?");
+                const pathname = idx >= 0 ? tab.path.slice(0, idx) : tab.path;
+                const search = idx >= 0 ? tab.path.slice(idx) : "";
+                const desc = descriptorFromPath(pathname, search);
+                if (desc && desc.title !== tab.title) {
+                    dispatch({ type: "update-title", tabId: tab.id, title: desc.title, subtitle: desc.subtitle });
+                }
+            }
+        }
+        // Intentionally only runs once on mount — `state` is read via the
+        // closure but we don't want to re-run on every state change.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
     // URL → tab sync. Whenever the route changes to a tabbable surface,
     // ensure a tab exists and is active in the current group. This keeps
     // deep links, back/forward, and programmatic navigation working
