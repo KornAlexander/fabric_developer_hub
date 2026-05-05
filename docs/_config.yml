@@ -1,0 +1,9 @@
+title: Fabric Developer Hub
+description: Enterprise AI Agent Orchestration Platform for Microsoft Fabric
+url: https://lukaszobst.github.io
+baseurl: /fabric_developer_hub
+
+# Disable Jekyll processing — we serve plain HTML/CSS
+plugins: []
+exclude:
+  - README.md
