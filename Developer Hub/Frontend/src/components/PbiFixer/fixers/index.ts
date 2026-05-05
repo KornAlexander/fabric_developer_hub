@@ -260,6 +260,43 @@ export const fixVisualAlignment = backendFixer({
   scope: "report",
 });
 
+// P2 SM batch (v0.51)
+export const fixDateColumnFormat = backendFixer({
+  id: "Fix_DateColumnFormat",
+  title: "Set formatString 'mm/dd/yyyy' on Date columns missing a format",
+  scope: "sm",
+});
+
+export const fixDataCategory = backendFixer({
+  id: "Fix_DataCategory",
+  title: "Set DataCategory on geo / URL / image columns by name pattern",
+  scope: "sm",
+});
+
+export const fixMarkPrimaryKeys = backendFixer({
+  id: "Fix_MarkPrimaryKeys",
+  title: "Mark relationship 'to' columns as primary keys (isKey: true)",
+  scope: "sm",
+});
+
+export const fixMeasureDescriptions = backendFixer({
+  id: "Fix_MeasureDescriptions",
+  title: "Set visible measure descriptions to their DAX expression when empty",
+  scope: "sm",
+});
+
+export const fixUseDivideFunction = backendFixer({
+  id: "Fix_UseDivideFunction",
+  title: "Rewrite simple A / B in measure expressions to DIVIDE(A, B)",
+  scope: "sm",
+});
+
+export const fixDefaultDataSourceVersion = backendFixer({
+  id: "Fix_DefaultDataSourceVersion",
+  title: "Set defaultPowerBIDataSourceVersion: PowerBI_V3 on the model",
+  scope: "sm",
+});
+
 export const FIXERS: readonly Fixer[] = Object.freeze([
   // Report (backend)
   fixPieChart,
@@ -283,6 +320,13 @@ export const FIXERS: readonly Fixer[] = Object.freeze([
   fixAvoidAdding0,
   addLastRefreshTable,
   addMeasuresFromColumns,
+  // P2 SM (v0.51)
+  fixDateColumnFormat,
+  fixDataCategory,
+  fixMarkPrimaryKeys,
+  fixMeasureDescriptions,
+  fixUseDivideFunction,
+  fixDefaultDataSourceVersion,
 ]);
 
 export function findFixerForBpaRule(ruleId: string): Fixer | undefined {

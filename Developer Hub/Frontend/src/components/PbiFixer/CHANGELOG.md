@@ -85,6 +85,19 @@ Six P1 fixers ported from `pbi_fixer/src/` in one shipping batch — three seman
 
 Frontend `fixers/index.ts` adds six new `backendFixer({...})` entries; backend `pbi_fixer_handlers.py` adds six new handlers + registry rows. No new API endpoints — all reuse the v0.41 `POST /api/pbi-fixer/fixers/apply` dispatcher.
 
+### v0.51 — P2 SM fixer batch (May 2026)
+Six P2 semantic-model fixers ported from `pbi_fixer/src/`. All are property-mutation fixers using the existing TMDL helpers (no relationship rename, no name changes). Sempy-labs-only fixers (`Fix_UpgradeToPbir`) and large workstreams (`Add_PrepForAI`, ~500 lines) deferred. Object-rename fixers (`Fix_TrimObjectNames`, `Fix_CapitalizeObjectNames`) deferred — they require updating every TMDL reference and all PBIR visual bindings.
+
+**Semantic model (TMDL):**
+- **Fix_DateColumnFormat** — set `formatString: "mm/dd/yyyy"` on columns named exactly `Date` that have no `formatString`.
+- **Fix_DataCategory** — set `dataCategory` on columns whose names match well-known geo / URL / image patterns (City, Country, State/Province, PostalCode, Continent, Latitude, Longitude, WebUrl, ImageUrl, Address, County). Skips columns that already have a non-Uncategorized data category.
+- **Fix_MarkPrimaryKeys** — for every relationship's `to` column, set `isKey: true` on that column when the table currently has no key column. Marks at most one column per table.
+- **Fix_MeasureDescriptions** — for every visible measure with no description and an inline DAX expression, set `description` to the expression text. Block-form measures are conservatively skipped.
+- **Fix_UseDivideFunction** — rewrite simple `[A] / [B]` and `(...) / (...)` patterns inside inline measure expressions to `DIVIDE([A], [B])`. Skips measures already dominated by `DIVIDE`.
+- **Fix_DefaultDataSourceVersion** — set `defaultPowerBIDataSourceVersion: PowerBI_V3` on the `model` block in `definition/model.tmdl` (required for XMLA write on Fabric / Premium capacities).
+
+Frontend adds six `backendFixer({...})` entries; backend `pbi_fixer_handlers.py` adds six handlers + registry rows. No new API endpoints.
+
 ## WS-F — Perspectives (v0.15)
 - UX: matrix grid with tri-state checkboxes, add / rename / delete perspective, dirty-change tracker, Apply switch + confirmation dialog.
 - Reads from TMDL semantic-model definition (`getSemanticModelDefinition`) — more robust than `INFO.PERSPECTIVES()` DAX (requires newer compat level, returned 400 on demo model).

@@ -1322,6 +1322,336 @@ def fix_visual_alignment(parts: list[Part], scan_only: bool) -> HandlerResult:
 
 
 # ---------------------------------------------------------------------------
+# P2 SM fixers (v0.51) — ports of small property-mutation fixers from
+# pbi_fixer/src/. All TMDL round-trip; none rename objects.
+# ---------------------------------------------------------------------------
+
+
+# ---- Fix_DateColumnFormat --------------------------------------------------
+# Source: _Fix_DateColumnFormat.py — set formatString="mm/dd/yyyy" on
+# columns named exactly "Date" that have no formatString.
+
+def fix_date_column_format(parts: list[Part], scan_only: bool) -> HandlerResult:
+    def tx(tname: str, text: str):
+        lines, blocks = _iter_columns(text)
+        findings: list[Finding] = []
+        for hidx, hindent, end, cname in reversed(blocks):
+            if cname.lower() != "date":
+                continue
+            props = _read_block_props(lines, hidx, end)
+            if (props.get("formatString") or "").strip():
+                continue
+            findings.append(Finding(
+                object_path=f"'{tname}'[{cname}]",
+                detail="formatString → mm/dd/yyyy",
+                before="(none)",
+                after='formatString: "mm/dd/yyyy"',
+            ))
+            _patch_block_props(lines, hidx, hindent, end, {"formatString": "mm/dd/yyyy"})
+        return "\n".join(lines), findings, []
+
+    return _apply_per_table(parts, scan_only, tx)
+
+
+# ---- Fix_DataCategory ------------------------------------------------------
+# Source: _Fix_DataCategory.py — set dataCategory on columns whose name
+# matches well-known location / URL / image patterns and which have no
+# (or "Uncategorized") dataCategory yet.
+
+_DATA_CATEGORY_MAP: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\bcity\b", re.IGNORECASE), "City"),
+    (re.compile(r"\bcountry\b", re.IGNORECASE), "Country"),
+    (re.compile(r"\bstate\b|\bprovince\b", re.IGNORECASE), "StateOrProvince"),
+    (re.compile(r"\bpostal\s*code\b|\bzip\s*code\b|\bzip\b|\bplz\b", re.IGNORECASE), "PostalCode"),
+    (re.compile(r"\bcontinent\b", re.IGNORECASE), "Continent"),
+    (re.compile(r"\blatitude\b|\blat\b", re.IGNORECASE), "Latitude"),
+    (re.compile(r"\blongitude\b|\blon\b|\blng\b", re.IGNORECASE), "Longitude"),
+    (re.compile(r"\burl\b|\bweb\s*url\b|\bwebsite\b|\blink\b", re.IGNORECASE), "WebUrl"),
+    (re.compile(r"\bimage\s*url\b|\bimage\b|\bthumbnail\b|\bphoto\b|\bpicture\b", re.IGNORECASE), "ImageUrl"),
+    (re.compile(r"\baddress\b", re.IGNORECASE), "Address"),
+    (re.compile(r"\bcounty\b", re.IGNORECASE), "County"),
+]
+
+
+def fix_data_category(parts: list[Part], scan_only: bool) -> HandlerResult:
+    def tx(tname: str, text: str):
+        lines, blocks = _iter_columns(text)
+        findings: list[Finding] = []
+        for hidx, hindent, end, cname in reversed(blocks):
+            props = _read_block_props(lines, hidx, end)
+            current = (props.get("dataCategory") or "").strip()
+            if current and current.lower() != "uncategorized":
+                continue
+            matched: str | None = None
+            for pat, cat in _DATA_CATEGORY_MAP:
+                if pat.search(cname):
+                    matched = cat
+                    break
+            if matched is None:
+                continue
+            findings.append(Finding(
+                object_path=f"'{tname}'[{cname}]",
+                detail=f"dataCategory → {matched}",
+                before=f"dataCategory: {current or '(none)'}",
+                after=f"dataCategory: {matched}",
+            ))
+            _patch_block_props(lines, hidx, hindent, end, {"dataCategory": matched})
+        return "\n".join(lines), findings, []
+
+    return _apply_per_table(parts, scan_only, tx)
+
+
+# ---- Fix_MarkPrimaryKeys ---------------------------------------------------
+# Source: _Fix_MarkPrimaryKeys.py — for every relationship's To column,
+# set isKey: true on that column when its table currently has no key column.
+
+def fix_mark_primary_keys(parts: list[Part], scan_only: bool) -> HandlerResult:
+    # 1. Collect (table, column) pairs from relationships' "to" side.
+    pk_pairs: set[tuple[str, str]] = set()
+
+    def _scan_rel_text(text: str) -> None:
+        for m in re.finditer(
+            r"toColumn:\s*('?)(.+?)\1\.('?)(.+?)\3(?:\s|$)",
+            text,
+            flags=re.MULTILINE,
+        ):
+            pk_pairs.add((m.group(2), m.group(4)))
+
+    rel_part = next((p for p in parts if p.get("path") == _REL_PART), None)
+    if rel_part:
+        try:
+            _scan_rel_text(_decode(rel_part))
+        except Exception:
+            pass
+    if not pk_pairs:
+        model_part = next((p for p in parts if p.get("path") == "definition/model.tmdl"), None)
+        if model_part:
+            try:
+                _scan_rel_text(_decode(model_part))
+            except Exception:
+                pass
+
+    # 2. Pre-pass: for each table, figure out whether it already has any
+    #    column with isKey: true (so we can skip the whole table).
+    tables_with_existing_key: set[str] = set()
+    for p in parts:
+        if not _TABLE_PART.match(p.get("path", "")):
+            continue
+        try:
+            text = _decode(p)
+        except Exception:
+            continue
+        tname = _table_name(p)
+        _, blocks = _iter_columns(text)
+        lines = text.split("\n")
+        for hidx, _hindent, end, _cname in blocks:
+            props = _read_block_props(lines, hidx, end)
+            if (props.get("isKey") or "").lower() == "true":
+                tables_with_existing_key.add(tname)
+                break
+
+    def tx(tname: str, text: str):
+        if tname in tables_with_existing_key:
+            return text, [], []
+        targets = {col for (t, col) in pk_pairs if t == tname}
+        if not targets:
+            return text, [], []
+        lines, blocks = _iter_columns(text)
+        findings: list[Finding] = []
+        # Only mark the FIRST relationship-target column on the table — once
+        # we add isKey:true the table now has a key, so skip the rest.
+        marked_one = False
+        for hidx, hindent, end, cname in reversed(blocks):
+            if marked_one:
+                continue
+            if cname not in targets:
+                continue
+            props = _read_block_props(lines, hidx, end)
+            if (props.get("isKey") or "").lower() == "true":
+                marked_one = True
+                continue
+            findings.append(Finding(
+                object_path=f"'{tname}'[{cname}]",
+                detail="primary key → isKey: true",
+                before="isKey: false (default)",
+                after="isKey: true",
+            ))
+            _patch_block_props(lines, hidx, hindent, end, {"isKey": True})
+            marked_one = True
+        return "\n".join(lines), findings, []
+
+    res = _apply_per_table(parts, scan_only, tx)
+    if not pk_pairs:
+        res.log.append("No relationships found — nothing to mark.")
+    return res
+
+
+# ---- Fix_MeasureDescriptions ----------------------------------------------
+# Source: _Fix_MeasureDescriptions.py — for every visible measure with no
+# description, set description to its DAX expression.
+#
+# TMDL stores the expression inline on the measure header (or as a body
+# block — see fix_avoid_adding_zero). For the description property we
+# only care about the expression *text* — the simplest reliable read is
+# from the inline header (which covers the vast majority of measures).
+# Block-form expressions are rare in practice and we conservatively skip
+# them rather than risk a wrong description.
+
+def fix_measure_descriptions(parts: list[Part], scan_only: bool) -> HandlerResult:
+    def tx(tname: str, text: str):
+        lines, blocks = _iter_measures(text)
+        findings: list[Finding] = []
+        for hidx, hindent, end, mname in reversed(blocks):
+            props = _read_block_props(lines, hidx, end)
+            if (props.get("description") or "").strip():
+                continue
+            if (props.get("isHidden") or "").lower() == "true":
+                continue
+            m = _MEASURE_HEADER_LINE.match(lines[hidx])
+            if not m:
+                continue
+            inline_expr = (m.group(5) or "").strip()
+            if not inline_expr:
+                # Block-form expression — conservatively skip.
+                continue
+            preview = inline_expr if len(inline_expr) <= 60 else inline_expr[:57] + "..."
+            findings.append(Finding(
+                object_path=f"'{tname}'[{mname}]",
+                detail=f"description ← {preview}",
+                before="(no description)",
+                after=f'description: "{preview}"',
+            ))
+            _patch_block_props(lines, hidx, hindent, end, {"description": inline_expr})
+        return "\n".join(lines), findings, []
+
+    return _apply_per_table(parts, scan_only, tx)
+
+
+# ---- Fix_UseDivideFunction -------------------------------------------------
+# Source: _Fix_UseDivideFunction.py — rewrite simple `<expr> / <expr>`
+# patterns inside measure expressions to `DIVIDE(<expr>, <expr>)`.
+#
+# We deliberately mirror the original regex: only match when both sides
+# of the `/` are bracketed (`[...]` column / measure ref) or parenthesised
+# `(...)` sub-expressions. Anything else is left alone.
+
+_DIVIDE_PAIR = re.compile(
+    r"(\[[^\]]+\]|\([^()]*\))\s*/\s*(\[[^\]]+\]|\([^()]*\))"
+)
+
+
+def _rewrite_divide(expr: str) -> tuple[str, int]:
+    """Replace simple `A / B` (with bracketed/parenthesised sides) by
+    `DIVIDE(A, B)`. Returns ``(new_expr, n_replacements)``."""
+    n = 0
+
+    def _sub(match: re.Match) -> str:
+        nonlocal n
+        n += 1
+        return f"DIVIDE({match.group(1)}, {match.group(2)})"
+
+    new_expr = _DIVIDE_PAIR.sub(_sub, expr)
+    return new_expr, n
+
+
+def fix_use_divide_function(parts: list[Part], scan_only: bool) -> HandlerResult:
+    def tx(tname: str, text: str):
+        lines = text.split("\n")
+        findings: list[Finding] = []
+        i = 0
+        # Walk forward; we only touch a single line per measure (the
+        # inline-expression line) so indices stay stable.
+        while i < len(lines):
+            m = _MEASURE_HEADER_LINE.match(lines[i])
+            if not m:
+                i += 1
+                continue
+            mname = m.group(3)
+            if len(mname) >= 2 and mname[0] == "'" and mname[-1] == "'":
+                mname = mname[1:-1].replace("''", "'")
+            inline_expr = m.group(5)
+            if not inline_expr or "/" not in inline_expr:
+                i += 1
+                continue
+            # Skip measures that already use DIVIDE more than `/`.
+            if inline_expr.upper().count("DIVIDE") > inline_expr.count("/"):
+                i += 1
+                continue
+            new_expr, n = _rewrite_divide(inline_expr)
+            if n > 0:
+                findings.append(Finding(
+                    object_path=f"'{tname}'[{mname}]",
+                    detail=f"rewrite {n} division(s) to DIVIDE()",
+                    before=inline_expr.strip(),
+                    after=new_expr.strip(),
+                ))
+                indent = m.group(1)
+                quote = m.group(2)
+                eq = m.group(4)
+                lines[i] = f"{indent}measure {quote}{m.group(3)}{quote}{eq}{new_expr}"
+            i += 1
+        return "\n".join(lines), findings, []
+
+    return _apply_per_table(parts, scan_only, tx)
+
+
+# ---- Fix_DefaultDataSourceVersion -----------------------------------------
+# Source: _Fix_DefaultDataSourceVersion.py — set
+# defaultPowerBIDataSourceVersion: PowerBI_V3 on the model when missing
+# / set to anything else. This is a **model-level** property in
+# definition/model.tmdl rather than a per-table block.
+
+def fix_default_datasource_version(parts: list[Part], scan_only: bool) -> HandlerResult:
+    new_parts = [{**p} for p in parts]
+    findings: list[Finding] = []
+    log: list[str] = []
+    model_part = next(
+        (p for p in new_parts if p.get("path") == "definition/model.tmdl"),
+        None,
+    )
+    if model_part is None:
+        log.append("definition/model.tmdl not found.")
+        return HandlerResult(parts=new_parts, findings=findings, log=log)
+    try:
+        text = _decode(model_part)
+    except Exception:
+        log.append("Could not decode model.tmdl.")
+        return HandlerResult(parts=new_parts, findings=findings, log=log)
+
+    lines = text.split("\n")
+    # Locate `model <Name>` header (no indent).
+    header_idx: int | None = None
+    for i, ln in enumerate(lines):
+        if re.match(r"^model\s+\S", ln):
+            header_idx = i
+            break
+    if header_idx is None:
+        log.append("model header not found in model.tmdl.")
+        return HandlerResult(parts=new_parts, findings=findings, log=log)
+
+    end_idx = _block_bounds(lines, header_idx, 0)
+    props = _read_block_props(lines, header_idx, end_idx)
+    current = (props.get("defaultPowerBIDataSourceVersion") or "").strip()
+    if current == "PowerBI_V3":
+        return HandlerResult(parts=new_parts, findings=findings, log=log)
+
+    findings.append(Finding(
+        object_path="model",
+        detail="defaultPowerBIDataSourceVersion → PowerBI_V3",
+        before=f"defaultPowerBIDataSourceVersion: {current or '(none)'}",
+        after="defaultPowerBIDataSourceVersion: PowerBI_V3",
+    ))
+    if not scan_only:
+        _patch_block_props(
+            lines, header_idx, 0, end_idx,
+            {"defaultPowerBIDataSourceVersion": "PowerBI_V3"},
+        )
+        model_part["payload"] = _encode("\n".join(lines))
+        model_part["payloadType"] = model_part.get("payloadType") or "InlineBase64"
+    return HandlerResult(parts=new_parts, findings=findings, log=log)
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -1340,6 +1670,13 @@ FIXER_HANDLERS: dict[str, tuple[str, Callable[[list[Part], bool], HandlerResult]
     "Fix_AvoidAdding0": ("sm", fix_avoid_adding_zero),
     "Add_LastRefreshTable": ("sm", add_last_refresh_table),
     "Add_MeasuresFromColumns": ("sm", add_measures_from_columns),
+    # P2 SM fixers (v0.51)
+    "Fix_DateColumnFormat": ("sm", fix_date_column_format),
+    "Fix_DataCategory": ("sm", fix_data_category),
+    "Fix_MarkPrimaryKeys": ("sm", fix_mark_primary_keys),
+    "Fix_MeasureDescriptions": ("sm", fix_measure_descriptions),
+    "Fix_UseDivideFunction": ("sm", fix_use_divide_function),
+    "Fix_DefaultDataSourceVersion": ("sm", fix_default_datasource_version),
     # Report fixers (PBIR JSON)
     "Fix_PieChart": ("report", fix_pie_chart),
     "Fix_PageSize": ("report", fix_page_size),
