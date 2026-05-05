@@ -78,7 +78,7 @@ const ALL_NAV_ITEMS: NavItem[] = [
 
   // Model tools
   { key: "modelBpa",         label: "Model BPA",         icon: <DatabaseSearch20Regular />,  group: "modelTools",   ready: true  },
-  { key: "memory",           label: "Memory",            icon: <Storage20Regular />,         group: "modelTools",   ready: true  },
+  { key: "memory",           label: "Memory Analyzer",   icon: <Storage20Regular />,         group: "modelTools",   ready: true  },
   { key: "perspectives",     label: "Perspectives",      icon: <Eye20Regular />,             group: "modelTools",   ready: true  },
   { key: "translations",     label: "Translations",      icon: <Translate20Regular />,       group: "modelTools",   ready: true  },
   { key: "delta",            label: "Delta",             icon: <ArrowSwap20Regular />,       group: "modelTools",   ready: true  },

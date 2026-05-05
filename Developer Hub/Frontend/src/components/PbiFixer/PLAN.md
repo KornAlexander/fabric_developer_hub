@@ -285,6 +285,39 @@ None — all originally-identified tabs are covered.
 - [ ] Final smoke pass after each integration batch
 - [x] LLM-backed translation propose endpoint (replaces glossary stub) — `Backend/src/api/agenthub_controller.py` (`_llm_translate_batch` + `pbi_fixer_translations_propose`); user-supplied `glossary` forwarded as preferred terminology, batched single Copilot call per culture, JSON response, fallback to source on failure. Frontend payload shape unchanged.
 
+### WS-S — Multi-Model & Multi-Report editing (NEW, planned)
+
+**Goal.** Lift the single-`(workspace, dataset|report)` invariant currently enforced by `PbiFixerPage` so the user can have several models / reports loaded side by side, scan all of them in one go, and apply fixers across the set.
+
+**Today's constraints (single-target).**
+- `PbiFixerPage` props expose exactly one `workspaceId`, `datasetId`, `reportId`. Every page (`Model`, `Report`, `ModelBpa`, `ReportBpa`, `Memory`, `Translations`, `Fixer`, `SempyRunner`, …) is keyed off these via `remountKey = ${activeNav}::${workspaceId}::${datasetId}::${reportId}`.
+- Pending edits and BPA findings live in component-local `useState`. Switching the dataset evicts everything.
+- The Editor Tabs strip already supports multiple PBI Fixer tabs (one per `nav` key), but they all share the same connection bar.
+
+**Phase 1 — Multi-target session (read-only scans).** _Smallest useful slice; ships first._
+1. **Connection bar** — extend the dataset / report picker to a multi-select chip-style control. Selected items go into a new `targets: TargetRef[]` state at the `PbiFixerPage` level, where `TargetRef = { workspaceId; datasetId?; reportId?; displayName }`.
+2. **Active vs scope** — keep `(workspaceId, datasetId, reportId)` as the *active* target (drives the existing single-model views). Add a separate `scope` (the full target list) consumed by new bulk pages.
+3. **New nav entry: "Bulk BPA"** (group `modelTools`) — runs `runModelBpa(loadModelData(...))` for every dataset in `scope` in parallel; aggregates findings into one grid with an extra `dataset` column. Same for Report BPA via a sibling page.
+4. **No write-back yet** — fixers stay scoped to the active target.
+
+**Phase 2 — Bulk apply.**
+5. New backend endpoint `POST /api/pbi-fixer/fixers/apply-bulk` accepting `targets: [{workspaceId, datasetId, fixerId, args, scanOnly}]`, fanning out to the existing `/fixers/apply` per target with bounded concurrency (3-5).
+6. UI: the existing scan-result panel in the Model / Report explorer gains an "Apply across selection" button visible when `scope.length > 1`. Per-target progress + per-target errors surface in a results table (success / partial / failed).
+7. Idempotency: every fixer must already be safe to re-apply (current contract). Add a confirmation dialog listing the targets before fan-out.
+
+**Phase 3 — Side-by-side editing.**
+8. Introduce a "Compare" view that lets the user split the editor area horizontally and pin a different `(target, navKey)` to each side — leveraging the existing Editor Tabs *group* abstraction (groups already exist in state, only one is rendered today).
+9. Per-tab connection state: each tab carries its own `targetRef` instead of inheriting from a single page-level value. The connection bar becomes per-tab when more than one group is open.
+10. Pending-edit isolation: move the `pendingEdits` and BPA `findings` state from the page components into a small per-target store (`Map<targetKey, PerTargetState>`), keyed by `${workspaceId}::${datasetId|reportId}`, so edits survive a `remountKey` change and so the Compare view can show two states at once.
+
+**Risks / open questions.**
+- Token / capacity load: parallel scans hit XMLA + Fabric REST hard. Cap concurrency at 3 and surface a "scanning N/M" progress chip.
+- Quota for bulk write-back — Fabric `updateDefinition` LROs are not free; bulk apply must serialise per-target writes inside one fan-out worker.
+- Tab UX with N targets — needs a target switcher (combobox or sub-tab strip) inside the connection bar before the tab strip itself becomes the switcher.
+- Sharing pending edits between the active target and the bulk grid: one direction only (bulk → single-target), to keep the mental model simple.
+
+**Cut from v1.** Cross-workspace selection (today: one workspace per session); per-target token scoping (all targets share the signed-in user's Fabric token); cross-target rule customisation (every target uses the same global rule set).
+
 ---
 
 ## Architecture decisions

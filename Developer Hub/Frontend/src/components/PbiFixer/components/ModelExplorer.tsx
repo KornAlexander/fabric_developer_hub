@@ -1414,7 +1414,7 @@ export const ModelExplorer: React.FC<ModelExplorerProps> = ({
                             </Button>
                           </div>
                           {r && r.findings.length > 0 && (
-                            <div style={{ fontSize: 11, color: GRAY_COLOR, fontFamily: "monospace", maxHeight: 80, overflow: "auto" }}>
+                            <div style={{ fontSize: 11, color: GRAY_COLOR, fontFamily: "monospace", maxHeight: 110, overflow: "auto" }}>
                               {r.findings.slice(0, 5).map((f, i) => (
                                 <div key={i}>• {f.objectPath}{f.detail ? ` — ${f.detail}` : ""}</div>
                               ))}

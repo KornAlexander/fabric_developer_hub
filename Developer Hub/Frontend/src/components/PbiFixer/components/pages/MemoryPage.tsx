@@ -264,7 +264,7 @@ export const MemoryPage: React.FC<PageProps> = ({ auth, workspaceId, datasetId, 
   if (!workspaceId || !datasetId) {
     return (
       <div className={styles.root}>
-        <Title3>Memory</Title3>
+        <Title3>Memory Analyzer</Title3>
         <Text>Select a workspace and a semantic model in the connection bar above to begin.</Text>
       </div>
     );

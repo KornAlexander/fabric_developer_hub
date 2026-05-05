@@ -37,6 +37,7 @@ import React, {
     useRef,
 } from "react";
 import { useHistory, useLocation } from "react-router-dom";
+import { ALL_NAV_ITEMS_REGISTRY } from "../../PbiFixer/types/nav";
 
 export type TabKind = "session" | "new" | "home" | "agents" | "pbifixer" | "settings" | "about";
 
@@ -515,8 +516,13 @@ export function descriptorFromPath(path: string, search?: string): TabDescriptor
             return m ? m[0] : null;
         })();
         if (navKey) {
-            // Capitalize for the title (best-effort: 'modelBpa' → 'ModelBpa').
-            const pretty = navKey.charAt(0).toUpperCase() + navKey.slice(1);
+            // Look up the user-facing label from the PBI Fixer nav
+            // registry so the tab title matches the sidebar (e.g.
+            // ``modelBpa`` → "Model BPA", ``memory`` → "Memory
+            // Analyzer"). Falls back to a capitalized form if the key
+            // is unknown to the registry.
+            const navLabel = ALL_NAV_ITEMS_REGISTRY.find((it) => it.key === navKey)?.label
+                ?? (navKey.charAt(0).toUpperCase() + navKey.slice(1));
             // Build a clean path so downstream tab.path consumers don't
             // have to re-parse nested query strings.
             const cleanPath = `${path.replace(/\/+$/, "")}?nav=${navKey}`;
@@ -524,7 +530,7 @@ export function descriptorFromPath(path: string, search?: string): TabDescriptor
                 id: `pbifixer:${navKey}`,
                 kind: "pbifixer",
                 path: cleanPath,
-                title: `PBI Fixer · ${pretty}`,
+                title: `PBI Fixer · ${navLabel}`,
             };
         }
         return { id: "pbifixer", kind: "pbifixer", path, title: "Power BI Fixer" };
