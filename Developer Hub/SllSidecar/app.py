@@ -63,7 +63,58 @@ from pydantic import BaseModel
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("sll-sidecar")
 
-app = FastAPI(title="SLL Sidecar", version="0.76.0")
+app = FastAPI(title="SLL Sidecar", version="0.77.0")
+
+
+# ─────────────────────────────────────────────────────────────────────
+#  Monkey patch: sempy_labs.run_model_bpa / run_vertipaq_analyzer
+#  call connect_semantic_model with the workspace GUID. The Power BI
+#  Analysis Services endpoint refuses GUID-style URLs for Service
+#  Principals — only workspace **names** resolve. Translate workspace
+#  GUID → workspace name in TOMWrapper.__init__ so the URL build uses
+#  the name. Verified via /debug/xmla.
+# ─────────────────────────────────────────────────────────────────────
+
+def _install_workspace_name_patch() -> None:
+    try:
+        import sempy_labs.tom._model as _tom_mod  # type: ignore
+    except Exception as exc:  # noqa: BLE001
+        log.warning("workspace-name patch skipped (sempy_labs not importable): %s", exc)
+        return
+
+    if getattr(_tom_mod.TOMWrapper, "_sll_workspace_name_patch_applied", False):
+        return
+
+    _orig_init = _tom_mod.TOMWrapper.__init__
+
+    def _patched_init(self, dataset, workspace, readonly):  # type: ignore[no-untyped-def]
+        try:
+            if (
+                isinstance(workspace, str)
+                and not workspace.startswith("asazure://")
+            ):
+                # Always resolve to the workspace name. resolve_*_name_and_id
+                # accepts either name or GUID and returns (name, guid).
+                from sempy_labs._helper_functions import (  # type: ignore
+                    resolve_workspace_name_and_id,
+                )
+
+                ws_name, _ws_id = resolve_workspace_name_and_id(workspace)
+                if ws_name and ws_name != workspace:
+                    log.info(
+                        "workspace-name patch: %s → %s", workspace, ws_name,
+                    )
+                workspace = ws_name
+        except Exception as exc:  # noqa: BLE001
+            log.warning("workspace-name patch lookup failed: %s", exc)
+        return _orig_init(self, dataset, workspace, readonly)
+
+    _tom_mod.TOMWrapper.__init__ = _patched_init  # type: ignore[assignment]
+    _tom_mod.TOMWrapper._sll_workspace_name_patch_applied = True  # type: ignore[attr-defined]
+    log.info("workspace-name patch installed on sempy_labs.tom._model.TOMWrapper")
+
+
+_install_workspace_name_patch()
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -212,6 +263,130 @@ def health() -> dict[str, Any]:
         "arch": machine,
         "arch_supported": arch_supported,
     }
+
+
+@app.post("/debug/xmla")
+def debug_xmla(payload: _ModelRequest) -> dict[str, Any]:
+    """Diagnose XMLA connectivity directly via .NET, bypassing sempy_labs.
+    Tries multiple auth & connection-string variants and returns each
+    outcome separately."""
+    import msal  # type: ignore[import-not-found]
+    import requests as _requests
+    from sempy.fabric._client._utils import _init_analysis_services
+
+    creds = _sp_env()
+    if creds is None:
+        raise HTTPException(503, "SP env not configured")
+    tenant, client, secret = creds
+
+    _init_analysis_services()
+    import Microsoft.AnalysisServices.Tabular as TOM  # type: ignore
+    import Microsoft.AnalysisServices as MAS  # type: ignore
+    from System import DateTimeOffset  # type: ignore
+
+    # Acquire SP token for Power BI / Fabric XMLA scope.
+    pbi_app = msal.ConfidentialClientApplication(
+        client_id=client,
+        client_credential=secret,
+        authority=f"https://login.microsoftonline.com/{tenant}",
+    )
+    tok_resp = pbi_app.acquire_token_for_client(
+        scopes=["https://analysis.windows.net/powerbi/api/.default"]
+    )
+    if "access_token" not in tok_resp:
+        raise HTTPException(502, f"token acquisition failed: {tok_resp}")
+    pbi_token = tok_resp["access_token"]
+
+    # Workspace GUID lookup via REST (avoids sempy).
+    rest_h = {"Authorization": f"Bearer {pbi_token}"}
+    ws_in = payload.workspace
+    ws_guid = ws_in
+    ws_name = ws_in
+    try:
+        r = _requests.get(
+            "https://api.powerbi.com/v1.0/myorg/groups",
+            headers=rest_h, timeout=30,
+        )
+        groups = r.json().get("value", [])
+        for g in groups:
+            if g.get("id") == ws_in or g.get("name") == ws_in:
+                ws_guid = g["id"]
+                ws_name = g["name"]
+                break
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"workspace lookup failed: {exc}"}
+
+    ds = payload.dataset
+
+    def _attempt_token(label: str, conn_str: str) -> dict[str, Any]:
+        try:
+            srv = TOM.Server()
+            seconds = 3600
+            exp = DateTimeOffset.UtcNow.AddSeconds(seconds)
+            srv.AccessToken = MAS.AccessToken(pbi_token, exp)
+            srv.Connect(conn_str)
+            dbs = [str(db.Name) for db in srv.Databases]
+            try:
+                srv.Disconnect()
+            except Exception:
+                pass
+            return {"ok": True, "server": str(srv.Name), "databases": dbs[:20]}
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"[:1800]}
+
+    def _attempt_inline_sp(label: str, conn_str: str) -> dict[str, Any]:
+        try:
+            srv = TOM.Server()
+            srv.Connect(conn_str)
+            dbs = [str(db.Name) for db in srv.Databases]
+            try:
+                srv.Disconnect()
+            except Exception:
+                pass
+            return {"ok": True, "server": str(srv.Name), "databases": dbs[:20]}
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"[:1800]}
+
+    base_pbi = "powerbi://api.powerbi.com/v1.0/myorg"
+    inline_creds = f"User ID=app:{client}@{tenant};Password=***REDACTED***;"
+    inline_creds_real = f"User ID=app:{client}@{tenant};Password={secret};"
+
+    return {
+        "workspace_input": ws_in,
+        "workspace_resolved_name": ws_name,
+        "workspace_resolved_guid": ws_guid,
+        "dataset": ds,
+        "token_len": len(pbi_token),
+        "results": {
+            "tok_by_name_with_catalog": _attempt_token(
+                "tok_by_name_with_catalog",
+                f"Data Source={base_pbi}/{ws_name};Initial Catalog={ds};",
+            ),
+            "tok_by_guid_with_catalog": _attempt_token(
+                "tok_by_guid_with_catalog",
+                f"Data Source={base_pbi}/{ws_guid};Initial Catalog={ds};",
+            ),
+            "tok_by_name_no_catalog": _attempt_token(
+                "tok_by_name_no_catalog",
+                f"Data Source={base_pbi}/{ws_name};",
+            ),
+            "tok_by_guid_no_catalog": _attempt_token(
+                "tok_by_guid_no_catalog",
+                f"Data Source={base_pbi}/{ws_guid};",
+            ),
+            "inline_sp_by_name": {
+                "conn_str_redacted": (
+                    f"Data Source={base_pbi}/{ws_name};Initial Catalog={ds};{inline_creds}"
+                ),
+                **_attempt_inline_sp(
+                    "inline_sp_by_name",
+                    f"Data Source={base_pbi}/{ws_name};Initial Catalog={ds};{inline_creds_real}",
+                ),
+            },
+        },
+    }
+
+
 
 
 def _require_supported_arch() -> None:
