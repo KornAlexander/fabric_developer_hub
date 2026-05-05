@@ -70,14 +70,20 @@ Shipped fixers (v0.41):
 - **Report**: Fix_PieChart, Fix_PageSize (1280×720), Fix_HideVisualFilters, Fix_DisableShowItemsNoData, Fix_RemoveUnusedCustomVisuals
 - **Stub**: Fix_UpgradeToPbir
 
-### v0.49 — P1 SM fixers batch (May 2026)
-Three more semantic-model fixers ported from `pbi_fixer/src/`, all using the existing TMDL round-trip pattern (no sidecar required — these don't need calculated tables / calc groups / relationships, so they fit `pbi_fixer_handlers.py`).
+### v0.50 — P1 fixer batch (May 2026)
+Six P1 fixers ported from `pbi_fixer/src/` in one shipping batch — three semantic-model, three report. All reuse the v0.41 round-trip dispatcher (no sidecar required).
 
-- **Fix_AvoidAdding0** — strip leading `0+` (or `0 + ` with any spacing) from measure DAX expressions. Handles both inline (`measure 'X' = 0 + COUNTROWS(Foo)`) and block-form (`measure 'X' =\n\t0 + COUNTROWS(Foo)`) measure definitions.
-- **Add_LastRefreshTable** — append a hidden `Last Refresh` table with one M-partition column (`Last Refreshes`) wrapping `DateTime.LocalNow()`, plus a `Last Refresh Measure` that surfaces the timestamp. Skips creation if any existing table name contains `refresh` (case-insensitive). If a table whose name contains `measure` exists, the measure is appended there; otherwise it sits on the new table.
-- **Add_MeasuresFromColumns** — for every column whose `summarizeBy` is `sum` / `count` / `min` / `max` / `average` / `distinctCount`, create a measure `<ColName> = AGG('Table'[Col])` and hide the source column. Auto-detects a measure-host table by name; otherwise the measure is appended to the source table. Skips columns where a measure of the same name already exists.
+**Semantic model (TMDL):**
+- **Fix_AvoidAdding0** — strip leading `0+` (any spacing) from measure DAX. Handles inline (`measure 'X' = 0 + COUNTROWS(Foo)`) and block-form measures.
+- **Add_LastRefreshTable** — append a hidden `Last Refresh` table with one M-partition column wrapping `DateTime.LocalNow()`, plus a `Last Refresh Measure` that surfaces the timestamp. Skips creation if any existing table name contains `refresh` (case-insensitive). If a table whose name contains `measure` exists, the measure is appended there.
+- **Add_MeasuresFromColumns** — for every column whose `summarizeBy` ∈ {sum, count, min, max, average, distinctCount}, create a measure `<ColName> = AGG('Table'[Col])` and hide the source column. Auto-routes to the first table whose name contains `measure`; otherwise the measure is appended to the source table. Skips columns where a measure of the same name already exists.
 
-Frontend `fixers/index.ts` adds three new `backendFixer({...})` entries; backend `pbi_fixer_handlers.py` adds three new handlers + registry rows. No new API endpoints — all three reuse the v0.41 `POST /api/pbi-fixer/fixers/apply` dispatcher.
+**Report (PBIR):**
+- **Fix_BarChart** — best-practice formatting on `barChart` / `clusteredBarChart`: removes X-axis title + values, Y-axis title and vertical gridlines; turns on data labels.
+- **Fix_ColumnChart** — best-practice formatting on `columnChart` / `clusteredColumnChart`: removes X-axis title, Y-axis title + values, vertical gridlines; turns on data labels.
+- **Fix_VisualAlignment** — within each page, group visible chart visuals whose width / height / X / Y differ by ≤ 2 % of the page dimension and snap them to the first visual in the group (sorted-anchor scan). Mirrors `_Fix_VisualAlignment.py`.
+
+Frontend `fixers/index.ts` adds six new `backendFixer({...})` entries; backend `pbi_fixer_handlers.py` adds six new handlers + registry rows. No new API endpoints — all reuse the v0.41 `POST /api/pbi-fixer/fixers/apply` dispatcher.
 
 ## WS-F — Perspectives (v0.15)
 - UX: matrix grid with tri-state checkboxes, add / rename / delete perspective, dirty-change tracker, Apply switch + confirmation dialog.

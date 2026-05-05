@@ -1064,6 +1064,264 @@ def fix_page_size(parts: list[Part], scan_only: bool) -> HandlerResult:
 
 
 # ---------------------------------------------------------------------------
+# Report fixers — chart formatting (P1 batch, ported from
+# pbi_fixer/src/report/_Fix_BarChart.py + _Fix_ColumnChart.py)
+# ---------------------------------------------------------------------------
+
+_BAR_CHART_TYPES = {"barChart", "clusteredBarChart"}
+_COLUMN_CHART_TYPES = {"columnChart", "clusteredColumnChart"}
+
+# (object_name, property_name, target_value, label)
+_BAR_CHART_CHECKS: list[tuple[str, str, str, str]] = [
+    ("valueAxis",    "showAxisTitle", "false", "X axis title"),
+    ("valueAxis",    "show",          "false", "X axis values"),
+    ("categoryAxis", "showAxisTitle", "false", "Y axis title"),
+    ("labels",       "show",          "true",  "Data labels"),
+    ("valueAxis",    "gridlineShow",  "false", "Vertical gridlines"),
+]
+
+_COLUMN_CHART_CHECKS: list[tuple[str, str, str, str]] = [
+    ("categoryAxis", "showAxisTitle", "false", "X axis title"),
+    ("valueAxis",    "showAxisTitle", "false", "Y axis title"),
+    ("valueAxis",    "show",          "false", "Y axis values"),
+    ("labels",       "show",          "true",  "Data labels"),
+    ("categoryAxis", "gridlineShow",  "false", "Vertical gridlines"),
+]
+
+
+def _get_visual_property(visual: dict, object_name: str, property_name: str) -> str | None:
+    obj_list = (visual.get("visual") or {}).get("objects", {}).get(object_name, [])
+    if not obj_list:
+        return None
+    return (
+        obj_list[0]
+        .get("properties", {})
+        .get(property_name, {})
+        .get("expr", {})
+        .get("Literal", {})
+        .get("Value")
+    )
+
+
+def _set_visual_property(visual: dict, object_name: str, property_name: str, value: str) -> None:
+    objects = visual.setdefault("visual", {}).setdefault("objects", {})
+    if object_name not in objects or not objects[object_name]:
+        objects[object_name] = [{"properties": {}}]
+    obj = objects[object_name][0]
+    if "properties" not in obj:
+        obj["properties"] = {}
+    obj["properties"][property_name] = {"expr": {"Literal": {"Value": value}}}
+
+
+def _fix_chart_formatting(
+    parts: list[Part],
+    scan_only: bool,
+    *,
+    chart_types: set[str],
+    checks: list[tuple[str, str, str, str]],
+) -> HandlerResult:
+    new_parts = [{**p} for p in parts]
+    findings: list[Finding] = []
+    for p in new_parts:
+        if not re.match(r"^definition/pages/[^/]+/visuals/[^/]+/visual\.json$", p.get("path", "")):
+            continue
+        try:
+            doc = _json.loads(_decode(p))
+        except Exception:
+            continue
+        vt = (doc.get("visual") or {}).get("visualType")
+        if vt not in chart_types:
+            continue
+        path_match = re.match(r"definition/pages/([^/]+)/visuals/([^/]+)/", p["path"])
+        page = path_match.group(1) if path_match else "?"
+        vname = path_match.group(2) if path_match else "?"
+
+        issues = [
+            (object_name, property_name, value, label)
+            for object_name, property_name, value, label in checks
+            if _get_visual_property(doc, object_name, property_name) != value
+        ]
+        if not issues:
+            continue
+        labels = ", ".join(label for _, _, _, label in issues)
+        findings.append(Finding(
+            object_path=f"{page} › {vname}",
+            detail=f"{vt}: {labels}",
+        ))
+        if not scan_only:
+            for object_name, property_name, value, _label in issues:
+                _set_visual_property(doc, object_name, property_name, value)
+            p["payload"] = _encode(_json.dumps(doc, indent=2))
+            p["payloadType"] = p.get("payloadType") or "InlineBase64"
+    return HandlerResult(parts=new_parts, findings=findings, log=[])
+
+
+def fix_bar_chart(parts: list[Part], scan_only: bool) -> HandlerResult:
+    """Apply best-practice formatting to barChart / clusteredBarChart visuals.
+
+    Removes X-axis title + values, Y-axis title and vertical gridlines,
+    and turns on data labels.
+    """
+    return _fix_chart_formatting(
+        parts, scan_only,
+        chart_types=_BAR_CHART_TYPES,
+        checks=_BAR_CHART_CHECKS,
+    )
+
+
+def fix_column_chart(parts: list[Part], scan_only: bool) -> HandlerResult:
+    """Apply best-practice formatting to columnChart / clusteredColumnChart visuals.
+
+    Removes X-axis title, Y-axis title + values and vertical gridlines,
+    and turns on data labels.
+    """
+    return _fix_chart_formatting(
+        parts, scan_only,
+        chart_types=_COLUMN_CHART_TYPES,
+        checks=_COLUMN_CHART_CHECKS,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Report fixer — visual alignment (P1, ported from _Fix_VisualAlignment.py)
+# ---------------------------------------------------------------------------
+
+_ALIGNMENT_CHART_TYPES = {
+    "barChart", "clusteredBarChart", "stackedBarChart", "hundredPercentStackedBarChart",
+    "columnChart", "clusteredColumnChart", "stackedColumnChart", "hundredPercentStackedColumnChart",
+    "lineChart", "areaChart", "stackedAreaChart", "lineStackedColumnComboChart",
+    "lineClusteredColumnComboChart", "ribbonChart", "waterfallChart", "funnel",
+    "scatterChart", "pieChart", "donutChart",
+}
+
+_ALIGNMENT_TOLERANCE_PCT = 2.0
+_DEFAULT_PAGE_W = 1280.0
+_DEFAULT_PAGE_H = 720.0
+
+
+def _group_by_tolerance(values: list[float], tolerance: float) -> list[list[int]]:
+    """Group indices of `values` that fall within `tolerance` of each other (sorted-anchor scan)."""
+    if not values:
+        return []
+    sorted_pairs = sorted(enumerate(values), key=lambda x: x[1])
+    groups: list[list[int]] = [[sorted_pairs[0][0]]]
+    anchor = sorted_pairs[0][1]
+    for idx, val in sorted_pairs[1:]:
+        if abs(val - anchor) <= tolerance:
+            groups[-1].append(idx)
+        else:
+            groups.append([idx])
+            anchor = val
+    return groups
+
+
+def fix_visual_alignment(parts: list[Part], scan_only: bool) -> HandlerResult:
+    """Snap nearly-aligned chart visuals to a common position/size.
+
+    Within each page, groups visible chart visuals whose width/height/X/Y
+    differ by no more than 2 % of the page dimension and snaps them to the
+    first visual in the group. Mirrors `_Fix_VisualAlignment.py`.
+    """
+    new_parts = [{**p} for p in parts]
+    findings: list[Finding] = []
+
+    # Build per-page page size lookup: page_id → (w, h)
+    page_size: dict[str, tuple[float, float]] = {}
+    for p in new_parts:
+        m = re.match(r"^definition/pages/([^/]+)/page\.json$", p.get("path", ""))
+        if not m:
+            continue
+        try:
+            doc = _json.loads(_decode(p))
+        except Exception:
+            continue
+        page_size[m.group(1)] = (
+            float(doc.get("width") or _DEFAULT_PAGE_W),
+            float(doc.get("height") or _DEFAULT_PAGE_H),
+        )
+
+    # Index visual parts by page
+    by_page: dict[str, list[dict]] = {}
+    for p in new_parts:
+        m = re.match(r"^definition/pages/([^/]+)/visuals/([^/]+)/visual\.json$", p.get("path", ""))
+        if not m:
+            continue
+        try:
+            doc = _json.loads(_decode(p))
+        except Exception:
+            continue
+        vt = (doc.get("visual") or {}).get("visualType")
+        if vt not in _ALIGNMENT_CHART_TYPES:
+            continue
+        if (doc.get("visual") or {}).get("isHidden") is True or doc.get("isHidden") is True:
+            continue
+        pos = doc.get("position") or {}
+        try:
+            x = float(pos.get("x", 0))
+            y = float(pos.get("y", 0))
+            w = float(pos.get("width", 0))
+            h = float(pos.get("height", 0))
+        except (TypeError, ValueError):
+            continue
+        by_page.setdefault(m.group(1), []).append({
+            "part": p,
+            "vname": m.group(2),
+            "doc": doc,
+            "pos": pos,
+            "x": x, "y": y, "w": w, "h": h,
+            "dirty": False,
+        })
+
+    for page_id, visuals in by_page.items():
+        if len(visuals) < 2:
+            continue
+        page_w, page_h = page_size.get(page_id, (_DEFAULT_PAGE_W, _DEFAULT_PAGE_H))
+        tol_x = page_w * _ALIGNMENT_TOLERANCE_PCT / 100.0
+        tol_y = page_h * _ALIGNMENT_TOLERANCE_PCT / 100.0
+
+        for axis_label, attr, tol in (
+            ("width",  "w", tol_x),
+            ("height", "h", tol_y),
+            ("X",      "x", tol_x),
+            ("Y",      "y", tol_y),
+        ):
+            values = [v[attr] for v in visuals]
+            for group in _group_by_tolerance(values, tol):
+                if len(group) < 2:
+                    continue
+                target = values[group[0]]
+                for gi in group[1:]:
+                    cur = values[gi]
+                    if cur == target:
+                        continue
+                    if abs(cur - target) > tol:
+                        continue
+                    v = visuals[gi]
+                    findings.append(Finding(
+                        object_path=f"{page_id} › {v['vname']}",
+                        detail=f"{axis_label}: {cur:.0f} → {target:.0f}",
+                        before=f"{axis_label}={cur:.0f}",
+                        after=f"{axis_label}={target:.0f}",
+                    ))
+                    # Update the in-memory doc so subsequent axis passes
+                    # see the new value (mirrors Python source which writes
+                    # back after each group).
+                    v[attr] = target
+                    v["pos"][{"w": "width", "h": "height", "x": "x", "y": "y"}[attr]] = target
+                    v["doc"]["position"] = v["pos"]
+                    v["dirty"] = True
+
+        if not scan_only:
+            for v in visuals:
+                if not v["dirty"]:
+                    continue
+                v["part"]["payload"] = _encode(_json.dumps(v["doc"], indent=2))
+                v["part"]["payloadType"] = v["part"].get("payloadType") or "InlineBase64"
+
+    return HandlerResult(parts=new_parts, findings=findings, log=[])
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -1088,4 +1346,7 @@ FIXER_HANDLERS: dict[str, tuple[str, Callable[[list[Part], bool], HandlerResult]
     "Fix_HideVisualFilters": ("report", fix_hide_visual_filters),
     "Fix_DisableShowItemsNoData": ("report", fix_disable_show_items_no_data),
     "Fix_RemoveUnusedCustomVisuals": ("report", fix_remove_unused_custom_visuals),
+    "Fix_BarChart": ("report", fix_bar_chart),
+    "Fix_ColumnChart": ("report", fix_column_chart),
+    "Fix_VisualAlignment": ("report", fix_visual_alignment),
 }

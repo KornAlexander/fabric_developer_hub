@@ -8,6 +8,8 @@
 
 ## WL-1 — Persistent Workload Item in Fabric Workspace
 
+> **Status (May 5 2026):** ~85% shipped. C1 (route fix), C2 (durable bind-mount), C3 (`schema_version`), C8 (workload version badge) all merged. **Remaining: C4 (manual end-to-end Fabric portal walk) and C5 (Playwright regression).** C6 (Fixer state persistence) and C7 (per-item ACL) deferred to WL-1.1 / WL-1.2.
+
 **Goal:** Make the Developer Hub item **persistently created** in the Fabric workspace where
 the user launches it (today the item is transient / session-scoped). Once created it must
 survive browser reloads, tenant re-logins, and show up in the workspace item list with its

@@ -241,6 +241,25 @@ export const addMeasuresFromColumns = backendFixer({
   scope: "sm",
 });
 
+// P1 report-fixer batch (v0.50)
+export const fixBarChart = backendFixer({
+  id: "Fix_BarChart",
+  title: "Fix bar chart formatting (axis titles, values, gridlines, data labels)",
+  scope: "report",
+});
+
+export const fixColumnChart = backendFixer({
+  id: "Fix_ColumnChart",
+  title: "Fix column chart formatting (axis titles, values, gridlines, data labels)",
+  scope: "report",
+});
+
+export const fixVisualAlignment = backendFixer({
+  id: "Fix_VisualAlignment",
+  title: "Snap nearly-aligned chart visuals (within 2% of page) to a common position/size",
+  scope: "report",
+});
+
 export const FIXERS: readonly Fixer[] = Object.freeze([
   // Report (backend)
   fixPieChart,
@@ -248,6 +267,9 @@ export const FIXERS: readonly Fixer[] = Object.freeze([
   fixHideVisualFilters,
   fixDisableShowItemsNoData,
   fixRemoveUnusedCustomVisuals,
+  fixBarChart,
+  fixColumnChart,
+  fixVisualAlignment,
   fixUpgradeToPbir,
   // Semantic model (backend)
   fixDiscourageImplicitMeasures,
