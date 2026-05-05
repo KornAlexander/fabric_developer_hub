@@ -303,9 +303,9 @@ Tracker:
 - [x] T1 dialog — `callItemGet` no longer routes empty exceptions through `handleException` (workload v1.37 / PBI Fixer v0.78)
 - [x] T2 loading title — `agenthub.tab.onInit` falls back to "Developer Hub Dashboard" instead of `{}`
 - [x] T3 revert hero + KPI — Model + Report restored to toolbar-first render, MessageBar/useMemo removed
-- [x] T4 SLL arch fix — `platform: linux/amd64` pinned on the `sll-sidecar` compose service
-- [x] T5 Memory Analyzer — fixed transitively by T4 (same SLL sidecar path)
-- [ ] T6 Report BPA SLL flip (gated on T4 + T5 verify in Playwright)
+- [~] T4 SLL arch fix — `platform: linux/amd64` pinned on the `sll-sidecar` compose service; container now reports `x86_64` (`platform.machine()`). On x64 dev hosts this is sufficient. **On aarch64 dev hosts** (this machine) QEMU x86_64 emulation segfaults inside the .NET 8 runtime when sempy_labs loads the AMO/ADOMD DLLs (`qemu: uncaught target signal 11 (Segmentation fault) - core dumped`). Hard limitation — needs an x86_64 host or a remote SLL sidecar deployment to fully verify Model BPA + Memory Analyzer end-to-end. Workload-side fix is in place.
+- [~] T5 Memory Analyzer — same status as T4: code path correct, blocked by QEMU emulation on aarch64.
+- [ ] T6 Report BPA SLL flip (gated on T4 + T5 verify on a real x64 host)
 - [x] T7 workspace + item context — `PbiFixerPage` now seeds + persists the connection bar to `sessionStorage["pbiFixer.connection.v1"]`
 - [x] T8 dashboard item from workspace folder — likely fixed transitively by T1 (host dialog was blocking the item editor mount); needs Playwright re-verify
 - [x] T9 dashboard item icon — `Product.json` createExperience card icon swapped from `dial.png` to `developerHub.png`
