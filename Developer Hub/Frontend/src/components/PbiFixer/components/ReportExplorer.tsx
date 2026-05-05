@@ -11,9 +11,6 @@ import {
   makeStyles,
   shorthands,
   tokens,
-  MessageBar,
-  MessageBarBody,
-  MessageBarTitle,
 } from "@fluentui/react-components";
 import {
   Search20Regular,
@@ -840,82 +837,8 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
   // Render
   // ---------------------------------------------------------------------------
 
-  // KPIs surfaced in the hero strip — assimilated to the AgentHub
-  // Sessions visual language (see DashboardPage "sessions-kpi*" usage).
-  const kpis = useMemo(() => {
-    if (!reportData) {
-      return { pages: "\u2014", visuals: "\u2014", hiddenPages: "\u2014", hiddenVisuals: "\u2014" };
-    }
-    let visuals = 0;
-    let hiddenVisuals = 0;
-    let hiddenPages = 0;
-    for (const p of Object.values(reportData.pages)) {
-      if (p.hidden) hiddenPages += 1;
-      visuals += p.visualCount;
-      for (const v of Object.values(p.visuals)) {
-        if (v.hidden) hiddenVisuals += 1;
-      }
-    }
-    return {
-      pages: Object.keys(reportData.pages).length,
-      visuals,
-      hiddenPages,
-      hiddenVisuals,
-    };
-  }, [reportData]);
-
   return (
     <div className={styles.root}>
-      {/* Hero header — assimilated to the AgentHub Sessions visual
-          language. Kept compact so the tree + properties workspace below
-          still has room to breathe. */}
-      <div className="sessions-hero" style={{ marginBottom: 12, alignItems: "flex-start" }}>
-        <div className="sessions-hero-copy">
-          <div className="sessions-eyebrow">Power BI · Report Definition</div>
-          <h1 className="sessions-title" style={{ fontSize: "clamp(20px, 1.8vw, 26px)", marginBottom: 4 }}>
-            Report
-          </h1>
-          <p className="sessions-subtitle">
-            Browse pages, visuals, and layout — inspect properties, find issues, and apply fixes.
-          </p>
-        </div>
-      </div>
-
-      <div className="sessions-kpis" role="group" aria-label="Report summary" style={{ marginBottom: 12 }}>
-        <div className={`sessions-kpi${reportData ? " is-active" : ""}`}>
-          <div className="sessions-kpi-label">Pages</div>
-          <div className="sessions-kpi-value">{kpis.pages}</div>
-        </div>
-        <div className={`sessions-kpi${reportData ? " is-active" : ""}`}>
-          <div className="sessions-kpi-label">Visuals</div>
-          <div className="sessions-kpi-value">{kpis.visuals}</div>
-        </div>
-        <div className={`sessions-kpi${reportData && Number(kpis.hiddenPages) > 0 ? " sessions-kpi--waiting is-active" : ""}`}>
-          <div className="sessions-kpi-label">Hidden Pages</div>
-          <div className="sessions-kpi-value">{kpis.hiddenPages}</div>
-        </div>
-        <div className={`sessions-kpi${reportData && Number(kpis.hiddenVisuals) > 0 ? " sessions-kpi--waiting is-active" : ""}`}>
-          <div className="sessions-kpi-label">Hidden Visuals</div>
-          <div className="sessions-kpi-value">{kpis.hiddenVisuals}</div>
-        </div>
-      </div>
-
-      {reportData ? (
-        <MessageBar intent="success" style={{ marginBottom: 12 }}>
-          <MessageBarBody>
-            <MessageBarTitle>Connected</MessageBarTitle>
-            Loaded report <strong>{reportName}</strong>.
-          </MessageBarBody>
-        </MessageBar>
-      ) : (
-        <MessageBar intent="info" style={{ marginBottom: 12 }}>
-          <MessageBarBody>
-            <MessageBarTitle>Not loaded</MessageBarTitle>
-            Pick a workspace + report above, then click <strong>Load Report</strong> to begin.
-          </MessageBarBody>
-        </MessageBar>
-      )}
-
       <div className={styles.toolbar}>
         <Button
           appearance="primary"

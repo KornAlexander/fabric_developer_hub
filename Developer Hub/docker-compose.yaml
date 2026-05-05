@@ -116,6 +116,13 @@ services:
   #   SLL_CLIENT_SECRET=<sp secret>
   # The SP must be added as a member of every workspace it analyses.
   sll-sidecar:
+    # T4: pin to linux/amd64 so the Microsoft.AnalysisServices.* x64 DLLs
+    # bundled inside sempy_labs can load via pythonnet. On aarch64 hosts
+    # (Apple Silicon, ARM Windows) the sidecar otherwise rejects every
+    # request with "host arch 'aarch64' is not supported". Docker Desktop
+    # transparently runs the image under QEMU emulation when the host
+    # arch differs.
+    platform: linux/amd64
     build:
       context: SllSidecar
       dockerfile: Dockerfile

@@ -63,7 +63,7 @@ from pydantic import BaseModel
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("sll-sidecar")
 
-app = FastAPI(title="SLL Sidecar", version="0.77.0")
+app = FastAPI(title="SLL Sidecar", version="0.78.0")
 
 
 # ─────────────────────────────────────────────────────────────────────

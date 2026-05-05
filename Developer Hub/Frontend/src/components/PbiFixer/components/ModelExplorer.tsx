@@ -14,9 +14,6 @@ import {
   shorthands,
   Tooltip,
   tokens,
-  MessageBar,
-  MessageBarBody,
-  MessageBarTitle,
 } from "@fluentui/react-components";
 import {
   Search20Regular,
@@ -1219,79 +1216,8 @@ export const ModelExplorer: React.FC<ModelExplorerProps> = ({
   // Render
   // ---------------------------------------------------------------------------
 
-  // KPIs surfaced in the hero strip — assimilated to the AgentHub Sessions
-  // visual language (see DashboardPage "sessions-kpi*" usage). Values are
-  // "\u2014" until the model is loaded.
-  const kpis = useMemo(() => {
-    if (!modelData) {
-      return { tables: "\u2014", measures: "\u2014", columns: "\u2014", relationships: "\u2014" };
-    }
-    let measures = 0;
-    let columns = 0;
-    for (const t of Object.values(modelData.tables)) {
-      measures += Object.keys(t.measures).length;
-      columns += Object.keys(t.columns).length;
-    }
-    return {
-      tables: Object.keys(modelData.tables).length,
-      measures,
-      columns,
-      relationships: modelData.relationships.length,
-    };
-  }, [modelData]);
-
   return (
     <div className={styles.root}>
-      {/* Hero header — assimilated to the AgentHub Sessions visual
-          language. Kept compact (small margins / smaller title clamp) so the
-          tree + properties workspace below still has room to breathe. */}
-      <div className="sessions-hero" style={{ marginBottom: 12, alignItems: "flex-start" }}>
-        <div className="sessions-hero-copy">
-          <div className="sessions-eyebrow">Power BI · Semantic Model</div>
-          <h1 className="sessions-title" style={{ fontSize: "clamp(20px, 1.8vw, 26px)", marginBottom: 4 }}>
-            Model
-          </h1>
-          <p className="sessions-subtitle">
-            Browse, edit, and validate your semantic model — measures, columns, relationships, and partitions.
-          </p>
-        </div>
-      </div>
-
-      <div className="sessions-kpis" role="group" aria-label="Semantic model summary" style={{ marginBottom: 12 }}>
-        <div className={`sessions-kpi${modelData ? " is-active" : ""}`}>
-          <div className="sessions-kpi-label">Tables</div>
-          <div className="sessions-kpi-value">{kpis.tables}</div>
-        </div>
-        <div className={`sessions-kpi${modelData ? " is-active" : ""}`}>
-          <div className="sessions-kpi-label">Measures</div>
-          <div className="sessions-kpi-value">{kpis.measures}</div>
-        </div>
-        <div className={`sessions-kpi${modelData ? " is-active" : ""}`}>
-          <div className="sessions-kpi-label">Columns</div>
-          <div className="sessions-kpi-value">{kpis.columns}</div>
-        </div>
-        <div className={`sessions-kpi${modelData ? " is-active" : ""}`}>
-          <div className="sessions-kpi-label">Relationships</div>
-          <div className="sessions-kpi-value">{kpis.relationships}</div>
-        </div>
-      </div>
-
-      {modelData ? (
-        <MessageBar intent="success" style={{ marginBottom: 12 }}>
-          <MessageBarBody>
-            <MessageBarTitle>Connected</MessageBarTitle>
-            Loaded semantic model <strong>{modelData.datasetName ?? datasetName}</strong>.
-          </MessageBarBody>
-        </MessageBar>
-      ) : (
-        <MessageBar intent="info" style={{ marginBottom: 12 }}>
-          <MessageBarBody>
-            <MessageBarTitle>Not loaded</MessageBarTitle>
-            Pick a workspace + semantic model above, then click <strong>Load Model</strong> to begin.
-          </MessageBarBody>
-        </MessageBar>
-      )}
-
       <div className={styles.toolbar}>
         <Button
           appearance="primary"

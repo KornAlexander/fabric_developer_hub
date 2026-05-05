@@ -197,13 +197,56 @@ export const PbiFixerPage: React.FC<PbiFixerPageProps> = ({
     () => initialNav ?? readNavKey()
   );
 
+  // T7: persist the connection bar selection in sessionStorage so a
+  // new PBI Fixer sub-tab (Model, Report, Model BPA, …) inherits the
+  // workspace + dataset + report from the previously-active sub-tab
+  // instead of forcing the user to re-pick everything every time.
+  // Each PBI Fixer tab spawns its own PbiFixerPage instance; without
+  // this the connection bar starts empty in every tab.
+  const PBIFIXER_CONN_STORAGE_KEY = "pbiFixer.connection.v1";
+  type PersistedConnection = {
+    workspaceId: string;
+    workspaceInput: string;
+    datasetId: string;
+    datasetInput: string;
+    reportId: string;
+    reportInput: string;
+  };
+  const readPersistedConn = (): Partial<PersistedConnection> => {
+    try {
+      const raw = sessionStorage.getItem(PBIFIXER_CONN_STORAGE_KEY);
+      if (!raw) return {};
+      const obj = JSON.parse(raw);
+      if (obj && typeof obj === "object") return obj as PersistedConnection;
+    } catch { /* ignore parse / quota errors */ }
+    return {};
+  };
+  const persistedConn = readPersistedConn();
+
   // Connection / selection state.
-  const [workspaceId, setWorkspaceId] = useState("");
-  const [datasetId, setDatasetId] = useState("");
-  const [reportId, setReportId] = useState("");
-  const [workspaceInput, setWorkspaceInput] = useState("");
-  const [datasetInput, setDatasetInput] = useState("");
-  const [reportInput, setReportInput] = useState("");
+  const [workspaceId, setWorkspaceId] = useState(persistedConn.workspaceId ?? "");
+  const [datasetId, setDatasetId] = useState(persistedConn.datasetId ?? "");
+  const [reportId, setReportId] = useState(persistedConn.reportId ?? "");
+  const [workspaceInput, setWorkspaceInput] = useState(persistedConn.workspaceInput ?? "");
+  const [datasetInput, setDatasetInput] = useState(persistedConn.datasetInput ?? "");
+  const [reportInput, setReportInput] = useState(persistedConn.reportInput ?? "");
+
+  // Persist on every change so the next sub-tab to mount picks it up.
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(
+        PBIFIXER_CONN_STORAGE_KEY,
+        JSON.stringify({
+          workspaceId,
+          workspaceInput,
+          datasetId,
+          datasetInput,
+          reportId,
+          reportInput,
+        }),
+      );
+    } catch { /* quota / disabled storage — silently ignore */ }
+  }, [workspaceId, workspaceInput, datasetId, datasetInput, reportId, reportInput]);
 
   const [workspaces, setWorkspaces] = useState<api.Workspace[]>([]);
   const [workspacesLoading, setWorkspacesLoading] = useState(false);

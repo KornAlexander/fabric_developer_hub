@@ -615,7 +615,21 @@ export async function callItemGet(objectId: string, workloadClient: WorkloadClie
     try {
         const item: GetItemResult = await workloadClient.itemCrud.getItem({ objectId });
         return item;
-    } catch (exception) {
+    } catch (exception: any) {
+        // T1: dev-loaded workload items (and items in workspaces that the
+        // host cannot resolve) make `itemCrud.getItem` reject with an
+        // exception that has no useful `errorCode`/`message` payload.
+        // Routing that through `handleException` surfaces a noisy
+        // "Could not handle exception: undefined" modal that blocks the
+        // entire workload UI on every tab open. We intentionally swallow
+        // those — callers already handle a null/throw result gracefully
+        // (see `ItemContext.tsx` and `index.ui.tsx`'s `agenthub.tab.onInit`).
+        const code = exception?.error?.message?.code;
+        const msg  = exception?.error?.message?.value || exception?.message;
+        if (!code && !msg) {
+            console.warn('[AgentHub] callItemGet returned no usable error for ObjectID %s; returning null', objectId);
+            return null as unknown as GetItemResult;
+        }
         console.error('Failed locating item with ObjectID %s', objectId, exception);
         return await handleException(exception, workloadClient, isRetry, false /* isDirectWorkloadCall */, callItemGet, objectId);
     }

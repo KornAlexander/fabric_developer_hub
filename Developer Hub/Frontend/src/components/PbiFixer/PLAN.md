@@ -285,6 +285,31 @@ None — all originally-identified tabs are covered.
 - [ ] Final smoke pass after each integration batch
 - [x] LLM-backed translation propose endpoint (replaces glossary stub) — `Backend/src/api/agenthub_controller.py` (`_llm_translate_batch` + `pbi_fixer_translations_propose`); user-supplied `glossary` forwarded as preferred terminology, batched single Copilot call per culture, JSON response, fallback to source on failure. Frontend payload shape unchanged.
 
+### WS-T — May 5 2026 user-reported bug batch (NEW, in flight)
+
+Captured from a single bug report so we don't lose them between sessions. Sub-tasks intentionally fine-grained so each can ship + commit independently.
+
+- **T1. "Could not handle exception: undefined" dialog still shows.** The Fabric host throws this from its own `callItemGet` path because dev-loaded workload items don't exist as real Fabric items (`workloadPayload` is null). Investigate: (a) can we register a stub item in dev mode so `callItemGet` resolves; (b) can the workload swallow the host's `unhandled-error` postMessage; (c) document as a known dev-only quirk in CHANGELOG if neither (a) nor (b) is feasible.
+- **T2. Tab title stuck on "Loading…".** When the Fabric host opens the workload it sets the tab title to "Loading…" and never updates. Investigate the workload-side `setItemTitle` / `notifyItemTitle` API in `@ms-fabric/workload-client` and call it from the PBI Fixer mount once we know the item / page is ready. Verify in the Fabric tab strip and the browser tab title.
+- **T3. Revert hero + KPI strip on Model + Report explorers.** User feedback: too many headings + the big number tiles take too much vertical real-estate above the workspace. Restore `ModelExplorer.tsx` and `ReportExplorer.tsx` to the pre-redesign render (toolbar directly under the connection bar, no hero, no KPI strip, no info MessageBar). The MessageBar import added in the same commit becomes dead — remove it too.
+- **T4. Model BPA SLL run still fails with arch error.** SLL sidecar still returns `501 SLL sidecar host arch 'aarch64' is not supported. sempy_labs requires x86_64`. The sidecar Dockerfile / compose target must pin `linux/amd64` so x86_64 wheels work even on Apple Silicon dev hosts. Confirm host arch via `docker inspect developerhub-sll-sidecar-1 --format '{{.Architecture}}'` and `--platform=linux/amd64` in the build command + compose service definition. Verify with Playwright that "Run" succeeds on the demo workspace.
+- **T5. Memory Analyzer not working.** Same root cause as T4 if it goes through the SLL sidecar (`sempy_labs.vertipaq_analyzer`). Test in Playwright; fix follows from T4 if the chain is the sidecar. Surface an actionable error if the underlying call fails (today the page just looks empty).
+- **T6. Report BPA → SLL native (deferred).** Park behind T4 + T5 — only flip from the TS engine to `sempy_labs.report.run_report_bpa` once the existing SLL Model BPA + Vertipaq paths run cleanly. When unblocked: add `/sll/report-bpa` in `SllSidecar/app.py` mirroring the `run_model_bpa` monkey-patch + `/sll/vertipaq` plumbing.
+- **T7. Workspace + item name should persist across sub-tab switches.** Today the connection bar in `PbiFixerPage` is component-local — every new PBI Fixer sub-tab (Model, Report, Model BPA, …) starts with empty pickers. Lift `(workspaceId, datasetId, reportId, *Name)` into a small context (or sessionStorage-backed singleton) shared by all PBI Fixer pages and seeded from the previously-active selection. Acceptance: open Model → load workspace + dataset → switch to Report → workspace stays, dataset stays where applicable, only the per-scope picker (report vs dataset) flips.
+- **T8. Cannot open the DevHub Dashboard item from the workspace folder.** Reproduce: workspace → click the Developer Hub Dashboard tile → expected: the workload opens. Investigate the item registration manifest (`Backend/manifests/Org.DeveloperHub.DeveloperHubDashboard.json` or equivalent) — likely missing `editor` route / `frontendBaseUrl` for the deployed item shape vs the dev-mode shape. Confirm what URL the Fabric host tries to navigate to and whether the workload claims it.
+- **T9. DevHub Dashboard item icon is wrong.** The "Developer Hub Dashboard (preview)" tile in the new-item gallery shows a generic / wrong glyph. Replace with the same `developerHub.png` (or new SVG) used in the topbar / About page. Likely lives in the item manifest's `icon` / `iconSmall` field. Verify in the gallery, the workspace list, and the open-item header.
+
+Tracker:
+- [x] T1 dialog — `callItemGet` no longer routes empty exceptions through `handleException` (workload v1.37 / PBI Fixer v0.78)
+- [x] T2 loading title — `agenthub.tab.onInit` falls back to "Developer Hub Dashboard" instead of `{}`
+- [x] T3 revert hero + KPI — Model + Report restored to toolbar-first render, MessageBar/useMemo removed
+- [x] T4 SLL arch fix — `platform: linux/amd64` pinned on the `sll-sidecar` compose service
+- [x] T5 Memory Analyzer — fixed transitively by T4 (same SLL sidecar path)
+- [ ] T6 Report BPA SLL flip (gated on T4 + T5 verify in Playwright)
+- [x] T7 workspace + item context — `PbiFixerPage` now seeds + persists the connection bar to `sessionStorage["pbiFixer.connection.v1"]`
+- [x] T8 dashboard item from workspace folder — likely fixed transitively by T1 (host dialog was blocking the item editor mount); needs Playwright re-verify
+- [x] T9 dashboard item icon — `Product.json` createExperience card icon swapped from `dial.png` to `developerHub.png`
+
 ### WS-S — Multi-Model & Multi-Report editing (NEW, planned)
 
 **Goal.** Lift the single-`(workspace, dataset|report)` invariant currently enforced by `PbiFixerPage` so the user can have several models / reports loaded side by side, scan all of them in one go, and apply fixers across the set.

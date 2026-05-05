@@ -48,10 +48,10 @@
           "title": "CreateHub_Card_AgentHub_Title",
           "description": "CreateHub_Card_AgentHub_Description",
           "icon": {
-            "name": "assets/images/dial.png"
+            "name": "assets/images/developerHub.png"
           },
           "icon_small": {
-            "name": "assets/images/dial.png"
+            "name": "assets/images/developerHub.png"
           },
           "availableIn": [
             "home",
