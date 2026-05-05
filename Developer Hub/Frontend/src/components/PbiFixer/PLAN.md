@@ -71,16 +71,15 @@ Files in place:
 
 Follow-up (low-prio): confirm About content lists Lukasz + Alexander as authors and credits Michael Kovalsky for `semantic-link-labs`; confirm a single source-of-truth hub version (workload version constant lives in topbar — see WL-1 C8).
 
-### WS-O design alignment — **bumped priority** based on user feedback
-Visual alignment between Fixer and AgentHub is now an active complaint, not a "nice to have". Focus the first WS-O slice on the cheapest wins:
-- **Font color and font sizes** (explicit user request) — audit every `Text` / heading / body in the Fixer surfaces against the AgentHub tokens. Strip remaining hard-coded `fontFamily` and `color` overrides in `ModelExplorer.tsx`, `ReportExplorer.tsx`, page headers, and DataGrid header rows.
-- Then proceed with the rest of WS-O Phase 1 (sidebar palette, active accent bar, topbar). See **Appendix B** for the full plan.
+### WS-O design alignment — ✅ shipped (v0.52–v0.55)
+
+All 10 locked WS-O decisions landed across v0.52–v0.55. See [CHANGELOG.md](CHANGELOG.md). Remaining low-prio polish: full `#005faa` audit across status / link colors (decision #8), and the Phase 1 "font color + sizes" sweep can be reopened opportunistically if any divergence is reported.
 
 ---
 
 ## Remaining fixers (WS-E backlog)
 
-13 fixer handlers shipped in v0.41 (8 SM + 5 Report — see CHANGELOG WS-E). Priority for the rest:
+25 fixer handlers shipped to date — 13 in v0.41, 6 in v0.50 (P1), 6 in v0.51 (P2). See [CHANGELOG.md](CHANGELOG.md) for the full list. Priority for the rest:
 
 ### IBCS workstream (P0 — Alexander's signature feature) — **WS-E-IBCS**
 
@@ -252,9 +251,6 @@ No code shipped. This spike is purely the architectural decision + revised ship 
 
 | Fixer | Python File | Lines | Priority |
 |---|---|---|---|
-| Fix Bar Chart Formatting | `report/_Fix_BarChart.py` | 299 | P1 |
-| Fix Column Chart Formatting | `report/_Fix_ColumnChart.py` | 299 | P1 |
-| Fix Visual Alignment | `_Fix_VisualAlignment.py` | ~200 | P1 (snap misaligned visuals) |
 | Migrate Report-Level Measures | `report/_Fix_MigrateReportLevelMeasures.py` | ~150 | P2 |
 | Upgrade PBIRLegacy → PBIR | `report/_Fix_UpgradeToPbir.py` | 100 | P2 (sempy-labs runtime) |
 | Migrate Slicers → Slicerbar | `report/_Fix_MigrateSlicerToSlicerbar.py` | ~150 | P2 |
@@ -264,17 +260,8 @@ No code shipped. This spike is purely the architectural decision + revised ship 
 
 | Fixer | Python File | Lines | Priority |
 |---|---|---|---|
-| Add Measures from Columns | `_Add_MeasuresFromColumns.py` | ~150 | P1 |
-| Add LastRefresh Table | `_Add_Table_LastRefresh.py` | ~80 | P1 |
-| Avoid Adding 0 (in measures) | `_Fix_AvoidAdding0.py` | ~60 | P1 |
-| Trim Object Names | `_Fix_TrimObjectNames.py` | 71 | P2 |
-| Use DIVIDE Function | `_Fix_UseDivideFunction.py` | 59 | P2 |
-| Mark Primary Keys | `_Fix_MarkPrimaryKeys.py` | 44 | P2 |
-| Measure Descriptions | `_Fix_MeasureDescriptions.py` | 40 | P2 |
-| Capitalize Object Names | `_Fix_CapitalizeObjectNames.py` | ~60 | P2 |
-| Set Data Category | `_Fix_DataCategory.py` | ~80 | P2 |
-| Date Column Format | `_Fix_DateColumnFormat.py` | ~50 | P2 |
-| Default Data Source Version | `_Fix_DefaultDataSourceVersion.py` | ~50 | P2 |
+| Trim Object Names | `_Fix_TrimObjectNames.py` | 71 | P2 (rename: touches every TMDL ref + PBIR binding) |
+| Capitalize Object Names | `_Fix_CapitalizeObjectNames.py` | ~60 | P2 (rename: touches every TMDL ref + PBIR binding) |
 | Month Column Format | `_Fix_MonthColumnFormat.py` | 38 | P3 |
 | Sort Month Column | `_Fix_SortMonthColumn.py` | 61 | P3 |
 | Flag Column Format | `_Fix_FlagColumnFormat.py` | 48 | P3 |
@@ -288,9 +275,12 @@ No code shipped. This spike is purely the architectural decision + revised ship 
 | Cache Warming | `_Add_CacheWarming.py` | 269 | P3 |
 | Incremental Refresh | `_Add_IncrementalRefresh.py` | 139 | P3 |
 
-**Already shipped in v0.41** (for reference, do not re-port):
-- SM: `Fix_FloatingPointDataType`, `Fix_DoNotSummarize`, `Fix_DiscourageImplicitMeasures`, `Fix_IsAvailableInMdxFalse`, `Fix_MeasureFormat`, `Fix_PercentageFormat`, `Fix_WholeNumberFormat`, `Fix_HideForeignKeys`
-- Report: `Fix_PieChart`, `Fix_PageSize`, `Fix_HideVisualFilters`, `Fix_DisableShowItemsNoData`, `Fix_RemoveUnusedCustomVisuals`
+**Already shipped — do not re-port** (see CHANGELOG for details):
+- v0.41 SM: `Fix_FloatingPointDataType`, `Fix_DoNotSummarize`, `Fix_DiscourageImplicitMeasures`, `Fix_IsAvailableInMdxFalse`, `Fix_MeasureFormat`, `Fix_PercentageFormat`, `Fix_WholeNumberFormat`, `Fix_HideForeignKeys`
+- v0.41 Report: `Fix_PieChart`, `Fix_PageSize`, `Fix_HideVisualFilters`, `Fix_DisableShowItemsNoData`, `Fix_RemoveUnusedCustomVisuals`
+- v0.50 SM: `Fix_AvoidAdding0`, `Add_LastRefreshTable`, `Add_MeasuresFromColumns`
+- v0.50 Report: `Fix_BarChart`, `Fix_ColumnChart`, `Fix_VisualAlignment`
+- v0.51 SM: `Fix_DateColumnFormat`, `Fix_DataCategory`, `Fix_MarkPrimaryKeys`, `Fix_MeasureDescriptions`, `Fix_UseDivideFunction`, `Fix_DefaultDataSourceVersion`
 
 **Priority legend:**
 - **P0** — IBCS batch (signature feature, ship as one workstream)
@@ -307,21 +297,21 @@ Lower-priority parity items still missing from the existing TS components:
 ### Model Explorer
 - DAX formatting (Python uses TOM `format_dax_expression`)
 - Table data preview (TOPN DAX query + render)
-- Editable properties (XMLA/TOM write-back)
+- ~~Editable properties (XMLA/TOM write-back)~~ — **measure write-back shipped.** `updateMeasureProperties` in [`services/fabricApi.ts`](services/fabricApi.ts) patches `expression` / `formatString` / `description` / `displayFolder` / `isHidden` per-measure via TMDL round-trip; wired into `ModelExplorer.tsx` `handleSaveEdits`. Column / table / relationship property edits still TODO.
 - Multi-model support (types defined, logic stubbed)
 - Perspective filtering (filter tree by perspective)
-- Hierarchy levels rendering in tree (types defined)
-- Partition details in properties (types defined)
+- Hierarchy levels rendering in tree (hierarchies parsed in `fabricApi.ts`, levels not yet emitted into the tree)
+- Partition details in properties (count shown, properties not expanded)
 - Right-click context menu actions
 - Scan mode (BPA badges on tree items)
 
 ### Report Explorer
-- ~~Live report preview / thumbnail~~ — **shipped.** Live, interactive Power BI report embed (not a thumbnail) via short-lived embed token minted server-side; `Load Report` / post-Save bumps a refresh key for fresh embed. See `ReportPreview` in `ReportExplorer.tsx` + `getReportEmbedToken` in `services/fabricApi.ts`.
-- ~~Editable properties save-back~~ — **shipped (WS-Q v0.42).** `handleSaveProps` calls `updateVisualProperties` (visual + page) → backend `/pbi-fixer/visual/update` → Fabric REST `updateDefinition` LRO. Preview refreshes on save (WS-Q v0.43).
 - Per-visual quick-fix buttons in properties panel
-- Scan mode badges (counts shown, scan execution missing)
+- Scan mode badges (counts shown, scan execution missing — `scanResults` is an empty `useState`)
 - Visual config JSON preview
 - Drag-and-drop page reorder
+
+> Shipped items moved out of this backlog: live Power BI embed (WS-Q v0.43), visual + page property save-back (WS-Q v0.42 — `updateVisualProperties` → `/pbi-fixer/visual/update`), measure property save-back (TMDL `updateMeasureProperties`). See [CHANGELOG.md](CHANGELOG.md).
 
 ### Other tabs not yet planned as standalone WSes
 None — all originally-identified tabs are covered: Fixer (WS-E), Perspectives (WS-F), Translations (WS-G), Model BPA (WS-C), Report BPA (WS-D), Memory/Vertipaq (WS-B), Delta (WS-I), Prototype (WS-M), Diagram (WS-J), Script Runner (WS-K). About moved out to the AgentHub shell (WS-L revised). Visual Properties editor shipped as WS-Q.
@@ -420,18 +410,35 @@ All other workstreams add to their own files + append-only exports from `types/s
 
 ---
 
-# Appendix B — WS-O — Design Alignment with AgentHub (proposed)
+# Appendix B — WS-O — Design Alignment with AgentHub (✅ shipped v0.52–v0.55)
 
-> Goal: make PBI Fixer shell visually and behaviourally feel like a first-class citizen of Developer Hub / AgentHub. Today the surfaces share host page chrome but diverge inside the `pbifixer` iframe — different sidebar palette, nav styling, active-state language, topbar pattern, no shared transitions.
+> Historical reference. Original side-by-side analysis, phase plan, and the 10 locked decisions are preserved in git history; the implementation summary now lives in [CHANGELOG.md](CHANGELOG.md) under v0.52–v0.55.
 >
-> **Planning-only.** Open questions for Alexander listed at the end before WS-O kicks off.
+> Outstanding low-prio polish (audited May 2026): full `#005faa` audit across status / link colors (decision #8 — `#555` `propLabel` swapped to `tokens.colorNeutralForeground2`; brand-color audit across the rest still pending).
 
-## Side-by-side comparison (current build)
+## Locked decisions (kept for reference)
 
-### Sidebar / left navigation
-| Aspect | AgentHub (`AgentHubLayout.tsx` + `styles.scss`) | PBI Fixer (`PbiFixerNav.tsx` Fluent `makeStyles`) |
+The 10 decisions below were locked in May 2026 and shipped across v0.52\u2013v0.55. Side-by-side comparison, phase plan, and per-decision implications removed (kept in git history).
+
+| # | Decision | Notes |
 |---|---|---|
-| Width | 224 px, animated collapse (200 ms cubic-bezier 0.33,0,0.67,1) | 220 px, no collapse, no animation |
+| 1 | Connection bar \u2014 restyle in place | AgentHub warm `#faf9f8` + 1 px hairline so it reads as topbar sub-header. |
+| 2 | Migrate Fixer chrome to shared SCSS classes | `PbiFixerNav.tsx` + `PbiFixerPage.tsx` now use `pbifixer-subnav-item` / shared sidenav classes. |
+| 3 | Topbar right cluster \u2014 skip entirely | Host AgentHub topbar covers the right side. |
+| 4 | Lazy-loading \u2014 deferred | Park for a dedicated perf pass when bundle size becomes a complaint. |
+| 5 | EditorGroups / tabs integration \u2014 separate workstream | Needs Lukasz alignment before sizing. |
+| 6 | URL-driven nav, drop sessionStorage | `?nav=` query is the source of truth; `popstate` listener wires browser back/forward. `pbiFixer.expandedGroups` sessionStorage entry intentionally kept. |
+| 7 | Sidebar footer \u2014 leave empty | No "Report a bug" / version pill in the Fixer sidebar bottom. |
+| 8 | AgentHub blue (`#005faa`) everywhere \u2014 including text | Partial: `#555` `propLabel` swapped to `tokens.colorNeutralForeground2`; full audit across status / link colors still pending. |
+| 9 | Page-swap motion \u2014 crossfade matching AgentHub | ~120 ms opacity crossfade on nav change. |
+| 10 | Hide nav items with `ready: false` | `NAV_ITEMS` in `types/nav.tsx` exports the filtered subset; `ALL_NAV_ITEMS_REGISTRY` keeps the full registry for `NavKey` resolution. |
+
+<!-- Removed in audit (May 5 2026): the original Side-by-side comparison, Phase 1/2/3 alignment plan, Owns/Acceptance lists, and Implications section. All shipped across v0.52\u2013v0.55. The line below is a placeholder so the heading boundary is preserved.
+
+### Removed sections (see git history)
+| Aspect | AgentHub | PBI Fixer (pre-WS-O) |
+|---|---|---|
+| Width | 224 px, animated collapse | 220 px, no collapse |
 | Background | `#f4f3f2` (warm grey) | `tokens.colorNeutralBackground2` (cooler) |
 | Border-right | None — background contrast separates | 1 px `colorNeutralStroke2` divider |
 | Item shape | `border-radius: 8px`, `margin: 2px 10px`, padding `8px 12px` | `borderRadiusMedium` (4 px), `padding: 6px 10px` |
