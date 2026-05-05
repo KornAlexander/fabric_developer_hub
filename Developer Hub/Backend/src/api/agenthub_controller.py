@@ -2585,40 +2585,17 @@ async def resolve_approval(
 
 
 # ── Agent template & config endpoints ────────────────────────────────
+#
+# IMPORTANT: literal-path routes (``/agents/my``, ``/agents/configure``)
+# MUST be declared BEFORE the parameterised ``/agents/{agent_id}`` route.
+# FastAPI matches routes in registration order, so if the parameterised
+# route is registered first it shadows the literal ones (e.g. a GET on
+# ``/api/agents/my`` would match ``/agents/{agent_id}`` with
+# ``agent_id="my"`` and return 404 "Agent template not found").
 
 @router.get("/agents")
 async def list_agent_templates():
     return [t.model_dump() for t in list_templates()]
-
-
-@router.get("/agents/{agent_id}")
-async def get_agent_template(agent_id: str):
-    t = get_template(agent_id)
-    if not t:
-        raise HTTPException(404, "Agent template not found")
-    return t.model_dump()
-
-
-@router.post("/agents/configure")
-async def configure_agent(
-    req: AgentConfigRequest,
-    request: Request,
-    ctx: AuthorizationContext | None = Depends(require_user),
-):
-    user_id = _user_key_from_context(ctx)
-    user_upn = _user_upn_from_context(ctx)
-    config = UserAgentConfig(
-        id=str(uuid.uuid4()),
-        user_id=user_id,
-        user_upn=user_upn,
-        agent_template_id=req.agent_template_id,
-        access_levels=req.access_levels,
-        tool_integrations=req.tool_integrations,
-        runtime_schedule=req.runtime_schedule,
-        custom_prompt_additions=req.custom_prompt_additions,
-    )
-    session_store.save_agent_config(config)
-    return config.model_dump(mode="json")
 
 
 @router.get("/agents/my")
@@ -2652,6 +2629,36 @@ async def delete_my_agent(
     if not ok:
         raise HTTPException(404, "Config not found")
     return {"status": "deleted"}
+
+
+@router.post("/agents/configure")
+async def configure_agent(
+    req: AgentConfigRequest,
+    request: Request,
+    ctx: AuthorizationContext | None = Depends(require_user),
+):
+    user_id = _user_key_from_context(ctx)
+    user_upn = _user_upn_from_context(ctx)
+    config = UserAgentConfig(
+        id=str(uuid.uuid4()),
+        user_id=user_id,
+        user_upn=user_upn,
+        agent_template_id=req.agent_template_id,
+        access_levels=req.access_levels,
+        tool_integrations=req.tool_integrations,
+        runtime_schedule=req.runtime_schedule,
+        custom_prompt_additions=req.custom_prompt_additions,
+    )
+    session_store.save_agent_config(config)
+    return config.model_dump(mode="json")
+
+
+@router.get("/agents/{agent_id}")
+async def get_agent_template(agent_id: str):
+    t = get_template(agent_id)
+    if not t:
+        raise HTTPException(404, "Agent template not found")
+    return t.model_dump()
 
 
 # ── Audit ─────────────────────────────────────────────────────────────
