@@ -97,10 +97,15 @@ async function resolveViaPersistentProfileDeviceFlow(
         return { source: `persistent Chromium profile is already in use: ${profilePath}` };
     }
 
-    const deviceResponse = await request.post(`${backendUrl}/api/github/device-code`, {
-        data: {},
-        timeout: 30_000,
-    });
+    let deviceResponse;
+    try {
+        deviceResponse = await request.post(`${backendUrl}/api/github/device-code`, {
+            data: {},
+            timeout: 30_000,
+        });
+    } catch (error) {
+        return { source: `persistent profile device flow could not start: ${redact(error instanceof Error ? error.message : String(error))}` };
+    }
     if (!deviceResponse.ok()) {
         return { source: `persistent profile device flow could not start (${deviceResponse.status()}): ${redact(await deviceResponse.text())}` };
     }
@@ -239,10 +244,15 @@ async function pollDeviceFlowToken(
     const intervalMs = Math.max(Number(device.interval || 5) * 1000, 3_000);
 
     while (Date.now() - started < timeoutMs) {
-        const response = await request.post(`${backendUrl}/api/github/poll-token`, {
-            data: { device_code: device.device_code },
-            timeout: 30_000,
-        });
+        let response;
+        try {
+            response = await request.post(`${backendUrl}/api/github/poll-token`, {
+                data: { device_code: device.device_code },
+                timeout: 30_000,
+            });
+        } catch (error) {
+            return { message: `persistent profile device flow poll failed: ${redact(error instanceof Error ? error.message : String(error))}` };
+        }
         if (!response.ok()) return { message: `persistent profile device flow poll failed (${response.status()}): ${redact(await response.text())}` };
         const body = await response.json() as DeviceFlowResponse;
         if (body.status === "pending") {

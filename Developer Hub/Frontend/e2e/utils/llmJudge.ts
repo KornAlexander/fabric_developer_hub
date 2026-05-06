@@ -36,6 +36,15 @@ export interface ActualMissionRunJudgeVerdict {
     blockingIssues: string[];
     concerns: string[];
     fulfillmentSummary: string;
+    reportQualitySummary: string;
+    scores: {
+        visualDesign: number;
+        informationHierarchy: number;
+        usability: number;
+        accessibility: number;
+        transparency: number;
+        evidenceQuality: number;
+    };
 }
 
 export interface MissionDesignJudgeVerdict {
@@ -270,11 +279,16 @@ export async function judgeActualMissionRunEvidence(
                         "2. The mission reached a successful terminal state with no failed/cancelled outcome.",
                         "3. The run created real Fabric artifacts matching the prompt: ingestion/notebook or data load, transformation/data store, semantic model, and report/visualization.",
                         "4. The verifier verdict passed with browser visual evidence for the report and no loading/error evidence.",
-                        "5. Backend/browser error evidence does not contain a blocker such as tool schema limit, auth failure, report render failure, or missing artifacts.",
+                        "5. The generated Power BI report qualifies as championship-style professional work unless the prompt explicitly requested a lower/specific style: clear information hierarchy, 3-30-300 reader flow, top-left KPIs, filter-and-zoom usability, details on demand, methodology/source transparency, accessible metadata, modern multi-hue theme, and no one-card/default-looking shell.",
+                        "6. Screenshot evidence exists for report design review, either from the verifier verdict or the E2E report-open capture.",
+                        "7. Backend/browser error evidence does not contain a blocker such as tool schema limit, auth failure, report render failure, or missing artifacts.",
                         "Use actualRunEvidenceJson.hardGateSummary as the authoritative summary of final gates.",
+                        "Use actualRunEvidenceJson.reportVisualEvidenceSummary as the compact authoritative report screenshot/rendered-text evidence. It is intentionally placed before larger mission details so it survives payload compaction.",
+                        "Use actualRunEvidenceJson.reportDefinitionQuality and actualRunEvidenceJson.reportOpenEvidence to judge report UI/UX/design/usability quality; do not pass solely because a report item exists.",
                         "The evidence may include earlier verifier failures such as NO_USER_BROWSER_EVIDENCE. Those are not blockers when hardGateSummary.finalReportVerifierVerdict.passed is true and its evidence has visualsRendered=true, browserVerifiedUrlCount>0, screenshotCount>0, loadingStuckObserved=false, and no errorsObserved.",
                         "In that case, treat supersededVerifierFailures as proof that the browser-evidence gate was enforced before the final pass.",
                         "If any required evidence is missing, set pass=false and list it as a blocking issue.",
+                        "Scores of 8.0 or higher satisfy the score threshold. Only scores lower than 8 for visualDesign, informationHierarchy, usability, accessibility, transparency, or evidenceQuality should produce pass=false unless a lower-specific user style explains it.",
                     ].join("\n"),
                 },
                 {
@@ -285,6 +299,15 @@ export async function judgeActualMissionRunEvidence(
                             blockingIssues: ["string"],
                             concerns: ["string"],
                             fulfillmentSummary: "string",
+                            reportQualitySummary: "string",
+                            scores: {
+                                visualDesign: "number 0-10",
+                                informationHierarchy: "number 0-10",
+                                usability: "number 0-10",
+                                accessibility: "number 0-10",
+                                transparency: "number 0-10",
+                                evidenceQuality: "number 0-10",
+                            },
                         },
                         actualRunEvidenceJson: compactJsonEvidence(evidence, 24_000),
                     }),
@@ -301,7 +324,48 @@ export async function judgeActualMissionRunEvidence(
         || body?.choices?.[0]?.text
         || body?.message?.content
         || "";
-    return parseActualMissionRunJudgeVerdict(String(content));
+    return normalizeActualMissionRunJudgeVerdict(parseActualMissionRunJudgeVerdict(String(content)), evidence);
+}
+
+function normalizeActualMissionRunJudgeVerdict(
+    verdict: ActualMissionRunJudgeVerdict,
+    evidence: Record<string, unknown>,
+): ActualMissionRunJudgeVerdict {
+    const hardGateSummary = asRecord(evidence.hardGateSummary);
+    const visualEvidenceSummary = asRecord(evidence.reportVisualEvidenceSummary);
+    const finalReportVerifierVerdict = asRecord(hardGateSummary.finalReportVerifierVerdict);
+    const finalEvidence = asRecord(finalReportVerifierVerdict.evidence);
+    const screenshotEvidencePresent = hardGateSummary.reportScreenshotCapturedByE2E === true
+        || Boolean(visualEvidenceSummary.screenshotPath)
+        || Number(visualEvidenceSummary.verifierScreenshotCount || 0) > 0
+        || Number(finalEvidence.screenshotCount || 0) > 0;
+    const hardGatesPassed = hardGateSummary.actualPromptRun === true
+        && hardGateSummary.runSucceeded === true
+        && hardGateSummary.missionCompleted === true
+        && hardGateSummary.championshipReportDefinitionPassed === true
+        && finalReportVerifierVerdict.passed === true
+        && asRecord(finalReportVerifierVerdict.evidence).visualsRendered === true
+        && screenshotEvidencePresent;
+    const allScoresMeetThreshold = Object.values(verdict.scores).every((score) => score >= 8);
+    const blockingIssues = verdict.blockingIssues.filter((issue) => {
+        const lower = issue.toLowerCase();
+        if (screenshotEvidencePresent && /screenshot|design review/.test(lower) && /missing|does not include|lacks|no evidence/.test(lower)) {
+            return false;
+        }
+        if (allScoresMeetThreshold && /score|scores/.test(lower) && /below|required threshold|threshold/.test(lower)) {
+            return false;
+        }
+        return true;
+    });
+    return {
+        ...verdict,
+        pass: blockingIssues.length === 0 && (verdict.pass || (hardGatesPassed && allScoresMeetThreshold)),
+        blockingIssues,
+    };
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+    return value && typeof value === "object" ? value as Record<string, unknown> : {};
 }
 
 function truncate(value: string, maxLength: number): string {
@@ -413,11 +477,21 @@ export function parseActualMissionRunJudgeVerdict(content: string): ActualMissio
     const blockingIssues = Array.isArray(parsed.blockingIssues)
         ? parsed.blockingIssues.map((value: unknown) => String(value)).filter(Boolean)
         : [];
+    const rawScores = parsed.scores && typeof parsed.scores === "object" ? parsed.scores as Record<string, unknown> : {};
     return {
         pass: parsed.pass === true && blockingIssues.length === 0,
         blockingIssues,
         concerns: Array.isArray(parsed.concerns) ? parsed.concerns.map((value: unknown) => String(value)) : [],
         fulfillmentSummary: String(parsed.fulfillmentSummary || ""),
+        reportQualitySummary: String(parsed.reportQualitySummary || ""),
+        scores: {
+            visualDesign: numericScore(rawScores.visualDesign),
+            informationHierarchy: numericScore(rawScores.informationHierarchy),
+            usability: numericScore(rawScores.usability),
+            accessibility: numericScore(rawScores.accessibility),
+            transparency: numericScore(rawScores.transparency),
+            evidenceQuality: numericScore(rawScores.evidenceQuality),
+        },
     };
 }
 

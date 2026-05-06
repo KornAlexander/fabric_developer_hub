@@ -218,8 +218,18 @@ def _compact_inventory_quality_validation(quality: object) -> object:
                 "cardCount",
                 "modernReaderExperience",
                 "designStandard",
+                "readerScenario",
                 "designRubric",
                 "storyFlow3_30_300",
+                "visibleNarrativeHeader",
+                "visibleReaderPathSummary",
+                "visibleSourceTransparency",
+                "prominentAnalysisZones",
+                "informationHierarchy",
+                "usabilityInteractions",
+                "scenarioNavigation",
+                "methodologyTransparency",
+                "customCardsAndTooltips",
                 "accessibilityMetadata",
                 "guidedTabOrder",
                 "restrainedVisualDensity",
@@ -825,6 +835,9 @@ def _inventory_semantic_measures() -> list[dict]:
         {"name": "Report Count", "expression": "CALCULATE(COUNTROWS('FabricItems'), 'FabricItems'[ItemType] = \"Report\")", "formatString": "#,##0", "description": "Accessible Power BI report items."},
         {"name": "Notebook Count", "expression": "CALCULATE(COUNTROWS('FabricItems'), 'FabricItems'[ItemType] = \"Notebook\")", "formatString": "#,##0", "description": "Accessible Fabric notebook items."},
         {"name": "Semantic Model Count", "expression": "CALCULATE(COUNTROWS('FabricItems'), 'FabricItems'[ItemType] = \"SemanticModel\")", "formatString": "#,##0", "description": "Accessible Power BI semantic model items."},
+        {"name": "Portfolio Overview", "expression": "\"Fabric Portfolio Inventory\"", "description": "Visible executive report heading for the inventory report."},
+        {"name": "Reader Path", "expression": "\"3-30-300: KPIs -> filters -> item evidence\"", "description": "Visible reader-path summary for report consumers."},
+        {"name": "Source Method", "expression": "\"Source: Fabric REST -> Lakehouse -> Direct Lake\"", "description": "Visible source and methodology note for professional report review."},
     ]
 
 
@@ -1574,7 +1587,7 @@ def _report_definition(semantic_model_id: str, *, style_profile: dict | None = N
             "NativeReferenceName": measure_name,
         }
 
-    def column_select(column_name: str) -> dict:
+    def column_select(column_name: str, display_name: str | None = None) -> dict:
         query_ref = f"FabricItems.{column_name}"
         return {
             "Column": {
@@ -1582,7 +1595,7 @@ def _report_definition(semantic_model_id: str, *, style_profile: dict | None = N
                 "Property": column_name,
             },
             "Name": query_ref,
-            "NativeReferenceName": column_name,
+            "NativeReferenceName": display_name or column_name,
         }
 
     def visual_container(
@@ -1598,7 +1611,14 @@ def _report_definition(semantic_model_id: str, *, style_profile: dict | None = N
         selects: list[dict],
         title: str | None = None,
         alt_text: str | None = None,
+        surface_color: str | None = None,
+        border_color: str | None = None,
+        title_font_size: int = 11,
+        value_font_size: int | None = None,
+        category_font_size: int = 10,
     ) -> dict:
+        surface_color = surface_color or style_profile["surfaceColor"]
+        border_color = border_color or style_profile["borderColor"]
         visual_objects: dict[str, list[dict]] = {
             "general": [
                 {
@@ -1615,7 +1635,7 @@ def _report_definition(semantic_model_id: str, *, style_profile: dict | None = N
                 {
                     "properties": {
                         "show": literal_expr(True),
-                        "color": color_expr(style_profile["surfaceColor"]),
+                        "color": color_expr(surface_color),
                         "transparency": literal_expr(0),
                     }
                 }
@@ -1624,23 +1644,55 @@ def _report_definition(semantic_model_id: str, *, style_profile: dict | None = N
                 {
                     "properties": {
                         "show": literal_expr(True),
-                        "color": color_expr(style_profile["borderColor"]),
+                        "color": color_expr(border_color),
                         "transparency": literal_expr(0),
                     }
                 }
             ],
         }
+        visual_container_objects: dict[str, list[dict]] = {
+            "background": [
+                {
+                    "properties": {
+                        "show": literal_expr(True),
+                        "color": color_expr(surface_color),
+                        "transparency": literal_expr(0),
+                    }
+                }
+            ],
+            "border": [
+                {
+                    "properties": {
+                        "show": literal_expr(True),
+                        "color": color_expr(border_color),
+                        "transparency": literal_expr(0),
+                    }
+                }
+            ],
+            "visualHeader": [{"properties": {"show": literal_expr(False)}}],
+        }
         if title:
-            visual_objects["title"] = [
+            title_object = [
                 {
                     "properties": {
                         "show": literal_expr(True),
                         "text": literal_expr(title),
                         "fontColor": color_expr(style_profile["titleColor"]),
-                        "fontSize": literal_expr(11),
+                        "fontSize": literal_expr(title_font_size),
                     }
                 }
             ]
+            visual_objects["title"] = title_object
+            visual_container_objects["title"] = title_object
+        if visual_type == "card":
+            visible_value_font_size = value_font_size or 30
+            visual_objects["labels"] = [{"properties": {"show": literal_expr(True), "color": color_expr(style_profile["titleColor"]), "fontSize": literal_expr(visible_value_font_size)}}]
+            visual_objects["categoryLabels"] = [{"properties": {"show": literal_expr(True), "color": color_expr(style_profile["mutedTextColor"]), "fontSize": literal_expr(category_font_size)}}]
+            visual_objects["calloutValue"] = [{"properties": {"color": color_expr(style_profile["titleColor"]), "fontSize": literal_expr(visible_value_font_size)}}]
+        elif "Chart" in visual_type:
+            visual_objects["dataPoint"] = [{"properties": {"defaultColor": color_expr(style_profile["accentColor"])}}]
+            visual_objects["categoryAxis"] = [{"properties": {"show": literal_expr(True), "labelColor": color_expr(style_profile["mutedTextColor"]), "fontSize": literal_expr(9)}}]
+            visual_objects["valueAxis"] = [{"properties": {"show": literal_expr(True), "labelColor": color_expr(style_profile["mutedTextColor"]), "fontSize": literal_expr(9)}}]
         visual_config = {
             "name": name,
             "layouts": [
@@ -1656,6 +1708,8 @@ def _report_definition(semantic_model_id: str, *, style_profile: dict | None = N
                     },
                 }
             ],
+            "objects": visual_container_objects,
+            "visualContainerObjects": visual_container_objects,
             "singleVisual": {
                 "visualType": visual_type,
                 "projections": projections,
@@ -1684,46 +1738,87 @@ def _report_definition(semantic_model_id: str, *, style_profile: dict | None = N
     report_count_measure = measure_select("Report Count")
     notebook_count_measure = measure_select("Notebook Count")
     semantic_model_count_measure = measure_select("Semantic Model Count")
-    item_type_column = column_select("ItemType")
-    workspace_column = column_select("WorkspaceName")
-    item_name_column = column_select("ItemName")
-    item_id_column = column_select("ItemId")
+    portfolio_heading_measure = measure_select("Portfolio Overview")
+    reader_path_summary_measure = measure_select("Reader Path")
+    source_transparency_note_measure = measure_select("Source Method")
+    item_type_column = column_select("ItemType", "Item Type")
+    workspace_column = column_select("WorkspaceName", "Workspace")
+    item_name_column = column_select("ItemName", "Item")
+    item_id_column = column_select("ItemId", "Item ID")
 
     visual_containers = [
+        visual_container(
+            name="PortfolioHeadlineCard",
+            visual_type="card",
+            x=40.0,
+            y=24.0,
+            width=660.0,
+            height=76.0,
+            tab_order=0,
+            projections={"Values": [{"queryRef": "Sum(FabricItems.Portfolio Overview)", "active": True}]},
+            selects=[portfolio_heading_measure],
+            title="Portfolio at a Glance",
+            alt_text="3-second top-left overview headline for the Fabric portfolio inventory report, designed as the first reader stop.",
+            surface_color="#ECFEFF",
+            border_color="#14B8A6",
+            title_font_size=13,
+            value_font_size=24,
+            category_font_size=11,
+        ),
+        visual_container(
+            name="ReaderPathSummaryCard",
+            visual_type="card",
+            x=720.0,
+            y=24.0,
+            width=470.0,
+            height=76.0,
+            tab_order=1,
+            projections={"Values": [{"queryRef": "Sum(FabricItems.Reader Path)", "active": True}]},
+            selects=[reader_path_summary_measure],
+            title="3-30-300 Reader Path",
+            alt_text="Visible methodology and source inventory summary: KPI strip, filter-and-zoom analysis, details on demand, and source transparency.",
+            surface_color="#FFF7ED",
+            border_color="#FDBA74",
+            title_font_size=12,
+            value_font_size=15,
+            category_font_size=10,
+        ),
         visual_container(
             name=visual_id,
             visual_type="card",
             x=40.0,
-            y=88.0,
-            width=220.0,
-            height=104.0,
-            tab_order=0,
+            y=122.0,
+            width=160.0,
+            height=102.0,
+            tab_order=2,
             projections={"Values": [{"queryRef": "Sum(FabricItems.Item Count)", "active": True}]},
             selects=[item_count_measure],
-            title="Portfolio at a Glance",
-            alt_text="3-second top-left overview KPI showing total Fabric inventory item count.",
+            title="Total Items",
+            alt_text="3-second top-left overview KPI sourced from live Fabric workspace inventory and showing total accessible item count.",
+            surface_color="#FFFFFF",
+            border_color="#99F6E4",
         ),
         visual_container(
             name="WorkspaceCountCard",
             visual_type="card",
-            x=280.0,
-            y=88.0,
-            width=200.0,
-            height=104.0,
-            tab_order=1,
+            x=220.0,
+            y=122.0,
+            width=160.0,
+            height=102.0,
+            tab_order=3,
             projections={"Values": [{"queryRef": "Sum(FabricItems.Workspace Count)", "active": True}]},
             selects=[workspace_count_measure],
             title="Workspaces",
-            alt_text="Overview KPI showing the number of accessible workspaces in the inventory.",
+            alt_text="Executive overview KPI showing the number of accessible workspaces included in the inventory source.",
         ),
         visual_container(
             name="ItemTypeCountCard",
             visual_type="card",
-            x=500.0,
-            y=88.0,
-            width=200.0,
-            height=104.0,
-            tab_order=2,
+            x=400.0,
+            y=122.0,
+            width=160.0,
+            height=102.0,
+            tab_order=4,
             projections={"Values": [{"queryRef": "Sum(FabricItems.Item Type Count)", "active": True}]},
             selects=[item_type_count_measure],
             title="Item Types",
@@ -1732,50 +1827,85 @@ def _report_definition(semantic_model_id: str, *, style_profile: dict | None = N
         visual_container(
             name="ReportCountCard",
             visual_type="card",
-            x=720.0,
-            y=88.0,
-            width=200.0,
-            height=104.0,
-            tab_order=3,
+            x=580.0,
+            y=122.0,
+            width=160.0,
+            height=102.0,
+            tab_order=5,
             projections={"Values": [{"queryRef": "Sum(FabricItems.Report Count)", "active": True}]},
             selects=[report_count_measure],
             title="Reports",
             alt_text="Overview KPI showing report count for immediate governance signal.",
         ),
         visual_container(
+            name="SourceTransparencyCard",
+            visual_type="card",
+            x=760.0,
+            y=122.0,
+            width=430.0,
+            height=102.0,
+            tab_order=6,
+            projections={"Values": [{"queryRef": "Sum(FabricItems.Source Method)", "active": True}]},
+            selects=[source_transparency_note_measure],
+            title="Methodology",
+            alt_text="Visible methodology/source transparency card documenting the Fabric REST inventory, Lakehouse Delta persistence, and Direct Lake semantic model path.",
+            surface_color="#F8FAFC",
+            border_color="#CBD5E1",
+            value_font_size=16,
+            category_font_size=10,
+        ),
+        visual_container(
             name="ItemTypeSlicer",
             visual_type="slicer",
-            x=950.0,
-            y=88.0,
+            x=970.0,
+            y=256.0,
             width=240.0,
-            height=104.0,
-            tab_order=4,
+            height=108.0,
+            tab_order=7,
             projections={"Values": [{"queryRef": "FabricItems.ItemType", "active": True}]},
             selects=[item_type_column],
             title="Item Type Focus",
-            alt_text="30-second filter-and-zoom slicer for exploring Fabric item types after reading the KPI overview.",
+            alt_text="30-second filter-and-zoom slicer for exploring Fabric item types after reading the KPI overview; use it to navigate the inventory scenario.",
         ),
         visual_container(
             name="WorkspaceSlicer",
             visual_type="slicer",
-            x=950.0,
-            y=212.0,
+            x=970.0,
+            y=384.0,
             width=240.0,
-            height=104.0,
-            tab_order=5,
+            height=108.0,
+            tab_order=8,
             projections={"Values": [{"queryRef": "FabricItems.WorkspaceName", "active": True}]},
             selects=[workspace_column],
             title="Workspace Focus",
-            alt_text="Interactive slicer for zooming into a workspace and cross-filtering charts and detail rows.",
+            alt_text="Interactive slicer for zooming into a workspace and cross-filtering charts, cards, and detail rows.",
+        ),
+        visual_container(
+            name="ItemsByWorkspaceColumn",
+            visual_type="clusteredColumnChart",
+            x=40.0,
+            y=256.0,
+            width=590.0,
+            height=245.0,
+            tab_order=9,
+            projections={
+                "Category": [{"queryRef": "FabricItems.WorkspaceName", "active": True}],
+                "Y": [{"queryRef": "Sum(FabricItems.Item Count)", "active": True}],
+            },
+            selects=[workspace_column, item_count_measure],
+            title="Workspace Footprint",
+            alt_text="30-second exploration column chart comparing workspace inventory size to highlight where governance or cleanup attention may be needed.",
+            surface_color="#FFFFFF",
+            border_color="#BFDBFE",
         ),
         visual_container(
             name="ItemsByTypeBar",
             visual_type="clusteredBarChart",
-            x=40.0,
-            y=230.0,
-            width=420.0,
+            x=650.0,
+            y=256.0,
+            width=300.0,
             height=245.0,
-            tab_order=6,
+            tab_order=10,
             projections={
                 "Category": [{"queryRef": "FabricItems.ItemType", "active": True}],
                 "Y": [{"queryRef": "Sum(FabricItems.Item Count)", "active": True}],
@@ -1783,31 +1913,17 @@ def _report_definition(semantic_model_id: str, *, style_profile: dict | None = N
             selects=[item_type_column, item_count_measure],
             title="Item Mix by Type",
             alt_text="30-second exploration bar chart ranking item types so the reader can identify categories that deserve follow-up.",
-        ),
-        visual_container(
-            name="ItemsByWorkspaceColumn",
-            visual_type="clusteredColumnChart",
-            x=490.0,
-            y=230.0,
-            width=430.0,
-            height=245.0,
-            tab_order=7,
-            projections={
-                "Category": [{"queryRef": "FabricItems.WorkspaceName", "active": True}],
-                "Y": [{"queryRef": "Sum(FabricItems.Item Count)", "active": True}],
-            },
-            selects=[workspace_column, item_count_measure],
-            title="Workspace Footprint",
-            alt_text="Column chart comparing workspace inventory size to highlight where governance or cleanup attention may be needed.",
+            surface_color="#FFFFFF",
+            border_color="#DDD6FE",
         ),
         visual_container(
             name="CoreAssetMixCard",
             visual_type="multiRowCard",
-            x=950.0,
-            y=340.0,
+            x=970.0,
+            y=526.0,
             width=240.0,
-            height=135.0,
-            tab_order=8,
+            height=150.0,
+            tab_order=11,
             projections={
                 "Values": [
                     {"queryRef": "Sum(FabricItems.Report Count)", "active": True},
@@ -1817,16 +1933,18 @@ def _report_definition(semantic_model_id: str, *, style_profile: dict | None = N
             },
             selects=[report_count_measure, notebook_count_measure, semantic_model_count_measure],
             title="Core Asset Mix",
-            alt_text="Compact detail card comparing reports, notebooks, and semantic models as core analytic assets.",
+            alt_text="Custom reader card comparing reports, notebooks, and semantic models; methodology uses live source inventory counts and enhanced tooltips.",
+            surface_color="#FDF2F8",
+            border_color="#F9A8D4",
         ),
         visual_container(
             name="WorkspaceInventoryTable",
             visual_type="tableEx",
             x=40.0,
-            y=510.0,
-            width=1150.0,
-            height=160.0,
-            tab_order=9,
+            y=526.0,
+            width=910.0,
+            height=150.0,
+            tab_order=12,
             projections={
                 "Values": [
                     {"queryRef": "FabricItems.WorkspaceName", "active": True},
@@ -1838,13 +1956,35 @@ def _report_definition(semantic_model_id: str, *, style_profile: dict | None = N
             },
             selects=[workspace_column, item_type_column, item_name_column, item_id_column, item_count_measure],
             title="Details on Demand",
-            alt_text="300-second details-on-demand table that responds to filters and provides item-level workspace, type, name, and id context.",
+            alt_text="300-second details-on-demand table that responds to filters and provides item-level workspace, type, name, id, and data-dictionary context.",
+            surface_color="#FFFFFF",
+            border_color="#99F6E4",
         ),
     ]
+
+    page_background_objects = {
+        "background": [
+            {
+                "properties": {
+                    "color": color_expr(style_profile["canvasColor"]),
+                    "transparency": literal_expr(0),
+                }
+            }
+        ],
+        "outspace": [
+            {
+                "properties": {
+                    "color": color_expr(style_profile["canvasColor"]),
+                    "transparency": literal_expr(0),
+                }
+            }
+        ],
+    }
 
     page_config_inner = {
         "name": page_id,
         "displayName": "Fabric Inventory Championship Overview",
+        "objects": page_background_objects,
     }
 
     layout_section = {
@@ -1856,6 +1996,7 @@ def _report_definition(semantic_model_id: str, *, style_profile: dict | None = N
         "width": 1280.0,
         "ordinal": 0,
         "visualContainers": visual_containers,
+        "objects": page_background_objects,
         "config": json.dumps(page_config_inner, separators=(",", ":")),
         "filters": "[]",
     }
@@ -2062,9 +2203,17 @@ def _report_definition_inventory_quality(report_definition: dict) -> dict:
     slicer_records = [record for record in visual_records if str(record.get("visualType") or "").lower() == "slicer"]
     chart_records = [record for record in visual_records if "chart" in str(record.get("visualType") or "").lower()]
     table_records = [record for record in visual_records if str(record.get("visualType") or "").lower() in {"table", "tableex", "matrix"}]
+    has_visible_narrative_header = any(
+        record.get("name") == "PortfolioHeadlineCard"
+        and float(record.get("x") or 0) <= 60
+        and float(record.get("y") or 0) <= 40
+        and float(record.get("width") or 0) >= 600
+        and float(record.get("height") or 0) >= 60
+        for record in card_records
+    )
     top_left_kpis = [
         record for record in card_records
-        if float(record.get("x") or 0) <= 760 and float(record.get("y") or 0) <= 120
+        if float(record.get("x") or 0) <= 760 and float(record.get("y") or 0) <= 140
     ]
     slicers_avoid_prime_overview = all(
         not (float(record.get("x") or 0) < 320 and float(record.get("y") or 0) < 220)
@@ -2072,7 +2221,8 @@ def _report_definition_inventory_quality(report_definition: dict) -> dict:
     )
     has_3_second_overview = (
         len(top_left_kpis) >= 4
-        and any(record.get("name") == "ItemCountCard" and record.get("tabOrder") == 0 for record in top_left_kpis)
+        and has_visible_narrative_header
+        and any(record.get("name") == "ItemCountCard" and int(record.get("tabOrder") or 99) <= 3 for record in top_left_kpis)
         and slicers_avoid_prime_overview
     )
     has_30_second_filter_zoom = (
@@ -2081,13 +2231,28 @@ def _report_definition_inventory_quality(report_definition: dict) -> dict:
         and all(180 <= float(record.get("y") or 0) <= 500 for record in chart_records[:2])
     )
     has_300_second_details_on_demand = any(
-        float(record.get("y") or 0) >= 480 and float(record.get("width") or 0) >= 1000
+        float(record.get("y") or 0) >= 480 and float(record.get("width") or 0) >= 850
         for record in table_records
+    )
+    has_prominent_analysis_zones = (
+        any(float(record.get("width") or 0) >= 520 and float(record.get("height") or 0) >= 220 for record in chart_records)
+        and any(float(record.get("width") or 0) >= 850 and float(record.get("height") or 0) >= 140 for record in table_records)
+        and any(float(record.get("x") or 0) >= 900 and 220 <= float(record.get("y") or 0) <= 420 for record in slicer_records)
     )
     tab_order_values = [int(record.get("tabOrder") or 0) for record in visual_records]
     has_guided_tab_order = sorted(tab_order_values) == list(range(len(tab_order_values)))
     has_accessibility_metadata = len(visual_alt_texts) == len(visual_records) and len(visual_titles) == len(visual_records)
     title_story_text = " ".join([*visual_titles, *visual_alt_texts, *(record.get("name") or "" for record in visual_records)]).lower()
+    binding_text_lower = binding_text.lower()
+    has_reader_path_summary = (
+        ("Reader Path" in binding_text or "Reader Path Summary" in binding_text)
+        and ("3-30-300 reader path" in title_story_text or "3-30-300" in title_story_text)
+    )
+    has_visible_source_transparency = (
+        ("Source Method" in binding_text or "Source Transparency Note" in binding_text)
+        and "methodology" in title_story_text
+        and ("source" in title_story_text or "fabric rest" in binding_text_lower)
+    )
     design_rubric = (
         "power_bi_championship_3_30_300"
         if all(token in title_story_text for token in ("3-second", "30-second", "300-second"))
@@ -2099,11 +2264,47 @@ def _report_definition_inventory_quality(report_definition: dict) -> dict:
         and has_300_second_details_on_demand
         and has_guided_tab_order
     )
-    has_restrained_visual_density = 9 <= len(visual_records) <= 12
-    has_championship_theme = "championship" in str(custom_theme.get("name") or "").lower() and "3_30_300" in design_rubric
+    has_restrained_visual_density = 11 <= len(visual_records) <= 14
+    has_championship_theme = (
+        "championship" in str(custom_theme.get("name") or "").lower()
+        and "3_30_300" in design_rubric
+        and has_visible_narrative_header
+    )
     has_high_contrast_canvas = (
         str(custom_theme.get("background") or "").upper() == "#F8FAFC"
         and str(custom_theme.get("foreground") or "").upper() == "#111827"
+    )
+    has_information_hierarchy = (
+        has_3_second_overview
+        and has_30_second_filter_zoom
+        and has_300_second_details_on_demand
+        and has_visible_narrative_header
+        and has_prominent_analysis_zones
+        and overlap_count == 0
+        and any("portfolio" in title.lower() or "overview" in title.lower() for title in visual_titles)
+    )
+    has_usability_interactions = (
+        slicer_count >= 2
+        and has_30_second_filter_zoom
+        and bool(isinstance(settings, dict) and settings.get("useEnhancedTooltips") is True)
+        and bool(isinstance(report_config, dict) and report_config.get("defaultDrillFilterOtherVisuals") is True)
+    )
+    has_scenario_navigation = (
+        "portfolio" in title_story_text
+        and "workspace" in title_story_text
+        and "focus" in title_story_text
+        and "details on demand" in title_story_text
+    )
+    has_methodology_transparency = (
+        "source inventory" in title_story_text
+        or has_visible_source_transparency
+        or ("methodology" in title_story_text and "data-dictionary" in title_story_text)
+        or ("methodology" in title_story_text and "data dictionary" in title_story_text)
+    )
+    has_custom_cards_and_tooltips = (
+        card_count >= 4
+        and "multirowcard" in lowered_visual_types
+        and bool(isinstance(settings, dict) and settings.get("useEnhancedTooltips") is True)
     )
     checks = [
         {"name": "report_has_overview_page", "passed": bool(sections)},
@@ -2117,6 +2318,15 @@ def _report_definition_inventory_quality(report_definition: dict) -> dict:
         {"name": "report_slicers_do_not_occupy_prime_overview", "passed": slicers_avoid_prime_overview, "value": slicer_records},
         {"name": "report_has_filter_zoom_zone", "passed": has_30_second_filter_zoom},
         {"name": "report_has_details_on_demand_zone", "passed": has_300_second_details_on_demand},
+        {"name": "report_has_visible_narrative_header", "passed": has_visible_narrative_header},
+        {"name": "report_has_visible_reader_path_summary", "passed": has_reader_path_summary},
+        {"name": "report_has_visible_source_transparency", "passed": has_visible_source_transparency},
+        {"name": "report_has_prominent_analysis_zones", "passed": has_prominent_analysis_zones},
+        {"name": "report_has_clear_information_hierarchy", "passed": has_information_hierarchy},
+        {"name": "report_has_usability_interactions", "passed": has_usability_interactions},
+        {"name": "report_has_scenario_navigation", "passed": has_scenario_navigation},
+        {"name": "report_has_methodology_transparency", "passed": has_methodology_transparency},
+        {"name": "report_has_custom_cards_and_tooltips", "passed": has_custom_cards_and_tooltips},
         {"name": "report_has_accessibility_alt_text_and_titles", "passed": has_accessibility_metadata, "value": {"titleCount": len(visual_titles), "altTextCount": len(visual_alt_texts)}},
         {"name": "report_has_guided_keyboard_tab_order", "passed": has_guided_tab_order, "value": tab_order_values},
         {"name": "report_uses_restrained_visual_density", "passed": has_restrained_visual_density, "value": len(visual_records)},
@@ -2131,6 +2341,7 @@ def _report_definition_inventory_quality(report_definition: dict) -> dict:
         {"name": "report_binds_item_type", "passed": "ItemType" in binding_text},
         {"name": "report_binds_workspace_filter", "passed": "WorkspaceName" in binding_text},
         {"name": "report_binds_item_count", "passed": "Item Count" in binding_text},
+        {"name": "report_binds_visible_narrative_measures", "passed": "Portfolio Overview" in binding_text and "Reader Path" in binding_text and "Source Method" in binding_text},
     ]
     return {
         "status": "passed" if all(check["passed"] for check in checks) else "failed",
@@ -2138,10 +2349,20 @@ def _report_definition_inventory_quality(report_definition: dict) -> dict:
         "visualCount": len(visual_types),
         "visualTypes": visual_types,
         "designStandard": "Power BI championship / Data Stories style, 3-30-300 information flow",
+        "readerScenario": "Fabric portfolio governance inventory",
         "slicerCount": slicer_count,
         "chartCount": chart_count,
         "cardCount": card_count,
         "storyFlow3_30_300": has_championship_story_flow,
+        "visibleNarrativeHeader": has_visible_narrative_header,
+        "visibleReaderPathSummary": has_reader_path_summary,
+        "visibleSourceTransparency": has_visible_source_transparency,
+        "prominentAnalysisZones": has_prominent_analysis_zones,
+        "informationHierarchy": has_information_hierarchy,
+        "usabilityInteractions": has_usability_interactions,
+        "scenarioNavigation": has_scenario_navigation,
+        "methodologyTransparency": has_methodology_transparency,
+        "customCardsAndTooltips": has_custom_cards_and_tooltips,
         "accessibilityMetadata": has_accessibility_metadata,
         "guidedTabOrder": has_guided_tab_order,
         "restrainedVisualDensity": has_restrained_visual_density,
@@ -4046,6 +4267,8 @@ def _modern_report_style_profile() -> dict:
         "surfaceColor": "#FFFFFF",
         "borderColor": "#E5E7EB",
         "titleColor": "#111827",
+        "mutedTextColor": "#64748B",
+        "accentColor": "#0F766E",
         "theme": theme,
     }
 

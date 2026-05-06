@@ -1850,6 +1850,7 @@ function MissionChatHistory({
                     patternLabel={patternLabel}
                     visibleAgentTotal={visibleAgentTotal}
                 />
+                <PiSubagentsObservabilityBridge state={state} runtimeSlots={runtimeSlots} />
                 <MissionPromptMessage job={job} state={state} />
                 <MissionOutcomeChatNotice state={state} />
                 {rows.length === 0 ? (

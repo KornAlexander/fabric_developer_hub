@@ -212,6 +212,35 @@ const FABRIC_CONSENT_SCOPES: readonly string[] = [
     "https://analysis.windows.net/powerbi/api/Workspace.Read.All",
     "https://analysis.windows.net/powerbi/api/Report.Read.All",
 ];
+const FABRIC_TOKEN_TIMEOUT_MS = 12_000;
+
+function withFabricTokenTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
+    let timeoutId: number | undefined;
+    const timeout = new Promise<T>((_, reject) => {
+        timeoutId = window.setTimeout(
+            () => reject(new Error(`${label} timed out after ${FABRIC_TOKEN_TIMEOUT_MS}ms`)),
+            FABRIC_TOKEN_TIMEOUT_MS,
+        );
+    });
+    return Promise.race([promise, timeout]).finally(() => {
+        if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+    });
+}
+
+async function acquireFabricToken(
+    workloadClient: WorkloadClientAPI,
+    additionalScopesToConsent: string[] | null,
+    label: string,
+): Promise<string | undefined> {
+    const result = await withFabricTokenTimeout(
+        workloadClient.auth.acquireAccessToken({
+            additionalScopesToConsent,
+            claimsForConditionalAccessPolicy: "",
+        }),
+        label,
+    );
+    return result?.token;
+}
 
 function decodeJwtExp(token: string): number | null {
     try {
@@ -249,16 +278,39 @@ export async function getFabricTokenCached(workloadClient: WorkloadClientAPI, fo
     const isColdCache = !_fabricTokenCache;
     _fabricTokenInflight = (async () => {
         try {
-            const result = await workloadClient.auth.acquireAccessToken({
-                additionalScopesToConsent: isColdCache ? [...FABRIC_CONSENT_SCOPES] : null,
-                claimsForConditionalAccessPolicy: "",
-            });
-            const token = result?.token;
+            let token = await acquireFabricToken(workloadClient, null, "Fabric token acquisition");
+            if (!token && isColdCache) {
+                token = await acquireFabricToken(
+                    workloadClient,
+                    [...FABRIC_CONSENT_SCOPES],
+                    "Fabric token consent acquisition",
+                );
+            }
             if (token) {
                 const exp = decodeJwtExp(token) ?? (Date.now() + 50 * 60_000);
                 _fabricTokenCache = { token, expires: exp };
             }
             return token;
+        } catch (err) {
+            if (isColdCache) {
+                try {
+                    const token = await acquireFabricToken(
+                        workloadClient,
+                        [...FABRIC_CONSENT_SCOPES],
+                        "Fabric token consent acquisition",
+                    );
+                    if (token) {
+                        const exp = decodeJwtExp(token) ?? (Date.now() + 50 * 60_000);
+                        _fabricTokenCache = { token, expires: exp };
+                    }
+                    return token;
+                } catch (fallbackErr) {
+                    console.warn("Fabric token consent acquisition failed:", fallbackErr);
+                }
+            } else {
+                console.warn("Fabric token acquisition failed:", err);
+            }
+            return undefined;
         } finally {
             _fabricTokenInflight = null;
         }

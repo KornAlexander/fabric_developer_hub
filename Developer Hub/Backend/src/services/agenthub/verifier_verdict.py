@@ -76,6 +76,17 @@ QUALITY_REVIEW_REQUIRED_ASPECTS = {
         "polished",
         "design language",
     ),
+    "information_hierarchy": (
+        "information hierarchy",
+        "reader hierarchy",
+        "executive overview",
+        "summary kpi",
+        "summary kpis",
+        "kpi overview",
+        "top-left overview",
+        "scan path",
+        "reader path",
+    ),
     "championship_storytelling": (
         "championship",
         "world championship",
@@ -92,6 +103,22 @@ QUALITY_REVIEW_REQUIRED_ASPECTS = {
         "story flow",
         "storytelling",
     ),
+    "usability_interactions": (
+        "usability",
+        "interactive",
+        "interaction",
+        "interactions",
+        "slicer",
+        "slicers",
+        "filter",
+        "filter and zoom",
+        "tooltips",
+        "tooltip",
+        "hover",
+        "details on demand",
+        "details-on-demand",
+        "navigation",
+    ),
     "accessibility": (
         "accessibility",
         "accessible",
@@ -102,6 +129,19 @@ QUALITY_REVIEW_REQUIRED_ASPECTS = {
         "screen reader",
         "color-only",
         "colour-only",
+    ),
+    "transparency_methodology": (
+        "methodology",
+        "transparent",
+        "transparency",
+        "source disclosure",
+        "data dictionary",
+        "data definitions",
+        "definition",
+        "definitions",
+        "freshness",
+        "lineage",
+        "data source",
     ),
     "software_engineering": (
         "software engineering",
@@ -148,6 +188,8 @@ def compute_structural_rubric(
     if requires_browser:
         if not evidence["browserVerifiedUrls"]:
             failures.append("NO_USER_BROWSER_EVIDENCE")
+        if evidence["browserVerifiedUrls"] and not evidence["screenshotPaths"]:
+            failures.append("NO_BROWSER_SCREENSHOT_EVIDENCE")
         if evidence["loadingStuckObserved"]:
             failures.append("REPORT_STUCK_LOADING")
         if evidence["errorsObserved"]:
@@ -180,7 +222,7 @@ def synthesize_browser_evidence_followup(
             + "user-facing deliverable webUrl below. Include the captured screenshotPath, finalUrl, "
             + "visualLikeElementCount, and bodyTextSample in AgentResult.evidence so the orchestrator's "
             + "structural backstop can pass. The verdict can only be accepted when the report renders "
-            + "actual visuals (no 'Loading your report...' stuck state, no error modal, visualsRendered=true). "
+            + "actual visuals (screenshotPath present, no 'Loading your report...' stuck state, no error modal, visualsRendered=true). "
             + "Deliverables to verify in browser:\n"
             + deliverable_block
         ),
@@ -259,12 +301,12 @@ def synthesize_mandatory_verification_followup(
             "Reject if browser lands on error page, stays on 'Loading your report...', or shows zero "
             "rendered visuals.\n\n"
             "  * professional quality review → inspect the created report definition, semantic model, "
-            "notebook/data path, inferred naming convention, and rendered browser evidence. This step must judge report design/usability, "
+            "notebook/data path, inferred naming convention, and rendered browser screenshot evidence. This step must judge report UI/UX/design/usability, "
             "Power BI Data Stories / world-championship-caliber storytelling, 3-30-300 flow (top-left overview, filter and zoom, details on demand), "
-            "visual usefulness, accessibility (alt text, contrast, keyboard/tab order, no color-only meaning), semantic-model clarity, data persistence/freshness, performance risk, code "
+            "information hierarchy, scenario/reader navigation, slicers/interactions/tooltips, custom-card usefulness, visual usefulness, accessibility (alt text, contrast, keyboard/tab order, no color-only meaning), methodology/source/data-dictionary transparency, semantic-model clarity, data persistence/freshness, performance risk, code "
             "cleanliness, naming convention fit, default-or-requested style/theme quality, maintainability, and extensibility. For any generated code, explicitly inspect software-engineering quality: classes/functions or equivalent decomposition, readability, extensibility, proper error handling, warning/error surfacing, and fail-fast behavior when outputs are empty or unverified. Fail this step for one-card proof-of-life reports, "
             "hardcoded snapshot models when persisted data exists, unclear measures, brittle notebook logic, swallowed exceptions, false-success paths, "
-            "raw temporary-looking item names, default-looking/cramped/single-hue visuals, or visuals that technically render but would not be considered good professional work.\n\n"
+            "raw temporary-looking item names, default-looking/cramped/single-hue visuals, missing source/methodology context, weak interactions, or visuals that technically render but would not be considered good professional work.\n\n"
             "ALSO inspect the upstream tool result (e.g. inventory tool response). Any string in "
             "its ``errors`` array — particularly entries containing 'refresh FAILED', "
             "'Delta table', 'access permissions', or 0x14700/C14700 hex codes — MUST be surfaced "
@@ -281,7 +323,7 @@ def synthesize_mandatory_verification_followup(
             "  * The browser verification JSON (finalUrl, screenshotPath, bodyTextSample, visualSummary)\n"
             "  * A ``stepResults`` array (one entry per phase) so the orchestrator can see exactly "
             "which steps passed and which failed. Include a step whose name or detail contains "
-            "'professional quality review' and explicitly mentions naming convention fit, style/theme quality, championship/3-30-300 storytelling, accessibility, and generated-code/software-engineering quality; "
+            "'professional quality review' and explicitly mentions naming convention fit, style/theme quality, information hierarchy, usability/interactions, championship/3-30-300 storytelling, accessibility, methodology/source transparency, screenshot-based design evidence, and generated-code/software-engineering quality; "
             "the deterministic verdict fails if this review or any required aspect is missing.\n\n"
             "Original user goal:\n"
             + original_goal[:1800]
@@ -333,6 +375,8 @@ def emit_verifier_verdict(
         if requires_browser:
             if not evidence["browserVerifiedUrls"]:
                 structural_failures.append("NO_USER_BROWSER_EVIDENCE")
+            if evidence["browserVerifiedUrls"] and not evidence["screenshotPaths"]:
+                structural_failures.append("NO_BROWSER_SCREENSHOT_EVIDENCE")
             if evidence["loadingStuckObserved"]:
                 structural_failures.append("REPORT_STUCK_LOADING")
             if evidence["errorsObserved"]:
@@ -385,10 +429,11 @@ def emit_verifier_verdict(
             criteria.extend(
                 [
                     "browser_verify_visual_render opened the user-facing URL",
+                    "browser_verify_visual_render captured screenshotPath evidence for design review",
                     'no "Loading your report..." stuck state observed',
                     "no error modal observed",
                     "visual elements rendered (visualsRendered=true)",
-                    "professional quality review passed for report design, naming convention fit, style/theme quality, championship/3-30-300 storytelling, accessibility, data/model/generated-code quality, proper error handling, performance, maintainability, and extensibility",
+                    "professional quality review passed for report design, information hierarchy, usability/interactions, naming convention fit, style/theme quality, championship/3-30-300 storytelling, accessibility, transparency/methodology, data/model/generated-code quality, proper error handling, performance, maintainability, and extensibility",
                 ]
             )
         feedback_round = int(
@@ -648,6 +693,23 @@ def _structured_quality_aspects(candidate: dict[str, Any], quality: Any) -> set[
             for check in report_checks
         ):
             aspects.add("championship_storytelling")
+        if (
+            report_quality.get("informationHierarchy") is True
+            or report_check_passed("report_has_clear_information_hierarchy")
+            or report_check_passed("report_has_top_left_kpi_overview")
+        ):
+            aspects.add("information_hierarchy")
+        if (
+            report_quality.get("usabilityInteractions") is True
+            or report_check_passed("report_has_usability_interactions")
+            or report_check_passed("report_has_filter_zoom_zone")
+        ):
+            aspects.add("usability_interactions")
+        if (
+            report_quality.get("methodologyTransparency") is True
+            or report_check_passed("report_has_methodology_transparency")
+        ):
+            aspects.add("transparency_methodology")
         if (
             (report_quality.get("accessibilityMetadata") is True or report_check_passed("report_has_accessibility_alt_text_and_titles"))
             and (report_quality.get("guidedTabOrder") is True or report_check_passed("report_has_guided_keyboard_tab_order"))

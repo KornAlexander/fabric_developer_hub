@@ -472,7 +472,7 @@ async def test_sample_prompt_runtime_emits_reconstructable_orchestration_log_seq
             evidence=[
                 {
                     "stepResults": [
-                        {"step": "Professional quality review", "status": "passed", "evidence": "report design, naming convention fit, modern style/theme, championship 3-30-300 storytelling, accessibility contrast/keyboard checks, semantic model clarity, performance, maintainability, extensibility, and clean code software engineering reviewed"},
+                        {"step": "Professional quality review", "status": "passed", "evidence": "report design, information hierarchy, usability interactions/tooltips, naming convention fit, modern style/theme, championship 3-30-300 storytelling, methodology/source transparency, accessibility contrast/keyboard checks, semantic model clarity, performance, maintainability, extensibility, and clean code software engineering reviewed"},
                     ]
                 },
                 {
@@ -630,7 +630,7 @@ async def test_produced_report_without_followup_gets_mandatory_verifier_gate() -
             evidence=[
                 {
                     "stepResults": [
-                        {"step": "Professional quality review", "status": "passed", "evidence": "multi-visual inventory report, naming convention fit, modern style/theme, championship 3-30-300 storytelling, accessibility contrast/keyboard checks, semantic model quality, performance, maintainability, extensibility, and clean code software engineering accepted"},
+                        {"step": "Professional quality review", "status": "passed", "evidence": "multi-visual inventory report, information hierarchy, usability interactions/tooltips, naming convention fit, modern style/theme, championship 3-30-300 storytelling, methodology/source transparency, accessibility contrast/keyboard checks, semantic model quality, performance, maintainability, extensibility, and clean code software engineering accepted"},
                     ]
                 },
                 {
@@ -788,7 +788,7 @@ async def test_transient_browser_text_miss_rechecks_without_repair_loop() -> Non
                     {"type": "Report", "name": "Inventory Report", "id": "report-1", "webUrl": report_url},
                     {
                         "stepResults": [
-                            {"step": "Professional quality review", "status": "passed", "evidence": "naming convention fit, modern style/theme, championship 3-30-300 storytelling, accessibility contrast/keyboard checks, semantic model quality, performance, maintainability, extensibility, and clean code software engineering accepted; only browser text propagation is unresolved"},
+                            {"step": "Professional quality review", "status": "passed", "evidence": "information hierarchy, usability interactions/tooltips, naming convention fit, modern style/theme, championship 3-30-300 storytelling, methodology/source transparency, accessibility contrast/keyboard checks, semantic model quality, performance, maintainability, extensibility, and clean code software engineering accepted; only browser text propagation is unresolved"},
                         ]
                     },
                     {
@@ -822,7 +822,7 @@ async def test_transient_browser_text_miss_rechecks_without_repair_loop() -> Non
                 {"type": "Report", "name": "Inventory Report", "id": "report-1", "webUrl": report_url},
                 {
                     "stepResults": [
-                        {"step": "Professional quality review", "status": "passed", "evidence": "report design, naming convention fit, modern style/theme, championship 3-30-300 storytelling, accessibility contrast/keyboard checks, semantic model quality, performance, maintainability, extensibility, and clean code software engineering accepted after propagation"},
+                        {"step": "Professional quality review", "status": "passed", "evidence": "report design, information hierarchy, usability interactions/tooltips, naming convention fit, modern style/theme, championship 3-30-300 storytelling, methodology/source transparency, accessibility contrast/keyboard checks, semantic model quality, performance, maintainability, extensibility, and clean code software engineering accepted after propagation"},
                     ]
                 },
                 {

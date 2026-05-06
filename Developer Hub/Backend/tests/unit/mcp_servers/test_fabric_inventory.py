@@ -407,15 +407,18 @@ def test_report_definition_binds_to_semantic_model_and_inventory_visual() -> Non
     assert by_conn["connectionType"] == "pbiServiceXmlaStyleLive"
 
     # The legacy single-file report has an executive overview page with
-    # interactive slicers, multiple analytical visuals, and bindings to
-    # the FabricItems entity and reusable measures.
+    # a visible narrative header, source transparency, interactive
+    # slicers, multiple analytical visuals, and bindings to the
+    # FabricItems entity and reusable measures.
     assert report_legacy["sections"], "report should have at least one page section"
     section = report_legacy["sections"][0]
-    assert len(section["visualContainers"]) >= 8
+    assert len(section["visualContainers"]) >= 12
     visual_inner = json.loads(section["visualContainers"][0]["config"])
     single_visual = visual_inner["singleVisual"]
     assert single_visual["visualType"] == "card"
     assert visual_inner["layouts"][0]["position"]["x"] == 40.0
+    assert visual_inner["layouts"][0]["position"]["y"] <= 40.0
+    assert visual_inner["layouts"][0]["position"]["width"] >= 600.0
     assert "Portfolio at a Glance" in json.dumps(single_visual)
     assert "3-second top-left overview" in json.dumps(single_visual)
     all_visuals = [json.loads(container["config"])["singleVisual"] for container in section["visualContainers"]]
@@ -430,6 +433,10 @@ def test_report_definition_binds_to_semantic_model_and_inventory_visual() -> Non
     assert "30-second filter-and-zoom" in serialized
     assert "Details on Demand" in serialized
     assert "300-second details-on-demand" in serialized
+    assert "Portfolio Overview" in serialized
+    assert "Reader Path" in serialized
+    assert "Source Method" in serialized
+    assert "Methodology" in serialized
     assert "altText" in serialized
     report_config = json.loads(report_legacy["config"])
     assert report_config["settings"]["useNewFilterPaneExperience"] is True
@@ -445,6 +452,7 @@ def test_report_definition_binds_to_semantic_model_and_inventory_visual() -> Non
     assert "Workspace Count" in serialized
     assert "ItemType" in serialized
     assert "WorkspaceName" in serialized
+    assert "visualContainerObjects" in json.dumps([json.loads(container["config"]) for container in section["visualContainers"]])
 
     model_definition = _semantic_model_definition_directlake(
         table_name="Inventory_FabricItems",
@@ -471,6 +479,15 @@ def test_report_definition_binds_to_semantic_model_and_inventory_visual() -> Non
     assert quality["report"]["slicerCount"] >= 2
     assert quality["report"]["chartCount"] >= 2
     assert quality["report"]["storyFlow3_30_300"] is True
+    assert quality["report"]["visibleNarrativeHeader"] is True
+    assert quality["report"]["visibleReaderPathSummary"] is True
+    assert quality["report"]["visibleSourceTransparency"] is True
+    assert quality["report"]["prominentAnalysisZones"] is True
+    assert quality["report"]["informationHierarchy"] is True
+    assert quality["report"]["usabilityInteractions"] is True
+    assert quality["report"]["scenarioNavigation"] is True
+    assert quality["report"]["methodologyTransparency"] is True
+    assert quality["report"]["customCardsAndTooltips"] is True
     assert quality["report"]["accessibilityMetadata"] is True
     assert quality["report"]["guidedTabOrder"] is True
     assert quality["report"]["restrainedVisualDensity"] is True
@@ -514,6 +531,15 @@ def test_inventory_solution_result_compaction_preserves_proof_under_runtime_cap(
                 "visualCount": 10,
                 "themeName": "AgentHub Modern Analytics",
                 "storyFlow3_30_300": True,
+                "visibleNarrativeHeader": True,
+                "visibleReaderPathSummary": True,
+                "visibleSourceTransparency": True,
+                "prominentAnalysisZones": True,
+                "informationHierarchy": True,
+                "usabilityInteractions": True,
+                "scenarioNavigation": True,
+                "methodologyTransparency": True,
+                "customCardsAndTooltips": True,
                 "accessibilityMetadata": True,
                 "guidedTabOrder": True,
                 "restrainedVisualDensity": True,
@@ -561,6 +587,13 @@ def test_inventory_solution_result_compaction_preserves_proof_under_runtime_cap(
     assert compact["qualityValidation"]["report"]["visualCount"] == 10
     assert compact["qualityValidation"]["report"]["designRubric"] == "power_bi_championship_3_30_300"
     assert compact["qualityValidation"]["report"]["storyFlow3_30_300"] is True
+    assert compact["qualityValidation"]["report"]["visibleNarrativeHeader"] is True
+    assert compact["qualityValidation"]["report"]["visibleReaderPathSummary"] is True
+    assert compact["qualityValidation"]["report"]["visibleSourceTransparency"] is True
+    assert compact["qualityValidation"]["report"]["prominentAnalysisZones"] is True
+    assert compact["qualityValidation"]["report"]["informationHierarchy"] is True
+    assert compact["qualityValidation"]["report"]["usabilityInteractions"] is True
+    assert compact["qualityValidation"]["report"]["methodologyTransparency"] is True
     assert compact["qualityValidation"]["report"]["accessibilityMetadata"] is True
     assert compact["qualityValidation"]["notebookCode"]["classCount"] == 3
     assert compact["qualityValidation"]["notebookCode"]["raisesRuntimeErrors"] is True

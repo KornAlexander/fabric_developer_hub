@@ -48,7 +48,7 @@ def test_structural_rubric_uses_scheduled_deliverables_and_browser_action_detail
         evidence=[
             {
                 "stepResults": [
-                    {"step": "Professional quality review", "status": "passed", "evidence": "multi-visual report, naming convention fit, modern style/theme, championship 3-30-300 story flow with top-left overview, filter and zoom, details on demand, accessibility alt text contrast tab order, clean code, classes/functions, maintainable data path, extensibility, and explicit error handling"},
+                    {"step": "Professional quality review", "status": "passed", "evidence": "multi-visual report, naming convention fit, modern style/theme, information hierarchy, championship 3-30-300 story flow with top-left overview, filter and zoom usability interactions, details on demand, methodology/source transparency, accessibility alt text contrast tab order, clean code, classes/functions, maintainable data path, extensibility, and explicit error handling"},
                 ]
             }
         ],
@@ -80,6 +80,55 @@ def test_structural_rubric_uses_scheduled_deliverables_and_browser_action_detail
     assert evidence["browserVerifiedUrls"] == [report["webUrl"]]
     assert evidence["screenshotPaths"] == ["/tmp/report.png"]
     assert evidence["visualsRendered"] is True
+
+
+def test_structural_rubric_requires_browser_screenshot_for_report_design_review() -> None:
+    producer_task = TaskNode(id="task-producer", title="Create", objective="Create report")
+    verifier_task = TaskNode(
+        id="task-verifier",
+        title="Verify",
+        objective="Verify report",
+        parent_task_id=producer_task.id,
+    )
+    report = {
+        "id": "report-123",
+        "type": "Report",
+        "name": "Inventory Report",
+        "webUrl": "https://app.powerbi.com/groups/w/reports/report-123",
+    }
+    state = MissionState(
+        brief=MissionBrief(session_id="s", goal="make a report", workspace_id="w"),
+        tasks={producer_task.id: producer_task, verifier_task.id: verifier_task},
+        blackboard={"mandatoryVerifierScheduledForTasks": {producer_task.id: {"deliverables": [report]}}},
+    )
+    result = AgentResult(
+        run_id="run-1",
+        task_id=verifier_task.id,
+        status=AgentResultStatus.SUCCESS,
+        summary="verified",
+        evidence=[
+            {
+                "stepResults": [
+                    {"step": "Professional quality review", "status": "passed", "evidence": "multi-visual report, naming convention fit, modern style/theme, information hierarchy, championship 3-30-300 story flow with top-left overview, filter and zoom usability interactions, details on demand, methodology/source transparency, accessibility alt text contrast tab order, clean code, classes/functions, maintainable data path, extensibility, and explicit error handling"},
+                ]
+            },
+            {
+                "toolName": "browser_verify_visual_render",
+                "url": report["webUrl"],
+                "finalUrl": report["webUrl"],
+                "bodyTextSample": "Power BI report canvas",
+                "visualLikeElementCount": 4,
+                "status": "passed",
+            },
+        ],
+    )
+
+    passed, failures, evidence, _deliverables = compute_structural_rubric(state, verifier_task, result)
+
+    assert passed is False
+    assert "NO_BROWSER_SCREENSHOT_EVIDENCE" in failures
+    assert evidence["browserVerifiedUrls"] == [report["webUrl"]]
+    assert evidence["screenshotPaths"] == []
 
 
 def test_mandatory_verification_followup_clips_long_objective() -> None:
@@ -122,7 +171,7 @@ def test_verdict_accepts_visual_render_when_expected_text_followup_is_only_issue
         evidence=[
             {
                 "stepResults": [
-                    {"step": "Professional quality review", "status": "passed", "evidence": "visual design, naming convention fit, modern style/theme, championship 3-30-300 story flow, accessibility alt text contrast keyboard tab order, semantic model quality, generated-code classes/functions, maintainability, extensibility, and error handling reviewed"},
+                    {"step": "Professional quality review", "status": "passed", "evidence": "visual design, naming convention fit, modern style/theme, information hierarchy, championship 3-30-300 story flow, usability interactions/tooltips, methodology/source transparency, accessibility alt text contrast keyboard tab order, semantic model quality, generated-code classes/functions, maintainability, extensibility, and error handling reviewed"},
                 ]
             }
         ],
@@ -365,12 +414,22 @@ def test_structural_rubric_accepts_structured_producer_quality_for_naming_and_st
                                         "report": {
                                             "status": "passed",
                                             "storyFlow3_30_300": True,
+                                            "informationHierarchy": True,
+                                            "usabilityInteractions": True,
+                                            "methodologyTransparency": True,
                                             "accessibilityMetadata": True,
+                                            "guidedTabOrder": True,
+                                            "highContrastCanvas": True,
                                             "checks": [
                                                 {"name": "report_has_modern_reader_experience", "passed": True},
                                                 {"name": "report_has_modern_theme", "passed": True},
                                                 {"name": "report_follows_3_30_300_story_flow", "passed": True},
+                                                {"name": "report_has_clear_information_hierarchy", "passed": True},
+                                                {"name": "report_has_usability_interactions", "passed": True},
+                                                {"name": "report_has_methodology_transparency", "passed": True},
                                                 {"name": "report_has_accessibility_alt_text_and_titles", "passed": True},
+                                                {"name": "report_has_guided_keyboard_tab_order", "passed": True},
+                                                {"name": "report_has_high_contrast_canvas", "passed": True},
                                             ],
                                         },
                                         "notebookCode": {
@@ -475,12 +534,22 @@ def test_structural_rubric_inherits_producer_quality_through_verifier_followup_c
                                         "report": {
                                             "status": "passed",
                                             "storyFlow3_30_300": True,
+                                            "informationHierarchy": True,
+                                            "usabilityInteractions": True,
+                                            "methodologyTransparency": True,
                                             "accessibilityMetadata": True,
+                                            "guidedTabOrder": True,
+                                            "highContrastCanvas": True,
                                             "checks": [
                                                 {"name": "report_has_modern_theme", "passed": True},
                                                 {"name": "report_has_visual_style_defaults", "passed": True},
                                                 {"name": "report_follows_3_30_300_story_flow", "passed": True},
+                                                {"name": "report_has_clear_information_hierarchy", "passed": True},
+                                                {"name": "report_has_usability_interactions", "passed": True},
+                                                {"name": "report_has_methodology_transparency", "passed": True},
                                                 {"name": "report_has_accessibility_alt_text_and_titles", "passed": True},
+                                                {"name": "report_has_guided_keyboard_tab_order", "passed": True},
+                                                {"name": "report_has_high_contrast_canvas", "passed": True},
                                             ],
                                         },
                                         "notebookCode": {
@@ -573,6 +642,9 @@ def test_structural_rubric_finds_report_from_sibling_inventory_solution_result()
                                         "report": {
                                             "status": "passed",
                                             "storyFlow3_30_300": True,
+                                            "informationHierarchy": True,
+                                            "usabilityInteractions": True,
+                                            "methodologyTransparency": True,
                                             "accessibilityMetadata": True,
                                             "guidedTabOrder": True,
                                             "highContrastCanvas": True,

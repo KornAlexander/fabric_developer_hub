@@ -40,7 +40,10 @@ const RUN_TIMESTAMP = new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 
 const RUN_FOLDER = process.env.FABRIC_E2E_RUN_FOLDER || `tmp_${RUN_TIMESTAMP}`;
 const PROMPT = process.env.FABRIC_E2E_PROMPT
     || "Create an end to end solution (ingestion, transformation, semantic modelling and a report) "
-        + "which shows all Fabric items I have access to in a nice appropriate visualization. "
+        + "which shows all Fabric items I have access to in a championship-quality Power BI report. "
+        + "Use Power BI Data Stories/community championship standards by default: a 3-30-300 reader path, "
+        + "top-left KPI overview, interactive filter-and-zoom exploration, details on demand, methodology/source transparency, "
+        + "accessible labels/alt text/contrast, and modern polished styling unless a different sample is explicitly requested. "
         + `Work in folder ${RUN_FOLDER} where ${RUN_FOLDER} is the timestamped run folder.`;
 
 // Fast-fail is ON by default for local debugging. Set FABRIC_E2E_FAST_FAIL=0
@@ -182,6 +185,37 @@ type FabricDefinitionPart = {
     payloadType?: string;
 };
 
+type ReportDefinitionQualitySummary = {
+    isLegacyPbir: boolean;
+    partCount: number;
+    visualPartCount: number;
+    visualContainerCount: number;
+    hasChampionshipTheme: boolean;
+    hasMultiHueTheme: boolean;
+    hasOverviewPath: boolean;
+    hasFilterZoomPath: boolean;
+    hasDetailsOnDemandPath: boolean;
+    hasMethodologyTransparency: boolean;
+    hasAccessibilityMetadata: boolean;
+    hasEnhancedTooltips: boolean;
+    hasInteractiveSlicers: boolean;
+    hasNoOneCardShell: boolean;
+    hasVisibleNarrativeHeader: boolean;
+    hasVisibleReaderPathSummary: boolean;
+    hasVisibleSourceTransparency: boolean;
+    hasProminentAnalysisZones: boolean;
+    qualityPassed: boolean;
+};
+
+type ReportOpenEvidence = {
+    screenshotPath?: string;
+    strictDomRendered: boolean;
+    visualElementCount: number;
+    browserErrorCount: number;
+    canvasTextSample: string;
+    pageTextSample: string;
+};
+
 const developerHubRoot = path.resolve(__dirname, "../..");
 const browserVisualAuthStatePath = path.join(developerHubRoot, "Backend", ".data", "browser-visual-storage-state.json");
 
@@ -281,7 +315,7 @@ function visiblePiSubagentsAdvanced(before: VisiblePiSubagentsSnapshot, after: V
 
 function isIgnorablePortalConsoleError(text: string, sourceUrl: string): boolean {
     if (isWorkloadUrl(sourceUrl)) return false;
-    return /EcsClient_.*Fetching ECS configuration failed|correlationId=/i.test(text);
+    return /EcsClient_.*Fetching ECS configuration failed|correlationId=|load remote switches.*TimedOut|EnvironmentService: error loading remote switches/i.test(text);
 }
 
 function rememberBackendAuth(auth: BackendAuthCapture, headers: Record<string, string>): void {
@@ -527,7 +561,7 @@ async function validateSemanticModelDefinitionContainsInventory(page: Page, auth
     console.log(`[diag] SemanticModel definition validation: parts=${parts.length} bytes=${decoded.length}`);
 }
 
-async function validateReportDefinitionContainsVisuals(page: Page, auth: BackendAuthCapture, report: WorkspaceItem, semanticModel: WorkspaceItem): Promise<void> {
+async function validateReportDefinitionContainsVisuals(page: Page, auth: BackendAuthCapture, report: WorkspaceItem, semanticModel: WorkspaceItem): Promise<ReportDefinitionQualitySummary> {
     expect(report.id, "Report item should expose an id for definition validation").toBeTruthy();
     expect(semanticModel.id, "SemanticModel item should expose an id for report binding validation").toBeTruthy();
     const parts = await fetchFabricDefinition(
@@ -552,6 +586,87 @@ async function validateReportDefinitionContainsVisuals(page: Page, auth: Backend
     }
 
     const visualText = [reportJson, ...visualParts.map(([, text]) => text)].join("\n");
+    let reportObject: any = {};
+    let reportConfig: any = {};
+    try {
+        reportObject = JSON.parse(reportJson || "{}");
+        reportConfig = JSON.parse(String(reportObject?.config || "{}"));
+    } catch {
+        reportObject = {};
+        reportConfig = {};
+    }
+    const sections = Array.isArray(reportObject?.sections) ? reportObject.sections : [];
+    const visualContainerCount = sections.reduce((sum: number, section: any) => (
+        sum + (Array.isArray(section?.visualContainers) ? section.visualContainers.length : 0)
+    ), 0);
+    const visualLayouts = sections.flatMap((section: any) => (
+        Array.isArray(section?.visualContainers) ? section.visualContainers : []
+    )).map((container: any) => {
+        let config: any = {};
+        try {
+            config = JSON.parse(String(container?.config || "{}"));
+        } catch {
+            config = {};
+        }
+        const position = config?.layouts?.[0]?.position || {};
+        const visualType = String(config?.singleVisual?.visualType || "");
+        return {
+            name: String(config?.name || ""),
+            visualType,
+            x: Number(position.x ?? container?.x ?? 0),
+            y: Number(position.y ?? container?.y ?? 0),
+            width: Number(position.width ?? container?.width ?? 0),
+            height: Number(position.height ?? container?.height ?? 0),
+        };
+    });
+    const chartLayouts = visualLayouts.filter((visual) => /chart/i.test(visual.visualType));
+    const tableLayouts = visualLayouts.filter((visual) => /table|matrix/i.test(visual.visualType));
+    const slicerLayouts = visualLayouts.filter((visual) => /^slicer$/i.test(visual.visualType));
+    const customTheme = reportConfig?.themeCollection?.customTheme || {};
+    const dataColors = Array.isArray(customTheme?.dataColors) ? customTheme.dataColors : [];
+    const colorFamilies = new Set(dataColors
+        .filter((color: unknown) => typeof color === "string" && /^#[0-9a-f]{6}$/i.test(color))
+        .map((color: string) => color.slice(0, 3).toUpperCase()));
+    const reportDefinitionQuality: ReportDefinitionQualitySummary = {
+        isLegacyPbir,
+        partCount: parts.length,
+        visualPartCount: visualParts.length,
+        visualContainerCount,
+        hasChampionshipTheme: /AgentHub Championship Analytics|championship/i.test(`${customTheme?.name || ""}\n${visualText}`),
+        hasMultiHueTheme: dataColors.length >= 5 && colorFamilies.size >= 4,
+        hasOverviewPath: /Portfolio at a Glance|3-second top-left overview/i.test(visualText),
+        hasFilterZoomPath: /Item Type Focus|30-second filter-and-zoom|Workspace Focus/i.test(visualText),
+        hasDetailsOnDemandPath: /Details on Demand|300-second details-on-demand/i.test(visualText),
+        hasMethodologyTransparency: /methodology|source inventory|data-dictionary|data dictionary|source.*workspace inventory/i.test(visualText),
+        hasAccessibilityMetadata: /altText/i.test(visualText),
+        hasEnhancedTooltips: reportConfig?.settings?.useEnhancedTooltips === true,
+        hasInteractiveSlicers: /slicer/i.test(visualText),
+        hasNoOneCardShell: visualContainerCount >= 8 && /clusteredBarChart/i.test(visualText) && /clusteredColumnChart/i.test(visualText) && /tableEx/i.test(visualText),
+        hasVisibleNarrativeHeader: visualLayouts.some((visual) => visual.name === "PortfolioHeadlineCard" && visual.x <= 60 && visual.y <= 40 && visual.width >= 600 && visual.height >= 60),
+        hasVisibleReaderPathSummary: /Reader Path|3-30-300 Reader Path|3-30-300 reader path|3-30-300:\s*KPIs/i.test(visualText),
+        hasVisibleSourceTransparency: /Source Method|Source:\s*Fabric REST|Methodology: live Fabric workspace inventory/i.test(visualText),
+        hasProminentAnalysisZones: chartLayouts.some((visual) => visual.width >= 520 && visual.height >= 220)
+            && tableLayouts.some((visual) => visual.width >= 850 && visual.height >= 140)
+            && slicerLayouts.some((visual) => visual.x >= 900 && visual.y >= 220 && visual.y <= 420),
+        qualityPassed: false,
+    };
+    reportDefinitionQuality.qualityPassed = [
+        reportDefinitionQuality.hasChampionshipTheme,
+        reportDefinitionQuality.hasMultiHueTheme,
+        reportDefinitionQuality.hasOverviewPath,
+        reportDefinitionQuality.hasFilterZoomPath,
+        reportDefinitionQuality.hasDetailsOnDemandPath,
+        reportDefinitionQuality.hasMethodologyTransparency,
+        reportDefinitionQuality.hasAccessibilityMetadata,
+        reportDefinitionQuality.hasEnhancedTooltips,
+        reportDefinitionQuality.hasInteractiveSlicers,
+        reportDefinitionQuality.hasNoOneCardShell,
+        reportDefinitionQuality.hasVisibleNarrativeHeader,
+        reportDefinitionQuality.hasVisibleReaderPathSummary,
+        reportDefinitionQuality.hasVisibleSourceTransparency,
+        reportDefinitionQuality.hasProminentAnalysisZones,
+    ].every(Boolean);
+
     expect(visualText, "Report visuals should bind to the generated FabricItems table").toContain("FabricItems");
     expect(visualText, "Report visuals should use the generated Item Count measure").toContain("Item Count");
     expect(visualText, "Report should use the championship analytics theme by default").toContain("AgentHub Championship Analytics");
@@ -561,11 +676,19 @@ async function validateReportDefinitionContainsVisuals(page: Page, auth: Backend
     expect(visualText, "Report should include structural 30-second filter-and-zoom evidence").toContain("30-second filter-and-zoom");
     expect(visualText, "Report should expose a polished details-on-demand title").toContain("Details on Demand");
     expect(visualText, "Report should include structural 300-second details-on-demand evidence").toContain("300-second details-on-demand");
+    expect(reportDefinitionQuality.hasMethodologyTransparency, "Report should include methodology/source transparency in titles or alt text").toBe(true);
+    expect(reportDefinitionQuality.hasEnhancedTooltips, "Report should enable enhanced tooltips for usable exploration").toBe(true);
+    expect(reportDefinitionQuality.hasNoOneCardShell, "Report should not be a one-card proof-of-life shell").toBe(true);
+    expect(reportDefinitionQuality.hasVisibleNarrativeHeader, "Report should include a visible narrative/header card, not just hidden metadata").toBe(true);
+    expect(reportDefinitionQuality.hasVisibleReaderPathSummary, "Report should visibly explain the 3-30-300 reader path").toBe(true);
+    expect(reportDefinitionQuality.hasVisibleSourceTransparency, "Report should visibly expose methodology/source transparency").toBe(true);
+    expect(reportDefinitionQuality.hasProminentAnalysisZones, "Report should allocate prominent space to charts, slicers, and details-on-demand").toBe(true);
     expect(visualText, "Report visuals should include accessibility alt text metadata").toContain("altText");
     if (!isLegacyPbir) {
         expect(visualText, "Report visuals should group by ItemType for the inventory visualization").toContain("ItemType");
     }
-    console.log(`[diag] Report definition validation: parts=${parts.length} visuals=${visualParts.length}`);
+    console.log(`[diag] Report definition validation: parts=${parts.length} visuals=${visualParts.length} quality=${JSON.stringify(reportDefinitionQuality)}`);
+    return reportDefinitionQuality;
 }
 
 function hasType(items: WorkspaceItem[], candidates: RegExp[]): boolean {
@@ -921,10 +1044,17 @@ async function failIfReportErrorVisible(reportPage: Page, latestText: string): P
     ).not.toMatch(/Something went wrong|Failed to get access request info|couldn'?t load|can'?t display|error loading|couldn'?t retrieve the data/i);
 }
 
-async function validateReportOpensWithVisualization(page: Page, report: WorkspaceItem, expectedItemTypes: string[], screenshotPrefix: string): Promise<void> {
+async function validateReportOpensWithVisualization(page: Page, report: WorkspaceItem, expectedItemTypes: string[], screenshotPrefix: string): Promise<ReportOpenEvidence> {
     expect(report.webUrl, "Report item should have a webUrl to open").toBeTruthy();
     const reportPage = await page.context().newPage();
     const reportErrors: string[] = [];
+    const openEvidence: ReportOpenEvidence = {
+        strictDomRendered: false,
+        visualElementCount: 0,
+        browserErrorCount: 0,
+        canvasTextSample: "",
+        pageTextSample: "",
+    };
     reportPage.on("console", (message) => {
         if (message.type() === "error" && !message.text().startsWith("Failed to load resource:")) {
             reportErrors.push(message.text().slice(0, 500));
@@ -941,9 +1071,7 @@ async function validateReportOpensWithVisualization(page: Page, report: Workspac
         let latestCanvasText = "";
         let latestVisualCount = 0;
         const itemTypePattern = new RegExp(expectedItemTypes.slice(0, 20).map(escapeRegExp).join("|"), "i");
-        const reportNamePattern = report.name ? new RegExp(escapeRegExp(report.name), "i") : null;
         let consecutiveRenderedChecks = 0;
-        let consecutiveShellChecks = 0;
         while (Date.now() < deadline) {
             latestText = await textFromPageAndFrames(reportPage);
             await failIfReportErrorVisible(reportPage, latestText);
@@ -956,10 +1084,14 @@ async function validateReportOpensWithVisualization(page: Page, report: Workspac
             } else {
                 consecutiveRenderedChecks = 0;
             }
+            openEvidence.visualElementCount = latestVisualCount;
+            openEvidence.canvasTextSample = latestCanvasText.slice(0, 1000);
+            openEvidence.pageTextSample = latestText.slice(0, 1000);
             if (consecutiveRenderedChecks >= 2) {
                 console.log(`[diag] Report opened with visualization DOM count=${latestVisualCount}`);
                 expect(reportErrors, `Report page emitted browser errors:\n${reportErrors.join("\n")}`).toEqual([]);
-                return;
+                openEvidence.strictDomRendered = true;
+                break;
             }
             // Cross-origin Power BI canvases (`pbi*.powerbi.com`) sandbox their visual DOM so Playwright
             // cannot scrape rows from outside, and the "Loading your report..." overlay text from the
@@ -972,22 +1104,31 @@ async function validateReportOpensWithVisualization(page: Page, report: Workspac
             // full BUDGETS.reportOpen budget and let the post-watch verdict assertion be the gate.
             await reportPage.waitForTimeout(2500);
         }
-        console.log(
-            `[diag] Report page did not expose a scrapeable rendered visual before timeout; `
-            + `deferring to verifier_verdict gate. visualElements=${latestVisualCount} `
-            + `canvasText=${JSON.stringify(latestCanvasText.slice(0, 1000))} `
-            + `pageText=${JSON.stringify(latestText.slice(0, 1000))}`,
-        );
+        if (!openEvidence.strictDomRendered) {
+            console.log(
+                `[diag] Report page did not expose a scrapeable rendered visual before timeout; `
+                + `deferring to verifier_verdict gate. visualElements=${latestVisualCount} `
+                + `canvasText=${JSON.stringify(latestCanvasText.slice(0, 1000))} `
+                + `pageText=${JSON.stringify(latestText.slice(0, 1000))}`,
+            );
+        }
     } finally {
         try {
             const shot = `${screenshotPrefix}-report.png`;
             await reportPage.screenshot({ path: shot, fullPage: true, animations: "disabled", timeout: 15_000 });
+            openEvidence.screenshotPath = shot;
             console.log(`[diag] Screenshot: ${shot}`);
         } catch (err) {
             console.log(`[diag] Report screenshot capture failed: ${(err as Error).message}`);
         }
+        openEvidence.browserErrorCount = reportErrors.length;
         await reportPage.close().catch(() => undefined);
     }
+    const renderedReportText = `${openEvidence.canvasTextSample}\n${openEvidence.pageTextSample}`;
+    expect(renderedReportText, "Opened report should visibly render the executive inventory heading, not just hidden report metadata").toMatch(/Fabric Portfolio Inventory/i);
+    expect(renderedReportText, "Opened report should visibly render the 3-30-300 reader path").toMatch(/3-30-300/i);
+    expect(renderedReportText, "Opened report should visibly render methodology/source transparency").toMatch(/Source:\s*Fabric REST|Methodology:\s*live Fabric workspace inventory/i);
+    return openEvidence;
 }
 
 test("Fabric portal: Developer Hub creates a real Fabric item visualization solution", async ({ page }, testInfo) => {
@@ -2107,9 +2248,9 @@ test("Fabric portal: Developer Hub creates a real Fabric item visualization solu
     validateNotebookExecution(inventoryAudit);
     await validateNotebookDefinitionContainsCode(page, backendAuth, notebook as WorkspaceItem);
     await validateSemanticModelDefinitionContainsInventory(page, backendAuth, semanticModel as WorkspaceItem);
-    await validateReportDefinitionContainsVisuals(page, backendAuth, report as WorkspaceItem, semanticModel as WorkspaceItem);
+    const reportDefinitionQuality = await validateReportDefinitionContainsVisuals(page, backendAuth, report as WorkspaceItem, semanticModel as WorkspaceItem);
     const inventoryItemTypes = await validateSemanticModelData(page, backendAuth, semanticModel as WorkspaceItem, inventoryAudit);
-    await validateReportOpensWithVisualization(page, report as WorkspaceItem, inventoryItemTypes, screenshotPrefix);
+    const reportOpenEvidence = await validateReportOpensWithVisualization(page, report as WorkspaceItem, inventoryItemTypes, screenshotPrefix);
 
     // ── Verifier-verdict gate (Phase E) ────────────────────────────
     // The orchestrator emits a structural ``verifier_verdict`` event when a
@@ -2151,6 +2292,10 @@ test("Fabric portal: Developer Hub creates a real Fabric item visualization solu
         `Verifier verdict does not include visualsRendered=true evidence. Verdict:\n${JSON.stringify(reportVerdict, null, 2)}`,
     ).toBe(true);
     expect(
+        (reportVerdict?.evidence?.screenshotPaths || []).length,
+        `Verifier verdict does not include screenshotPath evidence for visual design review. Verdict:\n${JSON.stringify(reportVerdict, null, 2)}`,
+    ).toBeGreaterThan(0);
+    expect(
         reportVerdict?.evidence?.loadingStuckObserved,
         `Verifier evidence shows the report stuck on "Loading your report...". Verdict:\n${JSON.stringify(reportVerdict, null, 2)}`,
     ).toBe(false);
@@ -2158,6 +2303,10 @@ test("Fabric portal: Developer Hub creates a real Fabric item visualization solu
         (reportVerdict?.evidence?.errorsObserved || []).length,
         `Verifier evidence captured browser errors on the report URL. Verdict:\n${JSON.stringify(reportVerdict, null, 2)}`,
     ).toBe(0);
+    expect(
+        (reportVerdict?.structuralFailures || []).filter((failure) => /^QUALITY_REVIEW_MISSING|NO_BROWSER_SCREENSHOT_EVIDENCE/i.test(failure)),
+        `Verifier verdict should not be missing any strict report quality aspects. Verdict:\n${JSON.stringify(reportVerdict, null, 2)}`,
+    ).toEqual([]);
     console.log(`[diag] Verifier verdict PASSED for report ${(report as WorkspaceItem).id} — visualsRendered=${reportVerdict?.evidence?.visualsRendered}, urls=${(reportVerdict?.evidence?.browserVerifiedUrls || []).length}, screenshots=${(reportVerdict?.evidence?.screenshotPaths || []).length}`);
 
     const finalCopy = await wf.locator(".mc3, .dmc-live").first().innerText({ timeout: 10_000 }).catch(() => "");
@@ -2177,6 +2326,25 @@ test("Fabric portal: Developer Hub creates a real Fabric item visualization solu
     const finalSession = await fetchSession(page, sessionId, backendAuth);
     const finalReportVerifierVerdict = summarizeVerifierVerdictForJudge(reportVerdict);
     const supersededVerifierFailures = summarizeSupersededVerifierFailuresForJudge(latestVerifierVerdicts, reportVerdict);
+    const renderedReportEvidenceText = `${reportOpenEvidence.canvasTextSample}\n${reportOpenEvidence.pageTextSample}`;
+    const reportVisualEvidenceSummary = {
+        screenshotPath: reportOpenEvidence.screenshotPath || null,
+        screenshotCapturedByE2E: Boolean(reportOpenEvidence.screenshotPath),
+        verifierScreenshotCount: finalReportVerifierVerdict?.evidence?.screenshotCount || 0,
+        verifierVisualsRendered: finalReportVerifierVerdict?.evidence?.visualsRendered === true,
+        visualElementCount: reportOpenEvidence.visualElementCount,
+        browserErrorCount: reportOpenEvidence.browserErrorCount,
+        visibleSignals: {
+            executiveHeading: /Fabric Portfolio Inventory/i.test(renderedReportEvidenceText),
+            readerPath: /3-30-300/i.test(renderedReportEvidenceText),
+            sourceMethod: /Source:\s*Fabric REST/i.test(renderedReportEvidenceText),
+            kpiStrip: /Item Count[\s\S]*Workspace Count[\s\S]*Item Type Count[\s\S]*Report Count/i.test(renderedReportEvidenceText),
+            filterZoom: /ItemType|Item Type|WorkspaceName|Workspace/i.test(renderedReportEvidenceText),
+            detailsOnDemand: /Row Selection|Item ID|ItemId|Details on Demand/i.test(renderedReportEvidenceText),
+        },
+        canvasTextSample: reportOpenEvidence.canvasTextSample.slice(0, 700),
+        pageTextSample: reportOpenEvidence.pageTextSample.slice(0, 700),
+    };
     const actualRunJudge = await judgeActualMissionRunEvidence(page.request, {
         hardGateSummary: {
             actualPromptRun: true,
@@ -2185,6 +2353,10 @@ test("Fabric portal: Developer Hub creates a real Fabric item visualization solu
             sessionStatus: finalSession?.status || "completed",
             artifactTypesCreated: Array.from(new Set(producedItems.map((item) => item.type))).sort(),
             finalReportVerifierVerdict,
+            championshipReportDefinitionPassed: reportDefinitionQuality.qualityPassed,
+            reportScreenshotCapturedByE2E: Boolean(reportOpenEvidence.screenshotPath),
+            reportScreenshotPath: reportOpenEvidence.screenshotPath || null,
+            reportVisualEvidenceSummary,
             supersededVerifierFailures,
             supersededVerifierFailuresAreBlocking: false,
             supersededVerifierFailureContext:
@@ -2199,6 +2371,7 @@ test("Fabric portal: Developer Hub creates a real Fabric item visualization solu
         sessionStatus: finalSession?.status || "completed",
         missionCompleted: true,
         missionStreamEventCount,
+        reportVisualEvidenceSummary,
         missionControlSummaryExcerpt: finalCopy.replace(/\s+/g, " ").trim().slice(-1200),
         producedItems: producedItems.map((item) => ({
             id: item.id,
@@ -2222,6 +2395,8 @@ test("Fabric portal: Developer Hub creates a real Fabric item visualization solu
             errors: inventoryAudit.errors || [],
             warnings: inventoryAudit.warnings || [],
         },
+        reportDefinitionQuality,
+        reportOpenEvidence,
         reportVerdict: finalReportVerifierVerdict,
         backendLogIssues: logIssues,
         browserRecordedErrors: recordedErrors,

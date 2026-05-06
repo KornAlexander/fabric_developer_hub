@@ -240,10 +240,30 @@ function recentStatusInfo(status?: string): { variant: RecentStatusVariant; labe
     return null;
 }
 
+const WORKSPACE_ID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+
+function normalizeWorkspaceId(value: string | null | undefined): string {
+    return value?.match(WORKSPACE_ID_RE)?.[0] || "";
+}
+
+function defaultWorkspaceIdFromLocation(): string {
+    if (typeof window === "undefined") return "";
+    const params = new URLSearchParams(window.location.search);
+    const direct = normalizeWorkspaceId(params.get("ws"));
+    if (direct) return direct;
+
+    // Fabric can mount workload routes as encoded segments such as
+    // /orchestrator%3Fws%3D<guid>; recover the workspace id from either form.
+    const href = window.location.href;
+    const encodedMatch = href.match(/(?:[?&]|%3[fF]|%26)ws(?:=|%3[dD])([^&#]+)/i);
+    return normalizeWorkspaceId(encodedMatch?.[1]);
+}
+
 /* ── Component ────────────────────────────────────────────────── */
 
 export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
     const { t } = useTranslation();
+    const defaultWs = defaultWorkspaceIdFromLocation();
     // taskText is the plain-text projection of the rich composer (see
     // RichComposer). Every upstream consumer — planner payload, drafts,
     // recent prompts, change-signature — still reads this string, so the
@@ -516,8 +536,8 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
 
     // Workspace selection
     const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
-    const [selectedWorkspace, setSelectedWorkspace] = useState("");
-    const [destinationWorkspace, setDestinationWorkspace] = useState("");
+    const [selectedWorkspace, setSelectedWorkspace] = useState(defaultWs);
+    const [destinationWorkspace, setDestinationWorkspace] = useState(defaultWs);
     const [loadingWorkspaces, setLoadingWorkspaces] = useState(false);
     // The workspace-picker Menu popover must match the trigger width.
     // Fluent's ``matchTargetSize: 'width'`` is flaky once custom CSS
@@ -587,9 +607,6 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
     const match = useRouteMatch();
     const { replaceActiveTab } = useEditorTabs();
     const githubToken = sessionStorage.getItem("github_token") || "";
-
-    const urlParams = new URLSearchParams(window.location.search);
-    const defaultWs = urlParams.get("ws") || "";
 
     function sessionPathFor(id: string): string {
         // Fabric may mount this route as an encoded segment such as
@@ -791,6 +808,10 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
             });
         } catch (e: any) {
             console.warn("Failed to load workspaces:", e);
+            if (defaultWs) {
+                setSelectedWorkspace(prev => prev || defaultWs);
+                setDestinationWorkspace(prev => prev || defaultWs);
+            }
             // Surface the failure so users don't stare at an empty dropdown
             // wondering why they can't pick a workspace.
             const msg = e?.message || String(e) || "Unknown error";

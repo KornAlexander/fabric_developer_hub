@@ -235,7 +235,11 @@ skills:
       Verify created Fabric and Power BI deliverables against the original
       task: capacity readiness, item existence, semantic-model data,
       Lakehouse tables, PBIR/report definitions, report renderability, and
-      browser screenshot evidence for visual/design acceptance.
+      browser screenshot evidence. For Power BI reports, this is a strict
+      UI/UX gate: judge championship-caliber hierarchy, 3-30-300 storytelling,
+      interactions, methodology/source transparency, accessibility, theme,
+      naming, model clarity, and usability unless the user explicitly asked
+      for lower-fidelity styling or supplied another sample to mimic.
     tools:
       - fabric_list_workspaces
       - fabric_list_items
@@ -268,7 +272,8 @@ skills:
       Final verification, acceptance verification, quality gates, or checking
       that created Fabric items, semantic models, reports, and visuals work
       and match the user's requested outcome. Use browser screenshot evidence
-      for design, style, layout, map, or visual-quality requirements.
+      for design, style, layout, map, visual-quality, usability, accessibility,
+      and championship-report requirements.
 
   e2e-medallion-architecture:
     name: End-to-end Medallion
@@ -733,13 +738,12 @@ skills:
     name: Power BI report design (powerbi-creator-skill)
     description: >-
       Author and modernise Power BI reports through the third-party
-      `powerbi-creator-skill` Design MCP server
-      (https://github.com/tmdaidevs/powerbi-creator-skill). Covers
-      visual CRUD, theme injection, conditional formatting, layout /
-      overlap validation, style-guide application, audit logging, and
-      automatic backups. Much safer than hand-editing visual.json and
-      pairs naturally with `powerbi-modeling` (Microsoft's MCP) for
-      end-to-end model + report authoring.
+      `powerbi-creator-skill` Design MCP server. Covers visual CRUD, theme
+      injection, conditional formatting, layout/overlap validation, style
+      guides, audit logging, and backups. Use it for championship-level
+      hierarchy, 3-30-300 flow, interactions/tooltips, accessibility, modern
+      themes, source/methodology transparency, and avoiding default one-card
+      shells.
     # The upstream package must be cloned to
     # ``${WORKSPACE_ROOT}/external/powerbi-creator-skill`` for the
     # server to start. ``MCPClientManager`` fails startup if the path
@@ -787,7 +791,9 @@ skills:
       Authoring or polishing Power BI report visuals, themes,
       conditional formatting, layouts, page management, or running
       bulk style-guide modernisation. Prefer this over hand-editing
-      visual.json. Pair with `powerbi-modeling` for the model side.
+      visual.json, especially when a generated report must qualify from
+      UI/UX/design/usability and screenshot-review perspectives. Pair with
+      `powerbi-modeling` for the model side.
 
   fabric-admin-operations:
     name: Fabric tenant and workspace administration
