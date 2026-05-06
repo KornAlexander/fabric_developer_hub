@@ -37,8 +37,9 @@ import React, {
     useRef,
 } from "react";
 import { useHistory, useLocation } from "react-router-dom";
+import { ALL_NAV_ITEMS_REGISTRY } from "../../PbiFixer/types/nav";
 
-export type TabKind = "session" | "new" | "home" | "agents" | "pbifixer" | "settings";
+export type TabKind = "session" | "new" | "home" | "agents" | "pbifixer" | "settings" | "about";
 
 export interface TabDescriptor {
     /** Stable id derived from ``kind`` + optional path param. Reused so
@@ -540,22 +541,40 @@ export function descriptorFromPath(path: string, search?: string): TabDescriptor
         // sidebar opens a fresh tab without overwriting the visible one.
         const navKey = (() => {
             if (!search) return null;
-            return new URLSearchParams(search).get("nav");
+            const raw = new URLSearchParams(search).get("nav");
+            if (!raw) return null;
+            // The iframe bootstrap URL nests query strings — e.g.
+            // ``?ws=...&nav=report?experience=fabric-developer`` — so the
+            // raw value can carry a trailing ``?…`` or ``&…`` segment.
+            // Keep only the alphanumeric nav key (e.g. ``report``).
+            const m = raw.match(/^[A-Za-z0-9_-]+/);
+            return m ? m[0] : null;
         })();
         if (navKey) {
-            // Capitalize for the title (best-effort: 'modelBpa' → 'ModelBpa').
-            const pretty = navKey.charAt(0).toUpperCase() + navKey.slice(1);
+            // Look up the user-facing label from the PBI Fixer nav
+            // registry so the tab title matches the sidebar (e.g.
+            // ``modelBpa`` → "Model BPA", ``memory`` → "Memory
+            // Analyzer"). Falls back to a capitalized form if the key
+            // is unknown to the registry.
+            const navLabel = ALL_NAV_ITEMS_REGISTRY.find((it) => it.key === navKey)?.label
+                ?? (navKey.charAt(0).toUpperCase() + navKey.slice(1));
+            // Build a clean path so downstream tab.path consumers don't
+            // have to re-parse nested query strings.
+            const cleanPath = `${path.replace(/\/+$/, "")}?nav=${navKey}`;
             return {
                 id: `pbifixer:${navKey}`,
                 kind: "pbifixer",
-                path: path + (search ?? ""),
-                title: `PBI Fixer · ${pretty}`,
+                path: cleanPath,
+                title: `PBI Fixer · ${navLabel}`,
             };
         }
         return { id: "pbifixer", kind: "pbifixer", path, title: "Power BI Fixer" };
     }
     if (/\/settings(?:\b|$)/.test(clean)) {
         return { id: "settings", kind: "settings", path, title: "Settings" };
+    }
+    if (/\/about(?:\b|$)/.test(clean)) {
+        return { id: "about", kind: "about", path, title: "About" };
     }
     return null;
 }
@@ -624,6 +643,35 @@ export function EditorTabsProvider({ children }: { children: React.ReactNode }) 
             sessionStorage.setItem(STORAGE_KEY, JSON.stringify(state));
         } catch { /* quota / disabled storage — silently ignore */ }
     }, [state]);
+
+    // One-shot title refresh on mount. Tabs persisted in sessionStorage
+    // were created by an older build whose label-derivation logic may
+    // have produced different strings (e.g. "ModelBpa" vs "Model BPA",
+    // or "Memory" vs "Memory Analyzer"). On load, re-resolve every
+    // pbifixer:* tab's title via the current descriptorFromPath so cached
+    // titles catch up to the latest naming without the user having to
+    // close + reopen each tab.
+    const titleRefreshDoneRef = useRef(false);
+    useEffect(() => {
+        if (titleRefreshDoneRef.current) return;
+        titleRefreshDoneRef.current = true;
+        for (const g of state.groups) {
+            for (const tab of g.tabs) {
+                if (tab.kind !== "pbifixer") continue;
+                // tab.path looks like "/agent-hub/pbifixer?nav=modelBpa".
+                const idx = tab.path.indexOf("?");
+                const pathname = idx >= 0 ? tab.path.slice(0, idx) : tab.path;
+                const search = idx >= 0 ? tab.path.slice(idx) : "";
+                const desc = descriptorFromPath(pathname, search);
+                if (desc && desc.title !== tab.title) {
+                    dispatch({ type: "update-title", tabId: tab.id, title: desc.title, subtitle: desc.subtitle });
+                }
+            }
+        }
+        // Intentionally only runs once on mount — `state` is read via the
+        // closure but we don't want to re-run on every state change.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     // URL → tab sync. Whenever the route changes to a tabbable surface,
     // ensure a tab exists and is active in the current group. This keeps

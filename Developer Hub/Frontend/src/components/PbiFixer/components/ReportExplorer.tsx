@@ -5,14 +5,18 @@ import React, { useState, useCallback, useMemo, useEffect, useRef } from "react"
 import {
   Button,
   Input,
+  Dropdown,
+  Option,
   Spinner,
   makeStyles,
   shorthands,
+  tokens,
 } from "@fluentui/react-components";
 import {
   Search20Regular,
   ArrowExpand20Regular,
   ArrowCollapseAll20Regular,
+  Wrench20Regular,
 } from "@fluentui/react-icons";
 import {
   ReportData,
@@ -36,6 +40,53 @@ import {
   getReportEmbedToken,
   PbiAuth,
 } from "../services";
+import { updateVisualProperties } from "../services/fixersApi";
+import { FIXERS, type Fixer, type FixerContext, type FixerResult } from "../fixers";
+
+// PBIR ``visualType`` catalogue (subset; covers the most common edits
+// like Pie → Clustered Bar). Values are the internal strings the engine
+// writes into ``visual.json``.
+const VISUAL_TYPE_OPTIONS: { value: string; label: string }[] = [
+  { value: "barChart", label: "Stacked Bar" },
+  { value: "clusteredBarChart", label: "Clustered Bar" },
+  { value: "hundredPercentStackedBarChart", label: "100% Stacked Bar" },
+  { value: "columnChart", label: "Stacked Column" },
+  { value: "clusteredColumnChart", label: "Clustered Column" },
+  { value: "hundredPercentStackedColumnChart", label: "100% Stacked Column" },
+  { value: "lineChart", label: "Line" },
+  { value: "areaChart", label: "Area" },
+  { value: "stackedAreaChart", label: "Stacked Area" },
+  { value: "lineStackedColumnComboChart", label: "Line + Stacked Column" },
+  { value: "lineClusteredColumnComboChart", label: "Line + Clustered Column" },
+  { value: "ribbonChart", label: "Ribbon" },
+  { value: "waterfallChart", label: "Waterfall" },
+  { value: "funnel", label: "Funnel" },
+  { value: "scatterChart", label: "Scatter" },
+  { value: "pieChart", label: "Pie" },
+  { value: "donutChart", label: "Donut" },
+  { value: "treemap", label: "Treemap" },
+  { value: "map", label: "Map" },
+  { value: "filledMap", label: "Filled Map" },
+  { value: "shapeMap", label: "Shape Map" },
+  { value: "tableEx", label: "Table" },
+  { value: "pivotTable", label: "Matrix" },
+  { value: "card", label: "Card" },
+  { value: "multiRowCard", label: "Multi-row Card" },
+  { value: "kpi", label: "KPI" },
+  { value: "gauge", label: "Gauge" },
+  { value: "slicer", label: "Slicer" },
+  { value: "advancedSlicerVisual", label: "Slicer (new)" },
+  { value: "textbox", label: "Text box" },
+  { value: "image", label: "Image" },
+  { value: "shape", label: "Shape" },
+  { value: "actionButton", label: "Button" },
+  { value: "decompositionTreeVisual", label: "Decomposition Tree" },
+  { value: "qnaVisual", label: "Q&A" },
+];
+
+function visualTypeLabel(value: string): string {
+  return VISUAL_TYPE_OPTIONS.find((o) => o.value === value)?.label ?? value;
+}
 
 // ---------------------------------------------------------------------------
 // Styles
@@ -96,20 +147,25 @@ const useStyles = makeStyles({
     flex: 1,
     ...shorthands.gap("8px"),
     minWidth: 0,
+    minHeight: 0,
+    overflow: "hidden",
   },
   previewPanel: {
     ...shorthands.border("1px", "solid", BORDER_COLOR),
     ...shorthands.borderRadius("8px"),
     ...shorthands.padding("8px"),
     backgroundColor: SECTION_BG,
-    minHeight: "400px",
     flex: 1,
+    minHeight: 0,
     display: "flex",
     flexDirection: "column",
+    position: "relative",
+    isolation: "isolate" as const,
+    overflow: "hidden",
   },
   previewSurface: {
     flex: 1,
-    minHeight: "480px",
+    minHeight: 0,
     display: "flex",
     alignItems: "stretch",
     justifyContent: "stretch",
@@ -135,16 +191,20 @@ const useStyles = makeStyles({
     ...shorthands.padding("8px"),
     backgroundColor: SECTION_BG,
     flex: "0 0 auto",
-    minHeight: "180px",
-    maxHeight: "320px",
+    minHeight: "200px",
+    maxHeight: "360px",
     overflowY: "auto",
+    position: "relative",
+    zIndex: 1,
   },
   sectionLabel: {
-    fontSize: "12px",
-    fontWeight: "600",
-    color: ICON_ACCENT,
-    textTransform: "uppercase" as const,
-    letterSpacing: "0.5px",
+    // v0.70 — mirror Fluent <Field label="…"> styling used by the
+    // Workspace / Semantic Model toolbar fields (small neutral label,
+    // no uppercase, no accent colour) instead of the previous
+    // accented all-caps section header.
+    fontSize: "14px",
+    fontWeight: tokens.fontWeightSemibold,
+    color: tokens.colorNeutralForeground1,
     marginBottom: "4px",
   },
   propRow: {
@@ -154,7 +214,8 @@ const useStyles = makeStyles({
   },
   propLabel: {
     fontWeight: "600",
-    color: "#555",
+    // WS-O #8: align with AgentHub neutral foreground tokens — was "#555"
+    color: tokens.colorNeutralForeground2,
     whiteSpace: "nowrap",
     minWidth: "120px",
     paddingRight: "10px",
@@ -183,6 +244,8 @@ interface ReportPreviewProps {
   reportData: ReportData | null;
   selectedKey: string | null;
   auth: PbiAuth;
+  /** Bumped by the parent to force a fresh embed (Load Report / post-Save). */
+  refreshNonce?: number;
 }
 
 /**
@@ -242,6 +305,7 @@ const ReportPreview: React.FC<ReportPreviewProps> = ({
   reportData,
   selectedKey,
   auth,
+  refreshNonce,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const reportRef = useRef<any>(null);
@@ -327,7 +391,7 @@ const ReportPreview: React.FC<ReportPreviewProps> = ({
       } catch { /* ignore */ }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reportData?.reportId, reportData?.workspaceId, auth.fabricToken]);
+  }, [reportData?.reportId, reportData?.workspaceId, auth.fabricToken, refreshNonce]);
 
   // When the user picks a different page, swap pages on the existing embed
   // (no re-mint of the token).
@@ -350,10 +414,10 @@ const ReportPreview: React.FC<ReportPreviewProps> = ({
   }
 
   return (
-    <div style={{ position: "relative", width: "100%", height: "100%", minHeight: 480 }}>
+    <div style={{ position: "relative", width: "100%", height: "100%" }}>
       <div
         ref={containerRef}
-        style={{ width: "100%", height: "100%", minHeight: 480 }}
+        style={{ width: "100%", height: "100%" }}
       />
       {embedLoading && (
         <div style={{
@@ -404,6 +468,22 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
 
   const [pendingChanges, setPendingChanges] = useState<Record<string, Record<string, unknown>>>({});
 
+  // Bumped on Load Report and after a successful Save — forces ReportPreview
+  // to mint a fresh embed token + reset the iframe so PBIR changes show up.
+  const [previewNonce, setPreviewNonce] = useState(0);
+
+  // v0.61 — per-visual quick-fix run state.
+  const [runningFixerId, setRunningFixerId] = useState<string | null>(null);
+  // v0.73 — report-wide fixer scan state. Keyed by fixer id; only
+  // entries with findings.length > 0 are surfaced. Independent from
+  // ``scanResults`` (tree-node violation counter, Record<string, number>).
+  const [fixerScanResults, setFixerScanResults] = useState<Record<string, FixerResult>>({});
+  const [fixerScanning, setFixerScanning] = useState(false);
+  const [fixerScanRanOnce, setFixerScanRanOnce] = useState(false);
+  // v0.61–0.65 attempted drag-and-drop page reorder; removed in v0.66 because
+  // the Fabric workload-iframe host intercepts/breaks both HTML5 drag and
+  // pointer-event-based drag. Backend endpoint kept; UI parked in PLAN.md.
+
   // Build tree
   const treeResult = useMemo<TreeBuildResult>(() => {
     if (!reportData) return { options: [], keyMap: {} };
@@ -424,6 +504,238 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
     if (!selectedKey || !reportData || !selectedKey.startsWith("visual:")) return null;
     return getVisualProperties(reportData, selectedKey);
   }, [selectedKey, reportData]);
+
+  // ── WS-Q v0.42 — editable visual / page properties ─────────────────
+  type VisualEdit = { visualType?: string; x?: number; y?: number; width?: number; height?: number };
+  type PageEdit = { pageWidth?: number; pageHeight?: number };
+  const [visualEdit, setVisualEdit] = useState<VisualEdit>({});
+  const [pageEdit, setPageEdit] = useState<PageEdit>({});
+  const [savingProps, setSavingProps] = useState(false);
+
+  // Reset staged edits whenever the user picks a different node.
+  useEffect(() => {
+    setVisualEdit({});
+    setPageEdit({});
+  }, [selectedKey]);
+
+  const visualEditDirty =
+    (visualEdit.visualType !== undefined && visualEdit.visualType !== visualProps?.type) ||
+    (visualEdit.x !== undefined && visualEdit.x !== visualProps?.x) ||
+    (visualEdit.y !== undefined && visualEdit.y !== visualProps?.y) ||
+    (visualEdit.width !== undefined && visualEdit.width !== visualProps?.width) ||
+    (visualEdit.height !== undefined && visualEdit.height !== visualProps?.height);
+
+  const pageEditDirty =
+    (pageEdit.pageWidth !== undefined && pageEdit.pageWidth !== pageProps?.width) ||
+    (pageEdit.pageHeight !== undefined && pageEdit.pageHeight !== pageProps?.height);
+
+  const handleSaveProps = useCallback(async () => {
+    if (!reportData?.workspaceId || !reportData?.reportId) return;
+    setSavingProps(true);
+    try {
+      if (visualProps && visualEditDirty) {
+        await updateVisualProperties(auth, {
+          workspaceId: reportData.workspaceId,
+          reportId: reportData.reportId,
+          page: visualProps.pageName,
+          visual: visualProps.internalName,
+          visualType: visualEdit.visualType,
+          x: visualEdit.x,
+          y: visualEdit.y,
+          width: visualEdit.width,
+          height: visualEdit.height,
+        });
+      } else if (pageProps && pageEditDirty) {
+        await updateVisualProperties(auth, {
+          workspaceId: reportData.workspaceId,
+          reportId: reportData.reportId,
+          page: pageProps.internalName,
+          visual: "*",
+          pageWidth: pageEdit.pageWidth,
+          pageHeight: pageEdit.pageHeight,
+        });
+      } else {
+        return;
+      }
+      // Reload the definition so the tree + preview reflect the change.
+      const data = await loadReportDefinition(
+        auth,
+        reportData.workspaceId,
+        reportData.reportId,
+        reportData.reportId,
+      );
+      setReportData(data);
+      setVisualEdit({});
+      setPageEdit({});
+      setPreviewNonce((n) => n + 1);
+      setStatus({ msg: "Saved", color: "#34c759" });
+    } catch (err) {
+      setStatus({
+        msg: `Save failed: ${err instanceof Error ? err.message : String(err)}`,
+        color: "#ff3b30",
+      });
+    } finally {
+      setSavingProps(false);
+    }
+  }, [auth, reportData, visualProps, pageProps, visualEdit, pageEdit, visualEditDirty, pageEditDirty]);
+
+  // ── v0.61 — per-visual quick-fix runner ──────────────────────────────
+  // Calls the existing report-wide apply flow; the report-scoped fixers
+  // currently scan the entire report (no per-visual scoping in the apply
+  // endpoint yet), so this is just a discoverable shortcut from the
+  // visual props pane. Reloads the definition + bumps the embed nonce on
+  // success so the live preview reflects the change immediately.
+  const runQuickFixer = useCallback(
+    async (fixer: Fixer) => {
+      if (!reportData?.workspaceId || !reportData?.reportId) return;
+      setRunningFixerId(fixer.id);
+      setStatus({ msg: `Running ${fixer.title}…`, color: GRAY_COLOR });
+      try {
+        const ctx: FixerContext = {
+          auth,
+          workspaceId: reportData.workspaceId,
+          reportId: reportData.reportId,
+          report: reportData,
+        };
+        const result = await fixer.apply(ctx);
+        if (result.applied) {
+          const data = await loadReportDefinition(
+            auth,
+            reportData.workspaceId,
+            reportData.reportId,
+            reportData.reportId,
+          );
+          setReportData(data);
+          setPreviewNonce((n) => n + 1);
+          setStatus({
+            msg: `Applied ${fixer.title} — ${result.findings.length} change(s) report-wide`,
+            color: "#34c759",
+          });
+        } else {
+          setStatus({
+            msg: `${fixer.title}: ${result.findings.length} finding(s), nothing applied`,
+            color: result.findings.length ? "#ff9f0a" : GRAY_COLOR,
+          });
+        }
+      } catch (err) {
+        setStatus({
+          msg: `Quick fix failed: ${err instanceof Error ? err.message : String(err)}`,
+          color: "#ff3b30",
+        });
+      } finally {
+        setRunningFixerId(null);
+      }
+    },
+    [auth, reportData],
+  );
+
+  // Filter the global fixer registry down to the ones whose `appliesTo`
+  // includes the currently selected visual's type (or that have no
+  // `appliesTo` and are therefore generic to all visuals).
+  const applicableFixers = useMemo<Fixer[]>(() => {
+    if (!visualProps) return [];
+    const vt = visualProps.type;
+    return FIXERS.filter((f) => {
+      if (f.scope !== "report") return false;
+      if (f.mode !== "backend") return false;
+      if (!f.appliesTo || f.appliesTo.length === 0) return true;
+      return f.appliesTo.includes(vt);
+    });
+  }, [visualProps]);
+
+  // v0.73 \u2014 Report-wide fixer scan. Runs every backend report-scoped
+  // fixer in scan-only mode and surfaces only those reporting findings.
+  const reportFixers = useMemo<Fixer[]>(
+    () => FIXERS.filter((f) => f.scope === "report" && f.mode === "backend"),
+    []
+  );
+
+  const buildReportFixerCtx = useCallback((): FixerContext | null => {
+    if (!reportData?.workspaceId || !reportData?.reportId) return null;
+    return {
+      auth,
+      workspaceId: reportData.workspaceId,
+      reportId: reportData.reportId,
+      report: reportData,
+    };
+  }, [auth, reportData]);
+
+  const handleScanReportFixers = useCallback(async () => {
+    const ctx = buildReportFixerCtx();
+    if (!ctx) {
+      setStatus({ msg: "Load a report first", color: "#ff3b30" });
+      return;
+    }
+    setFixerScanning(true);
+    setStatus({ msg: `Scanning ${reportFixers.length} report fixer(s)\u2026`, color: GRAY_COLOR });
+    try {
+      const entries = await Promise.all(
+        reportFixers.map(async (fx) => {
+          try {
+            const res = await fx.scan(ctx);
+            return [fx.id, res] as const;
+          } catch (err) {
+            return [fx.id, { findings: [], applied: false, log: [`scan error: ${err instanceof Error ? err.message : String(err)}`] }] as const;
+          }
+        })
+      );
+      const next: Record<string, FixerResult> = {};
+      for (const [id, res] of entries) next[id] = res;
+      setFixerScanResults(next);
+      setFixerScanRanOnce(true);
+      const withFindings = entries.filter(([, r]) => r.findings.length > 0).length;
+      setStatus({
+        msg: withFindings === 0
+          ? "Scan complete \u2014 no report issues found"
+          : `Scan complete \u2014 ${withFindings} fixer(s) with issues`,
+        color: withFindings === 0 ? "#34c759" : "#ff9500",
+      });
+    } finally {
+      setFixerScanning(false);
+    }
+  }, [buildReportFixerCtx, reportFixers]);
+
+  const handleApplyReportFixer = useCallback(async (fx: Fixer) => {
+    const ctx = buildReportFixerCtx();
+    if (!ctx) return;
+    setRunningFixerId(fx.id);
+    setStatus({ msg: `Applying ${fx.title}\u2026`, color: GRAY_COLOR });
+    try {
+      const res = await fx.apply(ctx);
+      let rescan: FixerResult | null = null;
+      try {
+        rescan = await fx.scan(ctx);
+      } catch { /* ignore */ }
+      setFixerScanResults((prev) => ({ ...prev, [fx.id]: rescan ?? { ...res, applied: false } }));
+      if (res.applied && reportData?.workspaceId && reportData?.reportId) {
+        try {
+          const data = await loadReportDefinition(
+            auth,
+            reportData.workspaceId,
+            reportData.reportId,
+            reportData.reportId,
+          );
+          setReportData(data);
+          setPreviewNonce((n) => n + 1);
+        } catch { /* keep existing report on reload failure */ }
+      }
+      setStatus({
+        msg: res.applied
+          ? `Applied ${fx.title} \u2014 ${res.findings.length} change(s)`
+          : `${fx.title}: ${res.findings.length} finding(s), nothing applied`,
+        color: res.applied ? "#34c759" : (res.findings.length ? "#ff9500" : GRAY_COLOR),
+      });
+    } catch (err) {
+      setStatus({ msg: `Apply failed: ${err instanceof Error ? err.message : String(err)}`, color: "#ff3b30" });
+    } finally {
+      setRunningFixerId(null);
+    }
+  }, [auth, buildReportFixerCtx, reportData]);
+
+  const reportFixersWithFindings = useMemo(
+    () => reportFixers.filter((f) => (fixerScanResults[f.id]?.findings.length ?? 0) > 0),
+    [reportFixers, fixerScanResults]
+  );
 
   // ---------------------------------------------------------------------------
   // Handlers
@@ -456,6 +768,7 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
       const data = await loadReportDefinition(auth, wsId, resolvedId, resolvedName);
       setReportData(data);
       setExpanded(new Set(Object.keys(data.pages)));
+      setPreviewNonce((n) => n + 1);
       setStatus({
         msg: `Loaded ${Object.keys(data.pages).length} pages`,
         color: "#34c759",
@@ -533,7 +846,7 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
           disabled={loading}
           icon={loading ? <Spinner size="tiny" /> : undefined}
         >
-          Load Report
+          {loading ? "Loading Report" : "Load Report"}
         </Button>
         <Button
           appearance="subtle"
@@ -551,7 +864,18 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
         >
           Collapse All
         </Button>
-        {status.msg && (
+        <Button
+          appearance="subtle"
+          icon={fixerScanning ? <Spinner size="tiny" /> : <Wrench20Regular />}
+          onClick={handleScanReportFixers}
+          disabled={!reportData || fixerScanning}
+        >
+          {fixerScanning ? "Scanning" : "Scan report fixes"}
+        </Button>
+        {/* v0.69 — toolbar status pill is reserved for ERRORS only.
+            Loading state is conveyed by the primary button's spinner + label;
+            success/info messages would just clutter the toolbar. */}
+        {status.msg && (status.color === "#ff3b30" || status.color === "#a4262c") && (
           <span
             className={styles.statusBar}
             style={{ background: `${status.color}1a`, color: status.color }}
@@ -600,6 +924,7 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
                   reportData={reportData}
                   selectedKey={selectedKey}
                   auth={auth}
+                  refreshNonce={previewNonce}
                 />
               ) : (
                 <span className={styles.previewEmpty}>
@@ -618,20 +943,117 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
                 <PropRow label="Display Name" value={pageProps.displayName} />
                 <PropRow label="Visual Count" value={String(pageProps.visualCount)} />
                 <PropRow label="Visual Types" value={pageProps.visualTypeSummary} />
-                <PropRow label="Dimensions" value={`${pageProps.width} \u00d7 ${pageProps.height}`} />
+                <EditableNumberRow
+                  label="Width"
+                  current={pageProps.width}
+                  pending={pageEdit.pageWidth}
+                  onChange={(v) => setPageEdit((e) => ({ ...e, pageWidth: v }))}
+                />
+                <EditableNumberRow
+                  label="Height"
+                  current={pageProps.height}
+                  pending={pageEdit.pageHeight}
+                  onChange={(v) => setPageEdit((e) => ({ ...e, pageHeight: v }))}
+                />
                 <PropRow label="Hidden" value={String(pageProps.hidden)} />
+                {pageEditDirty && (
+                  <div className={styles.saveRow}>
+                    <Button
+                      appearance="primary"
+                      size="small"
+                      onClick={handleSaveProps}
+                      disabled={savingProps}
+                      icon={savingProps ? <Spinner size="tiny" /> : undefined}
+                    >
+                      Save changes
+                    </Button>
+                    <Button
+                      appearance="secondary"
+                      size="small"
+                      onClick={() => setPageEdit({})}
+                      disabled={savingProps}
+                    >
+                      Discard
+                    </Button>
+                  </div>
+                )}
+                <JsonPreview label="Page JSON" data={pageProps.rawJson} />
               </>
             )}
 
             {visualProps && (
               <>
-                <PropRow label="Type" value={visualProps.displayType} />
+                <div className={styles.propRow}>
+                  <span className={styles.propLabel}>Type</span>
+                  <span className={styles.propValue} style={{ flex: 1 }}>
+                    <Dropdown
+                      size="small"
+                      value={visualTypeLabel(visualEdit.visualType ?? visualProps.type)}
+                      selectedOptions={[visualEdit.visualType ?? visualProps.type]}
+                      onOptionSelect={(_, data) => {
+                        if (data.optionValue) {
+                          setVisualEdit((e) => ({ ...e, visualType: data.optionValue }));
+                        }
+                      }}
+                      style={{ minWidth: 220 }}
+                    >
+                      {VISUAL_TYPE_OPTIONS.map((o) => (
+                        <Option key={o.value} value={o.value} text={o.label}>
+                          {o.label}
+                        </Option>
+                      ))}
+                    </Dropdown>
+                  </span>
+                </div>
                 <PropRow label="Internal Name" value={visualProps.internalName} />
                 <PropRow label="Page" value={visualProps.pageName} />
                 <PropRow label="Title" value={visualProps.title} />
-                <PropRow label="Position" value={`X: ${visualProps.x}, Y: ${visualProps.y}`} />
-                <PropRow label="Size" value={`${visualProps.width} \u00d7 ${visualProps.height}`} />
+                <EditableNumberRow
+                  label="X"
+                  current={visualProps.x}
+                  pending={visualEdit.x}
+                  onChange={(v) => setVisualEdit((e) => ({ ...e, x: v }))}
+                />
+                <EditableNumberRow
+                  label="Y"
+                  current={visualProps.y}
+                  pending={visualEdit.y}
+                  onChange={(v) => setVisualEdit((e) => ({ ...e, y: v }))}
+                />
+                <EditableNumberRow
+                  label="Width"
+                  current={visualProps.width}
+                  pending={visualEdit.width}
+                  onChange={(v) => setVisualEdit((e) => ({ ...e, width: v }))}
+                />
+                <EditableNumberRow
+                  label="Height"
+                  current={visualProps.height}
+                  pending={visualEdit.height}
+                  onChange={(v) => setVisualEdit((e) => ({ ...e, height: v }))}
+                />
                 <PropRow label="Hidden" value={String(visualProps.hidden)} />
+                {visualEditDirty && (
+                  <div className={styles.saveRow}>
+                    <Button
+                      appearance="primary"
+                      size="small"
+                      onClick={handleSaveProps}
+                      disabled={savingProps}
+                      icon={savingProps ? <Spinner size="tiny" /> : undefined}
+                    >
+                      Save changes
+                    </Button>
+                    <Button
+                      appearance="secondary"
+                      size="small"
+                      onClick={() => setVisualEdit({})}
+                      disabled={savingProps}
+                    >
+                      Discard
+                    </Button>
+                  </div>
+                )}
                 {visualProps.usedObjects.length > 0 && (
                   <div style={{ marginTop: "8px" }}>
                     <div className={styles.sectionLabel} style={{ marginBottom: "4px" }}>Used Objects</div>
@@ -658,6 +1080,42 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
                     ))}
                   </div>
                 )}
+                {(() => {
+                  // v0.73 — visual-scoped quick fixes are now scan-gated:
+                  // only fixers that returned findings on the most recent
+                  // report-wide scan AND apply to the selected visual's
+                  // type are surfaced here.
+                  const visualFixers = fixerScanRanOnce
+                    ? applicableFixers.filter((fx) => (fixerScanResults[fx.id]?.findings.length ?? 0) > 0)
+                    : [];
+                  if (visualFixers.length === 0) return null;
+                  return (
+                    <div style={{ marginTop: "8px" }}>
+                      <div className={styles.sectionLabel} style={{ marginBottom: "4px" }}>
+                        Quick fixes for this visual
+                      </div>
+                      <div style={{ fontSize: 11, color: GRAY_COLOR, marginBottom: 6, fontStyle: "italic" }}>
+                        Runs the fixer report-wide (per-visual scoping pending — see PLAN.md).
+                      </div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                        {visualFixers.map((fx) => (
+                          <Button
+                            key={fx.id}
+                            appearance="secondary"
+                            size="small"
+                            disabled={runningFixerId !== null}
+                            icon={runningFixerId === fx.id ? <Spinner size="tiny" /> : undefined}
+                            onClick={() => void runQuickFixer(fx)}
+                            style={{ justifyContent: "flex-start", textAlign: "left" }}
+                          >
+                            {fx.title} ({fixerScanResults[fx.id]?.findings.length ?? 0})
+                          </Button>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
+                <JsonPreview label="Visual JSON" data={visualProps.rawJson} />
               </>
             )}
 
@@ -675,6 +1133,55 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
                 <Button appearance="secondary" size="small" onClick={handleDiscard}>
                   {"\u2718"} Discard
                 </Button>
+              </div>
+            )}
+            {/* v0.73 — report-wide fixer scan results, rendered below the
+                properties panel content. Only fixers with findings appear. */}
+            {fixerScanRanOnce && (
+              <div style={{ marginTop: "16px", paddingTop: "8px", borderTop: `1px solid ${BORDER_COLOR}` }}>
+                <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>
+                  Quick fixes — {reportFixersWithFindings.length} issue type(s)
+                </div>
+                {reportFixersWithFindings.length === 0 ? (
+                  <div style={{ fontSize: 12, color: GRAY_COLOR, fontStyle: "italic" }}>
+                    No report issues found.
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {reportFixersWithFindings.map((fx) => {
+                      const r = fixerScanResults[fx.id];
+                      const count = r?.findings.length ?? 0;
+                      const busy = runningFixerId === fx.id;
+                      return (
+                        <div key={fx.id} style={{ display: "flex", flexDirection: "column", gap: 2, padding: "6px 8px", background: SECTION_BG, borderRadius: 4 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <span style={{ fontSize: 12, fontWeight: 600, flex: 1 }}>{fx.title}</span>
+                            <span style={{ fontSize: 11, color: GRAY_COLOR }}>{count} finding{count === 1 ? "" : "s"}</span>
+                            <Button
+                              appearance="primary"
+                              size="small"
+                              disabled={busy || runningFixerId !== null}
+                              icon={busy ? <Spinner size="tiny" /> : undefined}
+                              onClick={() => void handleApplyReportFixer(fx)}
+                            >
+                              Apply
+                            </Button>
+                          </div>
+                          {r && r.findings.length > 0 && (
+                            <div style={{ fontSize: 11, color: GRAY_COLOR, fontFamily: "monospace", maxHeight: 110, overflow: "auto" }}>
+                              {r.findings.slice(0, 5).map((f, i) => (
+                                <div key={i}>• {f.objectPath}{f.detail ? ` — ${f.detail}` : ""}</div>
+                              ))}
+                              {r.findings.length > 5 && (
+                                <div style={{ fontStyle: "italic" }}>… +{r.findings.length - 5} more</div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -695,6 +1202,100 @@ const PropRow: React.FC<{ label: string; value: string }> = ({ label, value }) =
     <div className={styles.propRow}>
       <span className={styles.propLabel}>{label}</span>
       <span className={styles.propValue}>{value}</span>
+    </div>
+  );
+};
+
+interface EditableNumberRowProps {
+  label: string;
+  current: number;
+  pending: number | undefined;
+  onChange: (v: number | undefined) => void;
+}
+
+const EditableNumberRow: React.FC<EditableNumberRowProps> = ({
+  label,
+  current,
+  pending,
+  onChange,
+}) => {
+  const styles = useStyles();
+  const value = pending ?? current;
+  return (
+    <div className={styles.propRow}>
+      <span className={styles.propLabel}>{label}</span>
+      <span className={styles.propValue} style={{ flex: 1 }}>
+        <Input
+          size="small"
+          type="number"
+          value={String(Math.round(value))}
+          onChange={(_, data) => {
+            const n = data.value === "" ? undefined : Number(data.value);
+            if (n === undefined || Number.isNaN(n)) {
+              onChange(undefined);
+            } else {
+              onChange(n);
+            }
+          }}
+          style={{ width: 110 }}
+        />
+      </span>
+    </div>
+  );
+};
+
+const JsonPreview: React.FC<{ label: string; data: unknown }> = ({ label, data }) => {
+  const [open, setOpen] = useState(false);
+  if (data === undefined || data === null) return null;
+  let pretty = "";
+  try { pretty = JSON.stringify(data, null, 2); } catch { pretty = String(data); }
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div
+        style={{
+          fontSize: 12,
+          fontWeight: 600,
+          cursor: "pointer",
+          padding: "4px 0",
+          color: GRAY_COLOR,
+          userSelect: "none",
+        }}
+        onClick={() => setOpen((v) => !v)}
+      >
+        {open ? "\u25bc" : "\u25b6"} {label}
+        {open && (
+          <Button
+            appearance="subtle"
+            size="small"
+            style={{ marginLeft: 8 }}
+            onClick={(e) => {
+              e.stopPropagation();
+              navigator.clipboard.writeText(pretty);
+            }}
+          >
+            Copy
+          </Button>
+        )}
+      </div>
+      {open && (
+        <pre
+          style={{
+            margin: 0,
+            padding: 8,
+            background: "#f6f8fa",
+            border: "1px solid #d0d7de",
+            borderRadius: 4,
+            fontSize: 11,
+            fontFamily: "monospace",
+            maxHeight: 280,
+            overflow: "auto",
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+          }}
+        >
+          {pretty}
+        </pre>
+      )}
     </div>
   );
 };

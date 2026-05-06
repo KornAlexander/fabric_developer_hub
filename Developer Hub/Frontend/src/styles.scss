@@ -1009,10 +1009,31 @@ html, body, #root {
     color: #404752;                  /* on-surface-variant */
     border-radius: 8px;
     font-size: 12px;
+    /* Reset native <button> styling so the About button looks identical
+       to the <div>-based Support / Feedback rows (no border, no native
+       background, inherits font, full width, left-aligned). */
+    background: none;
+    border: 0;
+    width: 100%;
+    text-align: left;
+    font-family: inherit;
+    appearance: none;
 
     &:hover {
         background: rgba(233, 232, 231, 0.5);
         color: #1a1c1c;
+    }
+
+    /* Inactive (placeholder) entries — Support, Feedback today.
+       Greyed out and non-interactive so they read as "coming soon". */
+    &.sidenav-footer-item--inactive {
+        color: #a0a4ab;
+        cursor: not-allowed;
+
+        &:hover {
+            background: transparent;
+            color: #a0a4ab;
+        }
     }
 }
 

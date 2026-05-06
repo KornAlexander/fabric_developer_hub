@@ -33,18 +33,15 @@ import {
   TranslationsPage,
   DeltaPage,
   DiagramPage,
-  ScriptRunnerPage,
   PrototypePage,
   ReversePrototypePage,
   SempyRunnerPage,
-  AboutPage,
 } from "./pages";
 import { DEFAULT_NAV_KEY, NavKey } from "../types/nav";
 import type { PageProps } from "../types/shared";
 import * as api from "../../../controller/AgentHubApi";
+import { getFabricTokenCached } from "../../../controller/AgentHubController";
 import { PBI_FIXER_VERSION } from "../utils/version";
-
-const STORAGE_NAV_KEY = "pbiFixer.activeNav";
 
 const useStyles = makeStyles({
   root: {
@@ -72,18 +69,19 @@ const useStyles = makeStyles({
   title: {
     fontSize: tokens.fontSizeBase400,
     fontWeight: tokens.fontWeightSemibold,
-    color: "#1a1c1c",
+    color: tokens.colorNeutralForeground1,
   },
-  // Version pill — matches the AgentHub workload-version badge style so
-  // both badges (workload + Fixer) read as siblings.
+  // Version pill — matches the AgentHub AboutPage badge style so all
+  // version badges across the hub read as siblings (12 px monospace,
+  // neutral foreground 2, hairline border on neutral background 3).
   version: {
-    fontSize: "11px",
-    color: "#605e5c",
+    fontSize: "12px",
+    color: tokens.colorNeutralForeground2,
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
     ...shorthands.padding("2px", "6px"),
     ...shorthands.border("1px", "solid", "rgba(192, 199, 212, 0.4)"),
     ...shorthands.borderRadius("4px"),
-    backgroundColor: "#ffffff",
+    backgroundColor: tokens.colorNeutralBackground3,
   },
   headerRight: {
     marginLeft: "auto",
@@ -170,22 +168,24 @@ export interface PbiFixerPageProps {
 }
 
 function readNavKey(): NavKey {
-  // 1) URL ``?nav=`` query takes precedence so each editor tab can
-  //    pin its own PBI Fixer sub-page (Model / Report / …).
+  // URL ``?nav=`` query is the single source of truth so each editor
+  // tab pins its own PBI Fixer sub-page (Model / Report / …) and
+  // browser back/forward navigates between them. WS-O Decision #6
+  // dropped the legacy ``sessionStorage["pbiFixer.activeNav"]`` fallback.
   try {
     if (typeof window !== "undefined") {
       const sp = new URLSearchParams(window.location.search);
       const fromUrl = sp.get("nav");
-      if (fromUrl) return fromUrl as NavKey;
+      if (fromUrl) {
+        // Iframe bootstrap URL can nest a second ``?…`` inside the
+        // nav value (e.g. ``nav=report?experience=fabric-developer``).
+        // Strip it down to the first alphanumeric token.
+        const m = fromUrl.match(/^[A-Za-z0-9_-]+/);
+        if (m) return m[0] as NavKey;
+      }
     }
   } catch { /* ignore */ }
-  try {
-    const raw = sessionStorage.getItem(STORAGE_NAV_KEY);
-    if (!raw) return DEFAULT_NAV_KEY;
-    return raw as NavKey;
-  } catch {
-    return DEFAULT_NAV_KEY;
-  }
+  return DEFAULT_NAV_KEY;
 }
 
 export const PbiFixerPage: React.FC<PbiFixerPageProps> = ({
@@ -197,13 +197,56 @@ export const PbiFixerPage: React.FC<PbiFixerPageProps> = ({
     () => initialNav ?? readNavKey()
   );
 
+  // T7: persist the connection bar selection in sessionStorage so a
+  // new PBI Fixer sub-tab (Model, Report, Model BPA, …) inherits the
+  // workspace + dataset + report from the previously-active sub-tab
+  // instead of forcing the user to re-pick everything every time.
+  // Each PBI Fixer tab spawns its own PbiFixerPage instance; without
+  // this the connection bar starts empty in every tab.
+  const PBIFIXER_CONN_STORAGE_KEY = "pbiFixer.connection.v1";
+  type PersistedConnection = {
+    workspaceId: string;
+    workspaceInput: string;
+    datasetId: string;
+    datasetInput: string;
+    reportId: string;
+    reportInput: string;
+  };
+  const readPersistedConn = (): Partial<PersistedConnection> => {
+    try {
+      const raw = sessionStorage.getItem(PBIFIXER_CONN_STORAGE_KEY);
+      if (!raw) return {};
+      const obj = JSON.parse(raw);
+      if (obj && typeof obj === "object") return obj as PersistedConnection;
+    } catch { /* ignore parse / quota errors */ }
+    return {};
+  };
+  const persistedConn = readPersistedConn();
+
   // Connection / selection state.
-  const [workspaceId, setWorkspaceId] = useState("");
-  const [datasetId, setDatasetId] = useState("");
-  const [reportId, setReportId] = useState("");
-  const [workspaceInput, setWorkspaceInput] = useState("");
-  const [datasetInput, setDatasetInput] = useState("");
-  const [reportInput, setReportInput] = useState("");
+  const [workspaceId, setWorkspaceId] = useState(persistedConn.workspaceId ?? "");
+  const [datasetId, setDatasetId] = useState(persistedConn.datasetId ?? "");
+  const [reportId, setReportId] = useState(persistedConn.reportId ?? "");
+  const [workspaceInput, setWorkspaceInput] = useState(persistedConn.workspaceInput ?? "");
+  const [datasetInput, setDatasetInput] = useState(persistedConn.datasetInput ?? "");
+  const [reportInput, setReportInput] = useState(persistedConn.reportInput ?? "");
+
+  // Persist on every change so the next sub-tab to mount picks it up.
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(
+        PBIFIXER_CONN_STORAGE_KEY,
+        JSON.stringify({
+          workspaceId,
+          workspaceInput,
+          datasetId,
+          datasetInput,
+          reportId,
+          reportInput,
+        }),
+      );
+    } catch { /* quota / disabled storage — silently ignore */ }
+  }, [workspaceId, workspaceInput, datasetId, datasetInput, reportId, reportInput]);
 
   const [workspaces, setWorkspaces] = useState<api.Workspace[]>([]);
   const [workspacesLoading, setWorkspacesLoading] = useState(false);
@@ -216,10 +259,15 @@ export const PbiFixerPage: React.FC<PbiFixerPageProps> = ({
 
   const githubToken = sessionStorage.getItem("github_token") || "";
 
-  // Persist nav state.
+  // WS-O #6: URL ``?nav=`` is the single source of truth. Listen for
+  // browser back/forward (popstate) so navigating history updates the
+  // active sub-page. The host shell still updates the URL on sub-nav
+  // clicks (via the Fabric tabs API), and we react to that here too.
   useEffect(() => {
-    try { sessionStorage.setItem(STORAGE_NAV_KEY, activeNav); } catch { /* ignore */ }
-  }, [activeNav]);
+    const sync = () => setActiveNav(readNavKey());
+    window.addEventListener("popstate", sync);
+    return () => window.removeEventListener("popstate", sync);
+  }, []);
 
   // Note: each PBI Fixer tab is independent now (one tab per nav key).
   // The legacy ``pbifixer:navchange`` cross-tab event is intentionally
@@ -278,6 +326,45 @@ export const PbiFixerPage: React.FC<PbiFixerPageProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [reports, reportInput, folderName],
   );
+
+  // Merged Semantic Model + Report picker — used by pages that target
+  // either scope (Fixer, Sempy Runner, Script Runner). A semantic model
+  // and a report typically share the same name in the same folder, and
+  // most sempy / script functions accept either scope, so collapsing
+  // both pickers into one keeps the connection bar uncluttered. We
+  // dedupe by `<folderId>|<name>` and remember whichever ids match.
+  const [pairInput, setPairInput] = useState("");
+  type PairItem = { name: string; folderId?: string | null; datasetId?: string; reportId?: string };
+  const pairItems = useMemo<PairItem[]>(() => {
+    const map = new Map<string, PairItem>();
+    const keyOf = (folderId: string | null | undefined, name: string) => `${folderId ?? ""}|${name}`;
+    for (const d of datasets) {
+      const k = keyOf(d.folderId, d.name);
+      map.set(k, { name: d.name, folderId: d.folderId, datasetId: d.id });
+    }
+    for (const r of reports) {
+      const k = keyOf(r.folderId, r.name);
+      const cur = map.get(k);
+      if (cur) cur.reportId = r.id;
+      else map.set(k, { name: r.name, folderId: r.folderId, reportId: r.id });
+    }
+    return [...map.values()];
+  }, [datasets, reports]);
+  const pairKey = (p: PairItem) => `${p.folderId ?? ""}|${p.name}|${p.datasetId ?? ""}|${p.reportId ?? ""}`;
+  const pairGroups = useMemo(
+    () => groupByFolder(pairItems, pairInput),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pairItems, pairInput, folderName],
+  );
+  // Prefer dataset name when both ids are set (they normally match anyway).
+  const selectedPair = useMemo<PairItem | undefined>(() => {
+    if (!datasetId && !reportId) return undefined;
+    return pairItems.find((p) => (datasetId && p.datasetId === datasetId) || (reportId && p.reportId === reportId));
+  }, [pairItems, datasetId, reportId]);
+  // Keep `pairInput` in sync with whichever scope-specific input changes.
+  useEffect(() => {
+    if (selectedPair) setPairInput(selectedPair.name);
+  }, [selectedPair]);
   const workspaceGroups = useMemo(() => {
     const needle = workspaceInput.toLowerCase();
     return workspaceInput
@@ -288,20 +375,10 @@ export const PbiFixerPage: React.FC<PbiFixerPageProps> = ({
   const acquireToken = useCallback(async () => {
     setTokenLoading(true);
     setTokenError("");
-    const fabricScopes = [
-      "https://api.fabric.microsoft.com/Workspace.Read.All",
-      "https://api.fabric.microsoft.com/Item.Read.All",
-      "https://analysis.windows.net/powerbi/api/Dataset.Read.All",
-      "https://analysis.windows.net/powerbi/api/Workspace.Read.All",
-      "https://analysis.windows.net/powerbi/api/Report.Read.All",
-    ];
     try {
-      const result = await workloadClient.auth.acquireAccessToken({
-        additionalScopesToConsent: fabricScopes,
-        claimsForConditionalAccessPolicy: "",
-      });
-      if (result?.token) {
-        setAccessToken(result.token);
+      const token = await getFabricTokenCached(workloadClient);
+      if (token) {
+        setAccessToken(token);
       } else {
         setTokenError("No token returned");
       }
@@ -456,11 +533,9 @@ export const PbiFixerPage: React.FC<PbiFixerPageProps> = ({
       case "translations": return <TranslationsPage key={remountKey} {...pageProps} />;
       case "delta":        return <DeltaPage        key={remountKey} {...pageProps} />;
       case "diagram":      return <DiagramPage      key={remountKey} {...pageProps} />;
-      case "scriptRunner": return <ScriptRunnerPage key={remountKey} {...pageProps} />;
       case "prototype":    return <PrototypePage    key={remountKey} {...pageProps} />;
       case "reversePrototype": return <ReversePrototypePage key={remountKey} {...pageProps} />;
       case "sempyRunner":  return <SempyRunnerPage  key={remountKey} {...pageProps} />;
-      case "about":        return <AboutPage        key={remountKey} {...pageProps} />;
       default:
         return null;
     }
@@ -468,14 +543,15 @@ export const PbiFixerPage: React.FC<PbiFixerPageProps> = ({
 
   // Only one picker should ever be visible at a time — Report-scoped
   // pages show the Report picker, everything else shows the Semantic
-  // Model picker. Keeps the connection bar uncluttered and avoids the
-  // "which one applies to this page?" ambiguity. Pages that can target
-  // either scope (Fixer, Sempy Runner, Script Runner) show both pickers
-  // so the user can pick whichever the function/script needs.
+  // Model picker. Pages that can target either scope (Fixer, Sempy
+  // Runner, Script Runner) show a SINGLE merged "Semantic Model /
+  // Report" picker — most functions accept either and the two items
+  // typically share the same name in the same folder.
   const isReportScoped = activeNav === "report" || activeNav === "reportBpa" || activeNav === "reversePrototype";
-  const needsBothPickers = activeNav === "fixer" || activeNav === "sempyRunner" || activeNav === "scriptRunner";
-  const showDatasetPicker = needsBothPickers || !isReportScoped;
-  const showReportPicker = needsBothPickers || isReportScoped;
+  const needsBothPickers = activeNav === "fixer" || activeNav === "sempyRunner";
+  const showDatasetPicker = !needsBothPickers && !isReportScoped;
+  const showReportPicker = !needsBothPickers && isReportScoped;
+  const showPairPicker = needsBothPickers;
 
   return (
     <div className={styles.root}>
@@ -530,6 +606,67 @@ export const PbiFixerPage: React.FC<PbiFixerPageProps> = ({
             ))}
           </Combobox>
         </Field>
+
+        {showPairPicker && (
+          <Field label="Semantic Model / Report" style={{ flex: "0 0 320px" }}>
+            <Combobox
+              key="pair-picker"
+              value={pairInput}
+              selectedOptions={selectedPair ? [pairKey(selectedPair)] : []}
+              placeholder={
+                !workspaceId
+                  ? "Pick a workspace first"
+                  : itemsLoading
+                  ? "Loading…"
+                  : pairItems.length
+                  ? "Select a semantic model or report"
+                  : "No semantic models or reports found"
+              }
+              onOptionSelect={(_, data) => {
+                const k = data.optionValue || "";
+                const found = pairItems.find((p) => pairKey(p) === k);
+                if (found) {
+                  setDatasetId(found.datasetId || "");
+                  setDatasetInput(found.datasetId ? found.name : "");
+                  setReportId(found.reportId || "");
+                  setReportInput(found.reportId ? found.name : "");
+                  setPairInput(found.name);
+                } else {
+                  setPairInput(data.optionText || "");
+                }
+              }}
+              onChange={(e) => setPairInput((e.target as HTMLInputElement).value)}
+              disabled={!workspaceId || itemsLoading}
+              freeform
+            >
+              {pairGroups.length === 1 && pairGroups[0].folder === ""
+                ? pairGroups[0].items.map((p) => (
+                    <Option key={pairKey(p)} value={pairKey(p)} text={p.name}>
+                      {p.name}
+                      {p.datasetId && p.reportId
+                        ? ""
+                        : p.datasetId
+                        ? " · model only"
+                        : " · report only"}
+                    </Option>
+                  ))
+                : pairGroups.map((g) => (
+                    <OptionGroup key={g.folder || "__root"} label={g.folder || "Root"}>
+                      {g.items.map((p) => (
+                        <Option key={pairKey(p)} value={pairKey(p)} text={p.name}>
+                          {p.name}
+                          {p.datasetId && p.reportId
+                            ? ""
+                            : p.datasetId
+                            ? " · model only"
+                            : " · report only"}
+                        </Option>
+                      ))}
+                    </OptionGroup>
+                  ))}
+            </Combobox>
+          </Field>
+        )}
 
         {showDatasetPicker && (
           <Field label="Semantic Model" style={{ flex: "0 0 260px" }}>

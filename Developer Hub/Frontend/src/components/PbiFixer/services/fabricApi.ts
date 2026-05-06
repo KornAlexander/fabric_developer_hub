@@ -253,10 +253,15 @@ function parseTmdlDefinition(
     const lines = text.split(/\r?\n/);
     let currentTable: string | null = null;
     let tableInfo: TableInfo | null = null;
-    let currentObject: null | { kind: "column" | "measure" | "hierarchy"; name: string; indent: number; props: Record<string, string>; expression: string[] } = null;
+    let currentObject: null | { kind: "column" | "measure" | "hierarchy" | "partition"; name: string; indent: number; props: Record<string, string>; expression: string[]; levels: string[]; sourceType?: string } = null;
+    // Track the currently-open `level <name>` sub-block inside a hierarchy
+    // so we can swallow its `column: <col>` property line without it
+    // leaking back onto the hierarchy's own props bag.
+    let currentLevel: null | { name: string; indent: number } = null;
 
     const flush = () => {
       if (!currentObject || !tableInfo) return;
+      currentLevel = null;
       if (currentObject.kind === "column") {
         tableInfo.columns[currentObject.name] = {
           dataType: currentObject.props.dataType ?? "",
@@ -280,7 +285,22 @@ function parseTmdlDefinition(
           isHidden: currentObject.props.isHidden === "true",
         };
       } else if (currentObject.kind === "hierarchy") {
-        tableInfo.hierarchies[currentObject.name] = {};
+        tableInfo.hierarchies[currentObject.name] = {
+          levels: currentObject.levels.slice(),
+        };
+      } else if (currentObject.kind === "partition") {
+        // v0.72 — capture partition with its M / DAX source. Strip
+        // surrounding TMDL fence markers (```) from the body but keep
+        // line-internal whitespace as authored.
+        const body = currentObject.expression
+          .filter((l) => l.trim() !== "```")
+          .join("\n")
+          .trim();
+        tableInfo.partitions.push({
+          name: currentObject.name,
+          sourceType: currentObject.sourceType ?? currentObject.props.mode ?? "",
+          expression: body,
+        });
       }
       currentObject = null;
     };
@@ -315,22 +335,65 @@ function parseTmdlDefinition(
 
       if (!tableInfo) continue;
 
-      const objMatch = trimmed.match(/^(column|measure|hierarchy)\s+(['"]?)([^=]+?)\2(?:\s*=\s*(.*))?$/);
+      const objMatch = trimmed.match(/^(column|measure|hierarchy|partition)\s+(['"]?)([^=]+?)\2(?:\s*=\s*(.*))?$/);
       if (objMatch) {
         flush();
+        const kind = objMatch[1] as "column" | "measure" | "hierarchy" | "partition";
+        const headerExpr = objMatch[4];
         currentObject = {
-          kind: objMatch[1] as "column" | "measure" | "hierarchy",
+          kind,
           name: objMatch[3].trim(),
           indent,
           props: {},
-          expression: objMatch[4] ? [objMatch[4].trim()] : [],
+          expression: [],
+          levels: [],
         };
+        // Partition header: `partition <name> = <kind>` where <kind> is
+        // the source type (m / calculated / entity / policyRange / …),
+        // NOT the start of the expression. The actual M/DAX body lives
+        // in the `source = …` property below.
+        if (kind === "partition") {
+          if (headerExpr) currentObject.sourceType = headerExpr.trim();
+        } else if (headerExpr) {
+          currentObject.expression.push(headerExpr.trim());
+        }
         continue;
       }
 
+      // `level <name>` inside a hierarchy block — record the level name,
+      // then swallow the following `column: <col>` line via currentLevel.
+      if (currentObject?.kind === "hierarchy") {
+        const levelMatch = trimmed.match(/^level\s+(['"]?)([^=]+?)\1\s*$/);
+        if (levelMatch) {
+          const lvlName = levelMatch[2].trim();
+          currentObject.levels.push(lvlName);
+          currentLevel = { name: lvlName, indent };
+          continue;
+        }
+      }
+
       if (currentObject) {
+        // v0.72 — partition `source = …` is the M / DAX body, NOT a
+        // colon-property. Match it explicitly so it doesn't fall into
+        // the propMatch bucket (it wouldn't anyway — `=`, not `:`) and
+        // start expression accumulation.
+        if (currentObject.kind === "partition") {
+          const srcMatch = trimmed.match(/^source\s*=\s*(.*)$/);
+          if (srcMatch) {
+            const v = srcMatch[1].trim();
+            if (v && v !== "```") currentObject.expression.push(v);
+            continue;
+          }
+        }
         const propMatch = trimmed.match(/^(\w+):\s*(.*)$/);
         if (propMatch) {
+          // If this prop is nested inside a `level` sub-block (deeper
+          // indent than the level header), it belongs to the level,
+          // not to the hierarchy itself — swallow it.
+          if (currentLevel && indent > currentLevel.indent) {
+            continue;
+          }
+          currentLevel = null;
           currentObject.props[propMatch[1]] = propMatch[2].replace(/^['"]|['"]$/g, "");
           continue;
         }
@@ -340,9 +403,21 @@ function parseTmdlDefinition(
         if (/^(annotation|lineageTag|changedProperty|extendedProperty|kind|sourceLineageTag|queryGroup|relatedColumnDetails)\b/.test(trimmed)) {
           continue;
         }
-        if (currentObject.kind === "measure" || currentObject.kind === "column") {
-          // Continuation of expression (multi-line DAX block)
+        if (currentObject.kind === "measure" || currentObject.kind === "column" || currentObject.kind === "partition") {
+          // Continuation of expression (multi-line DAX / M block)
           currentObject.expression.push(trimmed);
+        }
+      } else {
+        // Table-level property (no currentObject open) — capture
+        // `description:` / `isHidden:` so the editable Properties pane
+        // can show real values instead of always-empty strings.
+        const tableProp = trimmed.match(/^(description|isHidden):\s*(.*)$/);
+        if (tableProp) {
+          const key = tableProp[1];
+          const val = tableProp[2].replace(/^['"]|['"]$/g, "");
+          if (key === "description") tableInfo.description = val;
+          else if (key === "isHidden") tableInfo.isHidden = val === "true";
+          continue;
         }
       }
     }
@@ -376,6 +451,11 @@ export async function getSemanticModelDefinition(
 export interface MeasureEdit {
   table: string;
   measure: string;
+  /** v0.71 — rename the measure. Rewrites only the TMDL header line
+   *  (`measure '<old>' = …` → `measure '<new>' = …`); references in
+   *  other measures' DAX are NOT cascaded — the user is expected to
+   *  fix those by hand or via a follow-up save. */
+  newName?: string;
   expression?: string;
   formatString?: string;
   description?: string;
@@ -437,6 +517,27 @@ function patchMeasureInTmdl(
   }
   if (headerIdx < 0) return { text, matched: false };
   const headerIndent = headerIndentStr.length;
+
+  // v0.71 — rename support. Rewrite the measure name on the header
+  // line (and on the synthesised header in the expression-rewrite pass
+  // below) before any further work. Quote the new name iff it isn't a
+  // bare identifier (TMDL: `[A-Za-z_][A-Za-z0-9_]*`); single quotes
+  // inside the name are escaped by doubling them.
+  if (typeof edits.newName === "string" && edits.newName !== measureName) {
+    const newName = edits.newName;
+    const headerLine = lines[headerIdx];
+    const quotedNew = /^[A-Za-z_][A-Za-z0-9_]*$/.test(newName)
+      ? newName
+      : `'${newName.replace(/'/g, "''")}'`;
+    // Replace `measure <oldname-with-or-without-quotes>` once.
+    lines[headerIdx] = headerLine.replace(
+      new RegExp(`(measure\\s+)(['"]?)${escName}\\2`),
+      `$1${quotedNew}`,
+    );
+    // From here on, the patcher needs the new name for the
+    // expression-rewrite header synthesis below.
+    measureName = newName;
+  }
 
   // Find the end of the block: first line whose indent <= headerIndent (and non-blank).
   let endIdx = lines.length;
@@ -535,7 +636,10 @@ function patchMeasureInTmdl(
   }
 
   // Pass 1: replace existing property lines in-place.
-  const editKeys = (Object.keys(edits) as (keyof typeof edits)[]).filter((k) => k !== "expression");
+  // v0.71 — `newName` is a header rewrite (handled above); skip here.
+  const editKeys = (Object.keys(edits) as (keyof typeof edits)[]).filter(
+    (k) => k !== "expression" && k !== "newName",
+  );
   const handled = new Set<string>();
   for (let i = headerIdx + 1; i < endIdx; i++) {
     const trimmed = lines[i].trim();
@@ -651,6 +755,656 @@ export async function updateMeasureProperties(
   );
 
   return { updated, errors };
+}
+
+// ---------------------------------------------------------------------------
+// Column / Table / Relationship property write-back (TMDL roundtrip)
+// Generalised pattern after `patchMeasureInTmdl`. Each *Edit type lists
+// the editable props for one TMDL block kind; `patchTmdlBlockProps`
+// handles the property replace+insert plumbing (no expression rewrite,
+// kept measure-specific in `patchMeasureInTmdl`).
+// ---------------------------------------------------------------------------
+
+export interface ColumnEdit {
+  table: string;
+  column: string;
+  /** v0.71 — rename the column. Rewrites only the TMDL header line
+   *  (`column '<old>'` → `column '<new>'`); references in DAX measures /
+   *  relationships are NOT cascaded. */
+  newName?: string;
+  description?: string;
+  displayFolder?: string;
+  isHidden?: boolean;
+  summarizeBy?: string;
+  dataCategory?: string;
+  formatString?: string;
+}
+
+export interface TableEdit {
+  table: string;
+  description?: string;
+  isHidden?: boolean;
+}
+
+export interface RelationshipEdit {
+  /** Identifier of the relationship via from/to columns (since TMDL
+   *  stores the relationship by an opaque guid that isn't surfaced in
+   *  ModelData). The patcher locates the matching `relationship` block
+   *  by walking until it finds matching `fromColumn:` + `toColumn:` lines. */
+  fromTable: string;
+  fromColumn: string;
+  toTable: string;
+  toColumn: string;
+  isActive?: boolean;
+  crossFilteringBehavior?: string;
+}
+
+const ALWAYS_QUOTE_KEYS = new Set(["description", "formatString"]);
+
+function tmdlPropLineFor(
+  indent: string,
+  key: string,
+  val: string | boolean | undefined,
+): string {
+  if (typeof val === "boolean") return `${indent}${key}: ${val ? "true" : "false"}`;
+  const s = String(val ?? "");
+  if (ALWAYS_QUOTE_KEYS.has(key)) {
+    const esc = s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    return `${indent}${key}: "${esc}"`;
+  }
+  if (s === "") return `${indent}${key}: `;
+  if (/[:#"\s]/.test(s)) {
+    const esc = s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    return `${indent}${key}: "${esc}"`;
+  }
+  return `${indent}${key}: ${s}`;
+}
+
+/** Generic property patcher for any TMDL block — locates the header line
+ *  via the supplied regex (must capture the leading indent in group 1),
+ *  walks forward until the indent unwinds, then runs the same two-pass
+ *  replace+insert as `patchMeasureInTmdl` (no expression rewrite). */
+function patchTmdlBlockProps(
+  text: string,
+  headerRe: RegExp,
+  edits: Record<string, string | boolean | undefined>,
+): { text: string; matched: boolean } {
+  const lines = text.split(/\r?\n/);
+  let headerIdx = -1;
+  let headerIndentStr = "";
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(headerRe);
+    if (m) {
+      headerIdx = i;
+      headerIndentStr = m[1];
+      break;
+    }
+  }
+  if (headerIdx < 0) return { text, matched: false };
+  const headerIndent = headerIndentStr.length;
+
+  let endIdx = lines.length;
+  for (let i = headerIdx + 1; i < lines.length; i++) {
+    const ln = lines[i];
+    if (!ln.trim()) continue;
+    const indent = ln.length - ln.trimStart().length;
+    if (indent <= headerIndent) { endIdx = i; break; }
+  }
+
+  let unit = "\t";
+  const findUnitIn = (start: number, end: number): boolean => {
+    for (let i = start; i < end; i++) {
+      const ln = lines[i];
+      if (!ln.trim()) continue;
+      const m = ln.match(/^([\t ]+)\w+:\s/);
+      if (!m) continue;
+      const indentLen = m[1].length;
+      if (indentLen > headerIndent) {
+        unit = m[1].slice(headerIndent);
+        return true;
+      }
+    }
+    return false;
+  };
+  if (!findUnitIn(headerIdx + 1, endIdx)) findUnitIn(0, lines.length);
+  const propIndent = headerIndentStr + unit;
+
+  const editKeys = Object.keys(edits).filter((k) => edits[k] !== undefined);
+  const handled = new Set<string>();
+  for (let i = headerIdx + 1; i < endIdx; i++) {
+    const trimmed = lines[i].trim();
+    const propMatch = trimmed.match(/^(\w+):/);
+    if (!propMatch) continue;
+    const key = propMatch[1];
+    if (editKeys.includes(key) && !handled.has(key)) {
+      lines[i] = tmdlPropLineFor(propIndent, key, edits[key]);
+      handled.add(key);
+    }
+  }
+
+  const inserts: string[] = [];
+  for (const k of editKeys) {
+    if (handled.has(k)) continue;
+    inserts.push(tmdlPropLineFor(propIndent, k, edits[k]));
+  }
+  if (inserts.length > 0) {
+    let insertAt = endIdx;
+    while (insertAt > headerIdx + 1 && !lines[insertAt - 1].trim()) insertAt--;
+    lines.splice(insertAt, 0, ...inserts);
+  }
+
+  return { text: lines.join("\n"), matched: true };
+}
+
+function patchColumnInTmdl(
+  text: string,
+  columnName: string,
+  edits: Omit<ColumnEdit, "table" | "column">,
+): { text: string; matched: boolean } {
+  const escName = columnName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Column header: `<indent>column '<name>'` or `<indent>column <name>`,
+  // optionally followed by ` = <expression>` (calculated columns).
+  const headerRe = new RegExp(
+    `^([\\t ]*)column\\s+(['"]?)${escName}\\2(\\s|=|$)`,
+  );
+
+  // v0.71 — handle rename as a header-line rewrite, then delegate the
+  // remaining property edits (without `newName`) to the generic patcher.
+  let workingText = text;
+  if (typeof edits.newName === "string" && edits.newName !== columnName) {
+    const lines = workingText.split(/\r?\n/);
+    let headerIdx = -1;
+    for (let i = 0; i < lines.length; i++) {
+      if (headerRe.test(lines[i])) { headerIdx = i; break; }
+    }
+    if (headerIdx < 0) return { text, matched: false };
+    const newName = edits.newName;
+    const quotedNew = /^[A-Za-z_][A-Za-z0-9_]*$/.test(newName)
+      ? newName
+      : `'${newName.replace(/'/g, "''")}'`;
+    lines[headerIdx] = lines[headerIdx].replace(
+      new RegExp(`(column\\s+)(['"]?)${escName}\\2`),
+      `$1${quotedNew}`,
+    );
+    workingText = lines.join("\n");
+    // Subsequent property edits must locate the renamed column.
+    const newEscName = newName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const newHeaderRe = new RegExp(
+      `^([\\t ]*)column\\s+(['"]?)${newEscName}\\2(\\s|=|$)`,
+    );
+    const { newName: _drop, ...rest } = edits;
+    return patchTmdlBlockProps(workingText, newHeaderRe, rest as Record<string, string | boolean | undefined>);
+  }
+
+  const { newName: _drop, ...rest } = edits;
+  return patchTmdlBlockProps(workingText, headerRe, rest as Record<string, string | boolean | undefined>);
+}
+
+function patchTableInTmdl(
+  text: string,
+  tableName: string,
+  edits: Omit<TableEdit, "table">,
+): { text: string; matched: boolean } {
+  const escName = tableName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Table header is always at indent 0.
+  const headerRe = new RegExp(
+    `^()table\\s+(['"]?)${escName}\\2\\s*$`,
+  );
+  return patchTmdlBlockProps(text, headerRe, edits as Record<string, string | boolean | undefined>);
+}
+
+/** Patch a relationship by from/to identifiers. TMDL relationships are
+ *  keyed by an opaque guid in the header (e.g. `relationship 1234-...`)
+ *  so we walk every relationship block and match the one whose body
+ *  contains both `fromColumn: '<fromTable>'.'<fromCol>'` AND
+ *  `toColumn: '<toTable>'.'<toCol>'`. */
+function patchRelationshipInTmdl(
+  text: string,
+  ident: { fromTable: string; fromColumn: string; toTable: string; toColumn: string },
+  edits: Omit<RelationshipEdit, "fromTable" | "fromColumn" | "toTable" | "toColumn">,
+): { text: string; matched: boolean } {
+  const lines = text.split(/\r?\n/);
+  // Find every `relationship` header line (any indent).
+  const headers: { idx: number; indent: number }[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^([\t ]*)relationship\s+\S+/);
+    if (m) headers.push({ idx: i, indent: m[1].length });
+  }
+  // Locate the matching block. The fromColumn/toColumn lines look like:
+  //   fromColumn: 'TableName'.'ColumnName'
+  // (single quotes stripped where unambiguous). Match either form.
+  const colMatches = (line: string, key: "fromColumn" | "toColumn", t: string, c: string): boolean => {
+    const re = new RegExp(`^${key}:\\s*['"]?${t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}['"]?\\s*\\.\\s*['"]?${c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}['"]?\\s*$`);
+    return re.test(line.trim());
+  };
+  let matchIdx = -1;
+  for (let h = 0; h < headers.length; h++) {
+    const start = headers[h].idx;
+    const end = h + 1 < headers.length ? headers[h + 1].idx : lines.length;
+    let sawFrom = false;
+    let sawTo = false;
+    for (let i = start + 1; i < end; i++) {
+      if (colMatches(lines[i], "fromColumn", ident.fromTable, ident.fromColumn)) sawFrom = true;
+      if (colMatches(lines[i], "toColumn", ident.toTable, ident.toColumn)) sawTo = true;
+    }
+    if (sawFrom && sawTo) { matchIdx = start; break; }
+  }
+  if (matchIdx < 0) return { text, matched: false };
+
+  // Re-derive the header for patchTmdlBlockProps and slice/patch.
+  // Easiest path: inline the same prop replace+insert here instead of
+  // re-running the regex (we already know matchIdx).
+  const headerIndentStr = lines[matchIdx].match(/^([\t ]*)/)?.[1] ?? "";
+  const headerIndent = headerIndentStr.length;
+  let endIdx = lines.length;
+  for (let i = matchIdx + 1; i < lines.length; i++) {
+    const ln = lines[i];
+    if (!ln.trim()) continue;
+    const indent = ln.length - ln.trimStart().length;
+    if (indent <= headerIndent) { endIdx = i; break; }
+  }
+  let unit = "\t";
+  for (let i = matchIdx + 1; i < endIdx; i++) {
+    const ln = lines[i];
+    if (!ln.trim()) continue;
+    const m = ln.match(/^([\t ]+)\w+:\s/);
+    if (m && m[1].length > headerIndent) { unit = m[1].slice(headerIndent); break; }
+  }
+  const propIndent = headerIndentStr + unit;
+  const editEntries: [string, string | boolean | undefined][] = Object.entries(edits).filter(
+    ([, v]) => v !== undefined,
+  ) as [string, string | boolean | undefined][];
+  const handled = new Set<string>();
+  for (let i = matchIdx + 1; i < endIdx; i++) {
+    const trimmed = lines[i].trim();
+    const propMatch = trimmed.match(/^(\w+):/);
+    if (!propMatch) continue;
+    const key = propMatch[1];
+    const editVal = editEntries.find(([k]) => k === key);
+    if (editVal && !handled.has(key)) {
+      lines[i] = tmdlPropLineFor(propIndent, key, editVal[1]);
+      handled.add(key);
+    }
+  }
+  const inserts: string[] = [];
+  for (const [k, v] of editEntries) {
+    if (handled.has(k)) continue;
+    inserts.push(tmdlPropLineFor(propIndent, k, v));
+  }
+  if (inserts.length > 0) {
+    let insertAt = endIdx;
+    while (insertAt > matchIdx + 1 && !lines[insertAt - 1].trim()) insertAt--;
+    lines.splice(insertAt, 0, ...inserts);
+  }
+  return { text: lines.join("\n"), matched: true };
+}
+
+/** Apply column property edits via TMDL roundtrip. Mirrors
+ *  `updateMeasureProperties` shape: pulls definition, patches each
+ *  affected `definition/tables/<table>.tmdl` part, posts updateDefinition. */
+export async function updateColumnProperties(
+  auth: PbiAuth,
+  workspaceId: string,
+  datasetId: string,
+  edits: ColumnEdit[],
+): Promise<{ updated: number; errors: string[] }> {
+  if (edits.length === 0) return { updated: 0, errors: [] };
+  const parts = await getSemanticModelDefinition(auth, workspaceId, datasetId);
+  if (parts.length === 0) throw new Error("Semantic model definition is empty");
+
+  const byTable = new Map<string, ColumnEdit[]>();
+  for (const e of edits) {
+    const arr = byTable.get(e.table) ?? [];
+    arr.push(e);
+    byTable.set(e.table, arr);
+  }
+
+  const errors: string[] = [];
+  let updated = 0;
+  const newParts = parts.map((p) => ({ ...p }));
+  for (const [tableName, tableEdits] of byTable) {
+    const part = newParts.find((p) => {
+      const m = p.path.match(/definition\/tables\/(.+)\.tmdl$/);
+      if (!m) return false;
+      try { return decodeURIComponent(m[1]) === tableName; }
+      catch { return m[1] === tableName; }
+    });
+    if (!part) { errors.push(`Table TMDL not found: '${tableName}'`); continue; }
+    let text: string;
+    try { text = base64ToUtf8(part.payload); }
+    catch { errors.push(`Failed to decode TMDL for table '${tableName}'`); continue; }
+    for (const edit of tableEdits) {
+      const { table: _t, column, ...props } = edit;
+      const result = patchColumnInTmdl(text, column, props);
+      if (!result.matched) {
+        errors.push(`Column '${tableName}'[${column}] not found in TMDL`);
+        continue;
+      }
+      text = result.text;
+      updated++;
+    }
+    part.payload = utf8ToBase64(text);
+  }
+
+  if (updated === 0) {
+    return { updated: 0, errors: errors.length ? errors : ["No matching columns patched"] };
+  }
+  await fabricPost<unknown>(
+    auth,
+    `/workspaces/${workspaceId}/semanticModels/${datasetId}/updateDefinition`,
+    { definition: { parts: newParts } },
+  );
+  return { updated, errors };
+}
+
+/** Apply table-level property edits via TMDL roundtrip. */
+export async function updateTableProperties(
+  auth: PbiAuth,
+  workspaceId: string,
+  datasetId: string,
+  edits: TableEdit[],
+): Promise<{ updated: number; errors: string[] }> {
+  if (edits.length === 0) return { updated: 0, errors: [] };
+  const parts = await getSemanticModelDefinition(auth, workspaceId, datasetId);
+  if (parts.length === 0) throw new Error("Semantic model definition is empty");
+
+  const errors: string[] = [];
+  let updated = 0;
+  const newParts = parts.map((p) => ({ ...p }));
+  for (const edit of edits) {
+    const part = newParts.find((p) => {
+      const m = p.path.match(/definition\/tables\/(.+)\.tmdl$/);
+      if (!m) return false;
+      try { return decodeURIComponent(m[1]) === edit.table; }
+      catch { return m[1] === edit.table; }
+    });
+    if (!part) { errors.push(`Table TMDL not found: '${edit.table}'`); continue; }
+    let text: string;
+    try { text = base64ToUtf8(part.payload); }
+    catch { errors.push(`Failed to decode TMDL for table '${edit.table}'`); continue; }
+    const { table: _t, ...props } = edit;
+    const result = patchTableInTmdl(text, edit.table, props);
+    if (!result.matched) {
+      errors.push(`Table '${edit.table}' header not found in TMDL`);
+      continue;
+    }
+    part.payload = utf8ToBase64(result.text);
+    updated++;
+  }
+  if (updated === 0) {
+    return { updated: 0, errors: errors.length ? errors : ["No matching tables patched"] };
+  }
+  await fabricPost<unknown>(
+    auth,
+    `/workspaces/${workspaceId}/semanticModels/${datasetId}/updateDefinition`,
+    { definition: { parts: newParts } },
+  );
+  return { updated, errors };
+}
+
+/** Apply relationship property edits via TMDL roundtrip. Relationships
+ *  may live in `definition/relationships.tmdl` (top-level) OR inline in
+ *  `definition/model.tmdl`. We try every part whose path matches either;
+ *  the patcher only mutates the part actually containing the matching
+ *  relationship block. */
+export async function updateRelationshipProperties(
+  auth: PbiAuth,
+  workspaceId: string,
+  datasetId: string,
+  edits: RelationshipEdit[],
+): Promise<{ updated: number; errors: string[] }> {
+  if (edits.length === 0) return { updated: 0, errors: [] };
+  const parts = await getSemanticModelDefinition(auth, workspaceId, datasetId);
+  if (parts.length === 0) throw new Error("Semantic model definition is empty");
+
+  const errors: string[] = [];
+  let updated = 0;
+  const newParts = parts.map((p) => ({ ...p }));
+  // Candidate parts: relationships.tmdl + model.tmdl.
+  const candidates = newParts.filter((p) =>
+    /definition\/relationships\.tmdl$/.test(p.path) || /definition\/model\.tmdl$/.test(p.path),
+  );
+
+  for (const edit of edits) {
+    const { isActive, crossFilteringBehavior, ...ident } = edit;
+    let matched = false;
+    for (const part of candidates) {
+      let text: string;
+      try { text = base64ToUtf8(part.payload); }
+      catch { continue; }
+      const result = patchRelationshipInTmdl(text, ident, { isActive, crossFilteringBehavior });
+      if (result.matched) {
+        part.payload = utf8ToBase64(result.text);
+        matched = true;
+        updated++;
+        break;
+      }
+    }
+    if (!matched) {
+      errors.push(`Relationship ${ident.fromTable}[${ident.fromColumn}] → ${ident.toTable}[${ident.toColumn}] not found in TMDL`);
+    }
+  }
+
+  if (updated === 0) {
+    return { updated: 0, errors: errors.length ? errors : ["No matching relationships patched"] };
+  }
+  await fabricPost<unknown>(
+    auth,
+    `/workspaces/${workspaceId}/semanticModels/${datasetId}/updateDefinition`,
+    { definition: { parts: newParts } },
+  );
+  return { updated, errors };
+}
+
+// ---------------------------------------------------------------------------
+// Partition source (M / DAX) write-back (TMDL roundtrip) — v0.72
+// ---------------------------------------------------------------------------
+
+export interface PartitionEdit {
+  table: string;
+  partition: string;
+  /** New M (Power Query) or DAX expression body for the partition's
+   *  `source = …` block. */
+  expression: string;
+}
+
+/** Patch a single `partition <name>` block's `source = …` body with the
+ *  supplied expression. Strategy mirrors `patchMeasureInTmdl`'s
+ *  expression-rewrite pass:
+ *  - Locate the partition header (`partition '<name>' = <kind>`).
+ *  - Find the existing `source = …` line within the block.
+ *  - Determine its body span: inline (`source = X`), fenced
+ *    (`source = ```` … ````), or none (re-emit fenced).
+ *  - Replace span with new expression. Multi-line bodies are emitted
+ *    with TMDL ```` fence markers at the partition's child indent. */
+function patchPartitionInTmdl(
+  text: string,
+  partitionName: string,
+  expression: string,
+): { text: string; matched: boolean } {
+  const lines = text.split(/\r?\n/);
+  const escName = partitionName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const headerRe = new RegExp(
+    `^([\\t ]*)partition\\s+(['"]?)${escName}\\2(\\s|=|$)`,
+  );
+  let headerIdx = -1;
+  let headerIndentStr = "";
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(headerRe);
+    if (m) { headerIdx = i; headerIndentStr = m[1]; break; }
+  }
+  if (headerIdx < 0) return { text, matched: false };
+  const headerIndent = headerIndentStr.length;
+
+  // End of partition block.
+  let endIdx = lines.length;
+  for (let i = headerIdx + 1; i < lines.length; i++) {
+    const ln = lines[i];
+    if (!ln.trim()) continue;
+    const indent = ln.length - ln.trimStart().length;
+    if (indent <= headerIndent) { endIdx = i; break; }
+  }
+
+  // Detect indent unit by sampling a sibling property line.
+  let unit = "\t";
+  for (let i = headerIdx + 1; i < endIdx; i++) {
+    const ln = lines[i];
+    if (!ln.trim()) continue;
+    const m = ln.match(/^([\t ]+)\w+(:|\s*=)/);
+    if (m && m[1].length > headerIndent) { unit = m[1].slice(headerIndent); break; }
+  }
+  const childIndent = headerIndentStr + unit;
+  const bodyIndent = childIndent + unit;
+
+  // Locate `source = …` line.
+  let sourceIdx = -1;
+  let sourceIndentStr = "";
+  let sourceInlineVal = "";
+  for (let i = headerIdx + 1; i < endIdx; i++) {
+    const m = lines[i].match(/^([\t ]+)source\s*=\s*(.*)$/);
+    if (m) {
+      sourceIdx = i;
+      sourceIndentStr = m[1];
+      sourceInlineVal = m[2];
+      break;
+    }
+  }
+
+  // Build replacement lines.
+  const newExpr = expression.replace(/\r\n/g, "\n").replace(/\s+$/, "");
+  const isMultiLine = newExpr.includes("\n");
+  const replacement: string[] = [];
+  if (!isMultiLine) {
+    replacement.push(`${childIndent}source = ${newExpr.trim()}`);
+  } else {
+    replacement.push(`${childIndent}source = \`\`\``);
+    for (const ln of newExpr.split("\n")) {
+      replacement.push(ln.length > 0 ? `${bodyIndent}${ln}` : "");
+    }
+    replacement.push(`${bodyIndent}\`\`\``);
+  }
+
+  if (sourceIdx < 0) {
+    // No existing source — insert at end of block.
+    let insertAt = endIdx;
+    while (insertAt > headerIdx + 1 && !lines[insertAt - 1].trim()) insertAt--;
+    lines.splice(insertAt, 0, ...replacement);
+    return { text: lines.join("\n"), matched: true };
+  }
+
+  // Determine span of existing source block.
+  let sourceEndIdx = sourceIdx + 1;
+  if (sourceInlineVal.trim() === "```") {
+    // Fenced: walk until the matching closing fence at the body indent.
+    while (sourceEndIdx < endIdx) {
+      if (lines[sourceEndIdx].trim() === "```") { sourceEndIdx++; break; }
+      sourceEndIdx++;
+    }
+  } else if (sourceInlineVal === "" || sourceInlineVal.trim() === "") {
+    // Block form: walk until we hit a sibling property or dedent.
+    const srcIndent = sourceIndentStr.length;
+    while (sourceEndIdx < endIdx) {
+      const ln = lines[sourceEndIdx];
+      if (!ln.trim()) { sourceEndIdx++; continue; }
+      const li = ln.length - ln.trimStart().length;
+      if (li <= srcIndent) break;
+      sourceEndIdx++;
+    }
+  }
+  // else: inline single-line — sourceEndIdx already = sourceIdx + 1
+
+  lines.splice(sourceIdx, sourceEndIdx - sourceIdx, ...replacement);
+  return { text: lines.join("\n"), matched: true };
+}
+
+/** Apply partition source (M / DAX) edits via TMDL roundtrip. */
+export async function updatePartitionExpressions(
+  auth: PbiAuth,
+  workspaceId: string,
+  datasetId: string,
+  edits: PartitionEdit[],
+): Promise<{ updated: number; errors: string[] }> {
+  if (edits.length === 0) return { updated: 0, errors: [] };
+  const parts = await getSemanticModelDefinition(auth, workspaceId, datasetId);
+  if (parts.length === 0) throw new Error("Semantic model definition is empty");
+
+  const byTable = new Map<string, PartitionEdit[]>();
+  for (const e of edits) {
+    const arr = byTable.get(e.table) ?? [];
+    arr.push(e);
+    byTable.set(e.table, arr);
+  }
+
+  const errors: string[] = [];
+  let updated = 0;
+  const newParts = parts.map((p) => ({ ...p }));
+  for (const [tableName, tableEdits] of byTable) {
+    const part = newParts.find((p) => {
+      const m = p.path.match(/definition\/tables\/(.+)\.tmdl$/);
+      if (!m) return false;
+      try { return decodeURIComponent(m[1]) === tableName; }
+      catch { return m[1] === tableName; }
+    });
+    if (!part) { errors.push(`Table TMDL not found: '${tableName}'`); continue; }
+    let text: string;
+    try { text = base64ToUtf8(part.payload); }
+    catch { errors.push(`Failed to decode TMDL for table '${tableName}'`); continue; }
+    for (const edit of tableEdits) {
+      const result = patchPartitionInTmdl(text, edit.partition, edit.expression);
+      if (!result.matched) {
+        errors.push(`Partition '${tableName}'[${edit.partition}] not found in TMDL`);
+        continue;
+      }
+      text = result.text;
+      updated++;
+    }
+    part.payload = utf8ToBase64(text);
+  }
+
+  if (updated === 0) {
+    return { updated: 0, errors: errors.length ? errors : ["No matching partitions patched"] };
+  }
+  await fabricPost<unknown>(
+    auth,
+    `/workspaces/${workspaceId}/semanticModels/${datasetId}/updateDefinition`,
+    { definition: { parts: newParts } },
+  );
+  return { updated, errors };
+}
+
+// ---------------------------------------------------------------------------
+// DAX formatting via daxformatter.com
+// ---------------------------------------------------------------------------
+
+/** Format a DAX expression via the public daxformatter.com REST API
+ *  (sqlbi). Returns the formatted DAX string. Throws on network/CORS
+ *  failure so the caller can offer a clipboard fallback. */
+export async function formatDax(
+  dax: string,
+  opts?: { maxLineLength?: number; shortFormat?: boolean },
+): Promise<string> {
+  const body = new URLSearchParams({
+    Dax: dax,
+    MaxLineLength: String(opts?.maxLineLength ?? 0),
+    SkipSpaceAfterFunctionName: "0",
+    ListSeparator: ",",
+    DecimalSeparator: ".",
+  });
+  const resp = await fetch("https://www.daxformatter.com/api/daxformatter/DaxFormat", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: body.toString(),
+  });
+  if (!resp.ok) {
+    throw new Error(`daxformatter.com responded ${resp.status}`);
+  }
+  const text = await resp.text();
+  // Response is a JSON-encoded string (wrapped in quotes); strip if so.
+  const trimmed = text.trim();
+  if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    try { return JSON.parse(trimmed); } catch { /* fall through */ }
+  }
+  return text;
 }
 
 export async function executeDax(
@@ -772,6 +1526,7 @@ function parseReportDefinition(
           visualCount: 0,
           ordinal: pageOrderMap[pageName] ?? 9999,
           visuals: {},
+          rawJson: pageJson,
         };
         reportData.pages[pageName] = pageInfo;
       } catch {
@@ -804,6 +1559,7 @@ function parseReportDefinition(
               visualJson.visual?.visualContainerObjects?.title?.[0]?.properties
                 ?.text?.expr?.Literal?.Value ??
               "",
+            rawJson: visualJson,
           };
           reportData.pages[pageName].visuals[visualName] = visual;
           reportData.pages[pageName].visualCount++;

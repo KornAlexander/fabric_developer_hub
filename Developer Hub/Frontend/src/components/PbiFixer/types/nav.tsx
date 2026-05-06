@@ -20,11 +20,9 @@ import {
   Translate20Regular,
   ArrowSwap20Regular,
   Flowchart20Regular,
-  Code20Regular,
   Beaker20Regular,
   ArrowImport20Regular,
   Flash20Regular,
-  Info20Regular,
 } from "@fluentui/react-icons";
 
 export type NavKey =
@@ -38,11 +36,9 @@ export type NavKey =
   | "translations"
   | "delta"
   | "diagram"
-  | "scriptRunner"
   | "prototype"
   | "reversePrototype"
-  | "sempyRunner"
-  | "about";
+  | "sempyRunner";
 
 /** Sub-group identifiers used to partition the nav into themed,
  *  collapsible sections. v0.34 replaces the single catch-all "Others"
@@ -68,14 +64,21 @@ export interface NavItem {
 //   • Model tools  — analyse / maintain the semantic model
 //   • Report tools — design / inspect reports
 //   • Automation   — execute code (TMSL / C# / Python) against items
-export const NAV_ITEMS: NavItem[] = [
+//
+// WS-O acceptance #10: nav items with `ready: false` MUST NOT render in
+// the sidebar (matches AgentHub — never advertise unfinished pages).
+// We keep the unready entries in `ALL_NAV_ITEMS` so the NavKey union +
+// any deep-link / preselect logic that mentions them still resolves; the
+// public `NAV_ITEMS` export (consumed by `AgentHubLayout` to render the
+// rail) is the filtered subset. CHANGELOG / PLAN remain the roadmap.
+const ALL_NAV_ITEMS: NavItem[] = [
   // Top peers
   { key: "model",            label: "Model",             icon: <Database20Regular />,        group: "peer",         ready: true  },
   { key: "report",           label: "Report",            icon: <ChartMultiple20Regular />,   group: "peer",         ready: true  },
 
   // Model tools
   { key: "modelBpa",         label: "Model BPA",         icon: <DatabaseSearch20Regular />,  group: "modelTools",   ready: true  },
-  { key: "memory",           label: "Memory",            icon: <Storage20Regular />,         group: "modelTools",   ready: true  },
+  { key: "memory",           label: "Memory Analyzer",   icon: <Storage20Regular />,         group: "modelTools",   ready: true  },
   { key: "perspectives",     label: "Perspectives",      icon: <Eye20Regular />,             group: "modelTools",   ready: true  },
   { key: "translations",     label: "Translations",      icon: <Translate20Regular />,       group: "modelTools",   ready: true  },
   { key: "delta",            label: "Delta",             icon: <ArrowSwap20Regular />,       group: "modelTools",   ready: true  },
@@ -88,12 +91,17 @@ export const NAV_ITEMS: NavItem[] = [
 
   // Automation
   { key: "fixer",            label: "Fixer",             icon: <Wrench20Regular />,          group: "automation",   ready: true  },
-  { key: "scriptRunner",     label: "Script Runner",     icon: <Code20Regular />,            group: "automation",   ready: false },
   { key: "sempyRunner",      label: "Sempy Runner",      icon: <Flash20Regular />,           group: "automation",   ready: true  },
-
-  // Bottom peer
-  { key: "about",            label: "About",             icon: <Info20Regular />,            group: "peer",         ready: false },
 ];
+
+/** All nav entries including those gated behind `ready: false`. Use only
+ *  for type-level enumeration; never render this directly. */
+export const ALL_NAV_ITEMS_REGISTRY: NavItem[] = ALL_NAV_ITEMS;
+
+/** Public nav list rendered by the sidebar. Filters out entries that are
+ *  not yet production-ready so the rail never advertises unfinished
+ *  pages (WS-O acceptance #10). */
+export const NAV_ITEMS: NavItem[] = ALL_NAV_ITEMS.filter((i) => i.ready);
 
 /** Ordered list of collapsible groups. Used by the sidebar renderer
  *  to draw a header row + (when expanded) the group's items. */

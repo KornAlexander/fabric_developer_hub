@@ -358,7 +358,7 @@ export const FixerPage: React.FC<PageProps> = ({ auth, workspaceId, datasetId, d
 
             {hasDiffs && (
               <div style={{ marginTop: "12px" }}>
-                <Title3 style={{ fontSize: "14px" }}>Diff preview</Title3>
+                <Title3>Diff preview</Title3>
                 <Accordion collapsible multiple>
                   {Object.entries(run.results).filter(([, r]) => r.diff).map(([id, r]) => (
                     <AccordionItem key={id} value={id}>

@@ -54,3 +54,76 @@ export async function runFixer(
   }
   return await res.json();
 }
+
+// ---------------------------------------------------------------------------
+// WS-Q v0.42 — editable visual / page properties
+// ---------------------------------------------------------------------------
+
+export interface VisualUpdateRequest {
+  workspaceId: string;
+  reportId: string;
+  page: string;
+  /** Empty / "*" to target the page itself. */
+  visual: string;
+  visualType?: string;
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  pageWidth?: number;
+  pageHeight?: number;
+}
+
+export interface VisualUpdateResponse {
+  applied: boolean;
+  changes: { field: string; before: unknown; after: unknown }[];
+  log: string[];
+}
+
+export async function updateVisualProperties(
+  auth: PbiAuth,
+  req: VisualUpdateRequest,
+): Promise<VisualUpdateResponse> {
+  const res = await fetch(`${BE}/api/pbi-fixer/visual/update`, {
+    method: "POST",
+    headers: headers(auth),
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`updateVisualProperties failed (${res.status}): ${text}`);
+  }
+  return await res.json();
+}
+
+// ---------------------------------------------------------------------------
+// v0.61 — drag-and-drop page reorder
+// ---------------------------------------------------------------------------
+
+export interface PagesReorderRequest {
+  workspaceId: string;
+  reportId: string;
+  pageOrder: string[];
+}
+
+export interface PagesReorderResponse {
+  applied: boolean;
+  pageOrder: string[];
+  log: string[];
+}
+
+export async function reorderPages(
+  auth: PbiAuth,
+  req: PagesReorderRequest,
+): Promise<PagesReorderResponse> {
+  const res = await fetch(`${BE}/api/pbi-fixer/report/pages/reorder`, {
+    method: "POST",
+    headers: headers(auth),
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`reorderPages failed (${res.status}): ${text}`);
+  }
+  return await res.json();
+}

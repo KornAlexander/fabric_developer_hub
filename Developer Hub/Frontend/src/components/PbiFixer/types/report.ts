@@ -9,6 +9,8 @@ export interface VisualInfo {
   height: number;
   hidden: boolean;
   title: string;
+  /** Raw parsed visual.json payload (kept for the JSON preview pane). */
+  rawJson?: unknown;
 }
 
 export interface PageInfo {
@@ -19,6 +21,8 @@ export interface PageInfo {
   visualCount: number;
   ordinal: number;
   visuals: Record<string, VisualInfo>;
+  /** Raw parsed page.json payload (kept for the JSON preview pane). */
+  rawJson?: unknown;
 }
 
 export interface VisualObjectRef {

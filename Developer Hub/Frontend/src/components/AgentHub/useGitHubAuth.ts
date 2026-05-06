@@ -3,6 +3,7 @@
  * Used by both the ChatPanel and the AgentHub.
  */
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { clearFabricTokenCache } from '../../controller/AgentHubController';
 
 declare const process: { env: Record<string, string | undefined> };
 const BE = process.env.WORKLOAD_BE_URL || 'http://127.0.0.1:5000';
@@ -181,6 +182,7 @@ export function useGitHubAuth(): GitHubAuth {
         setGithubUser(null);
         tokenStore.remove(GH_TOKEN_KEY);
         tokenStore.remove(GH_USER_KEY);
+        clearFabricTokenCache();
     }, []);
 
     return { githubToken, githubUser, isPolling, deviceFlow, codeCopied, startDeviceFlow, copyCode, signOut };

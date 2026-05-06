@@ -463,6 +463,11 @@ export async function configureAgent(config: Record<string, unknown>, opts: Fetc
 }
 
 export async function listMyAgents(opts: FetchOpts) {
+    // Skip the network call entirely when no GitHub token is present yet —
+    // otherwise the browser logs a 401 during the pre-auth window which the
+    // user perceives as a real error even though the call is benign and
+    // re-issued once the device-flow completes.
+    if (!opts.githubToken) return [];
     const res = await fetch(`${BE}/api/agents/my`, { headers: headers(opts) });
     if (!res.ok) throw new Error(await res.text());
     return res.json();
@@ -576,6 +581,10 @@ export function invalidateWorkspacesCache(): void {
 
 /** Fire-and-forget background preload after auth. Safe to call without a Fabric token. */
 export async function preloadWorkspaces(opts: FetchOpts): Promise<void> {
+    // Skip the network call entirely when no GitHub token is present yet —
+    // the browser would otherwise log a noisy 401 during the pre-auth
+    // window before the GitHub device-flow lands.
+    if (!opts.githubToken) return;
     try {
         await fetch(`${BE}/api/workspaces/preload`, { method: 'POST', headers: headers(opts) });
     } catch {

@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useCallback, useEffect, Suspense, lazy } from "react";
-import { useHistory, useRouteMatch } from "react-router-dom";
+import { useHistory, useLocation, useRouteMatch } from "react-router-dom";
 import "../../styles.scss";
 import { EditorTabsProvider, useEditorTabs, type TabDescriptor, descriptorFromPath, makeNewSessionDescriptor, makeSessionsDescriptor, makeAgentsDescriptor, isReloadNavigation } from "./EditorTabs/EditorTabsContext";
 import { EditorGroupsRoot } from "./EditorTabs/EditorGroupsRoot";
@@ -12,16 +12,6 @@ import {
     Spinner,
     Body1,
     Tooltip,
-    Dialog,
-    DialogSurface,
-    DialogTitle,
-    DialogBody,
-    DialogContent,
-    DialogActions,
-    Field,
-    Input,
-    Combobox,
-    Option,
 } from "@fluentui/react-components";
 import {
     BrainCircuit24Regular,
@@ -29,6 +19,7 @@ import {
     SignOut24Regular,
     QuestionCircle24Regular,
     Chat24Regular,
+    Info24Regular,
     Alert24Regular,
     PersonCircle32Regular,
     Navigation24Regular,
@@ -37,7 +28,6 @@ import {
     AddCircle24Regular,
     Sparkle24Regular,
     ChatMultiple24Regular,
-    MoreHorizontal24Regular,
     PanelLeftContract24Regular,
     PanelLeftExpand24Regular,
     Search20Regular,
@@ -45,7 +35,6 @@ import {
     Dismiss16Regular,
     ChevronRight16Regular,
     ChevronDown16Regular,
-    Save24Regular,
 } from "@fluentui/react-icons";
 import { WorkloadClientAPI } from "@ms-fabric/workload-client";
 // OrchestratorPage stays eager — it's the default landing route, so lazy
@@ -73,6 +62,7 @@ function lazyWithPreload<T extends Record<string, any>>(
 const DashboardPage = lazyWithPreload(() => import("./DashboardPage"), "DashboardPage");
 const AgentsPage = lazyWithPreload(() => import("./AgentsPage"), "AgentsPage");
 const SettingsPage = lazyWithPreload(() => import("./SettingsPage"), "SettingsPage");
+const AboutPage = lazyWithPreload(() => import("./AboutPage"), "AboutPage");
 // Direct prop-driven variant of MissionControlPage used by the tabs
 // system — lets non-active editor groups render a session by id without
 // needing to own the URL via ``useParams``.
@@ -82,12 +72,12 @@ const PbiFixerPage = lazyWithPreload(
     "PbiFixerPage",
 );
 import { NAV_ITEMS as PBIFIXER_NAV_ITEMS, NAV_GROUPS as PBIFIXER_NAV_GROUPS, DEFAULT_NAV_KEY as PBIFIXER_DEFAULT_NAV, type NavKey as PbiFixerNavKey, type NavGroup as PbiFixerNavGroup } from "../PbiFixer";
-import { useGitHubAuth } from "./useGitHubAuth";
+import { useGitHubAuth, GitHubAuth } from "./useGitHubAuth";
 import { ItemProvider, useItemContext } from "./ItemContext";
 import { WORKLOAD_VERSION } from "../../version";
 import { SearchProvider, useSearch, searchPlaceholderFor, isFilterScope, type SearchScope } from "./SearchContext";
 import { openExternalTab, externalLinkOnClick } from "./openExternalTab";
-import { callAuthAcquireAccessToken } from "../../controller/AgentHubController";
+import { getFabricTokenCached } from "../../controller/AgentHubController";
 import * as api from "../../controller/AgentHubApi";
 import {
     setPreloaded,
@@ -264,298 +254,110 @@ function TopbarSearchInput() {
     );
 }
 
-/**
- * Topbar Save / Close action group. Lives inside ``ItemProvider`` so it can
- * read + persist the AgentHub item via ``useItemContext``. Save persists to
- * the workspace (creating the item on first save with a name dialog); Close
- * navigates the host back to the workspace listing. Once saved, the item
- * shows up in the Fabric workspace alongside reports / lakehouses / etc.
- */
-function TopbarItemActions({
-    workloadClient,
-    workspaceObjectId,
-}: {
-    workloadClient: WorkloadClientAPI;
-    workspaceObjectId: string | null;
-}) {
-    const { itemObjectId, workspaceObjectId: ctxWorkspaceId, settings, createItem, saveSettings } = useItemContext();
+// ── Wrapper component ────────────────────────────────────────────
+// Splits the layout into an unauthenticated **gate** and an authenticated
+// **body**. Without this split, the body's ~20 hooks were declared AFTER
+// an early ``if (!auth.githubToken) return <gate/>``. When the GitHub
+// device-flow completed, ``auth.githubToken`` flipped null → string,
+// making React run far MORE hooks on the second render than the first
+// (Rules of Hooks violation → minified React error #310). React then
+// unmounted the entire tree, leaving an empty white iframe ("grey
+// screen") that only recovered after a full page reload — exactly the
+// bug B5 in the PBI Fixer PLAN.md. By moving the gate into its own
+// component, the body never mounts until auth is present, so its hook
+// list is invariant for the lifetime of the component.
+export function AgentHubLayout(props: AgentHubLayoutProps) {
     const auth = useGitHubAuth();
-    const [saveOpen, setSaveOpen] = useState(false);
-    const [name, setName] = useState("AgentHub");
-    const [description, setDescription] = useState("AgentHub configuration and settings");
-    const [busy, setBusy] = useState(false);
-    const [savedFlash, setSavedFlash] = useState(false);
-    const [errorMsg, setErrorMsg] = useState<string | null>(null);
+    if (!auth.githubToken) {
+        return <AgentHubAuthGate auth={auth} workloadClient={props.workloadClient} />;
+    }
+    return <AgentHubLayoutAuthed {...props} auth={auth} />;
+}
 
-    // v0.36 Option B: when there's no ?ws= URL param the dialog asks
-    // the user to pick a workspace. We lazy-fetch the workspace list on
-    // first dialog open so we don't waste a Fabric round-trip on every
-    // page load.
-    const [workspaces, setWorkspaces] = useState<Array<{ id: string; name: string }>>([]);
-    const [workspacesLoading, setWorkspacesLoading] = useState(false);
-    const [pickedWorkspaceId, setPickedWorkspaceId] = useState<string>("");
-    const [pickedWorkspaceText, setPickedWorkspaceText] = useState<string>("");
-
-    const effectiveWorkspaceId = workspaceObjectId || pickedWorkspaceId || "";
-
-    const flashSaved = useCallback(() => {
-        setSavedFlash(true);
-        window.setTimeout(() => setSavedFlash(false), 1800);
-    }, []);
-
-    const ensureWorkspaces = useCallback(async () => {
-        if (workspaceObjectId) return;
-        if (workspaces.length || workspacesLoading) return;
-        if (!auth.githubToken) return;
-        setWorkspacesLoading(true);
-        try {
-            // The /api/workspaces backend endpoint requires a Fabric OBO
-            // token (GitHub token alone returns "Invalid Fabric token").
-            // Acquire one via the workload SDK — this runs in response
-            // to the user clicking "Save to workspace…", so the consent
-            // overlay (if any) shows in a context the user expects.
-            const fabricScopes = [
-                "https://api.fabric.microsoft.com/Workspace.Read.All",
-                "https://api.fabric.microsoft.com/Item.Read.All",
-            ];
-            let fabricToken: string | undefined;
-            try {
-                const res = await workloadClient.auth.acquireAccessToken({
-                    additionalScopesToConsent: fabricScopes,
-                    claimsForConditionalAccessPolicy: "",
-                });
-                fabricToken = res?.token;
-            } catch (e) {
-                // Fall through — backend will reject with a clear error
-                // surfaced via errorMsg below.
-            }
-            const data = await api.getWorkspaces({ githubToken: auth.githubToken, fabricToken });
-            const list = (data?.workspaces ?? []).map((w: any) => ({ id: w.id, name: w.name }));
-            list.sort((a, b) => a.name.localeCompare(b.name));
-            setWorkspaces(list);
-        } catch (e: any) {
-            setErrorMsg(`Failed to load workspaces: ${e?.message || e}`);
-        } finally {
-            setWorkspacesLoading(false);
-        }
-    }, [workspaceObjectId, workspaces.length, workspacesLoading, auth.githubToken, workloadClient]);
-
-    const handleSave = useCallback(async () => {
-        setErrorMsg(null);
-        if (!itemObjectId) {
-            setSaveOpen(true);
-            // Lazy-fetch workspaces only when the dialog actually opens
-            // and only when we don't already have workspace context.
-            void ensureWorkspaces();
-            return;
-        }
-        if (!settings) return;
-        setBusy(true);
-        try {
-            await saveSettings(settings);
-            flashSaved();
-        } catch (e: any) {
-            setErrorMsg(String(e?.message || e));
-        } finally {
-            setBusy(false);
-        }
-    }, [itemObjectId, settings, saveSettings, flashSaved, ensureWorkspaces]);
-
-    const formatErr = useCallback((e: any): string => {
-        if (!e) return "Unknown error";
-        if (typeof e === "string") return e;
-        // Workload SDK rejections often have non-enumerable properties
-        // (errorCode, message buried in nested objects, etc). First try
-        // common shapes, then fall back to a deep dump including
-        // non-enumerable own props.
-        const tryFields = (o: any): string => {
-            if (!o || typeof o !== "object") return "";
-            if (typeof o.message === "string" && o.message) return o.message;
-            if (o.error) {
-                const r = tryFields(o.error);
-                if (r) return r;
-            }
-            if (o.detail) return typeof o.detail === "string" ? o.detail : tryFields(o.detail);
-            if (o.errorCode) return `[${o.errorCode}]`;
-            return "";
-        };
-        const direct = tryFields(e);
-        if (direct) return direct;
-        try {
-            // Include both enumerable and non-enumerable own props so we
-            // surface the actual SDK exception payload.
-            const dump: Record<string, any> = {};
-            for (const k of Object.getOwnPropertyNames(e)) {
-                try { dump[k] = (e as any)[k]; } catch { /* skip */ }
-            }
-            return JSON.stringify(dump);
-        } catch {
-            return String(e);
-        }
-    }, []);
-
-    const handleConfirmCreate = useCallback(async () => {
-        const trimmed = name.trim();
-        if (!trimmed || !effectiveWorkspaceId) return;
-        setBusy(true);
-        setErrorMsg(null);
-        try {
-            await createItem(trimmed, description.trim() || undefined, effectiveWorkspaceId);
-            setSaveOpen(false);
-            flashSaved();
-        } catch (e: any) {
-            console.error("[AgentHub Save] createItem failed", e);
-            setErrorMsg(formatErr(e));
-        } finally {
-            setBusy(false);
-        }
-    }, [name, description, effectiveWorkspaceId, createItem, flashSaved, formatErr]);
-
-    const handleClose = useCallback(async () => {
-        // Prefer the workspace id known to ItemContext (which remembers
-        // the workspace picked in the Save dialog) over the prop, which
-        // is null when AgentHub was opened from the generic launcher.
-        const targetWs = ctxWorkspaceId || workspaceObjectId;
-        try {
-            if (targetWs) {
-                await workloadClient.navigation.navigate("host", {
-                    path: `/groups/${targetWs}/list`,
-                });
-                return;
-            }
-            // No workspace context at all — go to the workspaces list.
-            await workloadClient.navigation.navigate("host", { path: "/groups" });
-        } catch {
-            try { window.history.back(); } catch { /* no-op */ }
-        }
-    }, [workloadClient, workspaceObjectId, ctxWorkspaceId]);
-
+function AgentHubAuthGate({ auth, workloadClient }: { auth: GitHubAuth; workloadClient: WorkloadClientAPI }) {
     return (
-        <div
-            className="agenthub-topbar-actions"
-            style={{ display: "flex", alignItems: "center", gap: 8, marginRight: 8 }}
-        >
-            {savedFlash && (
-                <span
-                    aria-live="polite"
-                    style={{
-                        fontSize: 12,
-                        color: "#107c10",
-                        fontWeight: 600,
-                        whiteSpace: "nowrap",
-                    }}
-                >
-                    Saved ✓
-                </span>
-            )}
-            <Button
-                appearance="primary"
-                size="small"
-                icon={<Save24Regular />}
-                disabled={busy}
-                onClick={handleSave}
-                title={itemObjectId ? "Save settings to the workspace item" : "Save this AgentHub session as a workspace item"}
-            >
-                {itemObjectId ? "Save" : "Save to workspace…"}
-            </Button>
-            <Button
-                appearance="subtle"
-                size="small"
-                icon={<Dismiss24Regular />}
-                onClick={handleClose}
-                title="Close and return to the workspace"
-            >
-                Close
-            </Button>
-            <Dialog
-                open={saveOpen}
-                onOpenChange={(_, d) => { if (!busy) setSaveOpen(d.open); }}
-            >
-                <DialogSurface>
-                    <DialogBody>
-                        <DialogTitle>Save to workspace</DialogTitle>
-                        <DialogContent>
-                            <div style={{ display: "flex", flexDirection: "column", gap: 12, paddingTop: 4 }}>
-                                <Field label="Name" required>
-                                    <Input
-                                        value={name}
-                                        onChange={(_, d) => setName(d.value)}
-                                        disabled={busy}
-                                        autoFocus
-                                    />
-                                </Field>
-                                <Field label="Description">
-                                    <Input
-                                        value={description}
-                                        onChange={(_, d) => setDescription(d.value)}
-                                        disabled={busy}
-                                    />
-                                </Field>
-                                {!workspaceObjectId && (
-                                    <Field
-                                        label="Workspace"
-                                        required
-                                        hint={workspacesLoading ? "Loading workspaces…" : "AgentHub will be saved as an item in this workspace."}
-                                    >
-                                        <Combobox
-                                            placeholder={workspacesLoading ? "Loading…" : "Pick a workspace"}
-                                            value={pickedWorkspaceText}
-                                            selectedOptions={pickedWorkspaceId ? [pickedWorkspaceId] : []}
-                                            disabled={busy || workspacesLoading}
-                                            onOptionSelect={(_, d) => {
-                                                if (d.optionValue) {
-                                                    setPickedWorkspaceId(d.optionValue);
-                                                    setPickedWorkspaceText(d.optionText || "");
-                                                }
-                                            }}
-                                            onChange={(e) => setPickedWorkspaceText((e.target as HTMLInputElement).value)}
-                                        >
-                                            {workspaces.map((w) => (
-                                                <Option key={w.id} value={w.id} text={w.name}>{w.name}</Option>
-                                            ))}
-                                        </Combobox>
-                                    </Field>
-                                )}
-                                {errorMsg && (
-                                    <Text size={200} style={{ color: "#a4262c" }}>{errorMsg}</Text>
-                                )}
+        <div className="agenthub-root">
+            <div className="agenthub-auth-gate">
+                <BrainCircuit24Regular style={{ fontSize: 48, color: "#0078d4" }} />
+                <Text size={700} weight="bold">Developer Hub</Text>
+                <Body1 style={{ color: "#605e5c", textAlign: "center" }}>
+                    Sign in with GitHub to access the Agent Dashboard.
+                    <br />A GitHub Copilot subscription is required.
+                </Body1>
+
+                {auth.deviceFlow ? (
+                    <div className="agenthub-device-flow">
+                        <Body1>Enter this code at GitHub:</Body1>
+                        <code className="device-code-display">{auth.deviceFlow.userCode}</code>
+                        {auth.codeCopied && (
+                            <Text size={200} style={{ color: "#0ea50e" }}>Code copied to clipboard automatically</Text>
+                        )}
+                        <Button appearance="subtle" size="small" onClick={auth.copyCode}>
+                            Copy code again
+                        </Button>
+                        <a
+                            href={auth.deviceFlow.verificationUri}
+                            target="_blank"
+                            rel="noreferrer noopener"
+                            className="github-verify-link"
+                            onClick={async (e) => {
+                                e.preventDefault();
+                                try {
+                                    await workloadClient.navigation.openBrowserTab({
+                                        url: auth.deviceFlow!.verificationUri,
+                                        queryParams: {},
+                                    });
+                                } catch {
+                                    window.open(auth.deviceFlow!.verificationUri, '_blank', 'noopener,noreferrer');
+                                }
+                            }}
+                        >
+                            Open {auth.deviceFlow.verificationUri}
+                        </a>
+                        {auth.isPolling && (
+                            <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
+                                <Spinner size="tiny" />
+                                <Text size={200} style={{ color: "#605e5c" }}>Waiting for authorization...</Text>
                             </div>
-                        </DialogContent>
-                        <DialogActions>
-                            <Button
-                                appearance="secondary"
-                                onClick={() => setSaveOpen(false)}
-                                disabled={busy}
-                            >
-                                Cancel
-                            </Button>
-                            <Button
-                                appearance="primary"
-                                onClick={handleConfirmCreate}
-                                disabled={busy || !name.trim() || !effectiveWorkspaceId}
-                                icon={busy ? <Spinner size="tiny" /> : <Save24Regular />}
-                            >
-                                Save
-                            </Button>
-                        </DialogActions>
-                    </DialogBody>
-                </DialogSurface>
-            </Dialog>
+                        )}
+                    </div>
+                ) : (
+                    <Button appearance="primary" size="large" onClick={auth.startDeviceFlow}>
+                        Sign in with GitHub
+                    </Button>
+                )}
+            </div>
         </div>
     );
 }
 
-export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId }: AgentHubLayoutProps) {
+function AgentHubLayoutAuthed({ workloadClient, itemObjectId: routeItemObjectId, auth }: AgentHubLayoutProps & { auth: GitHubAuth }) {
     const history = useHistory();
+    const location = useLocation();
     const match = useRouteMatch();
     const routeBase = useMemo(() => normaliseRouteBase(match.path), [match.path]);
-    const auth = useGitHubAuth();
 
-    // Extract workspaceObjectId from ?ws= query param (set by index.worker.ts)
+    // Extract workspaceObjectId from ?ws= query param (set by index.worker.ts).
+    // Recompute on every URL change because the workload SDK navigates to
+    // the bootstrap path (which carries ?ws=...) AFTER the React app mounts.
+    // Also tolerate a malformed double-? URL (Fabric host occasionally appends
+    // ?experience=... to a URL that already has a query string), by stripping
+    // anything after a stray '?' inside the ws value.
     const workspaceObjectId = useMemo(() => {
-        const params = new URLSearchParams(window.location.search);
-        return params.get("ws") || sessionStorage.getItem("workspace_id") || null;
-    }, []);
+        const search = window.location.search || "";
+        const params = new URLSearchParams(search);
+        let raw = params.get("ws")
+            || sessionStorage.getItem("agenthub_workspace_id")
+            || sessionStorage.getItem("workspace_id")
+            || "";
+        if (raw.includes("?")) raw = raw.split("?")[0];
+        if (raw.includes("&")) raw = raw.split("&")[0];
+        const trimmed = raw.trim();
+        return trimmed || null;
+        // location.search & location.pathname are intentional deps so the value
+        // refreshes on every navigation.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [location.search, location.pathname]);
 
     const currentPath = history.location.pathname;
     let activePage = "newsession";
@@ -594,11 +396,6 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
         })();
         return () => { cancelled = true; };
     }, [auth.githubToken]);
-
-    // ── GitHub auth gate ──────────────────────────────────────────
-    // NOTE: the render branch lives at the bottom of this component.
-    // All hooks below must run on *every* render (auth'd or not) so React's
-    // hook-order invariant holds across the token-arrival re-render.
 
     // ── Main layout (sidebar + top bar + content) ─────────────────
     const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -666,8 +463,7 @@ export function AgentHubLayout({ workloadClient, itemObjectId: routeItemObjectId
                 fetchPromise = (async () => {
                     let fabricToken: string | undefined;
                     try {
-                        const t = await callAuthAcquireAccessToken(workloadClient);
-                        fabricToken = t.token;
+                        fabricToken = await getFabricTokenCached(workloadClient);
                     } catch { /* best-effort */ }
                     const [summary, rows] = await Promise.all([
                         api.getSessionSummary({ githubToken, fabricToken }),
@@ -926,11 +722,18 @@ function AgentHubContent({ workloadClient, matchPath }: { workloadClient: Worklo
                 let initialNav: string | undefined;
                 try {
                     const q = tab.path.split("?")[1];
-                    if (q) initialNav = new URLSearchParams(q).get("nav") ?? undefined;
+                    if (q) {
+                        const raw = new URLSearchParams(q).get("nav") ?? undefined;
+                        // Defensive: strip any nested ``?…``/``&…`` segment
+                        // that leaked in via the iframe bootstrap URL.
+                        const m = raw?.match(/^[A-Za-z0-9_-]+/);
+                        initialNav = m ? m[0] : raw;
+                    }
                 } catch { /* ignore */ }
                 return <PbiFixerPage workloadClient={workloadClient} initialNav={initialNav as never} />;
             }
             case "settings": return <SettingsPage workloadClient={workloadClient} />;
+            case "about":    return <AboutPage />;
             case "session": {
                 const m = tab.path.match(/\/session\/([^/?#]+)/);
                 const sid = m?.[1] ?? "";
@@ -1035,16 +838,11 @@ function AgentHubShell({
 
     // PBI Fixer sub-nav state — the Power BI Fixer sidebar row expands
     // into a flat tree of 14 pages (Model, Report, Others > 12 stubs).
-    // We keep the selection + expand state here so navigation from the
-    // outer sidebar drives the PBI Fixer page rendering via a window
-    // event + sessionStorage handshake. `PbiFixerPage` listens to both.
-    const [pbiFixerNavKey, setPbiFixerNavKey] = useState<PbiFixerNavKey>(() => {
-        try {
-            const raw = sessionStorage.getItem("pbiFixer.activeNav");
-            if (raw) return raw as PbiFixerNavKey;
-        } catch { /* ignore */ }
-        return PBIFIXER_DEFAULT_NAV;
-    });
+    // We keep the selection here so the outer sidebar can show which
+    // sub-page is active. WS-O Decision #6: URL ``?nav=`` is the single
+    // source of truth (no sessionStorage fallback) so deep-links work
+    // and browser back/forward navigates between Fixer pages.
+    const [pbiFixerNavKey, setPbiFixerNavKey] = useState<PbiFixerNavKey>(PBIFIXER_DEFAULT_NAV);
     // v0.34: themed sub-groups (Model tools / Report tools / Automation)
     // replace the single catch-all "Others" branch. State is a per-group
     // boolean map persisted as JSON in sessionStorage.
@@ -1139,7 +937,6 @@ function AgentHubShell({
      *  reads the initial activeNav from the URL query so each tab
      *  remembers its own page independently. */
     const handlePbiFixerSubNav = useCallback((key: PbiFixerNavKey) => {
-        try { sessionStorage.setItem("pbiFixer.activeNav", key); } catch { /* ignore */ }
         setPbiFixerNavKey(key);
         const navItem = PBIFIXER_NAV_ITEMS.find((i) => i.key === key);
         const label = navItem?.label ?? key;
@@ -1257,10 +1054,6 @@ function AgentHubShell({
                     <TopbarSearchInput />
                 </div>
                 <div className="agenthub-topbar-right">
-                    <TopbarItemActions
-                        workloadClient={workloadClient}
-                        workspaceObjectId={workspaceObjectId}
-                    />
                     <Alert24Regular className="topbar-icon" />
                     <QuestionCircle24Regular className="topbar-icon" />
                     <div className="agenthub-avatar" title={auth.githubUser || "User"}>
@@ -1497,8 +1290,6 @@ function AgentHubShell({
                                 })()}
                             </div>
                         )}
-                        <SideNavItem icon={<MoreHorizontal24Regular />} label="…" active={false} collapsed={sidebarCollapsed} onClick={() => { /* placeholder */ }} disabled />
-                        <SideNavItem icon={<MoreHorizontal24Regular />} label="…" active={false} collapsed={sidebarCollapsed} onClick={() => { /* placeholder */ }} disabled />
                     </nav>
 
                     <div className="agenthub-sidebar-footer">
@@ -1510,10 +1301,21 @@ function AgentHubShell({
                         >
                             <SignOut24Regular /> <Text size={200}>Sign out ({auth.githubUser})</Text>
                         </button>
-                        <div className="sidenav-footer-item" title="Support">
+                        <button
+                            type="button"
+                            className="sidenav-footer-item"
+                            onClick={() => {
+                                openTab({ id: "about", kind: "about", path: `${matchPath}/about`, title: "About" });
+                                closeSidebar();
+                            }}
+                            title="About Developer Hub"
+                        >
+                            <Info24Regular /> <Text size={200}>About</Text>
+                        </button>
+                        <div className="sidenav-footer-item sidenav-footer-item--inactive" title="Support (coming soon)" aria-disabled="true">
                             <QuestionCircle24Regular /> <Text size={200}>Support</Text>
                         </div>
-                        <div className="sidenav-footer-item" title="Feedback">
+                        <div className="sidenav-footer-item sidenav-footer-item--inactive" title="Feedback (coming soon)" aria-disabled="true">
                             <Chat24Regular /> <Text size={200}>Feedback</Text>
                         </div>
                     </div>

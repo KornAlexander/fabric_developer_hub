@@ -212,28 +212,37 @@ def parse_culture(text: str) -> CultureModel:
 
 
 def serialize_culture(cm: CultureModel, indent: str = "\t") -> str:
-    """Serialise a CultureModel back to TMDL. Stable ordering: model
-    block first (if any), tables alphabetically, then table-level props,
-    then children alphabetically by (kind, name)."""
+    """Serialise a CultureModel back to TMDL.
+
+    Fabric requires the structure
+    ``cultureInfo / translations / model <Name> / table <T> / column <C>``;
+    tables MUST be nested under a ``model`` block (a peer-level
+    ``table`` directly under ``translations`` triggers
+    ``MismatchObjectType - expected Model but actual was table``).
+    When ``cm.model_name`` is empty we default to ``Model`` so a fresh
+    culture file is still well-formed.
+
+    Stable ordering: tables alphabetical, table-level props first, then
+    children sorted by (kind, name)."""
     out: list[str] = [f"cultureInfo {cm.culture}", ""]
 
     has_translations = bool(cm.model_name or cm.by_table)
     if has_translations:
+        model_name = cm.model_name or "Model"
         out.append(f"{indent}translations")
-        if cm.model_name and cm.model_props:
-            out.append(f"{indent * 2}model {_quote(cm.model_name)}")
-            for prop in _KNOWN_PROPS:
-                if prop in cm.model_props:
-                    out.append(f"{indent * 3}{prop}: {_escape_value(cm.model_props[prop])}")
+        out.append(f"{indent * 2}model {_quote(model_name)}")
+        for prop in _KNOWN_PROPS:
+            if prop in cm.model_props:
+                out.append(f"{indent * 3}{prop}: {_escape_value(cm.model_props[prop])}")
 
         for tname in sorted(cm.by_table.keys()):
             entries = cm.by_table[tname]
-            out.append(f"{indent * 2}table {_quote(tname)}")
+            out.append(f"{indent * 3}table {_quote(tname)}")
             # Table-level props
             table_props = entries.get(_TABLE_KEY, {})
             for prop in _KNOWN_PROPS:
                 if prop in table_props:
-                    out.append(f"{indent * 3}{prop}: {_escape_value(table_props[prop])}")
+                    out.append(f"{indent * 4}{prop}: {_escape_value(table_props[prop])}")
             # Children sorted by kind then name for determinism.
             child_items = sorted(
                 ((k, v) for k, v in entries.items() if k != _TABLE_KEY),
@@ -242,10 +251,10 @@ def serialize_culture(cm: CultureModel, indent: str = "\t") -> str:
             for (kind, name), props in child_items:
                 if not props:
                     continue
-                out.append(f"{indent * 3}{kind.lower()} {_quote(name)}")
+                out.append(f"{indent * 4}{kind.lower()} {_quote(name)}")
                 for prop in _KNOWN_PROPS:
                     if prop in props:
-                        out.append(f"{indent * 4}{prop}: {_escape_value(props[prop])}")
+                        out.append(f"{indent * 5}{prop}: {_escape_value(props[prop])}")
 
     if cm.linguistic_block:
         out.append("")

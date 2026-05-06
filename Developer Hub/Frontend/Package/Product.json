@@ -4,9 +4,9 @@
     "displayName": "Workload_Display_Name",
     "fullDisplayName": "Workload_Full_Display_Name",
     "description": "Workload_Description",
-    "favicon": "assets/images/briefcase.png",
+    "favicon": "assets/images/developerHub.png",
     "icon": {
-    "name": "assets/images/briefcase.png"
+    "name": "assets/images/developerHub.png"
     },
     "homePage": {
       "learningMaterials": [
@@ -30,7 +30,7 @@
             {
                 "title": "NewSection_AgentHub_Title",
                 "icon": {
-                  "name": "assets/images/briefcase.png"
+                  "name": "assets/images/developerHub.png"
                 },
                 "onClick": {
                   "action": "open.agentHub"
@@ -38,7 +38,7 @@
             }
         ]},
         "recommendedItemTypes": [
-          "AgentHubItem"
+          "DeveloperHubDashboard"
         ]
     },
     "createExperience": {
@@ -48,13 +48,10 @@
           "title": "CreateHub_Card_AgentHub_Title",
           "description": "CreateHub_Card_AgentHub_Description",
           "icon": {
-            "name": "assets/images/dial.png"
+            "name": "assets/images/developerHub.png"
           },
           "icon_small": {
-            "name": "assets/images/dial.png"
-          },
-          "onClick": {
-            "action": "open.agentHub"
+            "name": "assets/images/developerHub.png"
           },
           "availableIn": [
             "home",
@@ -62,7 +59,11 @@
             "workspace-plus-new",
             "workspace-plus-new-teams"
           ],
-          "itemType": "AgentHubItem"
+          "itemType": "DeveloperHubDashboard",
+          "createItemDialogConfig": {
+            "onCreationFailure": { "action": "item.onCreationFailure" },
+            "onCreationSuccess": { "action": "item.onCreationSuccess" }
+          }
         }
       ]
     },

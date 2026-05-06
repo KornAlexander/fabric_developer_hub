@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8" ?>
 <!-- Template: ${WORKLOAD_NAME} is substituted from Developer Hub/.env at build time. -->
 <ItemManifestConfiguration xmlns:xsi= "http://www.w3.org/2001/XMLSchema-instance" SchemaVersion="1.101.0">
-  <Item TypeName="${WORKLOAD_NAME}.AgentHubItem" Category="Data" CreateOneLakeFoldersOnArtifactCreation="true">
+  <Item TypeName="${WORKLOAD_NAME}.DeveloperHubDashboard" Category="Data" CreateOneLakeFoldersOnArtifactCreation="true">
     <Workload WorkloadName="${WORKLOAD_NAME}" />
     <!--
       JobScheduler declares WHICH scheduled / on-demand jobs this item type
@@ -24,8 +24,8 @@
       <OnDemandJobDeduplicateOptions>PerItem</OnDemandJobDeduplicateOptions>
       <ScheduledJobDeduplicateOptions>PerItem</ScheduledJobDeduplicateOptions>
       <ItemJobTypes>
-        <ItemJobType Name="${WORKLOAD_NAME}.AgentHubItem.ScheduledJob" />
-        <ItemJobType Name="${WORKLOAD_NAME}.AgentHubItem.InstantJob" />
+        <ItemJobType Name="${WORKLOAD_NAME}.DeveloperHubDashboard.ScheduledJob" />
+        <ItemJobType Name="${WORKLOAD_NAME}.DeveloperHubDashboard.InstantJob" />
       </ItemJobTypes>
     </JobScheduler>
   </Item>

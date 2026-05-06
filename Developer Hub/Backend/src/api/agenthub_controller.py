@@ -1020,77 +1020,181 @@ class TranslationProposeResponse(BaseModel):
     items: list[TranslationProposalItem]
 
 
-# A tiny built-in glossary keeps propose output deterministic for tests
-# and offline dev. Real LLM-backed translation is deferred to WS-N; the
-# endpoint shape is stable so the client doesn't need to change.
-_BUILTIN_GLOSSARY: dict[str, dict[str, str]] = {
-    "de-DE": {
-        "sales": "Umsatz", "revenue": "Umsatz", "product": "Produkt",
-        "products": "Produkte", "customer": "Kunde", "customers": "Kunden",
-        "order": "Bestellung", "orders": "Bestellungen", "date": "Datum",
-        "amount": "Betrag", "total": "Summe", "quantity": "Menge",
-        "name": "Name", "category": "Kategorie", "region": "Region",
-        "country": "Land", "city": "Stadt", "year": "Jahr",
-        "month": "Monat", "day": "Tag", "price": "Preis", "cost": "Kosten",
-        "profit": "Gewinn", "store": "Filiale", "employee": "Mitarbeiter",
-    },
-    "fr-FR": {
-        "sales": "Ventes", "revenue": "Chiffre d'affaires", "product": "Produit",
-        "products": "Produits", "customer": "Client", "customers": "Clients",
-        "order": "Commande", "orders": "Commandes", "date": "Date",
-        "amount": "Montant", "total": "Total", "quantity": "Quantité",
-        "name": "Nom", "category": "Catégorie", "region": "Région",
-        "country": "Pays", "city": "Ville", "year": "Année",
-        "month": "Mois", "day": "Jour", "price": "Prix", "cost": "Coût",
-        "profit": "Bénéfice", "store": "Magasin", "employee": "Employé",
-    },
-    "es-ES": {
-        "sales": "Ventas", "revenue": "Ingresos", "product": "Producto",
-        "products": "Productos", "customer": "Cliente", "customers": "Clientes",
-        "order": "Pedido", "orders": "Pedidos", "date": "Fecha",
-        "amount": "Importe", "total": "Total", "quantity": "Cantidad",
-        "name": "Nombre", "category": "Categoría", "region": "Región",
-        "country": "País", "city": "Ciudad", "year": "Año",
-        "month": "Mes", "day": "Día", "price": "Precio", "cost": "Coste",
-        "profit": "Beneficio", "store": "Tienda", "employee": "Empleado",
-    },
-}
+# LLM-backed translation (WS-N, formerly WS-G deferred path).
+#
+# Captions are sent to GitHub Copilot's chat-completions endpoint in a
+# single batch per propose call. The model is instructed to return a
+# JSON array of translations, same length and order as the input. The
+# user-supplied glossary (if any) is injected into the system prompt
+# as preferred terminology. On any failure (missing token, malformed
+# JSON, length mismatch) we fall back to the source caption so the
+# review grid still renders something the user can edit.
+
+# Cheap and fast — translation is short, deterministic-leaning text.
+_TRANSLATE_MODEL = "gpt-4o-mini"
 
 
-def _translate_word(word: str, culture: str, glossary: dict[str, str] | None) -> str:
-    """Translate a single word using the user-supplied glossary first,
-    then the built-in glossary. Falls back to the original word. Case
-    sensitivity is preserved on the first character."""
-    if not word:
-        return word
-    key = word.lower()
-    # User-supplied glossary takes priority (already in target culture).
-    if glossary and key in {k.lower() for k in glossary.keys()}:
-        # Case-insensitive lookup
-        for gk, gv in glossary.items():
-            if gk.lower() == key:
-                translated = gv
-                break
-        else:
-            translated = word
-    else:
-        translated = _BUILTIN_GLOSSARY.get(culture, {}).get(key, word)
-    # Preserve leading capitalization
-    if word[:1].isupper():
-        translated = translated[:1].upper() + translated[1:]
-    return translated
+async def _llm_translate_batch(
+    captions: list[str],
+    culture: str,
+    glossary: dict[str, str] | None,
+    copilot_token: str,
+) -> list[str]:
+    """Translate a batch of captions to ``culture`` via Copilot chat.
 
+    Returns a list of translated strings, same length / order as
+    ``captions``. Falls back to the original caption for any item the
+    model fails to translate cleanly.
+    """
+    if not captions:
+        return []
 
-def _translate_caption(caption: str, culture: str, glossary: dict[str, str] | None) -> str:
-    """Split caption into tokens (keeping spaces / non-letter runs) and
-    translate each word via the glossary chain."""
-    import re
-    # Split on word boundaries but preserve separators.
-    parts = re.split(r"(\W+)", caption)
-    return "".join(
-        _translate_word(p, culture, glossary) if p.isalpha() else p
-        for p in parts
+    glossary_lines = ""
+    if glossary:
+        # Cap size — the prompt should stay well under context.
+        items = list(glossary.items())[:200]
+        glossary_lines = (
+            "\nPreferred terminology (use these exact target translations "
+            "whenever the source word matches, case-insensitive):\n"
+            + "\n".join(f"  {k} -> {v}" for k, v in items)
+        )
+
+    system = (
+        "You translate Power BI / Fabric semantic-model captions "
+        f"into culture '{culture}'. "
+        "Translate each input string idiomatically as it would appear "
+        "in a business intelligence report header, measure name, table "
+        "name, or column name. Keep proper nouns, acronyms, product "
+        "names, and brand names unchanged. Preserve casing style "
+        "(Title Case stays Title Case, ALL CAPS stays ALL CAPS, "
+        "snake_case stays snake_case). Do not add quotes, punctuation, "
+        "or commentary. Output ONLY a JSON object of the exact shape "
+        '{"translations": ["...", "..."]} with the same number of '
+        "items, in the same order, as the input list."
+        + glossary_lines
     )
+    user = json.dumps({"culture": culture, "sources": captions}, ensure_ascii=False)
+
+    body = {
+        "model": _TRANSLATE_MODEL,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        "temperature": 0.2,
+        "response_format": {"type": "json_object"},
+        "stream": False,
+    }
+
+    try:
+        data = await github_chat_controller._call_copilot_api(copilot_token, body)
+        content = (
+            data.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+        )
+        parsed = json.loads(content) if content else {}
+        translations = parsed.get("translations") if isinstance(parsed, dict) else None
+        if not isinstance(translations, list) or len(translations) != len(captions):
+            logger.warning(
+                "LLM translation returned unexpected shape (got %d items, expected %d)",
+                len(translations) if isinstance(translations, list) else -1,
+                len(captions),
+            )
+            return list(captions)
+        return [
+            (str(t) if t is not None and str(t).strip() else captions[i])
+            for i, t in enumerate(translations)
+        ]
+    except HTTPException:
+        # _call_copilot_api raises HTTPException on non-200 — surface
+        # as a 502 to the caller so the review grid can show "translation
+        # service unavailable" instead of silently passing source through.
+        raise
+    except Exception as exc:
+        logger.warning("LLM translation failed, falling back to source: %s", exc)
+        return list(captions)
+
+
+# ─────────────────────────────────────────────────────────────────────
+#  PBI Fixer → SLL Sidecar (semantic-link-labs by Michael Kovalsky)
+#
+#  Thin pass-through to the standalone ``sll-sidecar`` container which
+#  hosts ``run_model_bpa`` and ``vertipaq_analyzer`` over a Service
+#  Principal-bound XMLA endpoint. The frontend never talks to the
+#  sidecar directly — these proxies forward the body, surface upstream
+#  errors verbatim, and apply the standard rate-limit / auth gate.
+# ─────────────────────────────────────────────────────────────────────
+
+
+class _SllRequest(BaseModel):
+    workspace: str  # workspace name OR id (sempy_labs accepts both)
+    dataset: str    # dataset name OR id
+
+
+class _SllVertipaqRequest(_SllRequest):
+    read_stats_from_data: bool = False
+
+
+def _sll_base_url() -> str:
+    return os.environ.get("SLL_SIDECAR_URL", "http://sll-sidecar:5100").rstrip("/")
+
+
+async def _sll_post(path: str, body: dict, *, timeout: float = 300.0) -> dict:
+    """POST to the SLL sidecar and surface its JSON response (or
+    HTTPException on failure). vertipaq runs can be slow on large
+    models, hence the generous default timeout."""
+    import httpx
+
+    url = f"{_sll_base_url()}{path}"
+    headers: dict[str, str] = {}
+    token = os.environ.get("SLL_SIDECAR_TOKEN", "").strip()
+    if token:
+        headers["X-Sidecar-Token"] = token
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(url, json=body, headers=headers)
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"SLL sidecar unreachable: {exc}") from exc
+    if resp.status_code >= 400:
+        # Forward the sidecar's structured error so the UI can show it.
+        try:
+            detail = resp.json().get("detail", resp.text)
+        except Exception:  # noqa: BLE001
+            detail = resp.text
+        raise HTTPException(resp.status_code, f"SLL sidecar: {detail}")
+    return resp.json()
+
+
+@router.post("/pbi-fixer/sll/model-bpa")
+async def pbi_fixer_sll_model_bpa(
+    payload: _SllRequest,
+    request: Request,
+    ctx: AuthorizationContext | None = Depends(require_user),
+):
+    """Run ``sempy_labs.run_model_bpa`` against the target semantic
+    model and return the raw rule-violation DataFrame as rows + columns.
+
+    Note: the sidecar uses a Service Principal — the user's OBO Fabric
+    token is *not* forwarded. The SP must be a member of the workspace.
+    """
+    user_id = _user_key_from_context(ctx)
+    _rate_limit(user_id, "pbi_fixer_sll_model_bpa")
+    return await _sll_post("/sll/model-bpa", payload.model_dump())
+
+
+@router.post("/pbi-fixer/sll/vertipaq")
+async def pbi_fixer_sll_vertipaq(
+    payload: _SllVertipaqRequest,
+    request: Request,
+    ctx: AuthorizationContext | None = Depends(require_user),
+):
+    """Run ``sempy_labs.vertipaq_analyzer`` and return the literal HTML
+    blocks Michael's library renders into a notebook (one concatenated
+    document, sections separated by ``<hr/>``)."""
+    user_id = _user_key_from_context(ctx)
+    _rate_limit(user_id, "pbi_fixer_sll_vertipaq")
+    return await _sll_post("/sll/vertipaq", payload.model_dump(), timeout=600.0)
 
 
 @router.post("/pbi-fixer/translations/propose", response_model=TranslationProposeResponse)
@@ -1101,10 +1205,13 @@ async def pbi_fixer_translations_propose(
 ):
     """Generate a translation proposal for the given source items.
 
-    For this pass, translation is done via a small deterministic
-    glossary (see ``_BUILTIN_GLOSSARY``). The LLM-backed path described
-    in WS-G will be wired later; the response shape is stable so the
-    frontend review grid doesn't change when that lands.
+    WS-N (formerly WS-G deferred): translation now goes through GitHub
+    Copilot's chat-completions API in a single batched call per culture.
+    The user-supplied ``glossary`` is forwarded to the model as
+    preferred terminology so customer-specific business terms (e.g.
+    "Auftrag" instead of "Bestellung") win over the model's default
+    rendering. The response shape is unchanged so the frontend review
+    grid keeps working without modification.
     """
     user_id = _user_key_from_context(ctx)
     _rate_limit(user_id, "pbi_fixer_translations_propose")
@@ -1119,16 +1226,21 @@ async def pbi_fixer_translations_propose(
     culture = payload.targetCultures[0]
     glossary = payload.glossary or {}
 
-    items: list[TranslationProposalItem] = []
-    for src in payload.sourceItems:
-        proposed = _translate_caption(src.sourceCaption, culture, glossary)
-        items.append(TranslationProposalItem(
+    copilot_token = await _copilot_token(request)
+
+    captions = [src.sourceCaption for src in payload.sourceItems]
+    translations = await _llm_translate_batch(captions, culture, glossary, copilot_token)
+
+    items = [
+        TranslationProposalItem(
             objectType=src.objectType,
             objectPath=src.objectPath,
             sourceCaption=src.sourceCaption,
             existingCaption=src.existingCaption,
-            proposedCaption=proposed,
-        ))
+            proposedCaption=translations[i],
+        )
+        for i, src in enumerate(payload.sourceItems)
+    ]
 
     return TranslationProposeResponse(culture=culture, items=items)
 
@@ -1278,6 +1390,31 @@ async def pbi_fixer_translations_apply(
             cm = parse_culture(text)
             if not cm.culture:
                 cm.culture = payload.culture
+
+        # If we don't yet know the model name (fresh culture file or
+        # legacy parser miss), look it up in `definition/model.tmdl` —
+        # the TMDL file always starts with `model <Name>`. Fabric's
+        # culture validator requires the `translations` block to wrap
+        # tables under `model <Name>`; using the real name keeps the
+        # round-trip stable.
+        if not cm.model_name:
+            model_part = next(
+                (p for p in parts if p.get("path") == "definition/model.tmdl"),
+                None,
+            )
+            if model_part:
+                try:
+                    model_text = base64.b64decode(model_part["payload"]).decode("utf-8")
+                    import re as _re
+                    m_model = _re.search(r"^\s*model\s+(\S.*?)\s*$", model_text, _re.MULTILINE)
+                    if m_model:
+                        raw = m_model.group(1).strip()
+                        # Strip optional surrounding single quotes
+                        if raw.startswith("'") and raw.endswith("'") and len(raw) >= 2:
+                            raw = raw[1:-1].replace("''", "'")
+                        cm.model_name = raw
+                except Exception:
+                    pass  # fall back to default "Model" in serialize_culture
 
         # 3. Merge items
         apply_items = [
@@ -1500,6 +1637,378 @@ async def pbi_fixer_fixers_apply(
             for f in result.findings
         ],
         "log": result.log,
+    }
+
+
+# ---------------------------------------------------------------------------
+# WS-Q v0.42 — editable visual properties (type / position / size)
+# ---------------------------------------------------------------------------
+
+
+class VisualUpdateRequest(BaseModel):
+    workspaceId: str
+    reportId: str
+    page: str
+    visual: str
+    visualType: str | None = None
+    x: float | None = None
+    y: float | None = None
+    width: float | None = None
+    height: float | None = None
+    # Page-level edits (only used when ``visual`` is empty / "*").
+    pageWidth: float | None = None
+    pageHeight: float | None = None
+
+
+@router.post("/pbi-fixer/visual/update")
+async def pbi_fixer_visual_update(
+    payload: VisualUpdateRequest,
+    request: Request,
+    ctx: AuthorizationContext | None = Depends(require_user),
+):
+    """Patch a single visual's ``visualType`` / position, or a page's size.
+
+    Round-trips the report definition via Fabric REST (``getDefinition``
+    / ``updateDefinition``) and rewrites the matching ``visual.json`` /
+    ``page.json`` part.
+    """
+    import base64
+    import json as _json
+
+    import httpx
+
+    user_id = _user_key_from_context(ctx)
+    _rate_limit(user_id, "pbi_fixer_visual_update")
+
+    mcp_tokens = await _mcp_tokens(request)
+    if not mcp_tokens:
+        raise HTTPException(400, "Fabric token required")
+    fabric_token = mcp_tokens.get("FABRIC_API_TOKEN")
+    if not fabric_token:
+        raise HTTPException(401, "No Fabric OBO token available")
+
+    base = (
+        f"{_FABRIC_API_ROOT}/workspaces/{payload.workspaceId}"
+        f"/reports/{payload.reportId}"
+    )
+    get_url = f"{base}/getDefinition"
+
+    async def _follow_lro(client: httpx.AsyncClient, resp: httpx.Response) -> httpx.Response:
+        attempts = 0
+        while resp.status_code == 202 and attempts < 30:
+            attempts += 1
+            location = resp.headers.get("Location") or resp.headers.get("Operation-Location")
+            if not location:
+                break
+            try:
+                retry_after = float(resp.headers.get("Retry-After", "2"))
+            except ValueError:
+                retry_after = 2.0
+            await asyncio.sleep(min(retry_after, 5.0))
+            resp = await client.get(location, headers={"Authorization": f"Bearer {fabric_token}"})
+        if (
+            resp.status_code == 200
+            and resp.headers.get("content-type", "").startswith("application/json")
+        ):
+            try:
+                body = resp.json()
+            except Exception:
+                body = None
+            if isinstance(body, dict) and body.get("status") == "Failed":
+                err = body.get("error") or {}
+                raise HTTPException(
+                    502,
+                    f"Fabric LRO failed [{err.get('errorCode', '')}]: {err.get('message', '')}",
+                )
+            if (
+                isinstance(body, dict)
+                and body.get("status") in ("Succeeded", "Completed")
+                and "definition" not in body
+            ):
+                location = (resp.url and str(resp.url)) or location
+                try:
+                    rr = await client.get(
+                        f"{location.rstrip('/')}/result",
+                        headers={"Authorization": f"Bearer {fabric_token}"},
+                    )
+                    if rr.status_code < 400:
+                        resp = rr
+                except httpx.HTTPError:
+                    pass
+        return resp
+
+    page_only = not payload.visual or payload.visual == "*"
+    target_visual_path = (
+        f"definition/pages/{payload.page}/visuals/{payload.visual}/visual.json"
+    )
+    target_page_path = f"definition/pages/{payload.page}/page.json"
+
+    changes: list[dict] = []
+
+    async with httpx.AsyncClient(timeout=120.0, follow_redirects=False) as client:
+        try:
+            resp = await client.post(
+                get_url,
+                headers={
+                    "Authorization": f"Bearer {fabric_token}",
+                    "Content-Type": "application/json",
+                },
+                json={},
+            )
+        except httpx.HTTPError as exc:
+            raise HTTPException(502, f"getDefinition failed: {exc}") from exc
+        resp = await _follow_lro(client, resp)
+        if resp.status_code >= 400:
+            raise HTTPException(resp.status_code, f"getDefinition: {resp.text}")
+        try:
+            def_body = resp.json()
+        except Exception as exc:
+            raise HTTPException(502, f"getDefinition returned non-JSON: {exc}") from exc
+
+        parts = list((def_body.get("definition") or {}).get("parts") or [])
+        if not parts:
+            raise HTTPException(502, "Definition has no parts")
+
+        new_parts = [{**p} for p in parts]
+        touched = False
+
+        for p in new_parts:
+            path = p.get("path", "")
+            try:
+                doc_str = base64.b64decode(p.get("payload", "")).decode("utf-8")
+                doc = _json.loads(doc_str)
+            except Exception:
+                continue
+
+            if not page_only and path == target_visual_path:
+                vis = doc.get("visual") or {}
+                if payload.visualType and vis.get("visualType") != payload.visualType:
+                    changes.append({"field": "visualType", "before": vis.get("visualType"), "after": payload.visualType})
+                    vis["visualType"] = payload.visualType
+                    doc["visual"] = vis
+                pos = doc.get("position") or {}
+                for field, val in (("x", payload.x), ("y", payload.y), ("width", payload.width), ("height", payload.height)):
+                    if val is None:
+                        continue
+                    if pos.get(field) != val:
+                        changes.append({"field": f"position.{field}", "before": pos.get(field), "after": val})
+                        pos[field] = val
+                doc["position"] = pos
+                p["payload"] = base64.b64encode(_json.dumps(doc, indent=2).encode("utf-8")).decode("ascii")
+                p["payloadType"] = p.get("payloadType") or "InlineBase64"
+                touched = True
+            elif page_only and path == target_page_path:
+                for field, val in (("width", payload.pageWidth), ("height", payload.pageHeight)):
+                    if val is None:
+                        continue
+                    if doc.get(field) != val:
+                        changes.append({"field": f"page.{field}", "before": doc.get(field), "after": val})
+                        doc[field] = val
+                p["payload"] = base64.b64encode(_json.dumps(doc, indent=2).encode("utf-8")).decode("ascii")
+                p["payloadType"] = p.get("payloadType") or "InlineBase64"
+                touched = True
+
+        if not touched:
+            raise HTTPException(404, f"Target part not found: {target_visual_path if not page_only else target_page_path}")
+
+        if not changes:
+            return {"applied": False, "changes": [], "log": ["No-op: requested values match current state."]}
+
+        try:
+            up = await client.post(
+                f"{base}/updateDefinition",
+                headers={
+                    "Authorization": f"Bearer {fabric_token}",
+                    "Content-Type": "application/json",
+                },
+                json={"definition": {"parts": new_parts}},
+            )
+        except httpx.HTTPError as exc:
+            raise HTTPException(502, f"updateDefinition failed: {exc}") from exc
+        up = await _follow_lro(client, up)
+        if up.status_code >= 400:
+            raise HTTPException(up.status_code, f"updateDefinition: {up.text}")
+
+    return {
+        "applied": True,
+        "changes": changes,
+        "log": [f"Updated {len(changes)} field(s) on {payload.page}/{payload.visual or '*'}"],
+    }
+
+
+# ---------------------------------------------------------------------------
+# v0.61 — drag-and-drop page reorder
+# ---------------------------------------------------------------------------
+
+
+class PagesReorderRequest(BaseModel):
+    workspaceId: str
+    reportId: str
+    pageOrder: list[str]
+
+
+@router.post("/pbi-fixer/report/pages/reorder")
+async def pbi_fixer_pages_reorder(
+    payload: PagesReorderRequest,
+    request: Request,
+    ctx: AuthorizationContext | None = Depends(require_user),
+):
+    """Reorder report pages by mutating the ``pages.json`` part's ``pageOrder`` array.
+
+    Mirrors the v0.42 ``/visual/update`` LRO pattern: ``getDefinition`` →
+    patch the single ``definition/pages.json`` part → ``updateDefinition``.
+    Body ``pageOrder`` is the desired final ordering (page internal names).
+    Pages present in the file but missing from the request are appended at
+    the end (preserving their relative order); unknown names are dropped.
+    """
+    import base64
+    import json as _json
+
+    import httpx
+
+    user_id = _user_key_from_context(ctx)
+    _rate_limit(user_id, "pbi_fixer_pages_reorder")
+
+    if not payload.pageOrder:
+        raise HTTPException(400, "pageOrder must be a non-empty list")
+
+    mcp_tokens = await _mcp_tokens(request)
+    if not mcp_tokens:
+        raise HTTPException(400, "Fabric token required")
+    fabric_token = mcp_tokens.get("FABRIC_API_TOKEN")
+    if not fabric_token:
+        raise HTTPException(401, "No Fabric OBO token available")
+
+    base = (
+        f"{_FABRIC_API_ROOT}/workspaces/{payload.workspaceId}"
+        f"/reports/{payload.reportId}"
+    )
+
+    async def _follow_lro(client: httpx.AsyncClient, resp: httpx.Response) -> httpx.Response:
+        attempts = 0
+        while resp.status_code == 202 and attempts < 30:
+            attempts += 1
+            location = resp.headers.get("Location") or resp.headers.get("Operation-Location")
+            if not location:
+                break
+            try:
+                retry_after = float(resp.headers.get("Retry-After", "2"))
+            except ValueError:
+                retry_after = 2.0
+            await asyncio.sleep(min(retry_after, 5.0))
+            resp = await client.get(location, headers={"Authorization": f"Bearer {fabric_token}"})
+        if (
+            resp.status_code == 200
+            and resp.headers.get("content-type", "").startswith("application/json")
+        ):
+            try:
+                body = resp.json()
+            except Exception:
+                body = None
+            if isinstance(body, dict) and body.get("status") == "Failed":
+                err = body.get("error") or {}
+                raise HTTPException(
+                    502,
+                    f"Fabric LRO failed [{err.get('errorCode', '')}]: {err.get('message', '')}",
+                )
+            if (
+                isinstance(body, dict)
+                and body.get("status") in ("Succeeded", "Completed")
+                and "definition" not in body
+            ):
+                location = (resp.url and str(resp.url)) or location
+                try:
+                    rr = await client.get(
+                        f"{location.rstrip('/')}/result",
+                        headers={"Authorization": f"Bearer {fabric_token}"},
+                    )
+                    if rr.status_code < 400:
+                        resp = rr
+                except httpx.HTTPError:
+                    pass
+        return resp
+
+    async with httpx.AsyncClient(timeout=120.0, follow_redirects=False) as client:
+        try:
+            resp = await client.post(
+                f"{base}/getDefinition",
+                headers={
+                    "Authorization": f"Bearer {fabric_token}",
+                    "Content-Type": "application/json",
+                },
+                json={},
+            )
+        except httpx.HTTPError as exc:
+            raise HTTPException(502, f"getDefinition failed: {exc}") from exc
+        resp = await _follow_lro(client, resp)
+        if resp.status_code >= 400:
+            raise HTTPException(resp.status_code, f"getDefinition: {resp.text}")
+        try:
+            def_body = resp.json()
+        except Exception as exc:
+            raise HTTPException(502, f"getDefinition returned non-JSON: {exc}") from exc
+
+        parts = list((def_body.get("definition") or {}).get("parts") or [])
+        if not parts:
+            raise HTTPException(502, "Definition has no parts")
+
+        new_parts = [{**p} for p in parts]
+        touched = False
+        before_order: list[str] = []
+        after_order: list[str] = []
+
+        for p in new_parts:
+            if p.get("path") != "definition/pages.json":
+                continue
+            try:
+                doc_str = base64.b64decode(p.get("payload", "")).decode("utf-8")
+                doc = _json.loads(doc_str)
+            except Exception as exc:
+                raise HTTPException(502, f"pages.json decode failed: {exc}") from exc
+
+            existing = list(doc.get("pageOrder") or [])
+            before_order = list(existing)
+            requested = [n for n in payload.pageOrder if n in existing]
+            tail = [n for n in existing if n not in requested]
+            after_order = requested + tail
+            if after_order == existing:
+                return {
+                    "applied": False,
+                    "pageOrder": after_order,
+                    "log": ["No-op: requested order matches current order."],
+                }
+            doc["pageOrder"] = after_order
+            p["payload"] = base64.b64encode(_json.dumps(doc, indent=2).encode("utf-8")).decode("ascii")
+            p["payloadType"] = p.get("payloadType") or "InlineBase64"
+            touched = True
+            break
+
+        if not touched:
+            raise HTTPException(404, "definition/pages.json not found in report definition")
+
+        try:
+            up = await client.post(
+                f"{base}/updateDefinition",
+                headers={
+                    "Authorization": f"Bearer {fabric_token}",
+                    "Content-Type": "application/json",
+                },
+                json={"definition": {"parts": new_parts}},
+            )
+        except httpx.HTTPError as exc:
+            raise HTTPException(502, f"updateDefinition failed: {exc}") from exc
+        up = await _follow_lro(client, up)
+        if up.status_code >= 400:
+            raise HTTPException(up.status_code, f"updateDefinition: {up.text}")
+
+    return {
+        "applied": True,
+        "pageOrder": after_order,
+        "log": [
+            f"Reordered {len(after_order)} page(s).",
+            f"Before: {before_order}",
+            f"After:  {after_order}",
+        ],
     }
 
 
@@ -3019,40 +3528,17 @@ async def resolve_approval(
 
 
 # ── Agent template & config endpoints ────────────────────────────────
+#
+# IMPORTANT: literal-path routes (``/agents/my``, ``/agents/configure``)
+# MUST be declared BEFORE the parameterised ``/agents/{agent_id}`` route.
+# FastAPI matches routes in registration order, so if the parameterised
+# route is registered first it shadows the literal ones (e.g. a GET on
+# ``/api/agents/my`` would match ``/agents/{agent_id}`` with
+# ``agent_id="my"`` and return 404 "Agent template not found").
 
 @router.get("/agents")
 async def list_agent_templates():
     return [t.model_dump() for t in list_templates()]
-
-
-@router.get("/agents/{agent_id}")
-async def get_agent_template(agent_id: str):
-    t = get_template(agent_id)
-    if not t or t.is_internal:
-        raise HTTPException(404, "Agent template not found")
-    return t.model_dump()
-
-
-@router.post("/agents/configure")
-async def configure_agent(
-    req: AgentConfigRequest,
-    request: Request,
-    ctx: AuthorizationContext | None = Depends(require_user),
-):
-    user_id = _user_key_from_context(ctx)
-    user_upn = _user_upn_from_context(ctx)
-    config = UserAgentConfig(
-        id=str(uuid.uuid4()),
-        user_id=user_id,
-        user_upn=user_upn,
-        agent_template_id=req.agent_template_id,
-        access_levels=req.access_levels,
-        tool_integrations=req.tool_integrations,
-        runtime_schedule=req.runtime_schedule,
-        custom_prompt_additions=req.custom_prompt_additions,
-    )
-    session_store.save_agent_config(config)
-    return config.model_dump(mode="json")
 
 
 @router.get("/agents/my")
@@ -3086,6 +3572,36 @@ async def delete_my_agent(
     if not ok:
         raise HTTPException(404, "Config not found")
     return {"status": "deleted"}
+
+
+@router.post("/agents/configure")
+async def configure_agent(
+    req: AgentConfigRequest,
+    request: Request,
+    ctx: AuthorizationContext | None = Depends(require_user),
+):
+    user_id = _user_key_from_context(ctx)
+    user_upn = _user_upn_from_context(ctx)
+    config = UserAgentConfig(
+        id=str(uuid.uuid4()),
+        user_id=user_id,
+        user_upn=user_upn,
+        agent_template_id=req.agent_template_id,
+        access_levels=req.access_levels,
+        tool_integrations=req.tool_integrations,
+        runtime_schedule=req.runtime_schedule,
+        custom_prompt_additions=req.custom_prompt_additions,
+    )
+    session_store.save_agent_config(config)
+    return config.model_dump(mode="json")
+
+
+@router.get("/agents/{agent_id}")
+async def get_agent_template(agent_id: str):
+    t = get_template(agent_id)
+    if not t or t.is_internal:
+        raise HTTPException(404, "Agent template not found")
+    return t.model_dump()
 
 
 # ── Audit ─────────────────────────────────────────────────────────────

@@ -69,7 +69,7 @@ export const SEMPY_CATALOG: SempyFunction[] = [
     module: "sempy.fabric",
     alias: "fabric",
     name: "list_items",
-    description: "List all items in a workspace (reports, datasets, lakehouses, …).",
+    description: "List all items in a workspace (reports, semantic models, lakehouses, …).",
     category: "Workspace",
     params: [
       { name: "workspace", kind: "workspace", required: false },

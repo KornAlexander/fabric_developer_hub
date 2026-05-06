@@ -50,6 +50,9 @@ export interface Fixer {
   scope: FixerScope;
   mode: FixerMode;
   bpaRuleIds?: string[];
+  /** PBIR `visualType` values this report-scoped fixer is relevant for.
+   *  Omit (or empty) to mean "applies to any visual" / page-level. v0.61. */
+  appliesTo?: string[];
   scan(ctx: FixerContext): Promise<FixerResult>;
   apply(ctx: FixerContext): Promise<FixerResult>;
 }
@@ -71,6 +74,7 @@ function backendFixer(meta: {
   title: string;
   scope: FixerScope;
   bpaRuleIds?: string[];
+  appliesTo?: string[];
 }): Fixer {
   const call = async (ctx: FixerContext, scanOnly: boolean): Promise<FixerResult> => {
     if (!ctx.auth || !ctx.workspaceId) return emptyResult(["No auth / workspace."]);
@@ -110,6 +114,7 @@ function backendFixer(meta: {
     scope: meta.scope,
     mode: "backend",
     bpaRuleIds: meta.bpaRuleIds,
+    appliesTo: meta.appliesTo,
     scan: (ctx) => call(ctx, true),
     apply: (ctx) => call(ctx, false),
   };
@@ -124,6 +129,7 @@ export const fixPieChart = backendFixer({
   title: "Replace pie / donut / funnel charts with bar charts",
   scope: "report",
   bpaRuleIds: ["Report.PieOrDonut"],
+  appliesTo: ["pieChart", "donutChart", "funnel"],
 });
 
 export const fixPageSize = backendFixer({
@@ -137,12 +143,14 @@ export const fixHideVisualFilters = backendFixer({
   id: "Fix_HideVisualFilters",
   title: "Hide every visual-level filter from the filter pane",
   scope: "report",
+  // No appliesTo → relevant to every visual.
 });
 
 export const fixDisableShowItemsNoData = backendFixer({
   id: "Fix_DisableShowItemsNoData",
   title: "Disable 'Show items with no data' on visual projections",
   scope: "report",
+  // No appliesTo → relevant to every visual.
 });
 
 export const fixRemoveUnusedCustomVisuals = backendFixer({
@@ -222,6 +230,92 @@ export const fixWholeNumberFormat = backendFixer({
   scope: "sm",
 });
 
+// P1 batch (v0.47-v0.49)
+export const fixAvoidAdding0 = backendFixer({
+  id: "Fix_AvoidAdding0",
+  title: "Strip leading '0+' from measure expressions",
+  scope: "sm",
+});
+
+export const addLastRefreshTable = backendFixer({
+  id: "Add_LastRefreshTable",
+  title: "Add a 'Last Refresh' table + measure (skips if any 'refresh' table exists)",
+  scope: "sm",
+});
+
+export const addMeasuresFromColumns = backendFixer({
+  id: "Add_MeasuresFromColumns",
+  title: "Create measures from columns with summarizeBy ≠ none and hide the source columns",
+  scope: "sm",
+});
+
+// P1 report-fixer batch (v0.50)
+export const fixBarChart = backendFixer({
+  id: "Fix_BarChart",
+  title: "Fix bar chart formatting (axis titles, values, gridlines, data labels)",
+  scope: "report",
+  appliesTo: [
+    "barChart",
+    "clusteredBarChart",
+    "hundredPercentStackedBarChart",
+  ],
+});
+
+export const fixColumnChart = backendFixer({
+  id: "Fix_ColumnChart",
+  title: "Fix column chart formatting (axis titles, values, gridlines, data labels)",
+  scope: "report",
+  appliesTo: [
+    "columnChart",
+    "clusteredColumnChart",
+    "hundredPercentStackedColumnChart",
+  ],
+});
+
+export const fixVisualAlignment = backendFixer({
+  id: "Fix_VisualAlignment",
+  title: "Snap nearly-aligned chart visuals (within 2% of page) to a common position/size",
+  scope: "report",
+  // No appliesTo → relevant to every visual.
+});
+
+// P2 SM batch (v0.51)
+export const fixDateColumnFormat = backendFixer({
+  id: "Fix_DateColumnFormat",
+  title: "Set formatString 'mm/dd/yyyy' on Date columns missing a format",
+  scope: "sm",
+});
+
+export const fixDataCategory = backendFixer({
+  id: "Fix_DataCategory",
+  title: "Set DataCategory on geo / URL / image columns by name pattern",
+  scope: "sm",
+});
+
+export const fixMarkPrimaryKeys = backendFixer({
+  id: "Fix_MarkPrimaryKeys",
+  title: "Mark relationship 'to' columns as primary keys (isKey: true)",
+  scope: "sm",
+});
+
+export const fixMeasureDescriptions = backendFixer({
+  id: "Fix_MeasureDescriptions",
+  title: "Set visible measure descriptions to their DAX expression when empty",
+  scope: "sm",
+});
+
+export const fixUseDivideFunction = backendFixer({
+  id: "Fix_UseDivideFunction",
+  title: "Rewrite simple A / B in measure expressions to DIVIDE(A, B)",
+  scope: "sm",
+});
+
+export const fixDefaultDataSourceVersion = backendFixer({
+  id: "Fix_DefaultDataSourceVersion",
+  title: "Set defaultPowerBIDataSourceVersion: PowerBI_V3 on the model",
+  scope: "sm",
+});
+
 export const FIXERS: readonly Fixer[] = Object.freeze([
   // Report (backend)
   fixPieChart,
@@ -229,6 +323,9 @@ export const FIXERS: readonly Fixer[] = Object.freeze([
   fixHideVisualFilters,
   fixDisableShowItemsNoData,
   fixRemoveUnusedCustomVisuals,
+  fixBarChart,
+  fixColumnChart,
+  fixVisualAlignment,
   fixUpgradeToPbir,
   // Semantic model (backend)
   fixDiscourageImplicitMeasures,
@@ -239,6 +336,16 @@ export const FIXERS: readonly Fixer[] = Object.freeze([
   fixMeasureFormat,
   fixPercentageFormat,
   fixWholeNumberFormat,
+  fixAvoidAdding0,
+  addLastRefreshTable,
+  addMeasuresFromColumns,
+  // P2 SM (v0.51)
+  fixDateColumnFormat,
+  fixDataCategory,
+  fixMarkPrimaryKeys,
+  fixMeasureDescriptions,
+  fixUseDivideFunction,
+  fixDefaultDataSourceVersion,
 ]);
 
 export function findFixerForBpaRule(ruleId: string): Fixer | undefined {

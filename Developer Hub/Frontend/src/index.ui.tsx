@@ -30,19 +30,27 @@ export async function initialize(params: InitParams) {
         switch (action) {
             case 'agenthub.tab.onInit':
                 const { id } = data as ItemTabActionContext;
-                try{
+                try {
                     const getItemResult = await callItemGet(
                         id,
                         workloadClient
                     );
+                    if (!getItemResult) {
+                        // T2: dev-loaded items (or items the host cannot
+                        // resolve) return null from `callItemGet`. Without a
+                        // displayName the Fabric tab strip stays on the
+                        // bootstrap "Loading…" placeholder forever. Fall
+                        // back to a friendly default so the tab updates.
+                        return { title: 'Developer Hub Dashboard' };
+                    }
                     const item = convertGetItemResultToWorkloadItem<ItemPayload>(getItemResult);
-                    return {title: item.displayName};
+                    return { title: item.displayName || 'Developer Hub Dashboard' };
                 } catch (error) {
-                    console.error(
-                        `Error loading the Item (object ID:${id})`,
+                    console.warn(
+                        `[AgentHub] tab.onInit could not resolve display name for ${id}; using default`,
                         error
                     );
-                    return {};
+                    return { title: 'Developer Hub Dashboard' };
                 }
             case 'agenthub.tab.canDeactivate':
                 return { canDeactivate: true };

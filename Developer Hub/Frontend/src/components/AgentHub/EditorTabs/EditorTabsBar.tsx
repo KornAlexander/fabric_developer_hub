@@ -40,8 +40,10 @@ import {
     Settings20Regular,
     Home20Regular,
     AddCircle20Regular,
+    Info20Regular,
 } from "@fluentui/react-icons";
 import { useEditorTabs, makeNewSessionDescriptor, type TabDescriptor, type TabKind } from "./EditorTabsContext";
+import { NAV_ITEMS as PBIFIXER_NAV_ITEMS } from "../../PbiFixer";
 
 type DropSide = "left" | "right" | "top" | "bottom" | "center";
 
@@ -65,8 +67,24 @@ function iconForKind(kind: TabKind): React.ReactNode {
         case "agents":   return <Bot20Regular />;
         case "pbifixer": return <Wrench20Regular />;
         case "settings": return <Settings20Regular />;
+        case "about":    return <Info20Regular />;
         default:         return <DocumentRegular />;
     }
+}
+
+/** Icon for an open editor tab. PBI Fixer subpages encode their nav
+ *  key in the tab id (``pbifixer:<navKey>``) so we can look up the
+ *  matching sidebar icon and keep the tab strip visually aligned with
+ *  the left-rail navigation. Falls back to ``iconForKind`` for any
+ *  tab that doesn't carry a sub-key (e.g. the bare "Power BI Fixer"
+ *  landing tab). */
+function iconForTab(tab: TabDescriptor): React.ReactNode {
+    if (tab.kind === "pbifixer" && tab.id.startsWith("pbifixer:")) {
+        const navKey = tab.id.slice("pbifixer:".length);
+        const navItem = PBIFIXER_NAV_ITEMS.find((i) => i.key === navKey);
+        if (navItem) return navItem.icon;
+    }
+    return iconForKind(tab.kind);
 }
 
 /** IS_MAC sniff kept in sync with AgentHubLayout's — duplicated here
@@ -303,7 +321,7 @@ export function EditorTabsBar({ groupId, tabs, activeTabId, isActiveGroup }: Edi
                                 title={tab.subtitle ? `${tab.title} — ${tab.subtitle}` : tab.title}
                             >
                                 <span className="editor-tab__icon" aria-hidden>
-                                    {iconForKind(tab.kind)}
+                                    {iconForTab(tab)}
                                 </span>
                                 <span className="editor-tab__label">{tab.title}</span>
                                 <button
