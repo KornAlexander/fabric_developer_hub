@@ -270,13 +270,11 @@ def test_delete_my_agent_not_found(app: FastAPI, client: TestClient) -> None:
 
 
 def test_my_agents_route_registered(app: FastAPI, client: TestClient) -> None:
-    """Route ordering quirk: ``/agents/{agent_id}`` is declared before
-    ``/agents/my`` in the router, so ``/agents/my`` currently matches the
-    template-by-id route and returns 404. This test pins that behaviour so
-    any future fix (or accidental further regression) is surfaced."""
+    """The literal ``/agents/my`` route is registered before ``/agents/{agent_id}``."""
     _override_user(app, _make_ctx())
     r = client.get("/api/agents/my")
-    assert r.status_code == 404
+    assert r.status_code == 200
+    assert r.json() == []
 
 
 def test_audit_log_empty_is_blocked_for_unknown_session(
