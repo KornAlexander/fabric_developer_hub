@@ -28,6 +28,7 @@ _SRC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
 
+from jose import jwt
 from mcp.server.fastmcp import FastMCP
 
 from mcp_servers._common import format_http_error, shared_client
@@ -49,10 +50,63 @@ ITEM_ENDPOINTS: dict[str, dict[str, str]] = {
 }
 
 
-def _headers() -> dict[str, str]:
+def _token_claims(token: str) -> dict | None:
+    if not token:
+        return None
+    try:
+        claims = jwt.get_unverified_claims(token)
+    except Exception:
+        return None
+    return claims if isinstance(claims, dict) else None
+
+
+def _token_auth_mode(claims: dict | None) -> str:
+    if not claims:
+        return "unknown"
+    scp = claims.get("scp")
+    idtyp = str(claims.get("idtyp") or "").lower()
+    roles = claims.get("roles")
+    if isinstance(scp, str) and scp.strip():
+        return "delegated_user"
+    if idtyp == "app" or (roles and not scp):
+        return "application"
+    return "unknown"
+
+
+def _delegated_token_block_message(operation: str, claims: dict | None) -> str:
+    principal = "the app registration/service principal"
+    if isinstance(claims, dict):
+        principal = (
+            claims.get("app_displayname")
+            or claims.get("name")
+            or claims.get("appid")
+            or claims.get("azp")
+            or principal
+        )
+    return (
+        f"Blocked Fabric definition publish for {operation}: FABRIC_API_TOKEN is an "
+        f"application/service-principal token ({principal}). AgentHub refuses to publish "
+        "Fabric item definitions with app-only identity because newly-created semantic models "
+        "would be owned by the app registration instead of the mission user. Re-authenticate "
+        "through delegated user/OBO flow and retry."
+    )
+
+
+def _require_delegated_user_token(operation: str) -> None:
     token = os.environ.get("FABRIC_API_TOKEN", "")
     if not token:
         raise RuntimeError("FABRIC_API_TOKEN not set — user may not be authenticated.")
+    claims = _token_claims(token)
+    if _token_auth_mode(claims) == "application":
+        raise RuntimeError(_delegated_token_block_message(operation, claims))
+
+
+def _headers(*, require_delegated: bool = False, operation: str = "Fabric definition API call") -> dict[str, str]:
+    token = os.environ.get("FABRIC_API_TOKEN", "")
+    if not token:
+        raise RuntimeError("FABRIC_API_TOKEN not set — user may not be authenticated.")
+    if require_delegated:
+        _require_delegated_user_token(operation)
     return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
 
@@ -502,7 +556,11 @@ async def _publish_update(workspace_id: str, item: dict[str, Any], parts: list[d
     url = f"{FABRIC_API}/workspaces/{workspace_id}/{endpoint['collection']}/{item['itemId']}/updateDefinition"
     body = {"definition": {"parts": parts}}
     async with shared_client(60.0) as client:
-        resp = await client.post(url, json=body, headers=_headers())
+        resp = await client.post(
+            url,
+            json=body,
+            headers=_headers(require_delegated=True, operation=f"publishing {item['type']} definition update"),
+        )
         if resp.status_code in {200, 204}:
             return {"status": "succeeded", "statusCode": resp.status_code}
         if resp.status_code == 202:
@@ -521,7 +579,11 @@ async def _publish_create(workspace_id: str, item: dict[str, Any], parts: list[d
         "definition": {"parts": parts},
     }
     async with shared_client(60.0) as client:
-        resp = await client.post(f"{FABRIC_API}/workspaces/{workspace_id}/items", json=body, headers=_headers())
+        resp = await client.post(
+            f"{FABRIC_API}/workspaces/{workspace_id}/items",
+            json=body,
+            headers=_headers(require_delegated=True, operation=f"publishing new {item['type']} definition"),
+        )
         if resp.status_code in {200, 201}:
             return {"status": "succeeded", "statusCode": resp.status_code, "item": resp.json() if resp.text else {}}
         if resp.status_code == 202:

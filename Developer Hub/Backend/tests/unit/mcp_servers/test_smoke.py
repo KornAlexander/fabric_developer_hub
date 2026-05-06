@@ -33,13 +33,15 @@ def test_fabric_tool_count() -> None:
     """Lock the public tool surface so accidental removals are caught."""
 
     tool_names = sorted(n for n in dir(fabric) if n.startswith("fabric_"))
-    assert len(tool_names) == 16, f"expected 16 fabric_* tools, got {tool_names}"
+    assert len(tool_names) == 18, f"expected 18 fabric_* tools, got {tool_names}"
     assert "fabric_list_workspaces" in tool_names
     assert "fabric_list_files" in tool_names
     assert "fabric_read_file" in tool_names
     assert "fabric_create_folder" in tool_names
     assert "fabric_create_directory" in tool_names
     assert "fabric_validate_workspace_capacity" in tool_names
+    assert "fabric_get_semantic_model_refresh_history" in tool_names
+    assert "fabric_diagnose_workspace_artifacts" in tool_names
     assert "fabric_verify_report_renderable" in tool_names
     assert "fabric_verify_workspace_inventory_solution" in tool_names
 
@@ -78,7 +80,7 @@ def test_semantic_link_tool_count() -> None:
     on import)."""
 
     tool_names = sorted(n for n in dir(semantic_link) if n.startswith("sl_"))
-    assert len(tool_names) == 43, f"expected 43 sl_* tools, got {len(tool_names)}"
+    assert len(tool_names) == 44, f"expected 44 sl_* tools, got {len(tool_names)}"
     # Spot-check a tool from each major section
     for required in (
         "sl_evaluate_dax",

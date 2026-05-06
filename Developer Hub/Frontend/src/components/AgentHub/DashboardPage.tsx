@@ -40,12 +40,32 @@ import { WorkloadClientAPI } from "@ms-fabric/workload-client";
 import * as api from "../../controller/AgentHubApi";
 import { callAuthAcquireAccessToken } from "../../controller/AgentHubController";
 import { useItemContext } from "./ItemContext";
-import { readPreloaded, setPreloaded } from "./pagePreloadCache";
+import { getPending, readPreloaded, setPreloaded } from "./pagePreloadCache";
 import { useSearch } from "./SearchContext";
 import { fuzzyMatches } from "./fuzzySearch";
 
 interface DashboardPageProps {
     workloadClient: WorkloadClientAPI;
+}
+
+interface SessionsPreloadPayload {
+    rows: any[];
+    summary: api.SessionSummary | null;
+    hasMore: boolean;
+}
+
+function normalizeSessionsPreload(payload: SessionsPreloadPayload | any[] | undefined | null): SessionsPreloadPayload | null {
+    if (Array.isArray(payload)) {
+        return { rows: payload, summary: null, hasMore: false };
+    }
+    if (payload && Array.isArray(payload.rows)) {
+        return {
+            rows: payload.rows,
+            summary: payload.summary ?? null,
+            hasMore: payload.hasMore ?? false,
+        };
+    }
+    return null;
 }
 
 type CardTone = "primary" | "secondary" | "error";
@@ -131,11 +151,15 @@ export function computeDashboardCounts(jobs: any[], summary: api.SessionSummary 
 export function DashboardPage({ workloadClient }: DashboardPageProps) {
     // If navTo() prefetched the session list before route-changing, use it
     // directly so the page mounts fully populated with no skeleton flicker.
-    const preloaded = readPreloaded<any[]>("sessions");
-    const [jobs, setJobs] = useState<any[]>(preloaded ?? []);
-    const [summary, setSummary] = useState<api.SessionSummary | null>(null);
-    const [loading, setLoading] = useState(preloaded === undefined);
+    const preloaded = readPreloaded<SessionsPreloadPayload | any[]>("sessions");
+    const preloadedRows = Array.isArray(preloaded) ? preloaded : preloaded?.rows;
+    const preloadedSummary = Array.isArray(preloaded) ? null : preloaded?.summary ?? null;
+    const preloadedHasMore = Array.isArray(preloaded) ? false : preloaded?.hasMore ?? false;
+    const [jobs, setJobs] = useState<any[]>(preloadedRows ?? []);
+    const [summary, setSummary] = useState<api.SessionSummary | null>(preloadedSummary);
+    const [loading, setLoading] = useState(preloadedRows === undefined);
     const [syncingMore, setSyncingMore] = useState(false);
+    const [hasMoreSessions, setHasMoreSessions] = useState(preloadedHasMore);
     const [slowLoading, setSlowLoading] = useState(false);
     const [loadError, setLoadError] = useState<string | null>(null);
     const [creating, setCreating] = useState(false);
@@ -151,6 +175,11 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
     const { itemObjectId, workspaceObjectId, createItem } = useItemContext();
 
     const githubToken = sessionStorage.getItem("github_token") || "";
+    const PAGE_SIZE = 50;
+
+    function cacheSessions(rows: any[], nextSummary: api.SessionSummary | null, nextHasMore: boolean) {
+        setPreloaded("sessions", { rows, summary: nextSummary, hasMore: nextHasMore });
+    }
 
     useEffect(() => {
         // If we already have preloaded data, skip the initial fetch.
@@ -166,6 +195,22 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
         setLoadError(null);
         const slowTimer = window.setTimeout(() => setSlowLoading(true), 1200);
         try {
+            const pending = getPending<SessionsPreloadPayload | any[]>("sessions");
+            if (pending) {
+                try {
+                    const pendingPayload = normalizeSessionsPreload(await pending);
+                    if (pendingPayload) {
+                        setSummary(pendingPayload.summary);
+                        setJobs(pendingPayload.rows);
+                        setHasMoreSessions(pendingPayload.hasMore);
+                        cacheSessions(pendingPayload.rows, pendingPayload.summary, pendingPayload.hasMore);
+                        return;
+                    }
+                } catch {
+                    // Fall through to the normal page-owned fetch below.
+                }
+            }
+
             // Need the Fabric token so the backend can identify the user by
             // UPN (same key sessions were written under). Without it the
             // backend falls back to an Authorization hash and returns nothing.
@@ -176,38 +221,17 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
             } catch (e) {
                 console.warn("Could not acquire Fabric token for sessions list:", e);
             }
-            const PAGE_SIZE = 200;
             const [summaryData, firstPage] = await Promise.all([
                 api.getSessionSummary({ githubToken, fabricToken }),
                 api.listSessions({ githubToken, fabricToken }, undefined, { limit: PAGE_SIZE, offset: 0 }),
             ]);
 
             const baseRows = firstPage || [];
+            const hasMore = baseRows.length >= PAGE_SIZE && (summaryData?.total ?? baseRows.length) > baseRows.length;
             setSummary(summaryData || null);
             setJobs(baseRows);
-            setPreloaded("sessions", baseRows);
-
-            // Continue loading older pages in the background so cards/tables
-            // can grow to full history without blocking initial paint.
-            if (baseRows.length >= PAGE_SIZE) {
-                setSyncingMore(true);
-                let offset = baseRows.length;
-                let allRows = [...baseRows];
-                while (true) {
-                    const page: any[] = await api.listSessions(
-                        { githubToken, fabricToken },
-                        undefined,
-                        { limit: PAGE_SIZE, offset },
-                    );
-                    if (!page.length) break;
-                    allRows = [...allRows, ...page];
-                    setJobs(allRows);
-                    setPreloaded("sessions", allRows);
-                    if (page.length < PAGE_SIZE) break;
-                    offset += page.length;
-                }
-                setSyncingMore(false);
-            }
+            setHasMoreSessions(hasMore);
+            cacheSessions(baseRows, summaryData || null, hasMore);
         } catch (e: any) {
             console.error("Failed to load jobs:", e);
             // Surface the error instead of silently showing an empty state —
@@ -227,6 +251,35 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
             window.clearTimeout(slowTimer);
             setLoading(false);
             setSlowLoading(false);
+        }
+    }
+
+    async function loadMoreJobs() {
+        if (syncingMore || !hasMoreSessions) return;
+        setSyncingMore(true);
+        try {
+            let fabricToken: string | undefined;
+            try {
+                const tok = await callAuthAcquireAccessToken(workloadClient, undefined);
+                fabricToken = tok?.token;
+            } catch (e) {
+                console.warn("Could not acquire Fabric token for more sessions:", e);
+            }
+            const page: any[] = await api.listSessions(
+                { githubToken, fabricToken },
+                undefined,
+                { limit: PAGE_SIZE, offset: jobs.length },
+            );
+            const nextRows = [...jobs, ...(page || [])];
+            const nextHasMore = (page || []).length >= PAGE_SIZE && (summary?.total ?? Number.POSITIVE_INFINITY) > nextRows.length;
+            setJobs(nextRows);
+            setHasMoreSessions(nextHasMore);
+            cacheSessions(nextRows, summary, nextHasMore);
+        } catch (e: any) {
+            console.error("Failed to load older sessions:", e);
+            window.alert(`Could not load older sessions: ${e?.message || e}`);
+        } finally {
+            setSyncingMore(false);
         }
     }
 
@@ -346,7 +399,7 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
                 : j,
         );
         setJobs(optimistic);
-        setPreloaded("sessions", optimistic);
+        cacheSessions(optimistic, summary, hasMoreSessions);
 
         try {
             let fabricToken: string | undefined;
@@ -359,7 +412,7 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
         } catch (e: any) {
             console.error("Failed to cancel session:", e);
             setJobs(snapshot);
-            setPreloaded("sessions", snapshot);
+            cacheSessions(snapshot, summary, hasMoreSessions);
             window.alert(`Could not cancel session: ${e?.message || e}`);
         } finally {
             setCancelBusy(false);
@@ -719,7 +772,7 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
                         {syncingMore && (
                             <div className="sessions-loading" role="status" style={{ paddingBottom: 8 }}>
                                 <Spinner size="tiny" />
-                                Syncing older sessions…
+                                Loading older sessions…
                             </div>
                         )}
                         <table className="recent-jobs-table">
@@ -818,6 +871,17 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
                                     Showing all {recentFilteredJobs.length}{" "}
                                     {recentFilteredJobs.length === 1 ? "session" : "sessions"}
                                 </span>
+                            )}
+                            {hasMoreSessions && !recentQuery.trim() && !searchQuery.trim() && (
+                                <button
+                                    className="recent-jobs-viewall"
+                                    onClick={loadMoreJobs}
+                                    disabled={syncingMore}
+                                >
+                                    {syncingMore
+                                        ? "Loading older sessions…"
+                                        : `Load older sessions (${jobs.length} of ${summary?.total ?? "many"})`}
+                                </button>
                             )}
                         </div>
                     </div>

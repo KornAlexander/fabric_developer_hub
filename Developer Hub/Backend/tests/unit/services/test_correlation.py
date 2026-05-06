@@ -117,7 +117,7 @@ def test_middleware_binds_agenthub_correlation_headers(app: FastAPI, client: Tes
     )
 
     assert response.status_code == 200
-    assert response.json() == {"request_id": "req-agenthub-1", "session_id": session_id}
+    assert response.json() == {"request_id": "req-agenthub-1", "session_id": session_id[:8]}
     assert response.headers["X-Request-ID"] == "req-agenthub-1"
 
 

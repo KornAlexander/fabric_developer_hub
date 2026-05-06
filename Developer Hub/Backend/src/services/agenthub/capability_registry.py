@@ -101,15 +101,10 @@ def validate_skill_references(
     container takes out all ``docs_*`` tools — that is one operator
     problem, not six catalog bugs).
 
-    Severity:
-
-    * ``ERROR`` when the deployment reports no unavailable servers —
-      the missing tool is almost certainly a typo in ``catalog.yaml``.
-    * ``WARNING`` when at least one MCP server is known to be
-      pruned or failed. Some or all of the missing tools may come
-      from those servers, and this is an ops issue rather than a
-      catalog bug. The detail text includes the unavailable server
-      list so operators know where to look.
+        Missing tools are always errors. The MCP stack is part of the mission
+        runtime contract; if a configured server is absent, a package runner is
+        unavailable, or a catalog tool name drifts, AgentHub must fail startup
+        instead of accepting missions with a partial tool surface.
 
     Skills with an empty ``tools`` list are allowed (informational-only
     skills like ``check-updates`` exist by design).
@@ -121,25 +116,17 @@ def validate_skill_references(
         missing = [tool for tool in skill.tools if tool not in known]
         if not missing:
             continue
+        detail = (
+            f"{len(missing)} tool(s) not provided by the MCP stack: {missing}. "
+            "Startup is blocked because agents must not run with a partial "
+            "tool surface."
+        )
         if unavailable:
-            severity = IssueSeverity.WARNING
             server_list = ", ".join(sorted(unavailable))
-            detail = (
-                f"{len(missing)} tool(s) not provided by any running MCP "
-                f"server: {missing}. Unavailable servers this deploy: "
-                f"{server_list}. Skill is unreachable until those "
-                f"servers start (or the reference is removed)."
-            )
-        else:
-            severity = IssueSeverity.ERROR
-            detail = (
-                f"{len(missing)} tool(s) not provided by any running MCP "
-                f"server: {missing}. The compose LLM may pick this skill "
-                f"and the runtime will then fail with 'Unknown tool'."
-            )
+            detail += f" Unavailable servers this deploy: {server_list}."
         issues.append(
             CapabilityIssue(
-                severity=severity,
+                severity=IssueSeverity.ERROR,
                 kind="skill_tool_missing",
                 subject_id=skill_id,
                 detail=detail,
@@ -172,6 +159,40 @@ def validate_agent_skill_references(
     return issues
 
 
+def validate_discovered_tools_bound_to_agents(
+    skills: dict[str, Skill],
+    agent_skills: dict[str, list[str]],
+    discovered_tool_names: Iterable[str],
+) -> list[CapabilityIssue]:
+    """Check every discovered MCP tool is reachable through an agent skill."""
+    assigned_skill_ids = {
+        skill_id
+        for skill_ids in agent_skills.values()
+        for skill_id in skill_ids
+    }
+    agent_bound_tools = {
+        tool
+        for skill_id in assigned_skill_ids
+        if skill_id in skills
+        for tool in skills[skill_id].tools
+    }
+    unbound = sorted(set(discovered_tool_names) - agent_bound_tools)
+    if not unbound:
+        return []
+    return [
+        CapabilityIssue(
+            severity=IssueSeverity.ERROR,
+            kind="discovered_tool_unbound",
+            subject_id="__mcp_tools__",
+            detail=(
+                f"{len(unbound)} discovered MCP tool(s) are not bound to any "
+                f"agent skill: {unbound}. Startup is blocked because every "
+                "available tool must be usable by at least one agent."
+            ),
+        )
+    ]
+
+
 def validate_catalog(
     skills: dict[str, Skill],
     agent_skills: dict[str, list[str]],
@@ -184,10 +205,8 @@ def validate_catalog(
     validated. This keeps the function useful in offline test runs
     without requiring a live MCP stack.
 
-    If the manager exposes ``unavailable_servers()`` (pruned +
-    failed-to-discover), that dict is passed through so
-    ``validate_skill_references`` can classify missing tools as an ops
-    issue (WARNING) rather than a catalog bug (ERROR).
+    If the manager exposes ``unavailable_servers()`` (failed path validation
+    or failed discovery), that dict is included in the error detail.
     """
     issues: list[CapabilityIssue] = []
     issues.extend(validate_agent_skill_references(agent_skills, skills.keys()))
@@ -200,8 +219,7 @@ def validate_catalog(
         if unavailable:
             logger.info(
                 "[CAPABILITY] MCP servers unavailable this deploy: %s. "
-                "Skills that depend on their tools will be flagged below "
-                "as WARNING rather than ERROR.",
+                "Skills that depend on their tools will fail validation.",
                 ", ".join(f"{name} ({reason})" for name, reason in sorted(unavailable.items())),
             )
         issues.extend(
@@ -211,18 +229,31 @@ def validate_catalog(
                 unavailable_servers=unavailable,
             )
         )
+        issues.extend(
+            validate_discovered_tools_bound_to_agents(
+                skills,
+                agent_skills,
+                mcp_manager.tools.keys(),
+            )
+        )
     return issues
 
 
 def log_issues(issues: list[CapabilityIssue]) -> None:
     """Log each issue at its declared severity.
 
-    Errors are logged but do not raise — a single dangling reference
-    shouldn't take the whole backend down; it should surface in startup
-    output and healthchecks so it gets fixed in the next deploy.
+    Call ``raise_for_issues`` after logging during startup to enforce the
+    fail-fast MCP/capability contract.
     """
     for issue in issues:
         if issue.severity == IssueSeverity.ERROR:
             logger.error("[CAPABILITY] %s", issue.format())
         else:
             logger.warning("[CAPABILITY] %s", issue.format())
+
+
+def raise_for_issues(issues: list[CapabilityIssue]) -> None:
+    """Fail startup when any capability issue is present."""
+    if issues:
+        rendered = "; ".join(issue.format() for issue in issues)
+        raise RuntimeError(f"Capability catalog validation failed: {rendered}")

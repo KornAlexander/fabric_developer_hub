@@ -120,6 +120,58 @@ def test_list_jobs_respects_limit() -> None:
     assert len(session_store.list_sessions("u", limit=3)) == 3
 
 
+def test_list_session_summaries_returns_compact_dashboard_rows() -> None:
+    job = _make_job("j-summary", "u")
+    job.context = {
+        "prompt_attachments": [
+            {"name": "large.txt", "kind": "text", "content": "x" * 10_000},
+        ],
+    }
+    job.composition = Composition(
+        session_id=job.id,
+        task=job.task_description,
+        architecture="solo",
+        rationale="one agent is enough",
+        headline="Compact mission",
+        subtitle="dashboard row",
+        slots=[
+            AgentSlot(
+                id="slot-1",
+                agent_id="fabric-data-engineer",
+                role="Data engineer",
+                skills=[SkillRef(id="create_lakehouse", name="Create Lakehouse")],
+            )
+        ],
+        handoffs=[],
+        entrypoint_slot_id="slot-1",
+    )
+    job.agents.append(AgentAssignment(
+        agent_id="fabric-data-engineer",
+        session_id="agent-session-1",
+        role="Data engineer",
+        status=AgentStatus.RUNNING,
+        goal="G" * 10_000,
+        current_step="S" * 10_000,
+    ))
+    session_store.create_session(job)
+
+    rows = session_store.list_session_summaries("u")
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["id"] == "j-summary"
+    assert row["context"] is None
+    assert row["composition"]["architecture"] == "solo"
+    assert row["composition"]["headline"] == "Compact mission"
+    assert row["plan"]["summary"] == "Compact mission"
+    assert row["plan"]["steps"][0]["title"] == "Data engineer"
+    assert len(row["agents"][0]["goal"]) <= 240
+    assert len(row["agents"][0]["current_step"]) <= 240
+    assert row["agents"][0]["goal"].endswith("...")
+    assert row["agents"][0]["current_step"].endswith("...")
+    assert "phases" not in row["agents"][0]
+
+
 def test_update_job_persists_status_and_agents() -> None:
     job = _make_job()
     session_store.create_session(job)

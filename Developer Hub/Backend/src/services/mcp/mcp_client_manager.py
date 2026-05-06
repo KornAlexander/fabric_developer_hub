@@ -12,8 +12,10 @@ import logging
 import os
 import sys
 from contextlib import AsyncExitStack
+from dataclasses import dataclass, field
 from pathlib import Path
 
+from jose import jwt
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamablehttp_client
@@ -22,12 +24,19 @@ from services.correlation import get_request_id, get_session_id, get_user_id
 
 logger = logging.getLogger(__name__)
 
+
+@dataclass(frozen=True)
+class MCPToolCallResult:
+    output: str
+    latency_breakdown_ms: dict[str, int] = field(default_factory=dict)
+
 # Timeout for individual tool calls (seconds). Most tools should stay quick;
 # known Fabric LRO helpers get a longer window below.
 TOOL_CALL_TIMEOUT = int(os.environ.get("MCP_TOOL_CALL_TIMEOUT_SECONDS", "30"))
 LONG_RUNNING_TOOL_CALL_TIMEOUT = int(os.environ.get("MCP_LONG_RUNNING_TOOL_TIMEOUT_SECONDS", "120"))
 FABRIC_INVENTORY_TOOL_TIMEOUT = int(os.environ.get("MCP_FABRIC_INVENTORY_TOOL_TIMEOUT_SECONDS", "900"))
 FABRIC_VERIFICATION_TOOL_TIMEOUT = int(os.environ.get("MCP_FABRIC_VERIFICATION_TOOL_TIMEOUT_SECONDS", "600"))
+MCP_DISCOVERY_TIMEOUT = int(os.environ.get("MCP_DISCOVERY_TIMEOUT_SECONDS", "25"))
 _LONG_RUNNING_TOOLS: frozenset[str] = frozenset({
     "fabric_create_workspace_inventory_solution",
     "fabric_verify_report_renderable",
@@ -121,6 +130,60 @@ _FLEXIBLE_STATIC_TOOL_SCHEMA: dict = {
     "properties": {},
     "additionalProperties": True,
     "required": [],
+}
+
+_FABRIC_POWERBI_MUTATING_TOOLS: frozenset[str] = frozenset({
+    "fabric_create_workspace",
+    "fabric_create_folder",
+    "fabric_create_item",
+    "fabric_create_workspace_inventory_solution",
+    "fabric_delete_item",
+    "fabric_write_file",
+    "fabric_delete_file",
+    "fabric_create_directory",
+    "fabric_definition_publish",
+    "create_workspace",
+    "update_workspace",
+    "delete_workspace",
+    "add_workspace_role",
+    "update_workspace_role",
+    "delete_workspace_role",
+    "create_item",
+    "update_item",
+    "delete_item",
+    "update_item_definition",
+    "bulk_move_items",
+    "create_folder",
+    "update_folder",
+    "delete_folder",
+    "move_folder",
+    "sl_refresh_semantic_model",
+    "sl_cancel_refresh",
+    "sl_create_report_from_reportjson",
+    "sl_clone_report",
+    "sl_rebind_report",
+    "sl_run_table_maintenance",
+    "sl_create_shortcut",
+    "sl_add_workspace_user",
+    "sl_assign_workspace_to_capacity",
+    "sl_commit_to_git",
+    "sl_update_from_git",
+    "sl_deploy_semantic_model",
+    "sl_run_data_pipeline",
+    "sl_run_item_job",
+    "sl_set_endorsement",
+    "pbir_publish",
+    "pbir_batch",
+})
+
+_TOOL_TOKEN_ENV_OVERRIDES: dict[str, str] = {
+    "fabric_write_file": "ONELAKE_TOKEN",
+    "fabric_delete_file": "ONELAKE_TOKEN",
+    "fabric_create_directory": "ONELAKE_TOKEN",
+    "sl_refresh_semantic_model": "POWERBI_API_TOKEN",
+    "sl_cancel_refresh": "POWERBI_API_TOKEN",
+    "sl_clone_report": "POWERBI_API_TOKEN",
+    "sl_rebind_report": "POWERBI_API_TOKEN",
 }
 
 
@@ -219,15 +282,60 @@ def _validate_tool_arguments(
             )
 
 
+def _token_auth_mode(token: str) -> tuple[str, dict]:
+    if not token:
+        return "missing", {}
+    try:
+        claims = jwt.get_unverified_claims(token)
+    except Exception:
+        return "unknown", {}
+    if not isinstance(claims, dict):
+        return "unknown", {}
+    scp = claims.get("scp")
+    idtyp = str(claims.get("idtyp") or "").lower()
+    roles = claims.get("roles")
+    if isinstance(scp, str) and scp.strip():
+        return "delegated_user", claims
+    if idtyp == "app" or (roles and not scp):
+        return "application", claims
+    return "unknown", claims
+
+
+def _validate_delegated_token_for_mutation(
+    tool_name: str,
+    server_config: dict,
+    env_override: dict,
+) -> None:
+    if tool_name not in _FABRIC_POWERBI_MUTATING_TOOLS:
+        return
+    token_env = _TOOL_TOKEN_ENV_OVERRIDES.get(tool_name) or str(server_config.get("auth_token_env") or "FABRIC_API_TOKEN")
+    token = str(env_override.get(token_env) or "")
+    mode, claims = _token_auth_mode(token)
+    if mode != "application":
+        return
+    principal = (
+        claims.get("app_displayname")
+        or claims.get("name")
+        or claims.get("appid")
+        or claims.get("azp")
+        or "the app registration/service principal"
+    )
+    raise ToolPolicyViolation(
+        f"Tool {tool_name}: blocked Fabric/Power BI mutation because {token_env} is "
+        f"an application/service-principal token ({principal}). AgentHub refuses to "
+        "create, update, refresh, or delete user mission artifacts with app-only identity; "
+        "use the delegated user/OBO token for this request."
+    )
+
+
 class MCPClientManager:
     """Manages MCP server processes and client connections."""
 
     def __init__(self, config_path: str):
         self.config_path = config_path
-        # Servers that were pruned at config-load time because their
-        # entrypoint script is absent on disk (common in containers that
-        # don't ship the host-side ``${REPO_DIR}/mcp/`` tree). Keyed by
-        # server name, value is a one-line explanation suitable for logs.
+        # Servers whose local entrypoint could not be validated at config-load
+        # time. Startup now fails fast when this is non-empty; the field remains
+        # for diagnostics and test doubles used by the capability validator.
         self.pruned_servers: dict[str, str] = {}
         # Servers whose discovery step raised. Populated by
         # ``discover_tools`` and surfaced by the capability validator so
@@ -251,16 +359,14 @@ class MCPClientManager:
     def _load_config(self, config_path: str) -> dict:
         path = Path(config_path)
         if not path.exists():
-            logger.warning("MCP config not found at %s, starting with no servers", config_path)
-            return {"servers": {}}
+            raise FileNotFoundError(f"MCP config not found at {config_path}")
         with open(path, encoding="utf-8") as f:
             raw = json.load(f)
         # Resolve template variables in the config
         self._resolve_variables(raw, config_path)
-        # Drop servers whose entrypoint script doesn't exist on disk so that
-        # missing optional MCPs (e.g. host-only ${REPO_DIR}/... in Docker)
-        # degrade gracefully instead of failing tool discovery.
-        self._prune_missing_servers(raw)
+        # Every configured MCP server is required. Missing local entrypoints or
+        # working directories are deployment defects and must stop startup.
+        self._validate_local_server_paths(raw)
         return raw
 
     @staticmethod
@@ -289,50 +395,100 @@ class MCPClientManager:
         # No marker found — fall back to the directory containing the config.
         return str(path.parent)
 
+    @staticmethod
+    def _resolve_workspace_root(config_path: str) -> str:
+        """Resolve ${WORKSPACE_ROOT} — the topmost directory in the
+        repository that contains the ``mcp/`` tree.
+
+        ``${REPO_DIR}`` stops at the first ``pyproject.toml`` walking
+        upward, which in this monorepo is ``Developer Hub/Backend/``
+        rather than the actual repo root. Optional MCP servers like
+        ``pbi-fixer`` and ``pbir-tools`` live at
+        ``<repo_root>/mcp/...``, so they need a placeholder that keeps
+        walking past the backend boundary.
+
+        Precedence:
+          1. ``MCP_WORKSPACE_ROOT`` env var (explicit override).
+          2. Walk up from ``config_path`` and pick the highest parent
+             that contains an ``mcp/`` subdirectory with at least one
+             ``server.py`` underneath.
+          3. Fall back to ``_resolve_repo_dir(config_path)``.
+        """
+        override = os.environ.get("MCP_WORKSPACE_ROOT")
+        if override:
+            return override
+
+        path = Path(config_path).resolve()
+        best: Path | None = None
+        for candidate in path.parents:
+            mcp_dir = candidate / "mcp"
+            if mcp_dir.is_dir() and any(mcp_dir.glob("*/server.py")):
+                best = candidate  # keep walking; outermost match wins
+        if best is not None:
+            return str(best)
+
+        return MCPClientManager._resolve_repo_dir(config_path)
+
     def _resolve_variables(self, config: dict, config_path: str) -> None:
-        """Replace ${PYTHON}, ${SRC_DIR}, and ${REPO_DIR} placeholders in server configs."""
+        """Replace ${PYTHON}, ${SRC_DIR}, ${REPO_DIR}, and ${WORKSPACE_ROOT} placeholders in server configs."""
         src_dir = str(Path(config_path).parent)
         repo_dir = self._resolve_repo_dir(config_path)
+        workspace_root = self._resolve_workspace_root(config_path)
         python_exe = sys.executable
 
         def _sub(val: str) -> str:
             return (val
                     .replace("${PYTHON}", python_exe)
                     .replace("${SRC_DIR}", src_dir)
-                    .replace("${REPO_DIR}", repo_dir))
+                    .replace("${REPO_DIR}", repo_dir)
+                    .replace("${WORKSPACE_ROOT}", workspace_root))
 
         for server_config in config.get("servers", {}).values():
             if "command" in server_config:
                 server_config["command"] = _sub(server_config["command"])
             if "args" in server_config:
                 server_config["args"] = [_sub(arg) for arg in server_config["args"]]
+            if "cwd" in server_config and isinstance(server_config["cwd"], str):
+                server_config["cwd"] = _sub(server_config["cwd"])
+            # Apply the same ${PYTHON}/${SRC_DIR}/${REPO_DIR} substitution to
+            # the per-server env block so configs can point children at sibling
+            # workspace folders (e.g. NODE_PATH at the Frontend's
+            # node_modules where playwright-core actually lives).
+            env_block = server_config.get("env")
+            if isinstance(env_block, dict):
+                server_config["env"] = {
+                    key: _sub(value) if isinstance(value, str) else value
+                    for key, value in env_block.items()
+                }
 
-    def _prune_missing_servers(self, config: dict) -> None:
-        """Drop servers whose first arg (the script path) does not exist.
+    def _validate_local_server_paths(self, config: dict) -> None:
+        """Validate local MCP server entrypoints and working directories.
 
-        Keeps the manager usable when some MCPs are only available in the
-        host dev layout (e.g. ``${REPO_DIR}/mcp/...``) but not inside a
-        container that only ships ``src/``.
-
-        Only applied when the first arg looks like a local script path
-        (absolute path or ``*.py``). Servers launched through package
-        runners like ``npx`` pass flags (``-y``) as the first arg, which
-        are not paths and must not be pruned here.
+        Servers launched via package runners (for example ``npx`` or ``uvx``)
+        are validated during discovery. Local Python/script-backed servers are
+        checked here so a Docker image missing a mounted MCP tree fails before
+        AgentHub starts accepting missions.
         """
         servers = config.get("servers", {})
-        for name in list(servers.keys()):
+        missing: dict[str, str] = {}
+        for name, server_config in servers.items():
+            cwd = server_config.get("cwd")
+            if isinstance(cwd, str) and cwd and not Path(cwd).is_dir():
+                missing[name] = f"cwd {cwd} not found on disk"
+                continue
+
             args = servers[name].get("args") or []
             if not args:
                 continue
             first = args[0]
             looks_like_path = first.startswith("/") or first.endswith(".py")
             if looks_like_path and not Path(first).exists():
-                reason = f"script {first} not found on disk"
-                logger.warning(
-                    "MCP server %s: %s; skipping", name, reason,
-                )
-                self.pruned_servers[name] = reason
-                del servers[name]
+                missing[name] = f"script {first} not found on disk"
+
+        if missing:
+            self.pruned_servers.update(missing)
+            detail = "; ".join(f"{name}: {reason}" for name, reason in sorted(missing.items()))
+            raise RuntimeError(f"MCP server path validation failed: {detail}")
 
     def has_tools(self) -> bool:
         return len(self.tools) > 0
@@ -348,6 +504,14 @@ class MCPClientManager:
         if server is None:
             return f"<undiscovered>::{tool_name}"
         return f"{server}::{tool_name}"
+
+    @staticmethod
+    def _is_expected_startup_auth_discovery_miss(server_config: dict, error: str) -> bool:
+        return (
+            server_config.get("transport") == "streamable_http"
+            and bool(server_config.get("requires_auth"))
+            and "requires auth token" in error.lower()
+        )
 
     async def _discover_one_server(
         self,
@@ -365,7 +529,7 @@ class MCPClientManager:
         state is done after ``asyncio.gather`` by ``discover_tools``
         so collision resolution stays deterministic in declared order.
         """
-        try:
+        async def _run_discovery() -> tuple[str, list, str | None]:
             logger.info("Discovering tools from MCP server: %s", name)
             session, stack = await self._start_server(server_config, env_override={})
             try:
@@ -373,6 +537,13 @@ class MCPClientManager:
                 return name, list(result.tools), None
             finally:
                 await stack.aclose()
+
+        timeout_s = float(server_config.get("discovery_timeout_seconds", MCP_DISCOVERY_TIMEOUT))
+        try:
+            async with asyncio.timeout(timeout_s):
+                return await _run_discovery()
+        except TimeoutError:
+            return name, [], f"discovery timed out after {timeout_s:g}s"
         except Exception as e:
             return name, [], str(e)
 
@@ -407,23 +578,49 @@ class MCPClientManager:
         # is False because ``_discover_one_server`` already catches and
         # reports per-server errors via the returned tuple.
         results = await asyncio.gather(*(
-            self._discover_one_server(name, cfg) for name, cfg in servers
+            self._discover_one_server(name, cfg)
+            for name, cfg in servers
+            if not cfg.get("skip_startup_discovery")
         ))
 
         # Index results by name to merge in declared order.
         by_name = {name: (tools, error) for name, tools, error in results}
+        for name, cfg in servers:
+            if cfg.get("skip_startup_discovery"):
+                by_name[name] = ([], "startup discovery skipped by config")
 
         for name, _cfg in servers:
             tools, error = by_name[name]
             if error is not None:
-                self.failed_servers[name] = error
-                logger.error("Failed to discover tools from MCP server %s: %s", name, error)
                 static_added = self._register_static_tools(name, _cfg)
                 if static_added:
-                    logger.warning(
-                        "MCP server %s: using %d statically declared tool(s) after discovery failure",
-                        name, static_added,
-                    )
+                    if _cfg.get("skip_startup_discovery"):
+                        logger.warning(
+                            "MCP server %s: startup discovery skipped by config; "
+                            "using %d statically declared tool(s)",
+                            name, static_added,
+                        )
+                        continue
+                    if self._is_expected_startup_auth_discovery_miss(_cfg, error):
+                        logger.warning(
+                            "MCP server %s: auth token unavailable during startup discovery; "
+                            "using %d statically declared tool(s) until per-request auth is available",
+                            name, static_added,
+                        )
+                        continue
+                    if _cfg.get("allow_static_discovery_fallback"):
+                        logger.warning(
+                            "MCP server %s: using %d statically declared tool(s) after discovery failure: %s",
+                            name, static_added, error,
+                        )
+                        continue
+                    else:
+                        logger.warning(
+                            "MCP server %s: using %d statically declared tool(s) after discovery failure: %s",
+                            name, static_added, error,
+                        )
+                self.failed_servers[name] = error
+                logger.error("Failed to discover tools from MCP server %s: %s", name, error)
                 continue
 
             # Optional per-server allowlist — used to narrow the
@@ -432,6 +629,19 @@ class MCPClientManager:
             # MCP while skipping ``onelake`` / ``core`` which would
             # clash with our OBO-aware ``fabric_*`` tools).
             allowlist = _cfg.get("tool_allowlist") or None
+            discovered_names = {tool.name for tool in tools}
+            if allowlist is not None:
+                missing_from_server = sorted(set(allowlist) - discovered_names)
+                if missing_from_server:
+                    self.failed_servers[name] = (
+                        "allowlisted tool(s) not exposed by server: "
+                        f"{missing_from_server}"
+                    )
+                    logger.error(
+                        "MCP server %s: allowlisted tool(s) not exposed by server: %s",
+                        name, missing_from_server,
+                    )
+                    continue
             added = 0
             for tool in tools:
                 if allowlist is not None and tool.name not in allowlist:
@@ -453,6 +663,10 @@ class MCPClientManager:
                 logger.info("  Discovered tool: %s", tool.name)
                 added += 1
             logger.info("MCP server %s: discovered %d tools", name, added)
+
+        if self.failed_servers:
+            detail = "; ".join(f"{name}: {reason}" for name, reason in sorted(self.failed_servers.items()))
+            raise RuntimeError(f"MCP tool discovery failed: {detail}")
 
     def _register_static_tools(self, server_name: str, server_config: dict) -> int:
         """Register statically declared tool metadata for a server.
@@ -515,6 +729,26 @@ class MCPClientManager:
         workspace_id: str | None = None,
         execution_context: dict | None = None,
     ) -> str:
+        result = await self.call_tool_with_metrics(
+            tool_name,
+            arguments,
+            tokens,
+            allowed_tools=allowed_tools,
+            workspace_id=workspace_id,
+            execution_context=execution_context,
+        )
+        return result.output
+
+    async def call_tool_with_metrics(
+        self,
+        tool_name: str,
+        arguments: dict,
+        tokens: dict[str, str] | None = None,
+        *,
+        allowed_tools: set[str] | frozenset[str] | None = None,
+        workspace_id: str | None = None,
+        execution_context: dict | None = None,
+    ) -> MCPToolCallResult:
         """Execute a tool call via a per-request MCP server instance.
 
         Spawns a fresh process, calls the tool, kills the process.
@@ -540,6 +774,9 @@ class MCPClientManager:
             ValueError: ``tool_name`` is not a known tool.
             TimeoutError: the call exceeded ``TOOL_CALL_TIMEOUT``.
         """
+        import time
+
+        total_started = time.monotonic()
         if tool_name not in self.tool_server_map:
             raise ValueError(f"Unknown tool: {tool_name}")
 
@@ -562,6 +799,27 @@ class MCPClientManager:
         env_override = dict(server_config.get("env", {}))
         if server_config.get("requires_auth") and tokens:
             env_override.update(tokens)
+        # Expand ${TOKEN_NAME} placeholders inside env values so a server
+        # config can rename a token to the env var its third-party child
+        # process expects (e.g. PBI_MODELING_MCP_ACCESS_TOKEN ->
+        # ${POWERBI_API_TOKEN}). Falls back to os.environ for non-secret
+        # placeholders, so docker-compose / .env values still flow through.
+        if env_override:
+            substitutions: dict[str, str] = {}
+            if isinstance(tokens, dict):
+                substitutions.update({k: str(v) for k, v in tokens.items() if v is not None})
+            for k in os.environ:
+                substitutions.setdefault(k, os.environ[k])
+            expanded: dict[str, str] = {}
+            for key, value in env_override.items():
+                if isinstance(value, str) and "${" in value:
+                    new_value = value
+                    for var_name, var_value in substitutions.items():
+                        new_value = new_value.replace(f"${{{var_name}}}", var_value)
+                    expanded[key] = new_value
+                else:
+                    expanded[key] = value
+            env_override = expanded
         env_override.update({
             "AGENTHUB_REQUEST_ID": get_request_id(),
             "AGENTHUB_SESSION_ID": get_session_id(),
@@ -569,14 +827,19 @@ class MCPClientManager:
             "AGENTHUB_TOOL_NAME": tool_name,
         })
         env_override.update(_execution_context_env(execution_context))
+        _validate_delegated_token_for_mutation(tool_name, server_config, env_override)
 
+        start_started = time.monotonic()
         session, stack = await self._start_server(server_config, env_override=env_override)
+        mcp_process_startup_ms = int((time.monotonic() - start_started) * 1000)
         try:
             timeout_s = _timeout_for_tool(tool_name)
+            tool_started = time.monotonic()
             result = await asyncio.wait_for(
                 session.call_tool(tool_name, arguments),
                 timeout=timeout_s,
             )
+            mcp_tool_execution_ms = int((time.monotonic() - tool_started) * 1000)
             # Flatten MCP result content into a string
             parts = []
             for content in result.content:
@@ -584,7 +847,15 @@ class MCPClientManager:
                     parts.append(content.text)
                 else:
                     parts.append(str(content))
-            return "\n".join(parts)
+            output = "\n".join(parts)
+            return MCPToolCallResult(
+                output=output,
+                latency_breakdown_ms={
+                    "mcpProcessStartupMs": mcp_process_startup_ms,
+                    "mcpToolExecutionMs": mcp_tool_execution_ms,
+                    "mcpDispatchTotalMs": int((time.monotonic() - total_started) * 1000),
+                },
+            )
         except TimeoutError as e:
             raise TimeoutError(f"Tool {tool_name} timed out after {timeout_s}s") from e
         finally:
@@ -695,6 +966,7 @@ class MCPClientManager:
             command=server_config["command"],
             args=server_config.get("args", []),
             env=merged_env,
+            cwd=server_config.get("cwd"),
         )
 
         stack = AsyncExitStack()

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { PublicLogCategory } from "../../src/components/AgentHub/mission/events";
 import type { LogEntry } from "../../src/components/AgentHub/mission/missionReducer";
-import { logCategoryIncludedInView, logVisibleInCategory } from "../../src/components/AgentHub/mission/logVisibility";
+import { isHighSignalLog, logCategoryIncludedInView, logVisibleInCategory } from "../../src/components/AgentHub/mission/logVisibility";
 
 function entry(logCategory: PublicLogCategory, overrides: Partial<LogEntry> = {}): LogEntry {
     return {
@@ -17,22 +17,22 @@ function entry(logCategory: PublicLogCategory, overrides: Partial<LogEntry> = {}
 }
 
 describe("mission log visibility", () => {
-    it("treats public log categories as cumulative visibility levels", () => {
+    it("includes every public log category in every view", () => {
         expect(logCategoryIncludedInView("high_level", "high_level")).toBe(true);
-        expect(logCategoryIncludedInView("detailed", "high_level")).toBe(false);
+        expect(logCategoryIncludedInView("detailed", "high_level")).toBe(true);
         expect(logCategoryIncludedInView("high_level", "detailed")).toBe(true);
         expect(logCategoryIncludedInView("detailed", "detailed")).toBe(true);
-        expect(logCategoryIncludedInView("diagnostic", "detailed")).toBe(false);
+        expect(logCategoryIncludedInView("diagnostic", "detailed")).toBe(true);
         expect(logCategoryIncludedInView("high_level", "diagnostic")).toBe(true);
         expect(logCategoryIncludedInView("detailed", "diagnostic")).toBe(true);
         expect(logCategoryIncludedInView("diagnostic", "diagnostic")).toBe(true);
     });
 
-    it("does not promote high-signal diagnostic failures into higher-level views", () => {
+    it("shows diagnostic failures without category promotion rules", () => {
         const diagnosticFailure = entry("diagnostic", { level: "error", message: "Tool failed", kind: "error" });
 
-        expect(logVisibleInCategory(diagnosticFailure, "high_level")).toBe(false);
-        expect(logVisibleInCategory(diagnosticFailure, "detailed")).toBe(false);
+        expect(logVisibleInCategory(diagnosticFailure, "high_level")).toBe(true);
+        expect(logVisibleInCategory(diagnosticFailure, "detailed")).toBe(true);
         expect(logVisibleInCategory(diagnosticFailure, "diagnostic")).toBe(true);
     });
 
@@ -44,11 +44,23 @@ describe("mission log visibility", () => {
         expect(logVisibleInCategory(highLevelEntry, "diagnostic")).toBe(true);
     });
 
-    it("shows detailed entries in detailed and diagnostic views only", () => {
+    it("shows detailed entries in every public view", () => {
         const detailedEntry = entry("detailed");
 
-        expect(logVisibleInCategory(detailedEntry, "high_level")).toBe(false);
+        expect(logVisibleInCategory(detailedEntry, "high_level")).toBe(true);
         expect(logVisibleInCategory(detailedEntry, "detailed")).toBe(true);
         expect(logVisibleInCategory(detailedEntry, "diagnostic")).toBe(true);
+    });
+
+    it("treats rollup and steering entries as high-signal summaries", () => {
+        const rollup = entry("high_level", { kind: "rollup", message: "Created report receipt" });
+        const steering = entry("high_level", { kind: "steering", level: "warn", message: "Steering queued" });
+        const quietDiagnostic = entry("diagnostic", { kind: "diagnostic", message: "Baseline captured" });
+        const noisyDiagnostic = entry("diagnostic", { kind: "diagnostic", level: "error", message: "New issue" });
+
+        expect(isHighSignalLog(rollup)).toBe(true);
+        expect(isHighSignalLog(steering)).toBe(true);
+        expect(isHighSignalLog(quietDiagnostic)).toBe(false);
+        expect(isHighSignalLog(noisyDiagnostic)).toBe(true);
     });
 });

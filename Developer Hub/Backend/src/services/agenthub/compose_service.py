@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 import uuid
 from typing import Any
@@ -591,10 +592,14 @@ class ComposeService:
         budget_raw = payload.get("budget") or {}
         if not isinstance(budget_raw, dict):
             budget_raw = {}
+        default_wallclock_s = int(os.environ.get("AGENTHUB_DEFAULT_MAX_WALLCLOCK_SECONDS", "600"))
+        requested_wallclock_s = int(
+            budget_raw.get("maxWallclockS") or budget_raw.get("max_wallclock_s") or default_wallclock_s
+        )
         budget = Budget(
             max_turns=int(budget_raw.get("maxTurns") or budget_raw.get("max_turns") or 20),
             max_tool_calls=int(budget_raw.get("maxToolCalls") or budget_raw.get("max_tool_calls") or 100),
-            max_wallclock_s=int(budget_raw.get("maxWallclockS") or budget_raw.get("max_wallclock_s") or 600),
+            max_wallclock_s=max(requested_wallclock_s, default_wallclock_s),
             require_approvals=bool(
                 budget_raw.get("requireApprovals")
                 if budget_raw.get("requireApprovals") is not None

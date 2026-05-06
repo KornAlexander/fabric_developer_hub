@@ -261,7 +261,8 @@ async def lifespan(app: FastAPI):
         # fatal — it would only fail on a code/config bug, and silently
         # masking it (as a previous version did) hid an IndexError that
         # broke MCP entirely in production. Per-server discovery failures
-        # are still tolerated inside ``discover_tools``.
+        # are also fatal: agents must never accept missions with a partial
+        # MCP tool surface.
         try:
             mcp_config_path = os.path.join(os.path.dirname(__file__), "mcp_servers.json")
             mcp_manager: MCPClientManager | None = MCPClientManager(mcp_config_path)
@@ -271,39 +272,34 @@ async def lifespan(app: FastAPI):
 
         # Narrow for the type checker: construction succeeded above, so
         # ``mcp_manager`` is definitely non-None entering the discovery block.
-        # (It may be set back to None in the except clause below on failure.)
         assert mcp_manager is not None
-        try:
-            await mcp_manager.discover_tools()
-            set_mcp_manager(mcp_manager)
-            tool_count = len(mcp_manager.tools)
-            logger.info(
-                "\u2713 MCP client initialized: %d tools from %d servers",
-                tool_count, len(mcp_manager.config.get('servers', {})),
-            )
-            # Register tool-runtime policies and warn about any MCP tool
-            # that was discovered but has no policy entry — the runtime
-            # denies unregistered tools by default.
-            from services.agenthub import tool_policies
-            tool_policies.register_all()
-            tool_policies.warn_about_unregistered(list(mcp_manager.tools.keys()))
+        await mcp_manager.discover_tools()
+        set_mcp_manager(mcp_manager)
+        tool_count = len(mcp_manager.tools)
+        logger.info(
+            "\u2713 MCP client initialized: %d tools from %d servers",
+            tool_count, len(mcp_manager.config.get('servers', {})),
+        )
+        # Register tool-runtime policies and warn about any MCP tool
+        # that was discovered but has no policy entry — the runtime
+        # denies unregistered tools by default.
+        from services.agenthub import tool_policies
+        tool_policies.register_all()
+        tool_policies.require_all_registered(list(mcp_manager.tools.keys()))
 
-            # Cross-validate the capability catalog (skills → tools,
-            # agents → skills) against the just-discovered MCP tool set.
-            # Issues are logged, not fatal — see capability_registry.py.
-            from services.agenthub import capability_registry
-            from services.agenthub.agent_registry import SKILLS, _AGENT_SKILLS
-            capability_issues = capability_registry.validate_catalog(
-                SKILLS, _AGENT_SKILLS, mcp_manager,
-            )
-            capability_registry.log_issues(capability_issues)
-            logger.info(
-                "\u2713 Capability catalog validated: %d skills, %d agents, %d issues",
-                len(SKILLS), len(_AGENT_SKILLS), len(capability_issues),
-            )
-        except Exception:
-            logger.warning("\u26a0 MCP tool discovery failed (chat will work without tools)", exc_info=True)
-            mcp_manager = None
+        # Cross-validate the capability catalog (skills → tools,
+        # agents → skills) against the just-discovered MCP tool set.
+        from services.agenthub import capability_registry
+        from services.agenthub.agent_registry import SKILLS, _AGENT_SKILLS
+        capability_issues = capability_registry.validate_catalog(
+            SKILLS, _AGENT_SKILLS, mcp_manager,
+        )
+        capability_registry.log_issues(capability_issues)
+        capability_registry.raise_for_issues(capability_issues)
+        logger.info(
+            "\u2713 Capability catalog validated: %d skills, %d agents, %d issues",
+            len(SKILLS), len(_AGENT_SKILLS), len(capability_issues),
+        )
 
         # Initialize AgentHub database
         try:
@@ -320,6 +316,37 @@ async def lifespan(app: FastAPI):
         if mcp_manager:
             get_orchestrator_engine().configure(mcp_manager, _get_copilot_token, _acquire_mcp_tokens)
             logger.info("\u2713 Orchestrator engine configured")
+            try:
+                from services.mcp.mission_runtime_manager import cleanup_mission_mcp_runtimes
+
+                cleanup = await cleanup_mission_mcp_runtimes(active_session_ids=set())
+                if cleanup.get("removed") or cleanup.get("errors"):
+                    logger.info(
+                        "\u2713 Mission MCP runtime startup sweep removed=%s skipped=%s errors=%s",
+                        cleanup.get("removed"),
+                        cleanup.get("skipped"),
+                        len(cleanup.get("errors") or []),
+                    )
+            except Exception:
+                logger.warning("\u26a0 Mission MCP runtime startup sweep failed", exc_info=True)
+        if os.environ.get("AGENT_ISOLATION", "inprocess").lower() == "container":
+            try:
+                from services.agenthub.drivers.container_backend import DockerBackend, warm_pool_target_from_env
+
+                warm_target = warm_pool_target_from_env()
+                if warm_target > 0:
+                    warm_result = await DockerBackend().prewarm_from_env()
+                    logger.info(
+                        "\u2713 Agent container warm pool ready: target=%s ready=%s created=%s errors=%s",
+                        warm_result.get("target"),
+                        warm_result.get("ready"),
+                        warm_result.get("created"),
+                        len(warm_result.get("errors") or []),
+                    )
+                else:
+                    logger.info("Agent container warm pool disabled")
+            except Exception:
+                logger.warning("\u26a0 Agent container warm pool prewarm failed", exc_info=True)
         # Pre-warm the OpenID Connect configuration so the first
         # authenticated request doesn't block on a ~3s network call to
         # login.microsoftonline.com. The cache lasts 1 hour; background
@@ -375,6 +402,19 @@ async def lifespan(app: FastAPI):
         logger.warning("\u26a0 Service registry cleanup timed out")
     except Exception:
         logger.exception("Error during service registry cleanup")
+
+    try:
+        from services.agenthub.drivers.container_backend import DockerBackend
+
+        cleanup = await DockerBackend().cleanup_warm_pool()
+        if cleanup.get("removed") or cleanup.get("errors"):
+            logger.info(
+                "\u2713 Agent container warm pool cleanup removed=%s errors=%s",
+                cleanup.get("removed"),
+                len(cleanup.get("errors") or []),
+            )
+    except Exception:
+        logger.warning("\u26a0 Agent container warm pool cleanup failed", exc_info=True)
 
     shutdown_duration = time.time() - shutdown_start_time
     logger.info("\u2713 Application shutdown completed in %.2fs", shutdown_duration)
@@ -549,6 +589,7 @@ def create_app() -> FastAPI:
             "Accept",
             "X-Fabric-Token",
             "X-Request-ID",
+            "X-AgentHub-Session-ID",
         ],
         expose_headers=["X-Request-ID", "X-Process-Time"],
         max_age=600,

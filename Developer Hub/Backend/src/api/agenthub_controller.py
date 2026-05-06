@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import re
 import time
 import uuid
 from datetime import UTC, datetime
@@ -21,7 +23,9 @@ from domain.constants.workload_scopes import WorkloadScopes
 from domain.exceptions.exceptions import AuthenticationException
 from domain.models.agent_models import (
     AddAgentRequest,
+    AgentAssignment,
     AgentConfigRequest,
+    AgentStatus,
     ApprovePlanRequest,
     ComposeRequest,
     CreateJobRequest,
@@ -38,16 +42,27 @@ from services.agenthub.attachments import classify_attachments
 from services.agenthub.compose_models import rank_compose_models
 from services.agenthub.download_tokens import consume_token, issue_token
 from services.agenthub.orchestrator_engine import get_orchestrator_engine
+from services.agenthub.pi_backend_harness import build_pi_session_context
 from services.agenthub.rate_limit import RateLimitExceeded
 from services.agenthub.rate_limit import acquire as rate_limit_acquire
 from services.auth.authentication import get_authentication_service
 from services.configuration_service import get_configuration_service
 from services.correlation import set_session_id, set_user_id
+from services.logging_categories import log_extra
 from services.observability import bounded_text, collection_counts, stable_digest
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["AgentHub"])
+
+
+def _default_max_wallclock_seconds() -> int:
+    raw = os.environ.get("AGENTHUB_DEFAULT_MAX_WALLCLOCK_SECONDS", "600")
+    try:
+        seconds = int(raw)
+    except (TypeError, ValueError):
+        seconds = 600
+    return max(10, min(7200, seconds))
 
 
 # Per-(user, workspace_id) cache of the workspace-preview payload.
@@ -59,12 +74,21 @@ router = APIRouter(prefix="/api", tags=["AgentHub"])
 # historical consumer (session snapshot) can show "as-of HH:MM:SS".
 _WORKSPACE_ITEMS_TTL_SEC = 60
 _workspace_items_cache: dict[tuple[str, str], tuple[float, str, list[dict]]] = {}
+
+
+class _WorkspacePreviewUnavailable(Exception):
+    def __init__(self, status_code: int, detail: str) -> None:
+        super().__init__(detail)
+        self.status_code = status_code
+        self.detail = detail
 _FABRIC_API_BASE = "https://api.fabric.microsoft.com/v1"
 _FABRIC_DEFINITION_COLLECTIONS = {
     "notebook": "notebooks",
     "report": "reports",
     "semanticmodel": "semanticModels",
 }
+_MISSION_STATUS_LOG_TTL_SEC = 30.0
+_mission_status_log_cache: dict[str, tuple[float, str]] = {}
 
 
 # ── Auth helpers ─────────────────────────────────────────────────────
@@ -161,6 +185,9 @@ async def require_user(request: Request) -> AuthorizationContext | None:
     if not fabric_token:
         if config.is_production():
             raise HTTPException(401, "Missing Fabric bearer token")
+        return None
+
+    if not config.is_production() and fabric_token == "e2e-fabric-token":
         return None
 
     try:
@@ -797,6 +824,685 @@ async def query_workspace_semantic_model(
         return {"source": "powerbi_executeQueries", "rows": rows}
 
 
+# ── PBI Fixer proxy ──────────────────────────────────────────────────
+
+class PbiFixerProxyRequest(BaseModel):
+    """Forward an authenticated call to a Fabric / Power BI REST endpoint.
+
+    The PBI Fixer iframe cannot acquire a Fabric- or Power BI-audience
+    token directly (Fabric workload SDK only issues workload-audience
+    tokens). This proxy does the OBO exchange server-side and forwards
+    the call with the appropriate token, scoped per ``api`` field:
+
+    - ``api="fabric"`` → token aud ``api.fabric.microsoft.com``
+    - ``api="pbi"``    → token aud ``analysis.windows.net/powerbi/api``
+
+    ``path`` is the URL portion **after** the API root, including a
+    leading slash. Example: ``"/groups/{ws}/datasets/{ds}/tables"``.
+    """
+
+    api: str = Field(..., pattern="^(fabric|pbi)$")
+    path: str
+    method: str = Field("GET", pattern="^(GET|POST|PUT|PATCH|DELETE)$")
+    body: dict | list | None = None
+
+
+_FABRIC_API_ROOT = "https://api.fabric.microsoft.com/v1"
+_PBI_API_ROOT = "https://api.powerbi.com/v1.0/myorg"
+
+
+@router.post("/pbi-fixer/proxy")
+async def pbi_fixer_proxy(
+    payload: PbiFixerProxyRequest,
+    request: Request,
+    ctx: AuthorizationContext | None = Depends(require_user),
+):
+    """Proxy a single Fabric / Power BI REST call using the user's OBO token."""
+    user_id = _user_key_from_context(ctx)
+    _rate_limit(user_id, "pbi_fixer_proxy")
+
+    mcp_tokens = await _mcp_tokens(request)
+    if not mcp_tokens:
+        raise HTTPException(400, "Fabric token required")
+
+    if payload.api == "fabric":
+        token = mcp_tokens.get("FABRIC_API_TOKEN")
+        root = _FABRIC_API_ROOT
+    else:
+        token = mcp_tokens.get("PBI_API_TOKEN") or mcp_tokens.get("FABRIC_API_TOKEN")
+        root = _PBI_API_ROOT
+
+    if not token:
+        raise HTTPException(401, f"No OBO token available for api={payload.api}")
+
+    if not payload.path.startswith("/"):
+        raise HTTPException(400, "path must start with '/'")
+
+    url = f"{root}{payload.path}"
+
+    import httpx
+    location: str | None = None
+    async with httpx.AsyncClient(timeout=60.0, follow_redirects=False) as client:
+        try:
+            resp = await client.request(
+                payload.method,
+                url,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+                json=payload.body if payload.body is not None else None,
+            )
+        except httpx.HTTPError as exc:
+            raise HTTPException(502, f"Upstream request failed: {exc}") from exc
+
+        # Some long-running Fabric ops (getDefinition for reports/models)
+        # return 202 with a Location header pointing at an LRO. Follow it
+        # transparently so the frontend doesn't need to know about polling.
+        attempts = 0
+        while resp.status_code == 202 and attempts < 30:
+            attempts += 1
+            location = resp.headers.get("Location") or resp.headers.get("Operation-Location")
+            if not location:
+                break
+            try:
+                retry_after = float(resp.headers.get("Retry-After", "2"))
+            except ValueError:
+                retry_after = 2.0
+            await asyncio.sleep(min(retry_after, 5.0))
+            try:
+                resp = await client.get(
+                    location,
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+            except httpx.HTTPError as exc:
+                raise HTTPException(502, f"LRO poll failed: {exc}") from exc
+
+        # Once the LRO completes, Fabric typically returns 200 on the
+        # status URL but the body is the operation status — the actual
+        # result lives at f"{location}/result". Fetch that if the body
+        # looks like an LRO status (status: Succeeded). Surface
+        # status: Failed as an HTTP error so the frontend can react —
+        # without this, write operations like updateDefinition appear
+        # to "succeed" (HTTP 200) while having actually failed inside
+        # Fabric.
+        if resp.status_code == 200 and resp.headers.get("content-type", "").startswith("application/json"):
+            try:
+                maybe_status = resp.json()
+            except Exception:
+                maybe_status = None
+            if isinstance(maybe_status, dict) and "status" in maybe_status:
+                op_status = maybe_status.get("status")
+                if op_status == "Failed":
+                    err = maybe_status.get("error") or {}
+                    err_code = err.get("errorCode", "")
+                    err_msg = err.get("message", "")
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"Fabric LRO failed [{err_code}]: {err_msg}",
+                    )
+                if (
+                    op_status in ("Succeeded", "Completed")
+                    and "result" not in maybe_status
+                    and location
+                ):
+                    # Try fetching the result endpoint. Some write
+                    # operations (e.g. updateDefinition) have no result
+                    # body — Fabric responds 400 / OperationHasNoResult.
+                    # Treat that as success and fall back to the status
+                    # body so the call does not appear to fail.
+                    try:
+                        result_resp = await client.get(
+                            f"{location.rstrip('/')}/result",
+                            headers={"Authorization": f"Bearer {token}"},
+                        )
+                    except httpx.HTTPError as exc:
+                        raise HTTPException(502, f"LRO result fetch failed: {exc}") from exc
+                    if result_resp.status_code < 400:
+                        resp = result_resp
+                    else:
+                        # 400 OperationHasNoResult or similar → keep
+                        # the Succeeded status body as the response.
+                        pass
+
+    # Surface non-2xx as the same status so the frontend can react. Body
+    # is forwarded verbatim (text) so callers see the raw API error.
+    if resp.status_code >= 400:
+        raise HTTPException(
+            status_code=resp.status_code,
+            detail=f"{payload.method} {url}: {resp.text}",
+        )
+
+    # 204/empty body → return {}
+    if not resp.content:
+        return {}
+    try:
+        return resp.json()
+    except Exception:
+        return {"raw": resp.text}
+
+
+# ── PBI Fixer: Translations (WS-G) ──────────────────────────────────
+# Auto-translate proposal + apply endpoints. The propose endpoint
+# generates translation candidates for a batch of source strings
+# against one or more target cultures. The apply endpoint is scoped
+# out for this pass — see WS-N — and returns 501 so the frontend can
+# surface a clear "not yet enabled" message.
+
+
+class TranslationSourceItem(BaseModel):
+    objectType: str = Field(..., description="Table | Column | Measure | Hierarchy | Description")
+    objectPath: str = Field(..., description="'Sales' or 'Sales[Amount]' etc.")
+    sourceCaption: str = Field(..., description="Source string to translate")
+    existingCaption: str | None = None
+
+
+class TranslationProposeRequest(BaseModel):
+    workspaceId: str
+    datasetId: str
+    targetCultures: list[str] = Field(..., min_length=1)
+    sourceCulture: str | None = "en-US"
+    sourceItems: list[TranslationSourceItem] = Field(default_factory=list)
+    glossary: dict[str, str] | None = None
+
+
+class TranslationProposalItem(BaseModel):
+    objectType: str
+    objectPath: str
+    sourceCaption: str
+    existingCaption: str | None = None
+    proposedCaption: str
+    proposedDescription: str | None = None
+
+
+class TranslationProposeResponse(BaseModel):
+    culture: str
+    items: list[TranslationProposalItem]
+
+
+# A tiny built-in glossary keeps propose output deterministic for tests
+# and offline dev. Real LLM-backed translation is deferred to WS-N; the
+# endpoint shape is stable so the client doesn't need to change.
+_BUILTIN_GLOSSARY: dict[str, dict[str, str]] = {
+    "de-DE": {
+        "sales": "Umsatz", "revenue": "Umsatz", "product": "Produkt",
+        "products": "Produkte", "customer": "Kunde", "customers": "Kunden",
+        "order": "Bestellung", "orders": "Bestellungen", "date": "Datum",
+        "amount": "Betrag", "total": "Summe", "quantity": "Menge",
+        "name": "Name", "category": "Kategorie", "region": "Region",
+        "country": "Land", "city": "Stadt", "year": "Jahr",
+        "month": "Monat", "day": "Tag", "price": "Preis", "cost": "Kosten",
+        "profit": "Gewinn", "store": "Filiale", "employee": "Mitarbeiter",
+    },
+    "fr-FR": {
+        "sales": "Ventes", "revenue": "Chiffre d'affaires", "product": "Produit",
+        "products": "Produits", "customer": "Client", "customers": "Clients",
+        "order": "Commande", "orders": "Commandes", "date": "Date",
+        "amount": "Montant", "total": "Total", "quantity": "Quantité",
+        "name": "Nom", "category": "Catégorie", "region": "Région",
+        "country": "Pays", "city": "Ville", "year": "Année",
+        "month": "Mois", "day": "Jour", "price": "Prix", "cost": "Coût",
+        "profit": "Bénéfice", "store": "Magasin", "employee": "Employé",
+    },
+    "es-ES": {
+        "sales": "Ventas", "revenue": "Ingresos", "product": "Producto",
+        "products": "Productos", "customer": "Cliente", "customers": "Clientes",
+        "order": "Pedido", "orders": "Pedidos", "date": "Fecha",
+        "amount": "Importe", "total": "Total", "quantity": "Cantidad",
+        "name": "Nombre", "category": "Categoría", "region": "Región",
+        "country": "País", "city": "Ciudad", "year": "Año",
+        "month": "Mes", "day": "Día", "price": "Precio", "cost": "Coste",
+        "profit": "Beneficio", "store": "Tienda", "employee": "Empleado",
+    },
+}
+
+
+def _translate_word(word: str, culture: str, glossary: dict[str, str] | None) -> str:
+    """Translate a single word using the user-supplied glossary first,
+    then the built-in glossary. Falls back to the original word. Case
+    sensitivity is preserved on the first character."""
+    if not word:
+        return word
+    key = word.lower()
+    # User-supplied glossary takes priority (already in target culture).
+    if glossary and key in {k.lower() for k in glossary.keys()}:
+        # Case-insensitive lookup
+        for gk, gv in glossary.items():
+            if gk.lower() == key:
+                translated = gv
+                break
+        else:
+            translated = word
+    else:
+        translated = _BUILTIN_GLOSSARY.get(culture, {}).get(key, word)
+    # Preserve leading capitalization
+    if word[:1].isupper():
+        translated = translated[:1].upper() + translated[1:]
+    return translated
+
+
+def _translate_caption(caption: str, culture: str, glossary: dict[str, str] | None) -> str:
+    """Split caption into tokens (keeping spaces / non-letter runs) and
+    translate each word via the glossary chain."""
+    import re
+    # Split on word boundaries but preserve separators.
+    parts = re.split(r"(\W+)", caption)
+    return "".join(
+        _translate_word(p, culture, glossary) if p.isalpha() else p
+        for p in parts
+    )
+
+
+@router.post("/pbi-fixer/translations/propose", response_model=TranslationProposeResponse)
+async def pbi_fixer_translations_propose(
+    payload: TranslationProposeRequest,
+    request: Request,
+    ctx: AuthorizationContext | None = Depends(require_user),
+):
+    """Generate a translation proposal for the given source items.
+
+    For this pass, translation is done via a small deterministic
+    glossary (see ``_BUILTIN_GLOSSARY``). The LLM-backed path described
+    in WS-G will be wired later; the response shape is stable so the
+    frontend review grid doesn't change when that lands.
+    """
+    user_id = _user_key_from_context(ctx)
+    _rate_limit(user_id, "pbi_fixer_translations_propose")
+
+    if not payload.sourceItems:
+        raise HTTPException(400, "sourceItems is required — pass the model objects to translate")
+    if len(payload.targetCultures) != 1:
+        # Multi-culture is a UI affordance — backend translates one
+        # culture per call to keep responses small and paginatable.
+        raise HTTPException(400, "targetCultures must contain exactly one culture per call")
+
+    culture = payload.targetCultures[0]
+    glossary = payload.glossary or {}
+
+    items: list[TranslationProposalItem] = []
+    for src in payload.sourceItems:
+        proposed = _translate_caption(src.sourceCaption, culture, glossary)
+        items.append(TranslationProposalItem(
+            objectType=src.objectType,
+            objectPath=src.objectPath,
+            sourceCaption=src.sourceCaption,
+            existingCaption=src.existingCaption,
+            proposedCaption=proposed,
+        ))
+
+    return TranslationProposeResponse(culture=culture, items=items)
+
+
+class TranslationApplyRequest(BaseModel):
+    workspaceId: str
+    datasetId: str
+    culture: str
+    items: list[TranslationProposalItem]
+
+
+@router.post("/pbi-fixer/translations/apply")
+async def pbi_fixer_translations_apply(
+    payload: TranslationApplyRequest,
+    request: Request,
+    ctx: AuthorizationContext | None = Depends(require_user),
+):
+    """Apply accepted translations to a semantic model.
+
+    Implementation strategy: round-trip the model TMDL definition via
+    Fabric's ``getDefinition`` / ``updateDefinition`` REST. This avoids
+    needing an XMLA / sempy-labs bridge while still producing the same
+    ``ObjectTranslation`` rows that XMLA writes would produce. Steps:
+
+    1. Pull the model definition (LRO).
+    2. Find or create ``definition/cultures/<culture>.tmdl``.
+    3. Parse the existing culture body, merge the requested items into
+       its ``translations`` block (preserving any unrelated entries +
+       linguisticMetadata), and re-serialise deterministically.
+    4. POST ``updateDefinition`` with the patched parts (LRO).
+    """
+    import base64
+    import httpx
+
+    from services.agenthub.tmdl_translations import (
+        ApplyItem,
+        empty_culture,
+        merge_items,
+        parse_culture,
+        serialize_culture,
+    )
+
+    user_id = _user_key_from_context(ctx)
+    _rate_limit(user_id, "pbi_fixer_translations_apply")
+
+    if not payload.items:
+        raise HTTPException(400, "items is required")
+    if not payload.culture or not re.match(r"^[a-zA-Z]{2,3}(-[A-Za-z0-9]+)*$", payload.culture):
+        raise HTTPException(400, "culture must be a valid culture code, e.g. 'de-DE'")
+
+    mcp_tokens = await _mcp_tokens(request)
+    if not mcp_tokens:
+        raise HTTPException(400, "Fabric token required")
+    fabric_token = mcp_tokens.get("FABRIC_API_TOKEN")
+    if not fabric_token:
+        raise HTTPException(401, "No Fabric OBO token available")
+
+    base = f"{_FABRIC_API_ROOT}/workspaces/{payload.workspaceId}/semanticModels/{payload.datasetId}"
+
+    async def _follow_lro(client: httpx.AsyncClient, resp: httpx.Response) -> httpx.Response:
+        attempts = 0
+        while resp.status_code == 202 and attempts < 30:
+            attempts += 1
+            location = resp.headers.get("Location") or resp.headers.get("Operation-Location")
+            if not location:
+                break
+            try:
+                retry_after = float(resp.headers.get("Retry-After", "2"))
+            except ValueError:
+                retry_after = 2.0
+            await asyncio.sleep(min(retry_after, 5.0))
+            resp = await client.get(location, headers={"Authorization": f"Bearer {fabric_token}"})
+        # If the LRO finished with a status body, fetch /result if the
+        # operation succeeded; treat result-not-available as success.
+        if (
+            resp.status_code == 200
+            and resp.headers.get("content-type", "").startswith("application/json")
+        ):
+            try:
+                body = resp.json()
+            except Exception:
+                body = None
+            if isinstance(body, dict) and body.get("status") == "Failed":
+                err = body.get("error") or {}
+                raise HTTPException(
+                    502,
+                    f"Fabric LRO failed [{err.get('errorCode', '')}]: {err.get('message', '')}",
+                )
+            if (
+                isinstance(body, dict)
+                and body.get("status") in ("Succeeded", "Completed")
+                and "definition" not in body
+            ):
+                location = resp.url and str(resp.url) or location
+                try:
+                    rr = await client.get(
+                        f"{location.rstrip('/')}/result",
+                        headers={"Authorization": f"Bearer {fabric_token}"},
+                    )
+                    if rr.status_code < 400:
+                        resp = rr
+                except httpx.HTTPError:
+                    pass
+        return resp
+
+    async with httpx.AsyncClient(timeout=120.0, follow_redirects=False) as client:
+        # 1. getDefinition (TMDL)
+        try:
+            resp = await client.post(
+                f"{base}/getDefinition?format=TMDL",
+                headers={
+                    "Authorization": f"Bearer {fabric_token}",
+                    "Content-Type": "application/json",
+                },
+                json={},
+            )
+        except httpx.HTTPError as exc:
+            raise HTTPException(502, f"getDefinition failed: {exc}") from exc
+        resp = await _follow_lro(client, resp)
+        if resp.status_code >= 400:
+            raise HTTPException(resp.status_code, f"getDefinition: {resp.text}")
+        try:
+            def_body = resp.json()
+        except Exception as exc:
+            raise HTTPException(502, f"getDefinition returned non-JSON: {exc}") from exc
+
+        parts = (def_body.get("definition") or {}).get("parts") or []
+        if not parts:
+            raise HTTPException(502, "Semantic model definition has no parts")
+
+        culture_path = f"definition/cultures/{payload.culture}.tmdl"
+        # 2. Find or create the culture part
+        culture_part = next(
+            (p for p in parts if p.get("path") == culture_path),
+            None,
+        )
+        if culture_part is None:
+            text = ""
+            cm = empty_culture(payload.culture)
+        else:
+            try:
+                text = base64.b64decode(culture_part["payload"]).decode("utf-8")
+            except Exception as exc:
+                raise HTTPException(
+                    502, f"Failed to decode culture TMDL '{culture_path}': {exc}"
+                ) from exc
+            cm = parse_culture(text)
+            if not cm.culture:
+                cm.culture = payload.culture
+
+        # 3. Merge items
+        apply_items = [
+            ApplyItem(
+                object_type=it.objectType,
+                object_path=it.objectPath,
+                value=it.proposedCaption,
+                proposed_description=it.proposedDescription,
+            )
+            for it in payload.items
+        ]
+        touched = merge_items(cm, apply_items)
+        if touched == 0:
+            raise HTTPException(400, "No items had a recognisable object_type / object_path")
+
+        new_body = serialize_culture(cm)
+        new_payload_b64 = base64.b64encode(new_body.encode("utf-8")).decode("ascii")
+
+        new_parts = [{**p} for p in parts]
+        if culture_part is None:
+            new_parts.append(
+                {"path": culture_path, "payload": new_payload_b64, "payloadType": "InlineBase64"}
+            )
+        else:
+            for np in new_parts:
+                if np.get("path") == culture_path:
+                    np["payload"] = new_payload_b64
+                    np["payloadType"] = np.get("payloadType") or "InlineBase64"
+                    break
+
+        # 4. updateDefinition
+        try:
+            up = await client.post(
+                f"{base}/updateDefinition",
+                headers={
+                    "Authorization": f"Bearer {fabric_token}",
+                    "Content-Type": "application/json",
+                },
+                json={"definition": {"parts": new_parts}},
+            )
+        except httpx.HTTPError as exc:
+            raise HTTPException(502, f"updateDefinition failed: {exc}") from exc
+        up = await _follow_lro(client, up)
+        if up.status_code >= 400:
+            raise HTTPException(up.status_code, f"updateDefinition: {up.text}")
+
+    return {
+        "applied": touched,
+        "culture": payload.culture,
+        "createdCultureFile": culture_part is None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# WS-E v0.41 — generic Fixer apply endpoint
+# ---------------------------------------------------------------------------
+
+
+class FixerApplyRequest(BaseModel):
+    workspaceId: str
+    fixerId: str
+    scanOnly: bool = True
+    datasetId: str | None = None
+    reportId: str | None = None
+
+
+@router.post("/pbi-fixer/fixers/apply")
+async def pbi_fixer_fixers_apply(
+    payload: FixerApplyRequest,
+    request: Request,
+    ctx: AuthorizationContext | None = Depends(require_user),
+):
+    """Run a TS-port PBI fixer against a semantic model or report.
+
+    The handler registry lives in ``services.agenthub.pbi_fixer_handlers``
+    and each handler mutates the TMDL or PBIR JSON parts in place. We
+    follow the same Fabric ``getDefinition`` / ``updateDefinition``
+    LRO round-trip as ``pbi_fixer_translations_apply`` (v0.40).
+    """
+    import httpx
+
+    from services.agenthub.pbi_fixer_handlers import FIXER_HANDLERS
+
+    user_id = _user_key_from_context(ctx)
+    _rate_limit(user_id, "pbi_fixer_fixers_apply")
+
+    fx = FIXER_HANDLERS.get(payload.fixerId)
+    if not fx:
+        raise HTTPException(404, f"Unknown fixerId: {payload.fixerId}")
+    scope, handler = fx
+
+    if scope == "sm" and not payload.datasetId:
+        raise HTTPException(400, "datasetId required for semantic-model fixers")
+    if scope == "report" and not payload.reportId:
+        raise HTTPException(400, "reportId required for report fixers")
+
+    mcp_tokens = await _mcp_tokens(request)
+    if not mcp_tokens:
+        raise HTTPException(400, "Fabric token required")
+    fabric_token = mcp_tokens.get("FABRIC_API_TOKEN")
+    if not fabric_token:
+        raise HTTPException(401, "No Fabric OBO token available")
+
+    if scope == "sm":
+        base = (
+            f"{_FABRIC_API_ROOT}/workspaces/{payload.workspaceId}"
+            f"/semanticModels/{payload.datasetId}"
+        )
+        get_url = f"{base}/getDefinition?format=TMDL"
+    else:
+        base = (
+            f"{_FABRIC_API_ROOT}/workspaces/{payload.workspaceId}"
+            f"/reports/{payload.reportId}"
+        )
+        get_url = f"{base}/getDefinition"
+
+    async def _follow_lro(client: httpx.AsyncClient, resp: httpx.Response) -> httpx.Response:
+        attempts = 0
+        while resp.status_code == 202 and attempts < 30:
+            attempts += 1
+            location = resp.headers.get("Location") or resp.headers.get("Operation-Location")
+            if not location:
+                break
+            try:
+                retry_after = float(resp.headers.get("Retry-After", "2"))
+            except ValueError:
+                retry_after = 2.0
+            await asyncio.sleep(min(retry_after, 5.0))
+            resp = await client.get(location, headers={"Authorization": f"Bearer {fabric_token}"})
+        if (
+            resp.status_code == 200
+            and resp.headers.get("content-type", "").startswith("application/json")
+        ):
+            try:
+                body = resp.json()
+            except Exception:
+                body = None
+            if isinstance(body, dict) and body.get("status") == "Failed":
+                err = body.get("error") or {}
+                raise HTTPException(
+                    502,
+                    f"Fabric LRO failed [{err.get('errorCode', '')}]: {err.get('message', '')}",
+                )
+            if (
+                isinstance(body, dict)
+                and body.get("status") in ("Succeeded", "Completed")
+                and "definition" not in body
+            ):
+                location = (resp.url and str(resp.url)) or location
+                try:
+                    rr = await client.get(
+                        f"{location.rstrip('/')}/result",
+                        headers={"Authorization": f"Bearer {fabric_token}"},
+                    )
+                    if rr.status_code < 400:
+                        resp = rr
+                except httpx.HTTPError:
+                    pass
+        return resp
+
+    async with httpx.AsyncClient(timeout=120.0, follow_redirects=False) as client:
+        try:
+            resp = await client.post(
+                get_url,
+                headers={
+                    "Authorization": f"Bearer {fabric_token}",
+                    "Content-Type": "application/json",
+                },
+                json={},
+            )
+        except httpx.HTTPError as exc:
+            raise HTTPException(502, f"getDefinition failed: {exc}") from exc
+        resp = await _follow_lro(client, resp)
+        if resp.status_code >= 400:
+            raise HTTPException(resp.status_code, f"getDefinition: {resp.text}")
+        try:
+            def_body = resp.json()
+        except Exception as exc:
+            raise HTTPException(502, f"getDefinition returned non-JSON: {exc}") from exc
+
+        parts = (def_body.get("definition") or {}).get("parts") or []
+        if not parts:
+            raise HTTPException(502, "Definition has no parts")
+
+        try:
+            result = handler(parts, payload.scanOnly)
+        except Exception as exc:
+            raise HTTPException(500, f"{payload.fixerId} handler failed: {exc}") from exc
+
+        applied = False
+        if not payload.scanOnly and result.findings:
+            try:
+                up = await client.post(
+                    f"{base}/updateDefinition",
+                    headers={
+                        "Authorization": f"Bearer {fabric_token}",
+                        "Content-Type": "application/json",
+                    },
+                    json={"definition": {"parts": result.parts}},
+                )
+            except httpx.HTTPError as exc:
+                raise HTTPException(502, f"updateDefinition failed: {exc}") from exc
+            up = await _follow_lro(client, up)
+            if up.status_code >= 400:
+                raise HTTPException(up.status_code, f"updateDefinition: {up.text}")
+            applied = True
+
+    return {
+        "fixerId": payload.fixerId,
+        "scope": scope,
+        "scanOnly": payload.scanOnly,
+        "applied": applied,
+        "findings": [
+            {
+                "objectPath": f.object_path,
+                "detail": f.detail,
+                "before": f.before,
+                "after": f.after,
+            }
+            for f in result.findings
+        ],
+        "log": result.log,
+    }
+
+
 async def _fetch_workspace_snapshot(
     user_id: str,
     workspace_id: str,
@@ -815,8 +1521,8 @@ async def _fetch_workspace_snapshot(
     """
     cache_key = (user_id, workspace_id)
     now = time.time()
+    cached = _workspace_items_cache.get(cache_key)
     if use_cache:
-        cached = _workspace_items_cache.get(cache_key)
         if cached and (now - cached[0]) < _WORKSPACE_ITEMS_TTL_SEC:
             return cached[2], cached[1]
 
@@ -826,20 +1532,24 @@ async def _fetch_workspace_snapshot(
     mgr = github_chat_controller._mcp_manager
 
     async def _call_items() -> list[dict]:
-        raw = await mgr.call_tool(
-            "fabric_list_items",
-            {"workspace_id": workspace_id},
-            mcp_tokens,
-            allowed_tools={"fabric_list_items"},
-            workspace_id=workspace_id,
-        )
+        try:
+            raw = await mgr.call_tool(
+                "fabric_list_items",
+                {"workspace_id": workspace_id},
+                mcp_tokens,
+                allowed_tools={"fabric_list_items"},
+                workspace_id=workspace_id,
+            )
+        except Exception as exc:
+            detail = str(exc) or "Failed to list items"
+            raise _WorkspacePreviewUnavailable(502, detail) from exc
         body = str(raw)
         try:
             data = json.loads(body)
         except Exception:
-            if "HTTP 40" in body:
-                raise HTTPException(400, body) from None
-            raise HTTPException(502, body or "Failed to list items") from None
+            status_code = 400 if "HTTP 40" in body else 502
+            detail = body or "Failed to list items"
+            raise _WorkspacePreviewUnavailable(status_code, detail) from None
         return data if isinstance(data, list) else []
 
     async def _call_folders() -> list[dict]:
@@ -863,6 +1573,26 @@ async def _fetch_workspace_snapshot(
 
     try:
         items_raw, folders_raw = await asyncio.gather(_call_items(), _call_folders())
+    except _WorkspacePreviewUnavailable as exc:
+        if not use_cache:
+            raise HTTPException(exc.status_code, exc.detail) from exc
+        if cached:
+            logger.warning(
+                "fabric workspace-preview using stale cache workspace=%s status=%s detail=%s",
+                workspace_id,
+                exc.status_code,
+                exc.detail[:300],
+            )
+            return cached[2], cached[1]
+        captured_at = datetime.now(UTC).isoformat()
+        _workspace_items_cache[cache_key] = (now, captured_at, [])
+        logger.warning(
+            "fabric workspace-preview degraded to empty snapshot workspace=%s status=%s detail=%s",
+            workspace_id,
+            exc.status_code,
+            exc.detail[:300],
+        )
+        return [], captured_at
     except HTTPException:
         raise
     except Exception as exc:
@@ -1207,6 +1937,114 @@ def _job_observability_digest(job: Job) -> str:
     })
 
 
+def _job_status_value(job: Job) -> str:
+    return job.status.value if hasattr(job.status, "value") else str(job.status)
+
+
+def _agent_status_value(agent) -> str:
+    status = getattr(agent, "status", "unknown")
+    return status.value if hasattr(status, "value") else str(status)
+
+
+def _agent_label(agent) -> str:
+    agent_id = getattr(agent, "agent_id", None) or getattr(agent, "session_id", None) or "agent"
+    role = getattr(agent, "role", None)
+    status = _agent_status_value(agent)
+    if role:
+        return f"{role}/{agent_id}:{status}"
+    return f"{agent_id}:{status}"
+
+
+def _mission_waiting_for(job: Job, *, live_execution: bool, persisted_total: int) -> str:
+    status = _job_status_value(job)
+    if live_execution:
+        running_agents = [agent for agent in (job.agents or []) if _agent_status_value(agent) in {"running", "waiting"}]
+        if running_agents:
+            return "live orchestrator/subagent activity"
+        return "live orchestrator heartbeat or next mission event"
+    if status in {"planned", "approved"}:
+        return "session is planned/approved and waiting for the run request to attach execution"
+    if status in {"completed", "failed", "cancelled", "canceled", "success", "error"}:
+        return "mission is terminal; only persisted replay is available"
+    if persisted_total > 0:
+        return "persisted mission replay; no live process is attached to this backend"
+    return "no live process and no persisted mission events; UI should stop live reconnects or restart the run"
+
+
+def _mission_next_action(job: Job, *, live_execution: bool, persisted_total: int) -> str:
+    status = _job_status_value(job)
+    if live_execution:
+        return "stream live mission events"
+    if status in {"completed", "failed", "cancelled", "canceled", "success", "error"}:
+        return "show terminal session state and replay saved events"
+    if persisted_total > 0:
+        return "replay saved events and poll compact status only if needed"
+    return "classify as no-active-execution; do not reconnect every 2s"
+
+
+def _log_mission_status(
+    job: Job,
+    *,
+    route: str,
+    live_execution: bool,
+    persisted_total: int,
+    replay_events: int,
+    last_seq: int | None = None,
+) -> None:
+    """Emit a throttled support breadcrumb that answers what is happening."""
+    summary = _job_observability_summary(job)
+    running_agents = [
+        _agent_label(agent)
+        for agent in (job.agents or [])
+        if _agent_status_value(agent) in {"running", "waiting"}
+    ]
+    payload = {
+        "route": route,
+        "session": job.id,
+        "status": summary.get("status"),
+        "liveExecution": live_execution,
+        "persistedTotal": persisted_total,
+        "replayEvents": replay_events,
+        "lastSeq": last_seq,
+        "agentStatuses": summary.get("agentStatuses"),
+        "phaseCount": summary.get("phaseCount"),
+        "actionCount": summary.get("actionCount"),
+        "runningAgents": running_agents,
+        "waitingFor": _mission_waiting_for(job, live_execution=live_execution, persisted_total=persisted_total),
+        "nextAction": _mission_next_action(job, live_execution=live_execution, persisted_total=persisted_total),
+    }
+    digest = stable_digest(payload)
+    cache_key = f"{route}:{job.id}"
+    now = time.monotonic()
+    cached = _mission_status_log_cache.get(cache_key)
+    if cached and cached[1] == digest and now - cached[0] < _MISSION_STATUS_LOG_TTL_SEC:
+        return
+    _mission_status_log_cache[cache_key] = (now, digest)
+    logger.info(
+        "[MISSION_STATUS:%s] route=%s process=%s session_status=%s workspace=%s "
+        "persisted_events=%d replay_events=%d agents=%d agent_statuses=%s running_agents=%s "
+        "phase_count=%d action_count=%d last_seq=%s waiting_for=%s next_action=%s task=%s digest=%s",
+        job.id[:8],
+        route,
+        "yes" if live_execution else "no",
+        summary.get("status"),
+        summary.get("workspaceId"),
+        persisted_total,
+        replay_events,
+        summary.get("agentCount", 0),
+        summary.get("agentStatuses", {}),
+        running_agents or "none",
+        summary.get("phaseCount", 0),
+        summary.get("actionCount", 0),
+        str(last_seq) if last_seq is not None else "none",
+        payload["waitingFor"],
+        payload["nextAction"],
+        bounded_text(job.task_description, max_chars=160),
+        digest,
+        extra=log_extra("high_level"),
+    )
+
+
 def _dynamic_seed_composition(
     *,
     task_description: str,
@@ -1238,7 +2076,7 @@ def _dynamic_seed_composition(
         budget=Budget(
             max_turns=20,
             max_tool_calls=100,
-            max_wallclock_s=600,
+            max_wallclock_s=_default_max_wallclock_seconds(),
             require_approvals=require_approvals,
         ),
     )
@@ -1282,7 +2120,7 @@ async def create_session(
         require_approvals=require_approvals,
     )
 
-    persisted_context = _persist_context_with_attachments(req.context, req.attachments)
+    persisted_context = build_pi_session_context(_persist_context_with_attachments(req.context, req.attachments))
 
     # Note: the legacy code captured a Fabric workspace snapshot here so
     # the Session Detail page could later show "as-of HH:MM:SS". With
@@ -1327,20 +2165,22 @@ async def list_sessions(
     ``GET /api/sessions/{id}``.
     """
     user_id = _user_key_from_context(ctx)
-    jobs = session_store.list_sessions(user_id, status=status, limit=limit, offset=offset)
-    summaries = [_job_observability_summary(job) for job in jobs]
+    rows = session_store.list_session_summaries(user_id, status=status, limit=limit, offset=offset)
     logger.info(
         "[SESSIONS] list user=%s filter=%s count=%d limit=%d offset=%d statuses=%s arch=%s digest=%s",
         user_id[:12],
         status or "all",
-        len(jobs),
+        len(rows),
         limit,
         offset,
-        collection_counts(summaries, "status"),
-        collection_counts(summaries, "architecture"),
-        stable_digest(summaries),
+        collection_counts(rows, "status"),
+        collection_counts(
+            [r.get("composition") or {} for r in rows],
+            "architecture",
+        ),
+        stable_digest(rows),
     )
-    return [_strip_attachment_content(_serialize_job(j)) for j in jobs]
+    return rows
 
 
 @router.get("/sessions/summary")
@@ -1457,10 +2297,10 @@ async def send_message_to_session(
     user_key = _user_key_from_context(ctx)
     _rate_limit(user_key, "send_message")
     _ensure_owner(session_store.get_session(str(session_id)), user_key)
-    ok = get_orchestrator_engine().inject_message(str(session_id), req.message, req.target_agent_id)
-    if not ok:
+    result = get_orchestrator_engine().inject_message(str(session_id), req.message, req.target_agent_id, mode=req.mode)
+    if not result:
         raise HTTPException(404, "Session not running or not found")
-    return {"status": "sent"}
+    return result
 
 
 @router.post("/sessions/{session_id}/agents")
@@ -1503,6 +2343,7 @@ async def add_agent_to_session(
 async def session_events_inspect(
     session_id: UUID,
     types: str | None = None,
+    after_seq: int | None = Query(default=None, alias="afterSeq"),
     limit: int = 500,
     ctx: AuthorizationContext | None = Depends(require_user),
 ):
@@ -1519,13 +2360,15 @@ async def session_events_inspect(
     served from the persisted ``session_events`` table so the live log can
     be reconstructed exactly when the user re-opens the session later.
     """
-    _ensure_owner(session_store.get_session(str(session_id)), _user_key_from_context(ctx))
+    job = _ensure_owner(session_store.get_session(str(session_id)), _user_key_from_context(ctx))
     type_filter: set[str] | None = None
     if types:
         type_filter = {t.strip() for t in types.split(",") if t.strip()}
     execution = get_orchestrator_engine().get_job_execution(str(session_id))
     if execution is not None:
         ring = list(execution._ring)  # type: ignore[attr-defined]
+        if after_seq is not None:
+            ring = [ev for ev in ring if int(ev.get("seq") or 0) > after_seq]
         if type_filter:
             ring = [ev for ev in ring if ev.get("type") in type_filter]
         if limit and limit > 0:
@@ -1533,17 +2376,32 @@ async def session_events_inspect(
         return {
             "sessionId": str(session_id),
             "source": "live",
+            "liveExecution": True,
+            "sessionStatus": _job_status_value(job),
             "count": len(ring),
             "events": ring,
         }
+    persisted_total = session_event_store.event_count(str(session_id))
     persisted = session_event_store.load_events(
         str(session_id),
         types=type_filter,
         limit=limit if limit and limit > 0 else None,
+        after_seq=after_seq,
     )
+    if persisted_total == 0:
+        _log_mission_status(
+            job,
+            route="events.json",
+            live_execution=False,
+            persisted_total=persisted_total,
+            replay_events=len(persisted),
+        )
     return {
         "sessionId": str(session_id),
         "source": "persisted",
+        "liveExecution": False,
+        "sessionStatus": _job_status_value(job),
+        "persistedTotal": persisted_total,
         "count": len(persisted),
         "events": persisted,
     }
@@ -1565,7 +2423,7 @@ async def session_events_sse(
     ``run_overview`` snapshot and start streaming live from there —
     the client's reducer is idempotent on ``seq`` so duplicate-safe.
     """
-    _ensure_owner(session_store.get_session(str(session_id)), _user_key_from_context(ctx))
+    job = _ensure_owner(session_store.get_session(str(session_id)), _user_key_from_context(ctx))
     execution = get_orchestrator_engine().get_job_execution(str(session_id))
 
     last_event_id_raw = request.headers.get("last-event-id") or request.query_params.get("lastEventId")
@@ -1586,10 +2444,14 @@ async def session_events_sse(
             str(session_id),
             after_seq=last_seq,
         )
-        logger.info(
-            "[SSE] replay-only session=%s persisted_events=%d (no live execution)",
-            str(session_id)[:8],
-            len(persisted),
+        persisted_total = session_event_store.event_count(str(session_id))
+        _log_mission_status(
+            job,
+            route="events",
+            live_execution=False,
+            persisted_total=persisted_total,
+            replay_events=len(persisted),
+            last_seq=last_seq,
         )
 
         async def replay_stream():
@@ -1606,6 +2468,15 @@ async def session_events_sse(
             },
         )
 
+    persisted_total = session_event_store.event_count(str(session_id))
+    _log_mission_status(
+        job,
+        route="events",
+        live_execution=True,
+        persisted_total=persisted_total,
+        replay_events=0,
+        last_seq=last_seq,
+    )
     logger.info(
         "[SSE] subscribe session=%s user=%s last_seq=%s has_auth=%s has_fabric=%s",
         str(session_id)[:8],
@@ -1762,6 +2633,7 @@ async def make_mission_fixture():
     from services.agenthub import session_store as _store
     from services.agenthub.orchestrator_engine import (
         _JobExecution,
+        QueuedUserMessage,
         get_orchestrator_engine as _engine,
     )
 
@@ -1770,6 +2642,16 @@ async def make_mission_fixture():
         raise HTTPException(404, "Not found")
 
     session_id = str(uuid.uuid4())
+    generalist_id = "agent-generalist"
+    data_eng_id = "agent-data-engineer"
+    admin_id = "agent-admin"
+    modeler_id = "agent-modeler"
+    agents = [
+        (generalist_id, "AgentHub Generalist", "Generalist", "generalist"),
+        (data_eng_id, "Fabric Data Engineer", "Fabric Data Engineer", "fabric-data-engineer"),
+        (admin_id, "Fabric Admin", "Fabric Admin", "fabric-admin"),
+        (modeler_id, "Modeler", "Modeler", "modeler"),
+    ]
     job = Job(
         id=session_id,
         user_id=_DEV_USER_KEY,
@@ -1778,15 +2660,57 @@ async def make_mission_fixture():
         workspace_id="test",
         status=JobStatus.RUNNING,
         started_at=datetime.now(UTC),
+        agents=[
+            AgentAssignment(
+                agent_id=template_id,
+                session_id=agent_session_id,
+                role=role,
+                goal=f"Fixture {role} stream",
+                status=AgentStatus.RUNNING,
+                current_step="Fixture stream active",
+            )
+            for agent_session_id, _agent_name, role, template_id in agents
+        ],
     )
     _store.create_session(job)
     execution = _JobExecution(job, copilot_token="", mcp_tokens=None)
     _engine()._active_jobs[session_id] = execution
 
-    generalist_id = "agent-generalist"
-    data_eng_id = "agent-data-engineer"
-    admin_id = "agent-admin"
-    modeler_id = "agent-modeler"
+    async def _drain_fixture_queue(agent_session_id: str, agent_name: str, queue: asyncio.Queue):
+        while not execution.cancelled:
+            queued = await queue.get()
+            if not isinstance(queued, QueuedUserMessage):
+                continue
+            execution.emit(
+                "user_message_delivered",
+                steeringId=queued.steering_id,
+                targetAgentSessionId=agent_session_id,
+                targetMode=queued.target_mode,
+                mode=queued.mode,
+                messagePreview=queued.message_preview,
+            )
+            if queued.mode == "interrupt":
+                execution.pending_interrupts.pop(queued.steering_id, None)
+                execution.emit(
+                    "turn_interrupted",
+                    steeringId=queued.steering_id,
+                    targetAgentSessionId=agent_session_id,
+                    targetMode=queued.target_mode,
+                    messagePreview=queued.message_preview,
+                )
+            execution.emit(
+                "log_line",
+                agentId=agent_session_id,
+                agentName=agent_name,
+                level="info",
+                tags=["user_action"],
+                message=f"User instruction received: {queued.message_preview}",
+            )
+
+    for agent_session_id, agent_name, _role, _template_id in agents:
+        queue: asyncio.Queue = asyncio.Queue()
+        execution.user_message_queues[agent_session_id] = queue
+        execution.tasks.append(asyncio.create_task(_drain_fixture_queue(agent_session_id, agent_name, queue)))
 
     composition = {
         "architecture": "dynamic",
@@ -1812,13 +2736,7 @@ async def make_mission_fixture():
         await asyncio.sleep(0.15)
         execution.emit("composition_ready", composition=composition)
 
-        agents = [
-            (generalist_id, "AgentHub Generalist", "Generalist"),
-            (data_eng_id, "Fabric Data Engineer", "Fabric Data Engineer"),
-            (admin_id, "Fabric Admin", "Fabric Admin"),
-            (modeler_id, "Modeler", "Modeler"),
-        ]
-        for agent_id, agent_name, role in agents:
+        for agent_id, agent_name, role, _template_id in agents:
             execution.emit("slot_progress", slotId=agent_id, agentId=agent_id,
                            agentName=agent_name, role=role, status="running")
             execution.emit("agent_status", agentId=agent_id, agentName=agent_name,
@@ -1997,7 +2915,7 @@ async def run_session(
     copilot_token = await _copilot_token(request)
     mcp_tokens = await _mcp_tokens(request)
     await get_orchestrator_engine().start_job(job, copilot_token, mcp_tokens)
-    return {"status": "running", "session_id": job.id}
+    return {"status": job.status.value, "session_id": job.id}
 
 
 @router.post("/orchestrate/reject")

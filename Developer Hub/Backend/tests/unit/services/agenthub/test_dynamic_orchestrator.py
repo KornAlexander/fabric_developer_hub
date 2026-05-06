@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -30,6 +31,7 @@ from domain.models.skill import Skill
 from services.agenthub import _db, dynamic_mission_store
 from services.agenthub.dynamic_orchestrator import (
     DynamicMissionController,
+    GENERALIST_DIRECT_TOOL_SCOPE,
     read_claim,
     write_claim,
 )
@@ -207,7 +209,7 @@ def test_seed_from_job_starts_with_generalist_mission_controller() -> None:
     assert state.brief.preferred_strategy == "dynamic-generalist"
     assert list(state.tasks) == ["generalist"]
     assert state.tasks["generalist"].candidate_agent_ids == ["generalist"]
-    assert state.tasks["generalist"].tool_scope == ["*"]
+    assert state.tasks["generalist"].tool_scope == list(GENERALIST_DIRECT_TOOL_SCOPE)
     assert state.tasks["generalist"].created_by == "orchestrator"
     assert {entry["id"] for entry in state.blackboard["specialistCatalog"]} == {"admin", "builder", "modeler"}
     assert any(event["type"] == "mission_seeded" for event in sink.events)
@@ -278,14 +280,38 @@ async def test_generalist_observability_events_explain_context_and_state_decisio
     assert context_pack["taskId"] == "inventory"
     assert context_pack["agentId"] == "admin"
     assert context_pack["contextDigest"]
+    assert context_pack["contextPackSchemaVersion"] == 2
+    assert context_pack["contextPhase"] == "research"
+    assert context_pack["subagentWorkModel"] == "context-window-fork"
+    assert context_pack["contextGoal"].startswith("Learn the smallest reliable facts")
+    assert context_pack["contextBudgetMaxTokens"] == 12000
+    assert context_pack["contextModePackage"] == "npm:context-mode@1.0.103"
+    assert context_pack["contextModeFacade"] == "agenthub-governed-context-mode"
+    assert context_pack["contextModeSavedTokenEstimate"] >= 0
+    assert "pi.context.mode.indexed" in context_pack["contextModeEventTypes"]
+    assert "Do not include raw parent transcript." in context_pack["contextOmissionPolicy"]
+    assert "source refs" in context_pack["contextReturnContract"]
     assert context_pack["toolScopeCount"] == 2
     assert context_pack["acceptanceCriteriaCount"] == 1
     assert "support-grade inventory" in context_pack["steeringPreview"]
     assert spawn["contextDigest"] == context_pack["contextDigest"]
+    assert spawn["contextPackSchemaVersion"] == 2
+    assert spawn["contextPhase"] == "research"
+    assert spawn["contextModePackage"] == "npm:context-mode@1.0.103"
     assert decision["taskId"] == "inventory"
     assert decision["agentId"] == "admin"
     assert decision["resultStatus"] == "success"
     assert decision["artifactCount"] == 0
+
+    stored_pack = state.blackboard["contextPacks"][context_pack["contextPackRef"]]
+    context_pack_v2 = stored_pack["contextPackV2"]
+    assert context_pack_v2["schemaVersion"] == 2
+    assert context_pack_v2["executionTemplate"]["agentId"] == "admin"
+    assert context_pack_v2["executionTemplate"]["agentIdRole"] == "execution-template"
+    assert context_pack_v2["executionTemplate"]["subagentWorkModel"] == "context-window-fork"
+    assert context_pack_v2["contextMode"]["facade"] == "agenthub-governed-context-mode"
+    assert context_pack_v2["contextMode"]["purgeHandle"].endswith(":inventory")
+    assert context_pack_v2["toolPolicy"]["agenthubPolicyProxyRequired"] is True
 
 
 @pytest.mark.asyncio
@@ -382,7 +408,14 @@ async def test_sample_prompt_runtime_emits_reconstructable_orchestration_log_seq
                 task_id=task.id,
                 status=AgentResultStatus.SUCCESS,
                 summary="Report binding repaired and screenshot evidence attached.",
-                artifacts=[{"type": "Report", "name": "Customer360_Readiness_Report", "id": "report-1"}],
+                artifacts=[
+                    {
+                        "type": "Report",
+                        "name": "Customer360_Readiness_Report",
+                        "id": "report-1",
+                        "webUrl": "https://app.fabric.microsoft.com/groups/workspace-1/reports/report-1",
+                    }
+                ],
                 evidence=[{"kind": "screenshot", "artifactId": "report-1", "status": "captured"}],
             )
         return AgentResult(
@@ -392,7 +425,12 @@ async def test_sample_prompt_runtime_emits_reconstructable_orchestration_log_seq
             summary="Created initial Fabric analytics artifacts and requested independent verification.",
             artifacts=[
                 {"type": "Lakehouse", "name": "Lakehouse_Customer360_Readiness", "id": "lakehouse-1"},
-                {"type": "Report", "name": "Customer360_Readiness_Report", "id": "report-1"},
+                    {
+                        "type": "Report",
+                        "name": "Customer360_Readiness_Report",
+                        "id": "report-1",
+                        "webUrl": "https://app.fabric.microsoft.com/groups/workspace-1/reports/report-1",
+                    },
             ],
             followup_tasks=[
                 FollowupTask(
@@ -431,7 +469,23 @@ async def test_sample_prompt_runtime_emits_reconstructable_orchestration_log_seq
             task_id=task.id,
             status=AgentResultStatus.SUCCESS,
             summary="Verifier accepted the repaired report with screenshot evidence.",
-            evidence=[{"kind": "screenshot", "artifactId": "report-1", "status": "accepted"}],
+            evidence=[
+                {
+                    "stepResults": [
+                        {"step": "Professional quality review", "status": "passed", "evidence": "report design, naming convention fit, modern style/theme, championship 3-30-300 storytelling, accessibility contrast/keyboard checks, semantic model clarity, performance, maintainability, extensibility, and clean code software engineering reviewed"},
+                    ]
+                },
+                {
+                    "toolName": "browser_verify_visual_render",
+                    "url": "https://app.fabric.microsoft.com/groups/workspace-1/reports/report-1",
+                    "finalUrl": "https://app.fabric.microsoft.com/groups/workspace-1/reports/report-1",
+                    "screenshotPath": "/tmp/report-1.png",
+                    "visualLikeElementCount": 1,
+                    "bodyTextSample": "Customer360 readiness report",
+                    "artifactId": "report-1",
+                    "status": "accepted",
+                }
+            ],
         )
 
     executor = ScriptedExecutor(
@@ -530,6 +584,381 @@ async def test_sample_prompt_runtime_emits_reconstructable_orchestration_log_seq
         and action.rationale == "All tasks completed."
         for action in state.decisions
     )
+
+
+@pytest.mark.asyncio
+async def test_produced_report_without_followup_gets_mandatory_verifier_gate() -> None:
+    report_url = "https://app.fabric.microsoft.com/groups/workspace-1/reports/report-1"
+
+    def generalist_result(run: SubagentRun, task: TaskNode) -> AgentResult:
+        return AgentResult(
+            run_id=run.id,
+            task_id=task.id,
+            status=AgentResultStatus.PARTIAL,
+            summary="Created the inventory solution artifacts but did not request verification.",
+            artifacts=[
+                {
+                    "entity_type": "WorkspaceInventorySolution",
+                    "entity_name": "Inventory solution",
+                    "details": json.dumps(
+                        {
+                            "createdItems": [
+                                {
+                                    "type": "Report",
+                                    "id": "report-1",
+                                    "displayName": "Inventory Report",
+                                    "webUrl": report_url,
+                                },
+                                {
+                                    "type": "SemanticModel",
+                                    "id": "model-1",
+                                    "displayName": "Inventory Model",
+                                },
+                            ]
+                        }
+                    ),
+                }
+            ],
+        )
+
+    def verifier_result(run: SubagentRun, task: TaskNode) -> AgentResult:
+        return AgentResult(
+            run_id=run.id,
+            task_id=task.id,
+            status=AgentResultStatus.SUCCESS,
+            summary="Report renders in browser and matches the requested inventory solution.",
+            evidence=[
+                {
+                    "stepResults": [
+                        {"step": "Professional quality review", "status": "passed", "evidence": "multi-visual inventory report, naming convention fit, modern style/theme, championship 3-30-300 storytelling, accessibility contrast/keyboard checks, semantic model quality, performance, maintainability, extensibility, and clean code software engineering accepted"},
+                    ]
+                },
+                {
+                    "toolName": "browser_verify_visual_render",
+                    "url": report_url,
+                    "finalUrl": report_url,
+                    "screenshotPath": "/tmp/report-1.png",
+                    "visualLikeElementCount": 1,
+                    "bodyTextSample": "Inventory Report Total Items",
+                }
+            ],
+        )
+
+    executor = ScriptedExecutor(
+        result_factories={
+            "generalist": generalist_result,
+            "fabric-verifier": verifier_result,
+        }
+    )
+    controller, _, sink = _controller(executor)
+    controller.agent_templates["fabric-verifier"] = _template(
+        "fabric-verifier",
+        _skill("fabric-verification", "browser_verify_visual_render"),
+    )
+    state = controller.seed_from_job(
+        Job(
+            id="mandatory-verifier-session",
+            user_id="user-1",
+            workspace_id="workspace-1",
+            task_description="Create a workspace inventory report and prove it renders.",
+            composition=Composition(
+                session_id="mandatory-verifier-session",
+                task="Create a workspace inventory report and prove it renders.",
+                architecture="dynamic",
+                rationale="test mandatory verifier guardrail",
+                headline="Inventory mission",
+                subtitle="Verifier guardrail proof",
+                slots=[AgentSlot(id="generalist", agent_id="generalist", role="Mission controller")],
+                entrypoint_slot_id="generalist",
+                budget=Budget(max_turns=10, max_tool_calls=20, max_wallclock_s=60),
+            ),
+        )
+    )
+
+    await controller.run_until_idle(state)
+
+    verifier_tasks = [
+        task for task in state.tasks.values()
+        if "fabric-verifier" in task.candidate_agent_ids
+    ]
+    assert len(verifier_tasks) == 1
+    assert verifier_tasks[0].parent_task_id == "generalist"
+    assert "Inventory Report" in verifier_tasks[0].objective
+    assert "browser_verify_visual_render" in verifier_tasks[0].objective
+    assert ("generalist", "generalist") in [(task_id, task_id) for _, task_id in executor.started]
+    assert any(state.subagent_runs[run_id].agent_id == "fabric-verifier" for run_id in state.subagent_runs)
+
+    mandatory_decision = next(
+        event for event in sink.events
+        if event["type"] == "generalist_state_decision"
+        and "mandatory FabricVerifier gate" in event.get("summary", "")
+    )
+    assert mandatory_decision["followupTaskCount"] == 1
+
+    verdict = next(event for event in sink.events if event["type"] == "verifier_verdict")
+    assert verdict["passed"] is True
+    assert verdict["requiresUserBrowserRender"] is True
+    assert verdict["evidence"]["visualsRendered"] is True
+    assert verdict["deliverables"][0]["id"] == "report-1"
+
+    result_snapshot = state.blackboard["taskResults"]["generalist"]
+    assert result_snapshot["followupTasks"][0]["candidateAgentIds"] == ["fabric-verifier"]
+
+
+@pytest.mark.asyncio
+async def test_verifier_text_followup_drives_repair_when_browser_shows_stuck_loading() -> None:
+    report_url = "https://app.powerbi.com/groups/workspace-1/reports/report-1"
+
+    def verifier_result(run: SubagentRun, task: TaskNode) -> AgentResult:
+        return AgentResult(
+            run_id=run.id,
+            task_id=task.id,
+            status=AgentResultStatus.SUCCESS,
+            summary="Report shell painted but visual never rendered.",
+            artifacts=[
+                {
+                    "entityType": "browser_visual_render",
+                    "entityName": report_url,
+                    "webUrl": report_url,
+                    "details": json.dumps(
+                        {
+                            "ok": True,
+                            "status": "passed",
+                            "finalUrl": report_url,
+                            "screenshotPath": "/tmp/report.png",
+                            "bodyTextSample": "Power BI Report Loading your report... Report Zoomed To 100%",
+                            "expectedTextMatched": False,
+                            "visualSummary": {"visibleVisualLikeElementCount": 4},
+                        }
+                    ),
+                }
+            ],
+            followup_tasks=[
+                FollowupTask(
+                    title="Repair stuck report rendering",
+                    objective="Report is stuck on 'Loading your report...' and never paints visuals.",
+                    candidate_agent_ids=["fabric-data-engineer"],
+                )
+            ],
+        )
+
+    executor = ScriptedExecutor(result_factories={"fabric-verifier": verifier_result})
+    controller, _, sink = _controller(executor)
+    controller.agent_templates["fabric-verifier"] = _template(
+        "fabric-verifier",
+        _skill("fabric-verification", "browser_verify_visual_render"),
+    )
+    state = _mission_state(budget=MissionBudget(max_active_subagents=1, max_total_subagents=5))
+    controller.create_task(
+        state,
+        TaskNode(
+            id="verify-report",
+            title="Verify report",
+            objective="Verify the report renders in the browser.",
+            candidate_agent_ids=["fabric-verifier"],
+        ),
+        rationale="seed verifier task",
+    )
+
+    await controller.run_until_idle(state)
+
+    verdict = next(event for event in sink.events if event["type"] == "verifier_verdict")
+    assert verdict["passed"] is False
+    assert "REPORT_STUCK_LOADING" in verdict["structuralFailures"]
+    assert verdict["evidence"]["loadingStuckObserved"] is True
+    persisted_followups = state.blackboard["taskResults"]["verify-report"]["followupTasks"]
+    assert persisted_followups, "verifier follow-ups must be preserved when render is stuck"
+
+
+@pytest.mark.asyncio
+async def test_transient_browser_text_miss_rechecks_without_repair_loop() -> None:
+    report_url = "https://app.powerbi.com/groups/workspace-1/reports/report-1"
+    verifier_attempts = 0
+
+    def verifier_result(run: SubagentRun, task: TaskNode) -> AgentResult:
+        nonlocal verifier_attempts
+        verifier_attempts += 1
+        if verifier_attempts == 1:
+            return AgentResult(
+                run_id=run.id,
+                task_id=task.id,
+                status=AgentResultStatus.SUCCESS,
+                summary="Report server validation passed, but browser text was not visible during propagation.",
+                artifacts=[
+                    {"type": "Report", "name": "Inventory Report", "id": "report-1", "webUrl": report_url},
+                    {
+                        "stepResults": [
+                            {"step": "Professional quality review", "status": "passed", "evidence": "naming convention fit, modern style/theme, championship 3-30-300 storytelling, accessibility contrast/keyboard checks, semantic model quality, performance, maintainability, extensibility, and clean code software engineering accepted; only browser text propagation is unresolved"},
+                        ]
+                    },
+                    {
+                        "toolName": "browser_verify_visual_render",
+                        "url": report_url,
+                        "finalUrl": report_url,
+                        "screenshotPath": "/tmp/report-propagating.png",
+                        "bodyTextSample": "Power BI Report",
+                        "status": "failed",
+                        "ok": False,
+                        "errorCode": "EXPECTED_TEXT_NOT_VISIBLE",
+                        "reason": "expected text was not visible in the rendered page: 'Fabric Items'",
+                        "expectedTextMatched": False,
+                        "visualSummary": {"visibleVisualLikeElementCount": 0},
+                    },
+                ],
+                followup_tasks=[
+                    FollowupTask(
+                        title="Repair report rendering issue",
+                        objective="Rebuild the report because the browser text was not visible.",
+                        candidate_agent_ids=["fabric-data-engineer"],
+                    )
+                ],
+            )
+        return AgentResult(
+            run_id=run.id,
+            task_id=task.id,
+            status=AgentResultStatus.SUCCESS,
+            summary="Report renders in browser after propagation.",
+            evidence=[
+                {"type": "Report", "name": "Inventory Report", "id": "report-1", "webUrl": report_url},
+                {
+                    "stepResults": [
+                        {"step": "Professional quality review", "status": "passed", "evidence": "report design, naming convention fit, modern style/theme, championship 3-30-300 storytelling, accessibility contrast/keyboard checks, semantic model quality, performance, maintainability, extensibility, and clean code software engineering accepted after propagation"},
+                    ]
+                },
+                {
+                    "toolName": "browser_verify_visual_render",
+                    "url": report_url,
+                    "finalUrl": report_url,
+                    "screenshotPath": "/tmp/report-ready.png",
+                    "bodyTextSample": "Power BI Report 493 Item Count",
+                    "status": "passed",
+                    "ok": True,
+                    "expectedTextMatched": False,
+                    "visualSummary": {"visibleVisualLikeElementCount": 83},
+                },
+            ],
+        )
+
+    executor = ScriptedExecutor(result_factories={"fabric-verifier": verifier_result})
+    controller, _, sink = _controller(executor)
+    controller.agent_templates["fabric-verifier"] = _template(
+        "fabric-verifier",
+        _skill("fabric-verification", "browser_verify_visual_render"),
+    )
+    controller.agent_templates["fabric-data-engineer"] = _template(
+        "fabric-data-engineer",
+        _skill("fabric-build", "fabric_create_workspace_inventory_solution"),
+    )
+    state = _mission_state(budget=MissionBudget(max_active_subagents=1, max_total_subagents=5))
+    controller.create_task(
+        state,
+        TaskNode(
+            id="verify-report",
+            title="Verify report",
+            objective="Verify the report renders in the browser.",
+            candidate_agent_ids=["fabric-verifier"],
+        ),
+        rationale="seed verifier task",
+    )
+
+    await controller.run_until_idle(state)
+
+    assert verifier_attempts == 2
+    assert state.status == MissionStatus.COMPLETED
+    assert not any(
+        task.title.startswith("Review verification feedback")
+        or task.title.startswith("Repair report rendering")
+        for task in state.tasks.values()
+    )
+    first_snapshot = state.blackboard["taskResults"]["verify-report"]
+    assert first_snapshot["followupTasks"][0]["candidateAgentIds"] == ["fabric-verifier"]
+    verdicts = [event for event in sink.events if event["type"] == "verifier_verdict"]
+    assert verdicts[-1]["passed"] is True
+
+
+@pytest.mark.asyncio
+async def test_repeated_stuck_loading_signature_bails_with_error_severity() -> None:
+    report_url = "https://app.powerbi.com/groups/workspace-1/reports/report-1"
+
+    def stuck_verifier(run: SubagentRun, task: TaskNode) -> AgentResult:
+        return AgentResult(
+            run_id=run.id,
+            task_id=task.id,
+            status=AgentResultStatus.SUCCESS,
+            summary="Report shell painted but visual never rendered.",
+            artifacts=[
+                {
+                    "entityType": "browser_visual_render",
+                    "entityName": report_url,
+                    "webUrl": report_url,
+                    "details": json.dumps(
+                        {
+                            "ok": True,
+                            "status": "passed",
+                            "finalUrl": report_url,
+                            "screenshotPath": "/tmp/report.png",
+                            "bodyTextSample": "Power BI Report Loading your report... Report Zoomed To 100%",
+                            "visualSummary": {"visibleVisualLikeElementCount": 4},
+                        }
+                    ),
+                }
+            ],
+            followup_tasks=[
+                FollowupTask(
+                    title="Repair stuck report rendering",
+                    objective="Report is stuck on 'Loading your report...' and never paints visuals.",
+                    candidate_agent_ids=["fabric-data-engineer"],
+                )
+            ],
+        )
+
+    def generalist_re_verify(run: SubagentRun, task: TaskNode) -> AgentResult:
+        return AgentResult(
+            run_id=run.id,
+            task_id=task.id,
+            status=AgentResultStatus.SUCCESS,
+            summary="Generalist queues another verifier pass.",
+            followup_tasks=[
+                FollowupTask(
+                    title="Re-verify inventory report",
+                    objective="Verify report renders after attempted repair.",
+                    candidate_agent_ids=["fabric-verifier"],
+                )
+            ],
+        )
+
+    executor = ScriptedExecutor(
+        result_factories={
+            "fabric-verifier": stuck_verifier,
+            "generalist": generalist_re_verify,
+        }
+    )
+    controller, _, sink = _controller(executor)
+    controller.agent_templates["fabric-verifier"] = _template(
+        "fabric-verifier",
+        _skill("fabric-verification", "browser_verify_visual_render"),
+    )
+    state = _mission_state(budget=MissionBudget(max_active_subagents=1, max_total_subagents=20))
+    controller.create_task(
+        state,
+        TaskNode(
+            id="verify-report",
+            title="Verify report",
+            objective="Verify the report renders in the browser.",
+            candidate_agent_ids=["fabric-verifier"],
+        ),
+        rationale="seed verifier task",
+    )
+
+    await controller.run_until_idle(state)
+
+    no_progress_events = [event for event in sink.events if event["type"] == "mission_no_progress"]
+    assert no_progress_events, "expected mission_no_progress event when stuck signature repeats"
+    bail = no_progress_events[0]
+    assert bail["severity"] == "error"
+    assert bail["repeatedFailure"] is True
+    assert bail["feedbackRound"] >= 2
+    assert state.status in (MissionStatus.FAILED, MissionStatus.BLOCKED)
 
 
 @pytest.mark.asyncio
@@ -861,11 +1290,17 @@ async def test_non_converging_verifier_feedback_loop_fails_with_named_reason() -
 
     assert state.status == MissionStatus.FAILED
     loop = state.blackboard["verificationFeedbackLoops"]["verify"]
-    assert loop["rounds"] == 3
+    # The repeated identical signature triggers an early bail at round 2,
+    # rather than running a third repair attempt that would re-confirm the
+    # same failure.
+    assert loop["rounds"] == 2
     assert any(task.status == TaskStatus.FAILED and task.parent_task_id for task in state.tasks.values())
     assert any(
         decision.type == OrchestratorActionType.FAIL_MISSION
-        and "verification feedback loop exceeded no-progress limit" in decision.rationale
+        and (
+            "verification feedback loop exceeded no-progress limit" in decision.rationale
+            or "same structural failure twice" in decision.rationale
+        )
         for decision in state.decisions
     )
     assert any(event["type"] == "task_failed" and "not converging" in event["message"] for event in sink.events)
@@ -1243,3 +1678,51 @@ def test_dynamic_mission_store_roundtrips_full_state(tmp_path, monkeypatch: pyte
         assert dynamic_mission_store.load_mission_state("mission-1") is None
     finally:
         _db.reset_path_cache()
+
+
+@pytest.mark.asyncio
+async def test_no_improvement_in_failure_count_triggers_bail() -> None:
+    """When the verifier reports a different signature but the same
+    *count* of failures across rounds, the orchestrator must treat the
+    loop as stagnant and bail rather than waste another iteration."""
+    controller, _, _ = _controller(ScriptedExecutor())
+    controller.agent_templates["fabric-verifier"] = _template(
+        "fabric-verifier", _skill("fabric-verification", "browser_verify_visual_render")
+    )
+    state = _mission_state()
+    task = TaskNode(
+        id="verify-1",
+        title="Verify",
+        objective="Verify report.",
+        candidate_agent_ids=["fabric-verifier"],
+    )
+    controller.create_task(state, task, rationale="seed")
+
+    def _result(errs: list[str]) -> AgentResult:
+        return AgentResult(
+            run_id="run",
+            task_id=task.id,
+            status=AgentResultStatus.SUCCESS,
+            summary="verifier round",
+            errors=errs,
+            followup_tasks=[
+                FollowupTask(title=f"fix {errs[0]}", objective="fix it",
+                             candidate_agent_ids=["fabric-data-engineer"])
+            ],
+        )
+
+    # Round 1: 2 errors of one shape.
+    r1, sig1, repeated1, _ = controller._record_verifier_feedback_round(
+        state, task, _result(["err-A-detail-1", "err-B-detail-1"]),
+    )
+    assert r1 == 1
+    assert repeated1 is False, "first round can never count as a repeat"
+
+    # Round 2: a *different* pair of errors (different signature) but
+    # still 2 of them — count did not decrease, so we bail.
+    r2, sig2, repeated2, _ = controller._record_verifier_feedback_round(
+        state, task, _result(["err-A-detail-2", "err-C-detail-1"]),
+    )
+    assert r2 == 2
+    assert sig2 != sig1, "test guarantees different signatures"
+    assert repeated2 is True, "count-stagnation should mark round 2 as no-progress"

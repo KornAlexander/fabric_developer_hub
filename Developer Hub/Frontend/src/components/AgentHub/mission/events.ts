@@ -16,6 +16,13 @@ import type { Composition } from "./types";
 export type PublicLogCategory = "high_level" | "detailed" | "diagnostic";
 export type LogCategory = PublicLogCategory | "trace";
 
+export interface PiMissionExtensionMetadata {
+    id: string;
+    label?: string;
+    packageName?: string;
+    version?: string;
+}
+
 export interface BaseEvent {
     seq: number;
     sessionId: string;
@@ -24,6 +31,7 @@ export interface BaseEvent {
     eventId?: string;
     payloadDigest?: string;
     payloadSummary?: Record<string, unknown>;
+    extension?: PiMissionExtensionMetadata;
 }
 
 export interface HeartbeatEvent { type: "heartbeat"; ts?: string; }
@@ -59,9 +67,10 @@ export interface SlotProgressEvent extends BaseEvent {
     agentId: string;
     agentName?: string;
     role?: string;
-    status: "queued" | "running" | "done" | "approval_required" | "failed";
+    status: "queued" | "running" | "waiting" | "done" | "approval_required" | "failed";
     activeAgentId?: string;
     reason?: string;
+    currentStep?: string;
 }
 
 export interface LogLineEvent extends BaseEvent {
@@ -117,6 +126,8 @@ export interface ToolCallStartedEvent extends BaseEvent {
     agentName?: string;
     callId: string;
     toolName: string;
+    toolKind?: string;
+    operationKind?: string;
     argsPreview?: Record<string, unknown>;
 }
 
@@ -125,9 +136,209 @@ export interface ToolCallEndedEvent extends BaseEvent {
     agentId: string;
     callId: string;
     toolName: string;
+    toolKind?: string;
+    operationKind?: string;
     durationMs: number;
+    latencyBreakdownMs?: Record<string, number>;
     status: "ok" | "error";
     errorPreview?: string | null;
+}
+
+/**
+ * Live progress signal emitted from inside a long-running MCP tool. Mirrors
+ * the backend ``[TOOL_PROGRESS:...]`` log lines (e.g. semantic-model build
+ * ``step=lakehouse_table_validation status=started elapsedMs=147466``) so
+ * the UI can show the user *what is actually happening right now* inside a
+ * tool call instead of an opaque "running" spinner.
+ */
+export interface ToolProgressEvent extends BaseEvent {
+    type: "tool_progress";
+    agentId?: string;
+    agentName?: string;
+    toolName: string;
+    toolKind?: string;
+    operationKind?: string;
+    callId?: string;
+    step: string;
+    status: string;
+    elapsedMs?: number;
+    runId?: string;
+    taskId?: string;
+    taskTitle?: string;
+    workspaceId?: string;
+    error?: string | null;
+    digest?: string;
+    /** The full backend payload, retained for diagnostics tooltips. */
+    detail?: Record<string, unknown>;
+}
+
+export type LlmStreamPhase =
+    | "requesting"
+    | "thinking"
+    | "responding"
+    | "tool_input"
+    | "tool-use"
+    | "tool_use"
+    | "idle"
+    | "complete"
+    | string;
+
+export interface LlmRequestStartedEvent extends BaseEvent {
+    type: "llm_request_started";
+    agentId?: string;
+    agentName?: string;
+    requestId?: string;
+    model?: string;
+    taskTitle?: string;
+    promptSummary?: string;
+}
+
+export interface LlmStreamPhaseChangedEvent extends BaseEvent {
+    type: "llm_stream_phase_changed";
+    agentId?: string;
+    agentName?: string;
+    requestId?: string;
+    phase: LlmStreamPhase;
+    message?: string;
+    taskTitle?: string;
+    model?: string;
+    tokenCount?: number;
+    toolName?: string;
+}
+
+export interface AssistantTextStreamEvent extends BaseEvent {
+    type: "assistant_text_delta" | "assistant_text_finalized";
+    agentId?: string;
+    agentName?: string;
+    requestId?: string;
+    delta?: string;
+    text?: string;
+    tokenCount?: number;
+}
+
+export interface ThinkingStreamEvent extends BaseEvent {
+    type: "thinking_started" | "thinking_delta" | "thinking_finalized";
+    agentId?: string;
+    agentName?: string;
+    requestId?: string;
+    summary?: string;
+    delta?: string;
+    text?: string;
+    tokenCount?: number;
+}
+
+export interface ActivityRollupEvent extends BaseEvent {
+    type: "activity_rollup";
+    scope: "run" | "task" | "tool_batch" | "mission" | string;
+    agentId?: string;
+    agentName?: string;
+    runId?: string;
+    taskId?: string;
+    callId?: string;
+    toolName?: string;
+    toolKind?: string;
+    operationKind?: string;
+    summary: string;
+    coveredSeqStart?: number | null;
+    coveredSeqEnd?: number | null;
+    detailCount?: number;
+    status?: "completed" | "in_progress" | "failed" | string;
+    durationMs?: number;
+    counts?: Record<string, number | string | boolean | null>;
+}
+
+export interface UserMessageQueuedEvent extends BaseEvent {
+    type: "user_message_queued" | "user_message_broadcast" | "user_message_delivered" | "user_message_failed";
+    steeringId: string;
+    targetAgentSessionId?: string | null;
+    targetAgentSessionIds?: string[];
+    agentId?: string;
+    agentName?: string;
+    targetMode?: "agent" | "broadcast" | "generalist" | string;
+    mode?: "queue" | "interrupt" | string;
+    messagePreview?: string;
+    reason?: string;
+    targetCount?: number;
+    queuedAt?: string;
+    deliveredAtRound?: number;
+}
+
+export interface TurnInterruptEvent extends BaseEvent {
+    type: "turn_interrupt_requested" | "turn_interrupt_deferred" | "turn_interrupted";
+    steeringId: string;
+    targetAgentSessionId?: string | null;
+    agentId?: string;
+    agentName?: string;
+    targetMode?: string;
+    mode?: "queue" | "interrupt" | string;
+    messagePreview?: string;
+    reason?: string;
+}
+
+export interface DiagnosticEvent extends BaseEvent {
+    type: "diagnostic_baseline_captured" | "diagnostic_new_issues" | "diagnostic_resolved_issues" | "diagnostic_required";
+    agentId?: string;
+    agentName?: string;
+    callId?: string;
+    toolName?: string;
+    toolKind?: string;
+    operationKind?: string;
+    status?: string;
+    baselineCount?: number;
+    newIssueCount?: number;
+    resolvedIssueCount?: number;
+    summary?: string;
+    reason?: string;
+    policyDecision?: string;
+    diagnosticTool?: string;
+    directivePreview?: string;
+    issues?: Array<{ severity?: string; code?: string; message?: string } | string>;
+}
+
+export interface RuntimeGuardEvent extends BaseEvent {
+    type: "budget_exhausted" | "tool_call_denied" | "mission_no_progress" | "subagent_heartbeat";
+    slotId?: string;
+    agentId?: string;
+    agentName?: string;
+    runId?: string;
+    taskId?: string;
+    toolName?: string;
+    reason?: string;
+    severity?: string;
+    summary?: string;
+    rationale?: string;
+    status?: string;
+    feedbackRound?: number;
+    maxFeedbackReviewRounds?: number;
+}
+
+export interface TrustOrRuntimeEvent extends BaseEvent {
+    type:
+        | "mcp_server_approval_required"
+        | "mcp_server_approved"
+        | "mcp_server_rejected"
+        | "mcp_session_refreshed"
+        | "runtime_config_refreshed"
+        | "memory_loaded"
+        | "memory_written"
+        | "memory_updated"
+        | "memory_ignored"
+        | "plugin_enabled"
+        | "plugin_disabled"
+        | "capability_pack_enabled"
+        | "capability_pack_disabled"
+        | "approval_repeated_denial"
+        | "approval_fallback_required";
+    serverId?: string;
+    source?: string;
+    toolsPreview?: string[];
+    risk?: string;
+    memoryScope?: string;
+    pluginId?: string;
+    capabilityPackId?: string;
+    configVersion?: string;
+    summary?: string;
+    reason?: string;
 }
 
 export interface ActionEvent extends BaseEvent {
@@ -152,8 +363,29 @@ export interface ChangeRecord {
     agentId?: string;
     agentName?: string;
     targetId?: string | null;
+    folderId?: string | null;
+    folderName?: string | null;
+    parentFolderId?: string | null;
+    createdItems?: MissionOutputCreatedItem[] | null;
     webUrl?: string | null;
     ts: string;
+}
+
+export interface MissionOutputCreatedItem {
+    id?: string | null;
+    itemId?: string | null;
+    displayName?: string | null;
+    name?: string | null;
+    type?: string | null;
+    itemType?: string | null;
+    workspaceId?: string | null;
+    folderId?: string | null;
+    folderName?: string | null;
+    parentFolderId?: string | null;
+    webUrl?: string | null;
+    url?: string | null;
+    description?: string | null;
+    status?: string | null;
 }
 
 export interface ChangeRecordedEvent extends BaseEvent, ChangeRecord {
@@ -166,16 +398,19 @@ export interface Artifact {
     kind: string;
     name: string;
     state: "draft" | "written";
+    summary?: string;
+    details?: unknown;
     webUrl?: string | null;
 }
 
 export interface SlotProgress {
     slotId: string;
     agentId: string;
-    status: "queued" | "running" | "done" | "approval_required" | "failed";
+    status: "queued" | "running" | "waiting" | "done" | "approval_required" | "failed";
     agentName?: string;
     role?: string;
     reason?: string;
+    currentStep?: string;
 }
 
 export interface ArtifactAddedEvent extends BaseEvent, Artifact {
@@ -422,6 +657,24 @@ export interface VerifierVerdictEvent extends BaseEvent {
         errorsObserved: string[];
         expectedTextMatched?: boolean | null;
     };
+    /**
+     * Per-step pass/fail breakdown emitted by the verifier when it
+     * decomposes the original goal into discrete phases (ingestion,
+     * transformation, semantic-model queryability, report render, ...).
+     * Lets the UI show the user *exactly which step* of the mission
+     * succeeded or failed instead of a single opaque verdict.
+     */
+    stepResults?: Array<{
+        step: string;
+        status: string;
+        detail?: string;
+        evidence?: string;
+        reason?: string;
+        via?: string;
+        rowCount?: number;
+        url?: string;
+        exitValue?: string;
+    }>;
     criteria: string[];
     decisionRationale: string;
     summary?: string;
@@ -429,6 +682,321 @@ export interface VerifierVerdictEvent extends BaseEvent {
     planStateSnapshot?: Record<string, unknown>;
     timestampUtc?: string;
 }
+
+export type PiMissionTrustLevel = "trusted" | "untrusted" | "redacted";
+
+export interface PiMissionTrustMetadata {
+    level: PiMissionTrustLevel;
+    source?: "model" | "tool" | "fabric" | "user" | "runtime" | string;
+    redacted?: boolean;
+    summaryOnly?: boolean;
+}
+
+export interface PiToolDisplaySummary {
+    summary?: string;
+    details?: string;
+    outputPreview?: string;
+    trust?: PiMissionTrustMetadata;
+    fields?: Record<string, string | number | boolean | null>;
+}
+
+export interface PiHarnessToolSummary {
+    name: string;
+    label?: string;
+    description?: string;
+    sensitivity?: string;
+    autoAllowed?: boolean;
+    execution?: string;
+    parameters?: Record<string, unknown>;
+}
+
+export interface PiTurnStartEvent extends BaseEvent {
+    type: "pi.turn.start";
+    schemaVersion: 1;
+    turnId: string;
+    agentId: string;
+    agentName?: string;
+    model?: string;
+    title?: string;
+}
+
+export interface PiOrchestrationStartEvent extends BaseEvent {
+    type: "pi.orchestration.start";
+    schemaVersion: 1;
+    runtime: "pi";
+    subagentRuntime?: "pi-subagents" | string;
+    subagentPackage?: string;
+    subagentHarness?: string;
+    subagentRuntimeMode?: string;
+    subagentObservability?: Record<string, unknown>;
+    runtimePackage: string;
+    runtimePackageSource?: string;
+    frontendRuntimePackage: string;
+    executionSurfaceExtension: string;
+    agenticEngineeringExtension?: string;
+    rpiProtocol?: string;
+    qrspiProtocol?: string;
+    qrspiPhaseModel?: string[];
+    qrspiQuestionPolicy?: Record<string, unknown>;
+    qrspiResearchPolicy?: Record<string, unknown>;
+    qrspiDesignStructurePolicy?: Record<string, unknown>;
+    qrspiInstructionBudget?: Record<string, unknown>;
+    qrspiVerticalSlicePolicy?: Record<string, unknown>;
+    qrspiBacktrackPolicy?: Record<string, unknown>;
+    qrspiReviewPolicy?: Record<string, unknown>;
+    contextPackSchema?: string;
+    subagentWorkModel?: string;
+    contextWindowPolicy?: Record<string, unknown>;
+    contextModeFacade?: string;
+    contextModeEvents?: string[];
+    contextModeControls?: Record<string, unknown>;
+    streamTransport: "agenthub-sse-to-pi-extension" | string;
+    extensions: string[];
+    orchestrationHarness?: string;
+    harnessPackage?: string;
+    toolRegistry?: string;
+    toolExecutionBridge?: string;
+    toolCount?: number;
+    emittedToolCount?: number;
+    toolPolicySummary?: Record<string, number>;
+    tools?: PiHarnessToolSummary[];
+    backendBridge?: string;
+}
+
+export interface PiTurnDeltaEvent extends BaseEvent {
+    type: "pi.turn.delta";
+    schemaVersion: 1;
+    turnId: string;
+    textDelta: string;
+    trust?: PiMissionTrustMetadata;
+}
+
+export interface PiTurnEndEvent extends BaseEvent {
+    type: "pi.turn.end";
+    schemaVersion: 1;
+    turnId: string;
+    status: "completed" | "aborted" | "failed";
+    reason?: string;
+}
+
+export interface PiToolStartEvent extends BaseEvent {
+    type: "pi.tool.start";
+    schemaVersion: 1;
+    toolCallId: string;
+    turnId?: string;
+    agentId?: string;
+    agentName?: string;
+    toolName: string;
+    summary: string;
+    argsSummary?: string;
+    sensitivity?: "read-safe" | "read-sensitive" | "write" | "destructive" | string;
+}
+
+export interface PiToolEndEvent extends BaseEvent {
+    type: "pi.tool.end";
+    schemaVersion: 1;
+    toolCallId: string;
+    turnId?: string;
+    status: "ok" | "error" | "confirm_required";
+    durationMs?: number;
+    display?: PiToolDisplaySummary;
+    errorPreview?: string | null;
+}
+
+export interface PiArtifactUpsertEvent extends BaseEvent {
+    type: "pi.artifact.upsert";
+    schemaVersion: 1;
+    artifactId: string;
+    turnId?: string;
+    toolCallId?: string;
+    agentId?: string;
+    kind: "diff" | "screenshot" | "report" | "markdown" | "json" | "verifier" | string;
+    title: string;
+    summary?: string;
+    webUrl?: string | null;
+    previewText?: string;
+    trust?: PiMissionTrustMetadata;
+}
+
+export interface PiApprovalRequestEvent extends BaseEvent {
+    type: "pi.approval.request";
+    schemaVersion: 1;
+    requestId: string;
+    turnId?: string;
+    toolCallId?: string;
+    agentId?: string;
+    title: string;
+    summary?: string;
+    risk: "low" | "medium" | "high";
+    actionLabel?: string;
+    metadata?: Record<string, string | number | boolean | null>;
+}
+
+export interface PiClarificationRequestEvent extends BaseEvent {
+    type: "pi.clarification.request";
+    schemaVersion: 1;
+    requestId: string;
+    turnId?: string;
+    agentId?: string;
+    title: string;
+    prompt: string;
+    control: "input" | "select" | "multiSelect";
+    options?: Array<{ label: string; value: string; description?: string }>;
+}
+
+export interface PiSubagentUpdateEvent extends BaseEvent {
+    type: "pi.subagent.update";
+    schemaVersion: 1;
+    agentId: string;
+    agentName?: string;
+    role: string;
+    state: "queued" | "running" | "blocked" | "done" | "failed";
+    task?: string;
+    summary?: string;
+}
+
+export interface PiSubagentsProgressEntry {
+    index?: number;
+    agent: string;
+    status: "pending" | "running" | "completed" | "complete" | "failed" | "detached" | "paused" | "queued" | string;
+    activityState?: "active_long_running" | "needs_attention" | string;
+    task?: string;
+    skills?: string[];
+    lastActivityAt?: number;
+    currentTool?: string;
+    currentToolArgs?: string;
+    currentToolStartedAt?: number;
+    currentPath?: string;
+    recentTools?: Array<{ tool: string; args?: string; endMs?: number }>;
+    recentOutput?: string[];
+    toolCount?: number;
+    turnCount?: number;
+    tokens?: number | { input?: number; output?: number; total?: number };
+    durationMs?: number;
+    error?: string;
+}
+
+export interface PiSubagentsStatusEvent extends BaseEvent {
+    type: "pi.subagents.status";
+    schemaVersion: 1;
+    runId: string;
+    asyncId?: string;
+    mode: "single" | "parallel" | "chain" | string;
+    state: "queued" | "running" | "complete" | "completed" | "failed" | "paused" | "detached" | string;
+    agent?: string;
+    agentId?: string;
+    agentName?: string;
+    task?: string;
+    summary?: string;
+    activityState?: "active_long_running" | "needs_attention" | string;
+    currentTool?: string;
+    currentToolStartedAt?: number;
+    currentPath?: string;
+    turnCount?: number;
+    toolCount?: number;
+    durationMs?: number;
+    sessionFile?: string;
+    outputFile?: string;
+    progress?: PiSubagentsProgressEntry[];
+}
+
+export interface PiSubagentsControlEvent extends BaseEvent {
+    type: "pi.subagents.control";
+    schemaVersion: 1;
+    runId: string;
+    agent: string;
+    agentId?: string;
+    agentName?: string;
+    controlType: "active_long_running" | "needs_attention" | string;
+    to?: "active_long_running" | "needs_attention" | string;
+    message: string;
+    reason?: string;
+    currentTool?: string;
+    currentToolDurationMs?: number;
+    elapsedMs?: number;
+    toolCount?: number;
+    turnCount?: number;
+    tokens?: number;
+}
+
+export interface PiSubagentsResultEvent extends BaseEvent {
+    type: "pi.subagents.result";
+    schemaVersion: 1;
+    runId: string;
+    asyncId?: string;
+    mode: "single" | "parallel" | "chain" | string;
+    status: "completed" | "failed" | "paused" | "detached" | string;
+    agent?: string;
+    agentId?: string;
+    agentName?: string;
+    summary: string;
+    sessionFile?: string;
+    artifactPath?: string;
+    artifactPaths?: Record<string, string>;
+    usage?: Record<string, unknown>;
+    results?: Array<Record<string, unknown>>;
+}
+
+export interface PiSubagentsAsyncEvent extends BaseEvent {
+    type: "pi.subagents.async";
+    schemaVersion: 1;
+    asyncId: string;
+    runId?: string;
+    state: "queued" | "running" | "complete" | "completed" | "failed" | "paused" | string;
+    mode?: "single" | "chain" | string;
+    agent?: string;
+    agents?: string[];
+    summary?: string;
+    asyncDir?: string;
+    sessionDir?: string;
+    outputFile?: string;
+}
+
+export interface PiContextCompactionEvent extends BaseEvent {
+    type: "pi.context.compaction";
+    schemaVersion: 1;
+    status: "started" | "completed";
+    summary?: string;
+}
+
+export interface PiRetryEvent extends BaseEvent {
+    type: "pi.retry";
+    schemaVersion: 1;
+    status: "started" | "completed";
+    reason?: string;
+}
+
+export interface PiUiRequestEvent extends BaseEvent {
+    type: "pi.ui.request";
+    schemaVersion: 1;
+    requestId: string;
+    turnId?: string;
+    agentId?: string;
+    title: string;
+    message?: string;
+    control: "notify" | "status" | "widget" | "custom";
+    widgetKind?: string;
+    status?: "info" | "warning" | "error" | "success" | string;
+}
+
+export type PiMissionUiEvent =
+    | PiOrchestrationStartEvent
+    | PiTurnStartEvent
+    | PiTurnDeltaEvent
+    | PiTurnEndEvent
+    | PiToolStartEvent
+    | PiToolEndEvent
+    | PiArtifactUpsertEvent
+    | PiApprovalRequestEvent
+    | PiClarificationRequestEvent
+    | PiSubagentUpdateEvent
+    | PiSubagentsStatusEvent
+    | PiSubagentsControlEvent
+    | PiSubagentsResultEvent
+    | PiSubagentsAsyncEvent
+    | PiContextCompactionEvent
+    | PiRetryEvent
+    | PiUiRequestEvent;
 
 export interface DynamicMissionLifecycleEvent extends BaseEvent {
     type: "mission_seeded" | "mission_completed" | "mission_blocked" | "mission_failed" | "mission_cancelled";
@@ -451,6 +1019,7 @@ export interface JobTerminalEvent extends BaseEvent {
     jobId: string;
     status: JobStatusLite;
     totalDuration?: string;
+    reason?: string;
 }
 
 export type MissionEvent =
@@ -466,6 +1035,17 @@ export type MissionEvent =
     | AgentErrorEvent
     | ToolCallStartedEvent
     | ToolCallEndedEvent
+    | ToolProgressEvent
+    | LlmRequestStartedEvent
+    | LlmStreamPhaseChangedEvent
+    | AssistantTextStreamEvent
+    | ThinkingStreamEvent
+    | ActivityRollupEvent
+    | UserMessageQueuedEvent
+    | TurnInterruptEvent
+    | DiagnosticEvent
+    | RuntimeGuardEvent
+    | TrustOrRuntimeEvent
     | ActionEvent
     | ChangeRecordedEvent
     | ArtifactAddedEvent
@@ -491,6 +1071,7 @@ export type MissionEvent =
     | SubagentResultEvent
     | MissionReplannedEvent
     | VerifierVerdictEvent
+    | PiMissionUiEvent
     | DynamicMissionLifecycleEvent
     | DynamicResourceLockEvent
     | JobTerminalEvent;

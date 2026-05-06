@@ -1,0 +1,31 @@
+{
+  "topbarText": "Mission controlFabric ClawHubverifier rejectedcompleteVerifier rejected · dynamic · 3 agents",
+  "promptText": "YouTask promptFabric ClawHubCreate an end to end solution (ingestion, transformation, semantic modelling and a report) which shows all Fabric items I have access to in a nice appropriate visualization. Work in folder tmp_wukasz3.Fabric ClawHubFabricItems_LakehousePipeline_1task_prompt_overview.pngFabric workshop (1).pdf",
+  "promptInTopbar": false,
+  "promptMessageVisible": true,
+  "contextChipText": "Fabric ClawHubFabricItems_LakehousePipeline_1task_prompt_overview.pngFabric workshop (1).pdf",
+  "chatOverflowY": "auto",
+  "chatClientHeight": 667,
+  "chatScrollHeight": 2109,
+  "rowCount": 16,
+  "summaryVisible": true,
+  "composerVisible": true,
+  "frameBeforeDisplay": "none",
+  "frameBeforeContent": "\"\"",
+  "shellStyle": {
+    "display": "grid",
+    "content": "normal",
+    "overflowY": "hidden",
+    "backgroundImage": "none",
+    "borderImageSource": "none",
+    "boxShadow": "none"
+  },
+  "overlaps": {
+    "topbarChat": 0,
+    "chatComposer": 0,
+    "chatSummary": 0,
+    "composerSummary": 0
+  },
+  "rowOverlaps": [],
+  "overflows": []
+}

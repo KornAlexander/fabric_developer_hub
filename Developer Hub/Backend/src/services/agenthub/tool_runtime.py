@@ -96,6 +96,8 @@ def _looks_like_tool_failure(raw_output: Any) -> bool:
     if not text:
         return False
     lowered = text.lower()
+    if lowered.startswith("error creating inventory solution:"):
+        return True
     if _is_existing_create_conflict(lowered):
         return False
     return (
@@ -182,6 +184,7 @@ class ToolResult:
     tool_name: str
     arg_hash: str
     latency_ms: int | None = None
+    latency_breakdown_ms: dict[str, int] | None = None
 
 
 class ToolRuntimeError(RuntimeError):
@@ -247,6 +250,16 @@ def _check_kill_switches(tool_name: str, tenant_id: str) -> str | None:
 # backend replica (see rate_limit.py rationale). When we scale out, swap
 # for a Redis-backed counter.
 _SESSION_RECENT_CALLS: dict[str, list[tuple[str, str]]] = defaultdict(list)
+_SESSION_SUCCESS_CACHE: dict[tuple[str, str, str], ToolResult] = {}
+
+# Idempotent long-running creation tools can be safely replayed when an
+# agent repeats the exact same call. Without this, a successful create can
+# be followed by an LLM loop that hits the circuit breaker and turns an
+# otherwise good mission into a failure. Non-idempotent tools still use the
+# normal circuit-breaker denial.
+_REPLAYABLE_IDENTICAL_CALL_TOOLS: frozenset[str] = frozenset({
+    "fabric_create_workspace_inventory_solution",
+})
 
 
 def _circuit_broken(session_id: str, tool_name: str, arg_hash: str) -> bool:
@@ -271,6 +284,8 @@ def reset_circuit_breaker(session_id: str) -> None:
     or on explicit operator unjam (via an admin endpoint, not exposed to
     users)."""
     _SESSION_RECENT_CALLS.pop(session_id, None)
+    for key in [key for key in _SESSION_SUCCESS_CACHE if key[0] == session_id]:
+        _SESSION_SUCCESS_CACHE.pop(key, None)
 
 
 # ── Argument scrubbing ──────────────────────────────────────────────
@@ -459,6 +474,29 @@ async def execute(
 
     # (5) Circuit breaker (per-session identical-call loop).
     if ctx.session_id and _circuit_broken(ctx.session_id, tool_name, arg_hash):
+        cache_key = (ctx.session_id, tool_name, arg_hash)
+        cached = _SESSION_SUCCESS_CACHE.get(cache_key)
+        if cached and tool_name in _REPLAYABLE_IDENTICAL_CALL_TOOLS:
+            logger.warning(
+                "[TOOL_RUNTIME] replay cached result for %s after %d identical calls in session %s",
+                tool_name, CIRCUIT_BREAKER_THRESHOLD, ctx.session_id,
+                extra=log_extra("high_level"),
+            )
+            return ToolResult(
+                ok=True,
+                output=cached.output,
+                policy_decision="replayed_cached_result",
+                tool_name=tool_name,
+                arg_hash=arg_hash,
+                latency_ms=0,
+                latency_breakdown_ms={
+                    "backendPolicyMs": 0,
+                    "sidecarHttpMs": 0,
+                    "mcpProcessStartupMs": 0,
+                    "mcpToolExecutionMs": 0,
+                    "backendTotalMs": 0,
+                },
+            )
         logger.warning(
             "[TOOL_RUNTIME] circuit break %s: %d identical calls in session %s",
             tool_name, CIRCUIT_BREAKER_THRESHOLD, ctx.session_id,
@@ -479,6 +517,7 @@ async def execute(
 
     # (6) Dispatch through the existing mcp_client_manager gate, pinning
     #     workspace_id from the VERIFIED caller context (not from args).
+    backend_policy_ms = int((time.monotonic() - started) * 1000)
     try:
         logger.info(
             "[TOOL_RUNTIME] dispatch allowed tool=%s session=%s sensitivity=%s auto_allowed=%s arg_hash=%s dropped_identity_keys=%s",
@@ -490,13 +529,10 @@ async def execute(
             dropped_keys,
             extra=log_extra("diagnostic"),
         )
-        raw_output = await mcp_manager.call_tool(
-            tool_name,
-            args,
-            mcp_tokens,
-            allowed_tools=allowed_tools,
-            workspace_id=ctx.workspace_id,
-            execution_context={
+        dispatch_kwargs = {
+            "allowed_tools": allowed_tools,
+            "workspace_id": ctx.workspace_id,
+            "execution_context": {
                 "agent_id": ctx.agent_id,
                 "agent_name": ctx.agent_name,
                 "actor_role": ctx.actor_role,
@@ -506,29 +542,68 @@ async def execute(
                 "task_title": ctx.task_title,
                 "tool_call_id": ctx.tool_call_id,
             },
-        )
+        }
+        class_metric_dispatch = getattr(type(mcp_manager), "call_tool_with_metrics", None)
+        instance_metric_dispatch = getattr(mcp_manager, "__dict__", {}).get("call_tool_with_metrics")
+        if class_metric_dispatch is not None:
+            call_result = await class_metric_dispatch(
+                mcp_manager,
+                tool_name,
+                args,
+                mcp_tokens,
+                **dispatch_kwargs,
+            )
+            raw_output = getattr(call_result, "output", call_result)
+            nested_breakdown = dict(getattr(call_result, "latency_breakdown_ms", {}) or {})
+        elif instance_metric_dispatch is not None:
+            call_result = await instance_metric_dispatch(
+                tool_name,
+                args,
+                mcp_tokens,
+                **dispatch_kwargs,
+            )
+            raw_output = getattr(call_result, "output", call_result)
+            nested_breakdown = dict(getattr(call_result, "latency_breakdown_ms", {}) or {})
+        else:
+            raw_output = await mcp_manager.call_tool(
+                tool_name,
+                args,
+                mcp_tokens,
+                **dispatch_kwargs,
+            )
+            nested_breakdown = {}
         latency_ms = int((time.monotonic() - started) * 1000)
+        latency_breakdown_ms = {
+            "backendPolicyMs": backend_policy_ms,
+            **nested_breakdown,
+            "backendTotalMs": latency_ms,
+        }
         tool_failed = _looks_like_tool_failure(raw_output)
         logger.info(
-            "[TOOL_RUNTIME] dispatch end tool=%s session=%s ok=%s decision=%s arg_hash=%s latency_ms=%d output_chars=%d preview=%.240s",
+            "[TOOL_RUNTIME] dispatch end tool=%s session=%s ok=%s decision=%s arg_hash=%s latency_ms=%d latency_breakdown_ms=%s output_chars=%d preview=%.2000s",
             tool_name,
             ctx.session_id or "-",
             not tool_failed,
             "tool_error" if tool_failed else "allowed",
             arg_hash,
             latency_ms,
+            json.dumps(latency_breakdown_ms, sort_keys=True),
             len(str(raw_output or "")),
-            bounded_text(raw_output, max_chars=240),
+            bounded_text(raw_output, max_chars=2000),
             extra=log_extra("high_level" if tool_failed else "diagnostic"),
         )
-        return ToolResult(
+        result = ToolResult(
             ok=not tool_failed,
             output=wrap_as_untrusted(tool_name, str(raw_output)),
             policy_decision="tool_error" if tool_failed else "allowed",
             tool_name=tool_name,
             arg_hash=arg_hash,
             latency_ms=latency_ms,
+            latency_breakdown_ms=latency_breakdown_ms,
         )
+        if ctx.session_id and result.ok and tool_name in _REPLAYABLE_IDENTICAL_CALL_TOOLS:
+            _SESSION_SUCCESS_CACHE[(ctx.session_id, tool_name, arg_hash)] = result
+        return result
     except Exception as exc:
         # mcp_client_manager raises ToolPolicyViolation for its own policy
         # checks (path traversal, workspace mismatch, unknown tool). We
@@ -555,6 +630,10 @@ async def execute(
                 tool_name=tool_name,
                 arg_hash=arg_hash,
                 latency_ms=latency_ms,
+                latency_breakdown_ms={
+                    "backendPolicyMs": backend_policy_ms,
+                    "backendTotalMs": latency_ms,
+                },
             )
         logger.exception(
             "[TOOL_RUNTIME] tool %s dispatch failed (session=%s)",
@@ -568,4 +647,8 @@ async def execute(
             tool_name=tool_name,
             arg_hash=arg_hash,
             latency_ms=latency_ms,
+            latency_breakdown_ms={
+                "backendPolicyMs": backend_policy_ms,
+                "backendTotalMs": latency_ms,
+            },
         )

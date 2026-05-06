@@ -13,6 +13,10 @@ const BE = process.env.WORKLOAD_BE_URL || '';
 interface FetchOpts {
     githubToken?: string;
     fabricToken?: string;
+    signal?: AbortSignal;
+    /** Mission/session id for workspace-scoped calls whose path does not
+     *  include `/sessions/{id}`. Forwarded so backend logs can keep `s:<id>`. */
+    agentHubSessionId?: string;
     /** Optional explicit request ID; when omitted, falls back to the
      *  current `withRequestId(...)` scope. Stamped onto `X-Request-ID`
      *  so backend log lines correlate to the originating user action. */
@@ -23,6 +27,7 @@ function headers(opts: FetchOpts): Record<string, string> {
     const h: Record<string, string> = { 'Content-Type': 'application/json' };
     if (opts.githubToken) h['Authorization'] = `Bearer ${opts.githubToken}`;
     if (opts.fabricToken) h['X-Fabric-Token'] = `Bearer ${opts.fabricToken}`;
+    if (opts.agentHubSessionId) h['X-AgentHub-Session-ID'] = opts.agentHubSessionId;
     const rid = opts.requestId ?? currentRequestId();
     if (rid) h['X-Request-ID'] = rid;
     return h;
@@ -162,6 +167,20 @@ export async function getSession(sessionId: string, opts: FetchOpts) {
     return res.json();
 }
 
+export async function getSessionEvents(
+    sessionId: string,
+    opts: FetchOpts & { limit?: number; types?: string; afterSeq?: number },
+): Promise<{ sessionId: string; source: "live" | "persisted" | string; count: number; events: unknown[]; liveExecution?: boolean; sessionStatus?: string; persistedTotal?: number }> {
+    const qs = new URLSearchParams();
+    if (opts.limit != null) qs.set("limit", String(opts.limit));
+    if (opts.types) qs.set("types", opts.types);
+    if (opts.afterSeq != null) qs.set("afterSeq", String(opts.afterSeq));
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    const res = await fetch(`${BE}/api/sessions/${sessionId}/events.json${suffix}`, { headers: headers(opts), signal: opts.signal });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+}
+
 export interface SessionStatusResponse {
     id: string;
     status: string;
@@ -190,11 +209,27 @@ export async function cancelSession(sessionId: string, opts: FetchOpts) {
     return res.json();
 }
 
-export async function sendMessage(sessionId: string, message: string, targetAgentId: string | null, opts: FetchOpts) {
+export interface SendMessageResponse {
+    status: "queued" | string;
+    steeringId?: string;
+    targetMode?: "agent" | "broadcast" | string;
+    mode?: "queue" | "interrupt" | string;
+    targetAgentSessionIds?: string[];
+    targetCount?: number;
+    messagePreview?: string;
+}
+
+export async function sendMessage(
+    sessionId: string,
+    message: string,
+    targetAgentId: string | null,
+    opts: FetchOpts,
+    mode: "queue" | "interrupt" = "queue",
+): Promise<SendMessageResponse> {
     const res = await fetch(`${BE}/api/sessions/${sessionId}/message`, {
         method: 'POST',
         headers: headers(opts),
-        body: JSON.stringify({ message, target_agent_id: targetAgentId }),
+        body: JSON.stringify({ message, target_agent_id: targetAgentId, mode }),
     });
     if (!res.ok) throw new Error(await res.text());
     return res.json();
@@ -220,7 +255,7 @@ export function subscribeToSessionEventsFetch(
         onEvent: (data: unknown) => void;
         onOpen?: () => void;
         onError?: (err: unknown) => void;
-        onClose?: () => void;
+        onClose?: (info: { eventCount: number }) => void;
     },
 ): AbortController {
     const controller = new AbortController();
@@ -230,6 +265,7 @@ export function subscribeToSessionEventsFetch(
     }
 
     (async () => {
+        let eventCount = 0;
         try {
             // SSE is a GET with no body — use minimal headers to avoid
             // triggering a CORS preflight. Content-Type is not needed
@@ -240,6 +276,7 @@ export function subscribeToSessionEventsFetch(
             // Intentionally do not forward the GitHub token as Authorization
             // here: this endpoint expects a Fabric token identity.
             if (opts.fabricToken) sseHeaders['X-Fabric-Token'] = `Bearer ${opts.fabricToken}`;
+            if (opts.agentHubSessionId) sseHeaders['X-AgentHub-Session-ID'] = opts.agentHubSessionId;
             const rid = opts.requestId ?? currentRequestId();
             if (rid) sseHeaders['X-Request-ID'] = rid;
 
@@ -288,6 +325,7 @@ export function subscribeToSessionEventsFetch(
                     }
                     if (dataStr) {
                         try {
+                            eventCount += 1;
                             callbacks.onEvent(JSON.parse(dataStr));
                         } catch {
                             /* ignore malformed JSON */
@@ -295,10 +333,10 @@ export function subscribeToSessionEventsFetch(
                     }
                 }
             }
-            callbacks.onClose?.();
+            callbacks.onClose?.({ eventCount });
         } catch (err) {
             if ((err as DOMException)?.name === 'AbortError') {
-                callbacks.onClose?.();
+                callbacks.onClose?.({ eventCount });
                 return;
             }
             callbacks.onError?.(err);
@@ -626,6 +664,39 @@ export async function listWorkspaceItems(
  */
 export function warmWorkspaceItems(workspaceId: string, opts: FetchOpts): void {
     void listWorkspaceItems(workspaceId, opts).catch(() => {});
+}
+
+// ── PBI Fixer proxy ─────────────────────────────────────────────────
+
+/** Forward a single Fabric or Power BI REST call through the backend so
+ *  the backend can do the OBO token exchange (the iframe SDK can only
+ *  issue workload-audience tokens, which the Fabric/PBI APIs reject).
+ *
+ *  ``api``: ``"fabric"`` → root ``api.fabric.microsoft.com/v1`` |
+ *           ``"pbi"``    → root ``api.powerbi.com/v1.0/myorg``
+ *  ``path``: must start with ``"/"``.
+ */
+export async function pbiFixerProxy<T>(
+    api: "fabric" | "pbi",
+    path: string,
+    method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
+    body: unknown,
+    opts: FetchOpts,
+): Promise<T> {
+    const res = await fetch(`${BE}/api/pbi-fixer/proxy`, {
+        method: "POST",
+        headers: headers(opts),
+        body: JSON.stringify({ api, path, method, body: body ?? null }),
+    });
+    if (!res.ok) {
+        const text = await res.text();
+        const err: Error & { status?: number } = new Error(
+            `Proxy ${method} ${api}${path} failed (${res.status}): ${text}`,
+        );
+        err.status = res.status;
+        throw err;
+    }
+    return (await res.json()) as T;
 }
 
 // ── Attachments ─────────────────────────────────────────────────────

@@ -18,7 +18,7 @@
 
 import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useHistory } from "react-router-dom";
-import { Spinner, Dropdown, Option, Badge, Button, Card, Tab, TabList, Tooltip } from "@fluentui/react-components";
+import { Spinner, Badge, Card, Button, Dropdown, Option, Textarea, Tooltip } from "@fluentui/react-components";
 import {
     Checkmark12Filled,
     Dismiss12Filled,
@@ -28,32 +28,41 @@ import {
     Delete20Regular,
     Settings16Regular,
     Copy20Regular,
-    ArrowDownload20Regular,
     Info16Regular,
-    CheckmarkCircle16Filled,
     Flash16Regular,
+    Send20Regular,
+    Stop20Regular,
+    Target20Regular,
     Open20Regular,
-    ArrowResetRegular,
-    Resize20Regular,
-    Timer16Regular,
+    PeopleTeam20Regular,
+    Database20Regular,
+    BuildingFactory20Regular,
+    DocumentPdf20Regular,
+    Image20Regular,
+    Folder20Regular,
 } from "@fluentui/react-icons";
 import type { WorkloadClientAPI } from "@ms-fabric/workload-client";
 
 import * as api from "../../../controller/AgentHubApi";
 import { callAuthAcquireAccessToken } from "../../../controller/AgentHubController";
 import { externalLinkOnClick } from "../openExternalTab";
-import { TaskPromptRecap } from "../TaskPromptRecap";
 import { TeamPanel } from "../team/TeamPanel";
 import { ApprovalCard } from "../approvals/ApprovalCard";
 import { useMissionStream } from "./useMissionStream";
-import { teamFromComposition } from "./types";
-import { agentIcon, agentKind } from "../team/OrchCanvas";
+import { agentKind } from "../team/OrchCanvas";
 import type { LogEntry, PendingApproval, MissionState } from "./missionReducer";
-import type { ChangeKind, ChangeRecord, JobStatusLite, PublicLogCategory } from "./events";
+import type { Artifact, ChangeKind, ChangeRecord, MissionOutputCreatedItem } from "./events";
 import type { PlanStep, RecoveryAction, Team, TeamNodeStatus } from "../plan/types";
-import { formatDurationMs, formatToolLine, formatToolName } from "./logPresentation";
+import { formatDurationMs, formatLatencyBreakdownMs, formatToolLine, formatToolName } from "./logPresentation";
 import { formatToolArgsSummary, formatToolCommand, formatVisibleRuntimeText } from "./logPresentation";
-import { getMissionObservationSnapshot } from "./missionObservability";
+import { buildExecutionTranscriptRows, type ExecutionRowState } from "./executionStream";
+import { MissionPiSurface } from "./pi/MissionPiSurface";
+import {
+    PI_LOG_COMPACTION_EXTENSION,
+    PI_MISSION_UI_EXTENSION,
+    PI_ORCHESTRATION_RUNTIME_PACKAGE,
+    PI_SUBAGENTS_PACKAGE,
+} from "./pi/piExtensionPackages";
 
 // ────────────────────────────────────────────────────────────────────
 // Props & helpers
@@ -68,35 +77,17 @@ export interface MissionControlPageProps {
         task_description?: string;
         workspace_id?: string;
         workspace_name?: string | null;
+        runtime?: string | null;
         started_at?: string | null;
         status?: string;
         context?: Record<string, any> | null;
+        composition?: any | null;
     } | null;
 }
 
 type LogViewMode = "overview" | "detail";
-type LogCategoryFilter = PublicLogCategory;
-type CanvasViewPreference = "agents" | "logs";
 type RailTab = "overview" | "diagnostics";
 
-const LOG_CATEGORY_ORDER: LogCategoryFilter[] = ["high_level", "detailed", "diagnostic"];
-const LOG_CATEGORY_LABEL: Record<LogCategoryFilter, string> = {
-    high_level: "High level",
-    detailed: "Detailed",
-    diagnostic: "Diagnostics",
-};
-const LOG_CATEGORY_TAB_LABEL: Record<LogCategoryFilter, string> = {
-    high_level: "High",
-    detailed: "Detailed",
-    diagnostic: "Diag",
-};
-
-function fmtElapsed(sec: number): string {
-    const h = Math.floor(sec / 3600);
-    const m = Math.floor((sec % 3600) / 60);
-    const s = sec % 60;
-    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-}
 function fmtLogTs(iso: string): string {
     try {
         const d = new Date(iso);
@@ -131,6 +122,21 @@ function nameFor(state: MissionState, agentId: string): string {
 
     // 5) Fall back to first 8 chars of UUID
     return agentId.length > 12 ? agentId.slice(0, 8) : agentId;
+}
+
+function activeAgentNameFor(state: MissionState, runtimeSlots: RuntimeSlotView[]): string | null {
+    const latestAgentLog = [...state.logs].reverse().find((entry) => entry.agentName && !isInternalAgentRef(entry.agentName));
+    if (latestAgentLog?.agentName) return latestAgentLog.agentName;
+
+    const activeProgress = [...Object.values(state.slotProgress || {})].reverse().find((progress: any) => {
+        const status = String(progress?.status || "").toLowerCase();
+        return /^(running|waiting|approval_required)$/.test(status) && progress?.agentName;
+    }) as any;
+    if (activeProgress?.agentName) return String(activeProgress.agentName);
+
+    const activeRuntimeSlot = runtimeSlots.find((slot) => slot.lifecycle === "running" || slot.lifecycle === "waiting")
+        || runtimeSlots.find((slot) => slot.isActive);
+    return activeRuntimeSlot?.agentName || (state.activeAgentId ? nameFor(state, state.activeAgentId) : null);
 }
 
 function kindFor(agentId: string, comp: any): string {
@@ -234,40 +240,17 @@ interface RuntimeSlotView {
     reason?: string;
 }
 
-interface CanvasNodeLayout {
-    x: number;
-    y: number;
-    width?: number;
-    logHeight?: number;
-}
+type PiSubagentsBridgeRowKind = "status" | "control" | "result" | "async";
 
-type CanvasLayoutOverrides = Record<string, CanvasNodeLayout>;
-
-const MIN_AGENT_NODE_WIDTH = 176;
-const MAX_AGENT_NODE_WIDTH = 520;
-const MIN_AGENT_LOG_HEIGHT = 84;
-const MAX_AGENT_LOG_HEIGHT = 300;
-
-function clampNumber(value: number, min: number, max: number): number {
-    return Math.max(min, Math.min(max, value));
-}
-
-function defaultSubNodeLayout(index: number, total: number): CanvasNodeLayout {
-    if (total <= 1) return { x: 50, y: 72 };
-    if (total === 2) return { x: index === 0 ? 28 : 72, y: 70 };
-    if (total === 3) return { x: [16, 50, 84][index] ?? 50, y: index === 1 ? 72 : 66 };
-    const x = 12 + (index * (76 / Math.max(total - 1, 1)));
-    return { x, y: index % 2 === 1 ? 74 : 66 };
-}
-
-function nodeStyle(layout: CanvasNodeLayout): React.CSSProperties {
-    return {
-        "--x": `${layout.x}%`,
-        "--y": `${layout.y}%`,
-        ...(layout.width ? { "--node-w": `${layout.width}px` } : {}),
-        ...(layout.logHeight ? { "--agent-log-h": `${layout.logHeight}px` } : {}),
-        transform: "translate(-50%, -50%)",
-    } as React.CSSProperties;
+interface PiSubagentsBridgeRow {
+    key: string;
+    kind: PiSubagentsBridgeRowKind;
+    seq: number;
+    runId: string;
+    title: string;
+    state: string;
+    summary: string;
+    meta: string[];
 }
 
 function lifecycleToNodeStatus(lifecycle: RuntimeLifecycle): TeamNodeStatus {
@@ -365,6 +348,8 @@ function buildRuntimeSlotViews(state: MissionState): RuntimeSlotView[] {
             slot.agentId,
             runtimeAgentId,
             String((progress as any)?.slotId || ""),
+            String((progress as any)?.agentName || ""),
+            String((progress as any)?.role || ""),
         ].includes(state.activeAgentId);
 
         let lifecycle: RuntimeLifecycle = "planned";
@@ -372,7 +357,7 @@ function buildRuntimeSlotViews(state: MissionState): RuntimeSlotView[] {
             lifecycle = "failed";
         } else if (runtimeState === "completed" || progressStatus === "done") {
             lifecycle = "finished";
-        } else if (hasPendingApproval || progressStatus === "approval_required" || runtimeState === "waiting") {
+        } else if (hasPendingApproval || progressStatus === "approval_required" || progressStatus === "waiting" || runtimeState === "waiting") {
             lifecycle = "waiting";
         } else if (isActive || runtimeState === "running" || progressStatus === "running") {
             lifecycle = "running";
@@ -389,13 +374,15 @@ function buildRuntimeSlotViews(state: MissionState): RuntimeSlotView[] {
             lifecycle = "waiting";
         }
 
-        if (state.jobStatus === "completed" && (lifecycle === "spinning_up" || lifecycle === "waiting")) {
+        if (state.jobStatus === "completed" || state.terminalType === "job_complete") {
             lifecycle = "finished";
+        } else if (state.jobStatus === "cancelled" || state.terminalType === "job_cancelled") {
+            lifecycle = lifecycle === "failed" ? "failed" : "finished";
         }
 
         const reason = hasPendingApproval
             ? "Approval required"
-            : String((progress as any)?.reason || "") || undefined;
+            : String((progress as any)?.currentStep || (progress as any)?.reason || "") || undefined;
 
         const status = progressStatus
             || runtimeState
@@ -450,23 +437,6 @@ function applyRuntimeTeam(baseTeam: Team | null, runtimeSlots: RuntimeSlotView[]
     };
 }
 
-function isHighSignalLog(entry: LogEntry): boolean {
-    const level = resolvedLogLevel(entry);
-    if (entry.logCategory === "high_level") return true;
-    if (level === "error" || entry.kind === "error") return true;
-    if (level === "warn") return true;
-    if (entry.kind === "action" || entry.kind === "decision") return true;
-    if (entry.kind === "phase" && /complete|failed|approval/i.test(entry.message)) return true;
-    if (entry.kind === "log" && /approval|required|decline|retry|blocked/i.test(entry.message)) return true;
-    if (entry.kind === "tool_end") {
-        if (resolvedLogLevel(entry) === "error") return true;
-        const tool = String(entry.toolName || "").toLowerCase();
-        if (entry.durationMs != null && entry.durationMs >= 5000) return true;
-        if (/(create|update|delete|publish|deploy|write|apply|grant|revoke|execute)/.test(tool)) return true;
-    }
-    return false;
-}
-
 const CHANGE_SECTION_ORDER: ChangeKind[] = ["created", "updated", "deleted", "important_action"];
 
 const CHANGE_SECTION_LABEL: Record<ChangeKind, string> = {
@@ -497,39 +467,6 @@ function changeIcon(kind: ChangeKind, targetScope?: string) {
     return <Settings16Regular />;
 }
 
-function runtimeStatusLabel(slot: Pick<RuntimeSlotView, "lifecycle" | "status">): string {
-    if (slot.lifecycle === "finished") return "Done";
-    if (slot.lifecycle === "failed") return "Failed";
-    if (slot.lifecycle === "waiting") return "Waiting";
-    if (slot.lifecycle === "spinning_up") return "Starting";
-    if (slot.lifecycle === "running") return "Running";
-    return slot.status || "Planned";
-}
-
-function runtimeNodeClass(slot: RuntimeSlotView): string {
-    if (slot.lifecycle === "finished") return " agent-node--done";
-    if (slot.lifecycle === "failed" || slot.lifecycle === "waiting") return " agent-node--attention";
-    if (slot.lifecycle === "spinning_up") return " agent-node--spawning";
-    if (slot.lifecycle === "running" || slot.isActive) return " agent-node--running";
-    return "";
-}
-
-function runtimePillClass(slot: RuntimeSlotView): string {
-    if (slot.lifecycle === "finished") return "state-pill state-pill--done";
-    if (slot.lifecycle === "failed" || slot.lifecycle === "waiting") return "state-pill state-pill--attention";
-    if (slot.lifecycle === "spinning_up") return "state-pill state-pill--spawning";
-    if (slot.lifecycle === "running" || slot.isActive) return "state-pill state-pill--running";
-    return "state-pill";
-}
-
-function runtimeBadgeColor(slot: RuntimeSlotView): "success" | "warning" | "danger" | "brand" | "subtle" {
-    if (slot.lifecycle === "finished" || slot.lifecycle === "running" || slot.isActive) return "success";
-    if (slot.lifecycle === "spinning_up") return "brand";
-    if (slot.lifecycle === "failed") return "danger";
-    if (slot.lifecycle === "waiting") return "warning";
-    return "subtle";
-}
-
 function changeBadgeColor(status?: string): "success" | "warning" | "danger" | "brand" | "subtle" {
     const normalized = String(status || "tracked").toLowerCase();
     if (normalized === "applied" || normalized === "completed" || normalized === "ready") return "success";
@@ -552,15 +489,236 @@ function changeStatusLabel(status?: string): string {
     return normalized.charAt(0).toUpperCase() + normalized.slice(1);
 }
 
+const HIDDEN_OUTPUT_TYPES = new Set(["browser_visual_render", "browser_visual", "browser_screenshot", "validation", "solution_validation", "inventory_validation"]);
+
+type MissionOutputNode = {
+    key: string;
+    id?: string;
+    name: string;
+    type: string;
+    mode: string;
+    status?: string;
+    webUrl?: string;
+    summary?: string;
+    isFolder: boolean;
+    folderId?: string;
+    folderName?: string;
+    parentFolderId?: string;
+    children: MissionOutputNode[];
+};
+
+function outputString(value: unknown): string | undefined {
+    if (typeof value !== "string") return undefined;
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function outputTypeKey(value: unknown): string {
+    return String(value || "item").trim().toLowerCase().replace(/[\s-]+/g, "_");
+}
+
+function isHiddenOutputType(value: unknown): boolean {
+    return HIDDEN_OUTPUT_TYPES.has(outputTypeKey(value));
+}
+
+function isFolderOutputType(value: unknown): boolean {
+    return outputTypeKey(value) === "folder" || outputTypeKey(value) === "workspaceinventorysolution";
+}
+
+function outputModeLabel(mode?: string): string {
+    const normalized = String(mode || "updated").toLowerCase();
+    if (normalized === "created" || normalized === "written") return "Created";
+    if (normalized === "updated") return "Updated";
+    if (normalized === "deleted") return "Deleted";
+    if (normalized === "draft") return "Draft";
+    if (normalized === "important_action") return "Action";
+    return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+}
+
+function outputModeBadgeColor(mode?: string): "success" | "warning" | "danger" | "brand" | "subtle" {
+    const normalized = String(mode || "updated").toLowerCase();
+    if (normalized === "created" || normalized === "written") return "success";
+    if (normalized === "updated") return "brand";
+    if (normalized === "deleted") return "danger";
+    if (normalized === "draft" || normalized === "important_action") return "warning";
+    return "subtle";
+}
+
+function outputTypeLabel(type?: string): string {
+    const raw = String(type || "Item").trim() || "Item";
+    if (raw === "WorkspaceInventorySolution") return "Folder";
+    return raw.replace(/_/g, " ").replace(/([a-z])([A-Z])/g, "$1 $2");
+}
+
+function outputDetails(details: unknown): Record<string, unknown> {
+    if (!details || typeof details !== "object" || Array.isArray(details)) return {};
+    return details as Record<string, unknown>;
+}
+
+function visibleCreatedItems(items?: MissionOutputCreatedItem[] | null): MissionOutputCreatedItem[] {
+    if (!Array.isArray(items)) return [];
+    return items.filter((item) => {
+        const type = item.type || item.itemType;
+        return !isHiddenOutputType(type);
+    });
+}
+
+function createdItemToOutputNode(item: MissionOutputCreatedItem, mode: string, status?: string): MissionOutputNode | null {
+    const type = item.type || item.itemType || "Item";
+    if (isHiddenOutputType(type)) return null;
+    const name = outputString(item.displayName) || outputString(item.name) || outputString(item.id) || outputTypeLabel(type);
+    const id = outputString(item.id) || outputString(item.itemId);
+    const folderLike = isFolderOutputType(type);
+    const key = `${folderLike ? "folder" : "item"}:${id || `${outputTypeKey(type)}:${name}`}`;
+    return {
+        key,
+        id,
+        name,
+        type: folderLike ? "Folder" : type,
+        mode,
+        status: outputString(item.status) || status,
+        webUrl: outputString(item.webUrl) || outputString(item.url),
+        summary: outputString(item.description),
+        isFolder: folderLike,
+        folderId: folderLike ? undefined : outputString(item.folderId),
+        folderName: outputString(item.folderName),
+        parentFolderId: folderLike ? outputString(item.parentFolderId) || outputString(item.folderId) : undefined,
+        children: [],
+    };
+}
+
+function changeToOutputNode(change: ChangeRecord): MissionOutputNode | null {
+    if (isHiddenOutputType(change.targetType)) return null;
+    const folderLike = change.targetScope === "folder" || isFolderOutputType(change.targetType);
+    const name = outputString(change.targetName) || outputString(change.folderName) || outputString(change.targetId) || outputTypeLabel(change.targetType);
+    const id = outputString(change.targetId) || outputString(change.folderId);
+    return {
+        key: `${folderLike ? "folder" : "change"}:${id || `${outputTypeKey(change.targetType)}:${name}`}`,
+        id,
+        name,
+        type: folderLike ? "Folder" : change.targetType,
+        mode: change.kind,
+        status: change.status,
+        webUrl: change.webUrl,
+        summary: change.summary,
+        isFolder: folderLike,
+        folderId: folderLike ? undefined : change.folderId,
+        folderName: change.folderName,
+        parentFolderId: folderLike ? change.parentFolderId : undefined,
+        children: [],
+    };
+}
+
+function artifactToOutputNode(artifact: Artifact): MissionOutputNode | null {
+    if (isHiddenOutputType(artifact.kind)) return null;
+    const details = outputDetails(artifact.details);
+    const type = outputString(details.type) || artifact.kind;
+    if (isHiddenOutputType(type)) return null;
+    const folderLike = isFolderOutputType(type);
+    const id = outputString(details.id) || outputString(details.itemId) || outputString(details.folderId) || artifact.artifactId;
+    const name = outputString(details.displayName) || outputString(details.name) || outputString(details.folderName) || artifact.name;
+    return {
+        key: `${folderLike ? "folder" : "artifact"}:${id || `${outputTypeKey(type)}:${name}`}`,
+        id,
+        name,
+        type: folderLike ? "Folder" : type,
+        mode: artifact.state || "draft",
+        status: artifact.state,
+        webUrl: artifact.webUrl || outputString(details.webUrl) || outputString(details.url),
+        summary: artifact.summary || outputString(details.description),
+        isFolder: folderLike,
+        folderId: folderLike ? undefined : outputString(details.folderId),
+        folderName: outputString(details.folderName),
+        parentFolderId: folderLike ? outputString(details.parentFolderId) : undefined,
+        children: [],
+    };
+}
+
+function mergeOutputNodes(existing: MissionOutputNode, incoming: MissionOutputNode): MissionOutputNode {
+    return {
+        ...existing,
+        name: existing.name || incoming.name,
+        type: existing.type || incoming.type,
+        mode: existing.mode === "draft" ? incoming.mode : existing.mode,
+        status: existing.status || incoming.status,
+        webUrl: existing.webUrl || incoming.webUrl,
+        summary: existing.summary || incoming.summary,
+        id: existing.id || incoming.id,
+        folderId: existing.folderId || incoming.folderId,
+        folderName: existing.folderName || incoming.folderName,
+        parentFolderId: existing.parentFolderId || incoming.parentFolderId,
+        isFolder: existing.isFolder || incoming.isFolder,
+    };
+}
+
+function buildMissionOutputTree(changes: ChangeRecord[], artifacts: Artifact[]): MissionOutputNode[] {
+    const orderedKeys: string[] = [];
+    const nodes = new Map<string, MissionOutputNode>();
+    const addNode = (node: MissionOutputNode | null) => {
+        if (!node || isHiddenOutputType(node.type)) return;
+        const existing = nodes.get(node.key);
+        if (existing) {
+            nodes.set(node.key, mergeOutputNodes(existing, node));
+            return;
+        }
+        nodes.set(node.key, node);
+        orderedKeys.push(node.key);
+    };
+
+    for (const change of changes) {
+        const items = visibleCreatedItems(change.createdItems);
+        if (items.length > 0) {
+            const parentNode = changeToOutputNode(change);
+            if (parentNode?.isFolder) addNode(parentNode);
+            items.forEach((item) => addNode(createdItemToOutputNode(item, change.kind, change.status)));
+            continue;
+        }
+        addNode(changeToOutputNode(change));
+    }
+
+    for (const artifact of artifacts) {
+        const details = outputDetails(artifact.details);
+        const createdItems = visibleCreatedItems(details.createdItems as MissionOutputCreatedItem[] | undefined);
+        if (createdItems.length > 0) {
+            const parentNode = artifactToOutputNode(artifact);
+            if (parentNode?.isFolder) addNode(parentNode);
+            createdItems.forEach((item) => addNode(createdItemToOutputNode(item, artifact.state || "draft", artifact.state)));
+            continue;
+        }
+        addNode(artifactToOutputNode(artifact));
+    }
+
+    const flatNodes = orderedKeys.map((key) => nodes.get(key)).filter(Boolean).map((node) => ({ ...node!, children: [] }));
+    const folderById = new Map<string, MissionOutputNode>();
+    const folderByName = new Map<string, MissionOutputNode>();
+    for (const node of flatNodes) {
+        if (!node.isFolder) continue;
+        if (node.id) folderById.set(node.id, node);
+        folderByName.set(node.name.toLowerCase(), node);
+    }
+
+    const roots: MissionOutputNode[] = [];
+    for (const node of flatNodes) {
+        const parent = node.isFolder
+            ? (node.parentFolderId ? folderById.get(node.parentFolderId) : undefined)
+            : (node.folderId ? folderById.get(node.folderId) : undefined) || (node.folderName ? folderByName.get(node.folderName.toLowerCase()) : undefined);
+        if (parent && parent.key !== node.key) {
+            parent.children.push(node);
+        } else {
+            roots.push(node);
+        }
+    }
+    return roots;
+}
+
+function countOutputNodes(nodes: MissionOutputNode[]): number {
+    return nodes.reduce((total, node) => total + 1 + countOutputNodes(node.children), 0);
+}
+
 function changeLedgerRowClass(change: ChangeRecord): string {
     if (change.status && change.status !== "applied") return ` ledger-row--${change.kind} ledger-row--pending ledger-row--live`;
     if (change.kind === "important_action") return " ledger-row--action";
     return ` ledger-row--${change.kind}`;
-}
-
-function logCategoryMatches(entry: LogEntry, category: LogCategoryFilter): boolean {
-    if (category === "high_level") return entry.logCategory === "high_level" || isHighSignalLog(entry);
-    return entry.logCategory === category;
 }
 
 function logBelongsToSlot(entry: LogEntry, slot: RuntimeSlotView): boolean {
@@ -569,32 +727,298 @@ function logBelongsToSlot(entry: LogEntry, slot: RuntimeSlotView): boolean {
     return entryKeys.some((entryKey) => slotKeys.some((slotKey) => entryKey === slotKey || entryKey.includes(slotKey) || slotKey.includes(entryKey)));
 }
 
-function nodeLogsForSlot(state: MissionState, slot: RuntimeSlotView, category: LogCategoryFilter): LogEntry[] {
-    return state.logs
-        .filter((entry) => logCategoryMatches(entry, category) && logBelongsToSlot(entry, slot))
-        .slice(-4);
+function readableSlotLabel(slot: RuntimeSlotView): string {
+    return visibleAgentName(slot.agentName) || visibleAgentName(slot.agentId) || slot.role || "Agent";
 }
 
-function generalistLogs(state: MissionState, category: LogCategoryFilter): LogEntry[] {
-    return state.logs
-        .filter((entry) => logCategoryMatches(entry, category))
-        .filter((entry) => !entry.agentId || isInternalAgentRef(entry.agentId) || isInternalAgentRef(entry.agentName || ""))
-        .slice(-4);
+function lifecycleLabel(lifecycle: RuntimeLifecycle): string {
+    if (lifecycle === "running") return "running";
+    if (lifecycle === "waiting") return "waiting";
+    if (lifecycle === "spinning_up") return "starting";
+    if (lifecycle === "finished") return "done";
+    if (lifecycle === "failed") return "failed";
+    return "queued";
 }
 
-function LogWindow({ logs, fallback, large = false }: { logs: LogEntry[]; fallback: string; large?: boolean }) {
-    const visibleLogs = logs.length > 0 ? logs : null;
+function slotLatestActivity(state: MissionState, slot: RuntimeSlotView): string {
+    if (slot.lifecycle === "finished") {
+        if (slot.reason) return visibleRuntimeText(slot.reason).slice(0, 140);
+        return `Completed ${slot.role || readableSlotLabel(slot)}`;
+    }
+    const matchingLog = [...state.logs].reverse().find((entry) => logBelongsToSlot(entry, slot));
+    if (matchingLog) return visibleRuntimeText(matchingLog.message).slice(0, 140);
+    if (slot.reason) return visibleRuntimeText(slot.reason).slice(0, 140);
+    if (slot.lifecycle === "running") return `Working on ${slot.role || readableSlotLabel(slot)}`;
+    if (slot.lifecycle === "waiting") return "Waiting for the next safe step";
+    if (slot.lifecycle === "spinning_up") return `Preparing ${slot.role || readableSlotLabel(slot)}`;
+    return slot.role || readableSlotLabel(slot);
+}
+
+function missionStreamStatusText(state: MissionState, streamStatus?: string | null): string {
+    if (state.terminalType === "job_failed") return "Run failed";
+    if (state.terminalType === "job_cancelled") return "Run cancelled";
+    if (state.terminalType === "job_complete") return latestVerifierIssueMessage(state) ? "Verifier rejected; review evidence" : "Run completed";
+    if (streamStatus) return visibleRuntimeText(streamStatus);
+    if (state.jobStatus === "planned") return "Planning route";
+    if (state.jobStatus === "approved") return "Launch approved";
+    if (state.jobStatus === "running") return "Waiting for agent telemetry";
+    return "Watching mission state";
+}
+
+function latestFailureMessage(state: MissionState): string | null {
+    const entry = [...state.logs].reverse().find((log) => resolvedLogLevel(log) === "error" || log.kind === "error");
+    return entry ? visibleRuntimeText(entry.message) : null;
+}
+
+function latestVerifierIssueMessage(state: MissionState): string | null {
+    const entry = [...state.logs].reverse().find((log) => /verifier\s+rejected|verifier.*failed/i.test(log.message));
+    return entry ? visibleRuntimeText(entry.message) : null;
+}
+
+function hasPendingApproval(state: MissionState): boolean {
+    return Object.values(state.approvals || {}).some((approval) => !approval.resolved);
+}
+
+function missionHeaderStatus(state: MissionState): { statusLabel: string; connectionLabel: string; tone: "running" | "complete" | "failed" | "cancelled" | "waiting" } {
+    if (state.terminalType === "job_failed" || state.jobStatus === "failed") {
+        return { statusLabel: "failed", connectionLabel: "error", tone: "failed" };
+    }
+    if (state.terminalType === "job_cancelled" || state.jobStatus === "cancelled") {
+        return { statusLabel: "cancelled", connectionLabel: "stopped", tone: "cancelled" };
+    }
+    if (state.terminalType === "job_complete" || state.jobStatus === "completed") {
+        return latestVerifierIssueMessage(state)
+            ? { statusLabel: "verifier rejected", connectionLabel: "complete", tone: "failed" }
+            : { statusLabel: "completed", connectionLabel: "complete", tone: "complete" };
+    }
+    if (state.jobStatus === "planned" || state.jobStatus === "approved") {
+        return { statusLabel: state.jobStatus, connectionLabel: "starting", tone: "waiting" };
+    }
+    if (hasPendingApproval(state)) {
+        return { statusLabel: "waiting for approval", connectionLabel: "waiting", tone: "waiting" };
+    }
+    return { statusLabel: state.jobStatus || "running", connectionLabel: "streaming", tone: "running" };
+}
+
+type MissionCompactStatusTone = "running" | "success" | "warning" | "error" | "waiting" | "cancelled" | "quiet";
+
+function missionCompactStatus(
+    state: MissionState,
+    {
+        patternLabel,
+        visibleAgentTotal,
+        streamStatus,
+    }: {
+        patternLabel: string;
+        visibleAgentTotal: number;
+        streamStatus?: string | null;
+    },
+): { tone: MissionCompactStatusTone; label: string; detail: string } {
+    const warningCount = state.logs.filter((entry) => resolvedLogLevel(entry) === "warn" && !/approval required/i.test(entry.message)).length;
+    const errorCount = state.logs.filter((entry) => resolvedLogLevel(entry) === "error" || entry.kind === "error").length;
+    const pendingApprovalCount = Object.values(state.approvals || {}).filter((approval) => !approval.resolved).length;
+    const runShape = `${patternLabel} · ${visibleAgentTotal} agent${visibleAgentTotal === 1 ? "" : "s"}`;
+
+    if (state.terminalType === "job_failed" || state.jobStatus === "failed") {
+        return {
+            tone: "error",
+            label: "Error occurred",
+            detail: latestFailureMessage(state) || `${errorCount || 1} error${errorCount === 1 ? "" : "s"} · ${runShape}`,
+        };
+    }
+    if (state.terminalType === "job_cancelled" || state.jobStatus === "cancelled") {
+        return { tone: "cancelled", label: "Cancelled", detail: runShape };
+    }
+    if (state.terminalType === "job_complete" || state.jobStatus === "completed") {
+        const verifierIssue = latestVerifierIssueMessage(state);
+        if (verifierIssue) return { tone: "error", label: "Verifier rejected", detail: verifierIssue };
+        if (errorCount > 0) return { tone: "error", label: "Completed with errors", detail: `${errorCount} error${errorCount === 1 ? "" : "s"} · ${runShape}` };
+        if (warningCount > 0) return { tone: "warning", label: "Successful with warnings", detail: `${warningCount} warning${warningCount === 1 ? "" : "s"} · ${runShape}` };
+        return { tone: "success", label: "Successful", detail: runShape };
+    }
+    if (pendingApprovalCount > 0) {
+        return { tone: "waiting", label: "Waiting for approval", detail: `${pendingApprovalCount} approval${pendingApprovalCount === 1 ? "" : "s"} · ${runShape}` };
+    }
+    if (streamStatus) {
+        return { tone: "quiet", label: "Reconnecting", detail: visibleRuntimeText(streamStatus).slice(0, 160) };
+    }
+    if (state.jobStatus === "planned" || state.jobStatus === "approved") {
+        return { tone: "waiting", label: "Starting", detail: runShape };
+    }
+    return { tone: "running", label: "Running", detail: runShape };
+}
+
+function MissionChatStatusBar({
+    state,
+    streamStatus,
+    connectionLabel,
+    connectionState,
+    connected,
+    patternLabel,
+    visibleAgentTotal,
+}: {
+    state: MissionState;
+    streamStatus?: string | null;
+    connectionLabel: string;
+    connectionState: string;
+    connected: boolean;
+    patternLabel: string;
+    visibleAgentTotal: number;
+}) {
+    const status = missionCompactStatus(state, { patternLabel, visibleAgentTotal, streamStatus });
     return (
-        <div className={`log-window${large ? " log-window--large" : ""}`}>
-            {visibleLogs ? visibleLogs.map((log) => (
-                <p key={log.seq}><time>[{fmtLogTs(log.ts)}]</time> {visibleRuntimeText(log.message)}</p>
-            )) : <p>{fallback}</p>}
+        <div className={`mc3-chat-status-bar mc3-chat-status-bar--${status.tone}`} role="status" aria-live="polite" aria-label={`Mission status: ${status.label}. ${status.detail}`}>
+            <span className="mc3-chat-status-bar__dot" aria-hidden="true" />
+            <strong>{status.label}</strong>
+            <span className="mc3-chat-status-bar__detail">{status.detail}</span>
+            <span className="mc3-chat-status-bar__connection" data-state={connectionState} data-connected={String(connected)}>{connectionLabel}</span>
         </div>
     );
 }
 
-function readableSlotLabel(slot: RuntimeSlotView): string {
-    return visibleAgentName(slot.agentName) || visibleAgentName(slot.agentId) || slot.role || "Agent";
+function emptyTranscriptCopy(state: MissionState, streamStatus?: string | null): { badge: string; headline: string; detail: string; chips: string[]; active: boolean } {
+    if (state.jobStatus === "completed" || state.terminalType === "job_complete") {
+        return {
+            badge: "Complete",
+            headline: "Run completed",
+            detail: "No public transcript rows were persisted for this session.",
+            chips: ["Evidence ready", "Session closed"],
+            active: false,
+        };
+    }
+    if (state.jobStatus === "failed" || state.terminalType === "job_failed") {
+        const failure = latestFailureMessage(state);
+        return {
+            badge: "Failed",
+            headline: "Mission failed before work could start",
+            detail: failure || streamStatus ? visibleRuntimeText(failure || streamStatus || "") : "AgentHub stopped the mission before public work rows were published. The most likely cause is a backend or isolated runtime startup error.",
+            chips: ["Runtime error", "Mission halted", "No user action needed yet"],
+            active: false,
+        };
+    }
+    if (streamStatus) {
+        return {
+            badge: "Quiet stream",
+            headline: "No agent telemetry is attached yet",
+            detail: visibleRuntimeText(streamStatus),
+            chips: ["Event channel checked", "Snapshot checked", "Awaiting first row"],
+            active: true,
+        };
+    }
+    if (state.jobStatus === "planned") {
+        return {
+            badge: "Queued",
+            headline: "Mission is queued for launch",
+            detail: "The transcript will start as soon as the first public agent event arrives.",
+            chips: ["Route pending", "No tools started", "Ready to stream"],
+            active: true,
+        };
+    }
+    return {
+        badge: "Listening",
+        headline: "Waiting for the first agent event",
+        detail: "The session is open, but no public execution row has reached the transcript yet.",
+        chips: ["Event stream open", "Snapshot polling", "No rows yet"],
+        active: true,
+    };
+}
+
+function EmptyTranscriptState({ state, streamStatus }: { state: MissionState; streamStatus?: string | null }) {
+    const copy = emptyTranscriptCopy(state, streamStatus);
+    return (
+        <div className={`canvas-log-empty mc3-exec-empty${copy.active ? " is-active" : ""}`} role="status" aria-live="polite">
+            <div className="mc3-exec-empty__signal" aria-hidden="true">
+                <span />
+                <span />
+                <span />
+            </div>
+            <div className="mc3-exec-empty__body">
+                <div className="mc3-exec-empty__head">
+                    <Badge appearance="tint" color={copy.active ? "brand" : "subtle"}>{copy.badge}</Badge>
+                    {copy.active && <span className="mc3-exec-empty__pulse">listening</span>}
+                </div>
+                <strong>{copy.headline}</strong>
+                <p>{copy.detail}</p>
+                <div className="mc3-exec-empty__chips" aria-label="Stream checks">
+                    {copy.chips.map((chip) => <span key={chip}>{chip}</span>)}
+                </div>
+            </div>
+        </div>
+    );
+}
+
+function AgentExecutionLanes({ state, slots, streamStatus }: { state: MissionState; slots: RuntimeSlotView[]; streamStatus?: string | null }) {
+    const lanes = useMemo(() => {
+        const live = slots.filter((slot) => slot.lifecycle !== "planned");
+        if (live.length > 0) return live.slice(0, 6);
+        return slots.slice(0, 4);
+    }, [slots]);
+    const generalistActivity = useMemo(() => {
+        const entry = [...state.logs].reverse().find((log) => isInternalAgentRef(log.agentId) || isInternalAgentRef(log.agentName) || log.agentName === "Generalist" || !log.agentId);
+        if (entry) return visibleRuntimeText(entry.message).slice(0, 140);
+        if (streamStatus) return missionStreamStatusText(state, streamStatus).slice(0, 140);
+        if (state.jobStatus === "planned") return "Planning the route";
+        if (state.terminalType === "job_failed") return latestFailureMessage(state)?.slice(0, 140) || "Mission failed";
+        if (state.terminalType === "job_cancelled") return "Mission cancelled";
+        if (state.terminalType) return "Run completed";
+        return "Coordinating specialists";
+    }, [state, streamStatus]);
+    const generalistFailed = state.terminalType === "job_failed" || state.jobStatus === "failed";
+    const generalistComplete = !!state.terminalType && !generalistFailed;
+    const generalistStateClass = generalistFailed ? " is-failed" : generalistComplete ? " is-done" : " is-running";
+    const generalistLabel = generalistFailed ? "failed" : generalistComplete ? "done" : "routing";
+
+    return (
+        <div className="mc3-agent-lanes" aria-label="Active agent execution">
+            <article className={`mc3-agent-lane mc3-agent-lane--generalist${generalistStateClass}`}>
+                <div className="mc3-agent-lane__head">
+                    <span className="mc3-agent-lane__dot" />
+                    <strong>System</strong>
+                    <span>{generalistLabel}</span>
+                </div>
+                <p>{generalistActivity}</p>
+            </article>
+            {lanes.map((slot) => (
+                <article key={slot.slotId} className={`mc3-agent-lane mc3-agent-lane--${slot.lifecycle}${slot.isActive ? " is-active" : ""}`}>
+                    <div className="mc3-agent-lane__head">
+                        <span className="mc3-agent-lane__dot" />
+                        <strong>{readableSlotLabel(slot)}</strong>
+                        <span>{lifecycleLabel(slot.lifecycle)}</span>
+                    </div>
+                    <p>{slotLatestActivity(state, slot)}</p>
+                </article>
+            ))}
+            {streamStatus && !state.terminalType && (
+                <div className="mc3-agent-lanes__status" role="status">{missionStreamStatusText(state, streamStatus)}</div>
+            )}
+        </div>
+    );
+}
+
+function MissionOutcomeBanner({ state }: { state: MissionState }) {
+    const failure = latestFailureMessage(state);
+    const verifierIssue = latestVerifierIssueMessage(state);
+    if ((state.terminalType === "job_complete" || state.jobStatus === "completed") && verifierIssue) {
+        return (
+            <section className="mc3-outcome-banner mc3-outcome-banner--attention" role="alert" aria-label="Mission verifier issue summary">
+                <div>
+                    <strong>Verifier rejected</strong>
+                    <p>Review the evidence before treating this mission as successful: {verifierIssue}</p>
+                </div>
+                <span>review evidence</span>
+            </section>
+        );
+    }
+    if (state.terminalType !== "job_failed" && state.jobStatus !== "failed") return null;
+    return (
+        <section className="mc3-outcome-banner mc3-outcome-banner--failed" role="alert" aria-label="Mission failure summary">
+            <div>
+                <strong>Mission failed</strong>
+                <p>{failure || "AgentHub stopped this mission before execution telemetry was published. This usually points to a backend/runtime startup failure, not a problem with the mission prompt."}</p>
+            </div>
+            <span>backend/runtime</span>
+        </section>
+    );
 }
 
 function canvasLogAgent(log: LogEntry, slots: RuntimeSlotView[], state: MissionState): { label: string; kind: string } {
@@ -608,7 +1032,7 @@ function canvasLogAgent(log: LogEntry, slots: RuntimeSlotView[], state: MissionS
 
     const agentRef = log.agentName || log.agentId || "";
     if (!agentRef || isInternalAgentRef(agentRef)) {
-        return { label: "Generalist", kind: "generalist" };
+        return { label: "System", kind: "generalist" };
     }
 
     return {
@@ -617,33 +1041,114 @@ function canvasLogAgent(log: LogEntry, slots: RuntimeSlotView[], state: MissionS
     };
 }
 
-function shouldUseCanvasLogStream(width: number, height: number, slotCount: number): boolean {
-    if (slotCount <= 1 || width <= 0 || height <= 0) return false;
-    const widthFloor = slotCount >= 4 ? 1100 : slotCount === 3 ? 940 : 760;
-    const heightFloor = slotCount >= 4 ? 560 : 500;
-    return width < widthFloor || height < heightFloor;
+function canvasLogAgentTitle(log: LogEntry, slots: RuntimeSlotView[], state: MissionState): string {
+    const agent = canvasLogAgent(log, slots, state);
+    const slot = slots.find((candidate) => logBelongsToSlot(log, candidate));
+    const role = slot?.role || log.payloadSummary?.role || log.payloadSummary?.agentRole;
+    const task = slot ? slotLatestActivity(state, slot) : log.payloadSummary?.taskDescription || log.message;
+    return [
+        `Source: ${agent.label}`,
+        role ? `Task: ${visibleRuntimeText(String(role)).slice(0, 140)}` : null,
+        task ? `Latest: ${visibleRuntimeText(String(task)).slice(0, 180)}` : null,
+    ].filter(Boolean).join("\n");
 }
 
-function CanvasLogStream({ state, slots, categoryFilter, autoCompact }: { state: MissionState; slots: RuntimeSlotView[]; categoryFilter: LogCategoryFilter; autoCompact: boolean }) {
+function CanvasLogStream({ state, slots, streamStatus }: { state: MissionState; slots: RuntimeSlotView[]; streamStatus?: string | null }) {
+    const [expanded, setExpanded] = useState<Set<number>>(() => new Set());
     const logs = useMemo(
-        () => state.logs.filter((entry) => logCategoryMatches(entry, categoryFilter)).slice(-48),
-        [state.logs, categoryFilter],
+        () => state.logs.slice(-192),
+        [state.logs],
     );
+    const rows = useMemo(() => buildExecutionTranscriptRows(logs, state, state.logs), [logs, state]);
+
+    const toggleExpanded = useCallback((seq: number) => {
+        setExpanded((current) => {
+            const next = new Set(current);
+            if (next.has(seq)) next.delete(seq);
+            else next.add(seq);
+            return next;
+        });
+    }, []);
 
     return (
-        <div className={`canvas-log-stream${autoCompact ? " canvas-log-stream--auto" : ""}`} role="log" aria-label="Agent log stream">
-            {logs.length === 0 ? (
-                <div className="canvas-log-empty">
-                    <Badge appearance="tint" color="brand">Generalist</Badge>
-                    <span>{state.jobStatus === "completed" ? "Run completed and summaries are ready." : "Waiting for the first runtime message."}</span>
-                </div>
-            ) : logs.map((log) => {
+        <div className="canvas-log-stream mc3-log" role="log" aria-label="Mission log stream" data-pi-live-log="true">
+            {rows.length === 0 ? (
+                <EmptyTranscriptState state={state} streamStatus={streamStatus} />
+            ) : rows.map((row) => {
+                const log = row.entry;
                 const agent = canvasLogAgent(log, slots, state);
+                const rowState = row.state;
+                const isExpanded = expanded.has(log.seq);
                 return (
-                    <article key={log.seq} className={`canvas-log-row canvas-log-row--${agent.kind}`}>
-                        <span className={`canvas-log-row__agent canvas-log-row__agent--${agent.kind}`}>{agent.label}</span>
-                        <time className="canvas-log-row__time">{fmtLogTs(log.ts)}</time>
-                        <p>{visibleRuntimeText(log.message)}</p>
+                    <article
+                        key={row.key}
+                        className={`canvas-log-row mc3-transcript-row mc3-exec-row canvas-log-row--${agent.kind} mc3-transcript-row--${rowState}${row.isLive ? " mc3-exec-row--live" : ""}${row.isAttention ? " mc3-exec-row--attention" : ""}`}
+                        data-kind={log.kind}
+                        data-state={rowState}
+                        data-pi-live-log-row="true"
+                        data-pi-log-seq={log.seq}
+                        data-pi-log-kind={log.kind}
+                        data-pi-log-level={resolvedLogLevel(log)}
+                        data-pi-log-collapse-state={row.isReceipt ? "collapsed" : row.isLive ? "recent" : "current"}
+                    >
+                        <div className="mc3-transcript-row__gutter" aria-hidden="true">
+                            <span className={`mc3-transcript-row__dot mc3-transcript-row__dot--${rowState}`}>{transcriptDot(rowState)}</span>
+                        </div>
+                        <div className="mc3-transcript-row__content">
+                            <header className="mc3-transcript-row__head">
+                                <span className={`canvas-log-row__agent canvas-log-row__agent--${agent.kind}`}>{agent.label}</span>
+                                {row.isLive && <span className="mc3-transcript-row__running">Streaming</span>}
+                                <time className="canvas-log-row__time">{fmtLogTs(log.ts)}</time>
+                            </header>
+                            {row.isTextStream ? (
+                                <div className={`mc3-stream-block mc3-stream-block--${row.streamKind || "assistant"}${row.isLive ? " is-live" : ""}`}>
+                                    <p className="mc3-stream-block__label">{row.streamKind === "thinking" ? "Thinking" : "Assistant"}</p>
+                                    <p className="mc3-stream-block__text">{visibleRuntimeText(row.streamText || log.message)}{row.isLive && <span className="mc3-stream-cursor" aria-hidden="true" />}</p>
+                                </div>
+                            ) : row.isLive ? (
+                                <>
+                                    <div className={`mc3-exec-current mc3-exec-current--${row.progress.semanticClass}`} data-spinner-mode={row.progress.mode} aria-label="Current execution spinner">
+                                        <span className="mc3-exec-spinner" aria-hidden="true" />
+                                        <span className="mc3-exec-glimmer">{visibleRuntimeText(row.progress.spinnerMessage)}</span>
+                                    </div>
+                                    <div className="mc3-agent-progress-line" aria-label="Current execution step">
+                                        <span className="mc3-agent-progress-line__marker" aria-hidden="true">⎿</span>
+                                        <span className="mc3-agent-progress-line__text">{visibleRuntimeText(row.progress.statusText)}</span>
+                                    </div>
+                                </>
+                            ) : (
+                                <p className="mc3-exec-headline">{visibleRuntimeText(row.headline)}</p>
+                            )}
+                            <div className="mc3-transcript-row__meta">
+                                {row.meta.map((part) => <span key={part}>{part}</span>)}
+                            </div>
+                            {row.isLive && row.activities.length > 0 && (
+                                <div className="mc3-exec-activity-list" aria-label="Current task details">
+                                    {row.activities.map((activity) => (
+                                        <div key={activity.seq} className={`mc3-exec-activity${activity.current ? " is-current" : ""}${activity.muted ? " is-muted" : ""}`}>
+                                            <span className="mc3-exec-activity__marker" data-category={activity.category}>{activity.badge}</span>
+                                            <span className="mc3-exec-activity__text">{visibleRuntimeText(activity.text)}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                            {(row.hiddenCount > 0 || row.children.length > 0) && (
+                                <Button appearance="transparent" size="small" className="mc3-transcript-row__expand" onClick={() => toggleExpanded(log.seq)} aria-expanded={isExpanded}>
+                                    {isExpanded ? "Hide details" : `Show details (+${row.hiddenCount || row.children.length})`}
+                                </Button>
+                            )}
+                            {isExpanded && row.children.length > 0 && (
+                                <div className="mc3-transcript-row__children">
+                                    {row.children.map((child) => (
+                                        <div key={child.seq} className={`mc3-transcript-child mc3-transcript-child--${child.kind}`}>
+                                            <span className="mc3-transcript-child__marker">⎿</span>
+                                            <span className="mc3-transcript-child__time">{fmtLogTs(child.ts)}</span>
+                                            <span className="mc3-transcript-child__text">{visibleRuntimeText(child.message)}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
                     </article>
                 );
             })}
@@ -651,281 +1156,28 @@ function CanvasLogStream({ state, slots, categoryFilter, autoCompact }: { state:
     );
 }
 
-function AgentNodeCard({
-    slot,
-    index,
-    total,
-    state,
-    categoryFilter,
-    layout,
-    onMoveStart,
-    onResizeStart,
-}: {
-    slot: RuntimeSlotView;
-    index: number;
-    total: number;
-    state: MissionState;
-    categoryFilter: LogCategoryFilter;
-    layout: CanvasNodeLayout;
-    onMoveStart: (event: React.PointerEvent<HTMLElement>, nodeId: string, layout: CanvasNodeLayout) => void;
-    onResizeStart: (event: React.PointerEvent<HTMLElement>, nodeId: string, layout: CanvasNodeLayout) => void;
-}) {
-    const kind = kindForWithProgress(slot.agentId, state.composition, state.slotProgress);
-    const logs = nodeLogsForSlot(state, slot, categoryFilter);
-    const fallback = slot.reason || `${runtimeStatusLabel(slot)} · waiting for runtime output.`;
-    const nodeId = slot.slotId || slot.agentId || String(index);
-    return (
-        <Card
-            className={`agent-node agent-node--sub${runtimeNodeClass(slot)}${layout.width || layout.logHeight ? " agent-node--manual-size" : ""}`}
-            data-agent-node-id={nodeId}
-            data-manual-size={layout.width || layout.logHeight ? "true" : undefined}
-            style={nodeStyle(layout)}
-        >
-            <div className="agent-head" onPointerDown={(event) => onMoveStart(event, nodeId, layout)}>
-                <span className={`agent-icon agent-icon--${kind === "fde" ? "data" : kind === "admin" ? "admin" : kind === "reporter" ? "report" : "generalist"}`}>
-                    {agentIcon(kind)}
-                </span>
-                <div>
-                    <h2>{visibleAgentName(slot.agentName) || slot.agentId}</h2>
-                    <p>{slot.role || slot.agentId}</p>
-                </div>
-                <Badge appearance="tint" color={runtimeBadgeColor(slot)} className={runtimePillClass(slot)}>
-                    {runtimeStatusLabel(slot)}
-                </Badge>
-            </div>
-            <LogWindow logs={logs} fallback={fallback} />
-            <Tooltip content="Resize card" relationship="label">
-                <button
-                    type="button"
-                    className="agent-card-resize"
-                    aria-label={`Resize ${visibleAgentName(slot.agentName) || slot.agentId}`}
-                    onPointerDown={(event) => onResizeStart(event, nodeId, layout)}
-                >
-                    <Resize20Regular />
-                </button>
-            </Tooltip>
-        </Card>
-    );
+function transcriptDot(state: ExecutionRowState): string {
+    if (state === "done") return "✓";
+    if (state === "error") return "×";
+    if (state === "warn") return "!";
+    if (state === "queued") return "•";
+    return "";
 }
 
 function DynamicMissionCanvas({
     state,
     runtimeSlots,
-    categoryFilter,
-    onCategoryChange,
+    streamStatus,
 }: {
     state: MissionState;
     runtimeSlots: RuntimeSlotView[];
-    categoryFilter: LogCategoryFilter;
-    onCategoryChange: (category: LogCategoryFilter) => void;
+    streamStatus?: string | null;
 }) {
     const slots = runtimeSlots.length > 0 ? runtimeSlots : [];
-    const canvasRef = useRef<HTMLElement | null>(null);
-    const [nodeOverrides, setNodeOverrides] = useState<CanvasLayoutOverrides>({});
-    const [canvasViewPreference, setCanvasViewPreference] = useState<CanvasViewPreference>("agents");
-    const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
-    const categoryCounts = useMemo(() => {
-        return LOG_CATEGORY_ORDER.reduce((acc, category) => {
-            acc[category] = state.logs.filter((entry) => logCategoryMatches(entry, category)).length;
-            return acc;
-        }, {} as Record<LogCategoryFilter, number>);
-    }, [state.logs]);
-    const generalistLogLines = generalistLogs(state, categoryFilter);
-    const fallback = state.jobStatus === "completed"
-        ? "Run completed and summaries are ready."
-        : slots.length > 0
-            ? `Coordinating ${slots.length} visible agent${slots.length === 1 ? "" : "s"}.`
-            : "Building the run plan and waiting for the first agent.";
-    const slotLayouts = useMemo(() => {
-        return slots.map((slot, index) => {
-            const nodeId = slot.slotId || slot.agentId || String(index);
-            return {
-                nodeId,
-                layout: { ...defaultSubNodeLayout(index, slots.length), ...(nodeOverrides[nodeId] || {}) },
-            };
-        });
-    }, [slots, nodeOverrides]);
-    const autoLogStream = shouldUseCanvasLogStream(canvasSize.width, canvasSize.height, slots.length);
-    const showLogStream = canvasViewPreference === "logs" || autoLogStream;
-
-    useEffect(() => {
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-        const update = () => {
-            const width = Math.round(canvas.clientWidth);
-            const height = Math.round(canvas.clientHeight);
-            setCanvasSize((current) => current.width === width && current.height === height
-                ? current
-                : { width, height });
-        };
-        update();
-        if (typeof ResizeObserver === "undefined") {
-            window.addEventListener("resize", update);
-            return () => window.removeEventListener("resize", update);
-        }
-        const observer = new ResizeObserver(update);
-        observer.observe(canvas);
-        return () => observer.disconnect();
-    }, []);
-
-    const resetCanvasView = useCallback(() => setNodeOverrides({}), []);
-
-    const startNodeMove = useCallback((event: React.PointerEvent<HTMLElement>, nodeId: string, layout: CanvasNodeLayout) => {
-        if (event.button !== 0) return;
-        if ((event.target as HTMLElement).closest("button, a")) return;
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-        event.preventDefault();
-        const rect = canvas.getBoundingClientRect();
-        const start = { x: event.clientX, y: event.clientY, layout };
-        const card = event.currentTarget.closest(".agent-node") as HTMLElement | null;
-        card?.classList.add("is-dragging");
-        const onMove = (moveEvent: PointerEvent) => {
-            const nextX = clampNumber(start.layout.x + ((moveEvent.clientX - start.x) / rect.width) * 100, 7, 93);
-            const nextY = clampNumber(start.layout.y + ((moveEvent.clientY - start.y) / rect.height) * 100, 18, 90);
-            setNodeOverrides((prev) => ({ ...prev, [nodeId]: { ...(prev[nodeId] || start.layout), x: nextX, y: nextY } }));
-        };
-        const onUp = () => {
-            card?.classList.remove("is-dragging");
-            window.removeEventListener("pointermove", onMove);
-            window.removeEventListener("pointerup", onUp);
-        };
-        window.addEventListener("pointermove", onMove);
-        window.addEventListener("pointerup", onUp, { once: true });
-    }, []);
-
-    const startNodeResize = useCallback((event: React.PointerEvent<HTMLElement>, nodeId: string, layout: CanvasNodeLayout) => {
-        if (event.button !== 0) return;
-        const card = event.currentTarget.closest(".agent-node") as HTMLElement | null;
-        if (!card) return;
-        event.preventDefault();
-        event.stopPropagation();
-        const logWindow = card.querySelector(".log-window") as HTMLElement | null;
-        const start = {
-            x: event.clientX,
-            y: event.clientY,
-            width: layout.width || card.getBoundingClientRect().width,
-            logHeight: layout.logHeight || logWindow?.getBoundingClientRect().height || 112,
-        };
-        card.classList.add("is-resizing");
-        const onMove = (moveEvent: PointerEvent) => {
-            const width = clampNumber(start.width + (moveEvent.clientX - start.x), MIN_AGENT_NODE_WIDTH, MAX_AGENT_NODE_WIDTH);
-            const logHeight = clampNumber(start.logHeight + (moveEvent.clientY - start.y), MIN_AGENT_LOG_HEIGHT, MAX_AGENT_LOG_HEIGHT);
-            setNodeOverrides((prev) => ({ ...prev, [nodeId]: { ...(prev[nodeId] || layout), width, logHeight } }));
-        };
-        const onUp = () => {
-            card.classList.remove("is-resizing");
-            window.removeEventListener("pointermove", onMove);
-            window.removeEventListener("pointerup", onUp);
-        };
-        window.addEventListener("pointermove", onMove);
-        window.addEventListener("pointerup", onUp, { once: true });
-    }, []);
 
     return (
-        <section ref={canvasRef} className="agent-canvas agent-canvas--dense mc3-dmc-canvas" aria-label="Agent mission canvas">
-            <div className="canvas-toolbar">
-                <TabList
-                    className="log-mode-switch"
-                    aria-label="Log category"
-                    selectedValue={categoryFilter}
-                    onTabSelect={(_, data) => onCategoryChange(data.value as LogCategoryFilter)}
-                    size="small"
-                >
-                    {LOG_CATEGORY_ORDER.map((category) => (
-                        <Tab
-                            key={category}
-                            value={category}
-                            className={`log-mode-switch__option${categoryFilter === category ? " is-active" : ""}`}
-                        >
-                            <span className="log-mode-switch__label">{LOG_CATEGORY_TAB_LABEL[category]}</span>
-                            <Badge appearance="tint" color={categoryFilter === category ? "brand" : "subtle"} size="small">
-                                {categoryCounts[category]}
-                            </Badge>
-                        </Tab>
-                    ))}
-                </TabList>
-                <div className="canvas-view-controls" aria-label="Canvas view controls">
-                    <Button
-                        className={`canvas-view-button canvas-view-button--mode${!showLogStream ? " is-active" : ""}`}
-                        aria-label="Show agent cards"
-                        aria-pressed={!showLogStream}
-                        appearance="subtle"
-                        size="small"
-                        onClick={() => setCanvasViewPreference("agents")}
-                        disabled={autoLogStream}
-                    >
-                        Agents
-                    </Button>
-                    <Button
-                        className={`canvas-view-button canvas-view-button--mode${showLogStream ? " is-active" : ""}`}
-                        aria-label="Show agent log stream"
-                        aria-pressed={showLogStream}
-                        appearance="subtle"
-                        icon={<Document16Regular />}
-                        size="small"
-                        onClick={() => setCanvasViewPreference("logs")}
-                    >
-                        Logs
-                    </Button>
-                    {autoLogStream && <Badge appearance="tint" color="brand" size="small" className="canvas-view-auto-badge">Auto</Badge>}
-                    <Tooltip content="Reset agent layout" relationship="label">
-                        <Button
-                            className="canvas-view-button"
-                            aria-label="Reset agent layout"
-                            appearance="subtle"
-                            icon={<ArrowResetRegular />}
-                            size="small"
-                            onClick={resetCanvasView}
-                            disabled={Object.keys(nodeOverrides).length === 0}
-                        />
-                    </Tooltip>
-                </div>
-            </div>
-
-            {showLogStream ? (
-                <CanvasLogStream state={state} slots={slots} categoryFilter={categoryFilter} autoCompact={autoLogStream} />
-            ) : (
-                <>
-                    <svg className="canvas-lines" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-                        {slotLayouts.map(({ nodeId, layout }) => {
-                            const { x, y } = layout;
-                            return <path key={nodeId} className="line line--active" d={`M 50 29 C 50 42 ${x} 38 ${x} ${y - 11}`} />;
-                        })}
-                    </svg>
-
-                    <Card
-                        className="agent-node agent-node--generalist agent-node--running"
-                        style={{ "--x": "50%", "--y": "29%", transform: "translate(-50%, -50%)" } as React.CSSProperties}
-                    >
-                        <div className="agent-head">
-                            <span className="agent-icon agent-icon--generalist"><Flash16Regular /></span>
-                            <div>
-                                <h2>Generalist</h2>
-                                <p>{state.jobStatus === "completed" ? "Merged summaries" : "Observe, plan, dispatch"}</p>
-                            </div>
-                            <Badge appearance="tint" color="success" className={state.jobStatus === "completed" ? "state-pill state-pill--done" : "state-pill state-pill--running"}>
-                                {state.jobStatus === "completed" ? "Done" : "Running"}
-                            </Badge>
-                        </div>
-                        <LogWindow logs={generalistLogLines} fallback={fallback} large />
-                    </Card>
-
-                    {slots.map((slot, index) => (
-                        <AgentNodeCard
-                            key={slot.slotId || slot.agentId || index}
-                            slot={slot}
-                            index={index}
-                            total={slots.length}
-                            state={state}
-                            categoryFilter={categoryFilter}
-                            layout={slotLayouts[index]?.layout || defaultSubNodeLayout(index, slots.length)}
-                            onMoveStart={startNodeMove}
-                            onResizeStart={startNodeResize}
-                        />
-                    ))}
-                </>
-            )}
+        <section className="agent-canvas agent-canvas--dense mc3-dmc-canvas" aria-label="Mission logs">
+            <CanvasLogStream state={state} slots={slots} streamStatus={streamStatus} />
         </section>
     );
 }
@@ -940,6 +1192,23 @@ function ChangeLedgerRail({ state, workloadClient }: { state: MissionState; work
         () => Object.values(state.approvals).filter((approval) => !approval.resolved),
         [state.approvals],
     );
+    const errorCount = useMemo(
+        () => state.logs.filter((entry) => resolvedLogLevel(entry) === "error" || entry.kind === "error").length,
+        [state.logs],
+    );
+    const warningCount = useMemo(
+        () => state.logs.filter((entry) => resolvedLogLevel(entry) === "warn" && !/approval required/i.test(entry.message)).length,
+        [state.logs],
+    );
+    const lastRollup = useMemo(
+        () => [...state.logs].reverse().find((entry) => entry.kind === "rollup"),
+        [state.logs],
+    );
+    const latestIssue = useMemo(
+        () => [...state.logs].reverse().find((entry) => resolvedLogLevel(entry) !== "info" || entry.kind === "error"),
+        [state.logs],
+    );
+    const activeAgent = activeAgentNameFor(state, runtimeSlots);
     const badge = state.terminalType
         ? `${changes.filter((change) => change.status === "applied").length || changes.length} applied`
         : pendingApprovals.length > 0
@@ -948,6 +1217,26 @@ function ChangeLedgerRail({ state, workloadClient }: { state: MissionState; work
 
     return (
         <aside className="right-rail" aria-label="Change overview">
+            <section className="mission-pulse" aria-label="Mission pulse">
+                <header className="mission-pulse__header">
+                    <h2>Mission pulse</h2>
+                    <span>{state.jobStatus}</span>
+                </header>
+                <div className="mission-pulse__rows">
+                    <div className="mission-pulse__row">
+                        <span>Active</span>
+                        <strong>{visibleAgentName(activeAgent) || (state.terminalType ? "Completed" : "Waiting")}</strong>
+                    </div>
+                    <div className="mission-pulse__row">
+                        <span>Latest update</span>
+                        <strong>{lastRollup ? visibleRuntimeText(lastRollup.message).slice(0, 120) : "No updates yet"}</strong>
+                    </div>
+                    <div className="mission-pulse__row">
+                        <span>Needs attention</span>
+                        <strong>{pendingApprovals[0]?.summary || (latestIssue ? visibleRuntimeText(latestIssue.message).slice(0, 120) : "None")}</strong>
+                    </div>
+                </div>
+            </section>
             <section className={`change-ledger${pendingApprovals.length > 0 ? " change-ledger--approval" : ""}`}>
                 <header className="change-ledger__header">
                     <h2>Change overview</h2>
@@ -1006,6 +1295,1053 @@ function ChangeLedgerRail({ state, workloadClient }: { state: MissionState; work
     );
 }
 
+function missionSummaryLine(job: MissionControlPageProps["initialJob"] | null | undefined, state: MissionState): string {
+    const task = job?.task_description || (state.composition as any)?.task || "Mission running";
+    const workspace = job?.workspace_name || job?.workspace_id || "Fabric workspace";
+    return `${workspace} · ${task}`;
+}
+
+function plainRecord(value: unknown): Record<string, any> {
+    return value && typeof value === "object" ? value as Record<string, any> : {};
+}
+
+function isNativePiSurfaceValue(value: unknown): boolean {
+    const normalized = String(value || "").trim().toLowerCase();
+    return normalized === "native-pi-web-ui"
+        || normalized === "native-web-ui"
+        || normalized === "pi-web-ui-full-page"
+        || normalized === "full-page";
+}
+
+function isNativePiSurfaceRequested(job: MissionControlPageProps["initialJob"] | null | undefined, jobContext: Record<string, any>): boolean {
+    const piOrchestration = plainRecord(jobContext.pi_orchestration);
+    return String(job?.runtime || "").toLowerCase() === "pi"
+        || isNativePiSurfaceValue(jobContext.execution_surface_mode)
+        || isNativePiSurfaceValue(jobContext.pi_execution_surface)
+        || isNativePiSurfaceValue(piOrchestration.execution_surface_mode)
+        || isNativePiSurfaceValue(piOrchestration.execution_surface)
+        || isNativePiSurfaceValue(piOrchestration.execution_surface_extension_mode);
+}
+
+function hasPiHarnessMetadata(jobContext: Record<string, any>, state: MissionState): boolean {
+    const piOrchestration = plainRecord(jobContext.pi_orchestration);
+    return String(jobContext.runtime || "").toLowerCase() === "pi"
+        || String(jobContext.orchestration_runtime || "").toLowerCase() === "pi"
+        || String(piOrchestration.runtime || "").toLowerCase() === "pi"
+        || String(jobContext.subagent_runtime || "").toLowerCase() === "pi-subagents"
+        || String(piOrchestration.subagent_runtime || "").toLowerCase() === "pi-subagents"
+        || state.piEvents.some((event) => event.type.startsWith("pi."));
+}
+
+function piBridgeSeq(value: unknown, fallback: number): number {
+    const seq = Number(value);
+    return Number.isFinite(seq) && seq > 0 ? seq : Math.max(1, fallback);
+}
+
+function piBridgeText(value: unknown, fallback: string, max = 190): string {
+    const raw = String(value || fallback || "").trim();
+    const visible = visibleRuntimeText(raw || fallback);
+    return visible.length > max ? `${visible.slice(0, max - 1)}…` : visible;
+}
+
+function buildPiSubagentsBridgeRows(state: MissionState, runtimeSlots: RuntimeSlotView[]): PiSubagentsBridgeRow[] {
+    const rows: PiSubagentsBridgeRow[] = [];
+    for (const event of state.piEvents) {
+        const fallbackSeq = rows.length + state.lastSeq + 1;
+        if (event.type === "pi.subagents.status") {
+            rows.push({
+                key: `status-${event.runId}-${event.seq}`,
+                kind: "status",
+                seq: piBridgeSeq(event.seq, fallbackSeq),
+                runId: event.runId,
+                title: piBridgeText(event.agentName || event.agent || event.agentId, "subagent", 80),
+                state: String(event.state || "running"),
+                summary: piBridgeText(event.summary || event.task || event.currentTool, "subagent activity"),
+                meta: [event.currentTool && `tool ${event.currentTool}`, event.turnCount != null && `turns ${event.turnCount}`, event.toolCount != null && `tools ${event.toolCount}`].filter(Boolean) as string[],
+            });
+        } else if (event.type === "pi.subagents.control") {
+            rows.push({
+                key: `control-${event.runId}-${event.seq}`,
+                kind: "control",
+                seq: piBridgeSeq(event.seq, fallbackSeq),
+                runId: event.runId,
+                title: piBridgeText(event.agentName || event.agent || event.agentId, "control", 80),
+                state: String(event.controlType || "control"),
+                summary: piBridgeText(event.message || event.reason, "subagent control signal"),
+                meta: [event.currentTool, event.turnCount != null && `turns ${event.turnCount}`, event.toolCount != null && `tools ${event.toolCount}`].filter(Boolean) as string[],
+            });
+        } else if (event.type === "pi.subagents.result") {
+            rows.push({
+                key: `result-${event.runId}-${event.seq}`,
+                kind: "result",
+                seq: piBridgeSeq(event.seq, fallbackSeq),
+                runId: event.runId,
+                title: piBridgeText(event.agentName || event.agent || event.agentId, "result", 80),
+                state: String(event.status || "completed"),
+                summary: piBridgeText(event.summary, "subagent result"),
+                meta: [event.sessionFile && "session", (event.artifactPath || event.artifactPaths) && "artifacts"].filter(Boolean) as string[],
+            });
+        } else if (event.type === "pi.subagents.async") {
+            rows.push({
+                key: `async-${event.asyncId}-${event.seq}`,
+                kind: "async",
+                seq: piBridgeSeq(event.seq, fallbackSeq),
+                runId: event.runId || event.asyncId,
+                title: event.asyncId,
+                state: String(event.state || "running"),
+                summary: piBridgeText(event.summary || event.agents?.join(", "), "async subagent run"),
+                meta: [event.mode, event.outputFile && "output"].filter(Boolean) as string[],
+            });
+        } else if (event.type === "pi.subagent.update") {
+            rows.push({
+                key: `update-${event.agentId}-${event.seq}`,
+                kind: "status",
+                seq: piBridgeSeq(event.seq, fallbackSeq),
+                runId: event.agentId || `subagent-${event.seq}`,
+                title: piBridgeText(event.agentName || event.agentId, "subagent", 80),
+                state: String(event.state || "running"),
+                summary: piBridgeText(event.task || event.summary || event.role, "context-window fork activity"),
+                meta: [event.role].filter(Boolean) as string[],
+            });
+        }
+    }
+
+    if (rows.length > 0) return summarizePiSubagentBridgeRows(rows).slice(-6);
+
+    const activeSlots = runtimeSlots
+        .filter((slot) => slot.lifecycle !== "planned")
+        .slice(0, 6);
+    if (activeSlots.length > 0) {
+        return activeSlots.map((slot, index) => ({
+            key: `runtime-${slot.slotId}-${index}`,
+            kind: "status" as const,
+            seq: Math.max(1, state.lastSeq + index + 1),
+            runId: slot.slotId || slot.agentId || `runtime-${index}`,
+            title: visibleAgentName(slot.agentName || slot.agentId) || "subagent",
+            state: slot.status || slot.lifecycle,
+            summary: piBridgeText(slot.reason || slot.role, "context-window fork active"),
+            meta: [slot.role, slot.lifecycle].filter(Boolean),
+        }));
+    }
+
+    const latestLog = state.logs[state.logs.length - 1];
+    if (latestLog) {
+        return [{
+            key: `runtime-log-${latestLog.seq}`,
+            kind: "status",
+            seq: Math.max(1, latestLog.seq),
+            runId: latestLog.agentId || "agenthub-pi-bridge",
+            title: visibleAgentName(latestLog.agentName || latestLog.agentId) || "Mission control",
+            state: latestLog.kind === "error" ? "needs_attention" : "running",
+            summary: piBridgeText(latestLog.message, "mission activity"),
+            meta: [latestLog.logCategory, latestLog.kind].filter(Boolean),
+        }];
+    }
+
+    return [];
+}
+
+function friendlyPiBridgeState(state: string): string {
+    const normalized = String(state || "running").toLowerCase().replace(/[_-]/g, " ");
+    if (normalized === "done" || normalized === "complete" || normalized === "completed" || normalized === "ok") return "done";
+    if (normalized === "needs attention" || normalized === "blocked" || normalized === "paused") return "needs review";
+    if (normalized === "failed" || normalized === "error") return "failed";
+    if (normalized === "queued" || normalized === "pending") return "queued";
+    if (normalized === "running" || normalized === "active long running") return "running";
+    return normalized || "running";
+}
+
+function piBridgeRowPriority(row: PiSubagentsBridgeRow): number {
+    if (row.kind === "control" || /needs|blocked|failed|error/i.test(row.state)) return 4;
+    if (row.kind === "result") return 3;
+    if (row.kind === "async") return 2;
+    return 1;
+}
+
+function summarizePiSubagentBridgeRows(rows: PiSubagentsBridgeRow[]): PiSubagentsBridgeRow[] {
+    const byAgent = new Map<string, PiSubagentsBridgeRow>();
+    for (const row of [...rows].sort((a, b) => a.seq - b.seq)) {
+        const key = canonicalAgentLabel(row.title) || row.runId;
+        const current = byAgent.get(key);
+        if (!current) {
+            byAgent.set(key, { ...row, state: friendlyPiBridgeState(row.state) });
+            continue;
+        }
+        const rowPriority = piBridgeRowPriority(row);
+        const currentPriority = piBridgeRowPriority(current);
+        const shouldPromote = rowPriority > currentPriority || (rowPriority === currentPriority && row.seq >= current.seq);
+        const promoted = shouldPromote ? row : current;
+        const supporting = shouldPromote ? current : row;
+        byAgent.set(key, {
+            ...promoted,
+            state: friendlyPiBridgeState(promoted.state),
+            summary: piBridgeText(promoted.summary || supporting.summary, "delegated work update"),
+            meta: Array.from(new Set([...promoted.meta, ...supporting.meta].map((item) => piBridgeText(item, "detail", 80)))).slice(0, 3),
+        });
+    }
+    return [...byAgent.values()].sort((a, b) => a.seq - b.seq);
+}
+
+function piSubagentsRowAttributes(row: PiSubagentsBridgeRow): Record<string, string> {
+    const attrs: Record<string, string> = {
+        "data-pi-run-id": row.runId,
+        "data-pi-seq": String(row.seq),
+    };
+    if (row.kind === "status") {
+        attrs["data-pi-subagents-status-row"] = "true";
+        attrs["data-pi-state"] = row.state;
+    } else if (row.kind === "control") {
+        attrs["data-pi-subagents-control-row"] = "true";
+        attrs["data-pi-control"] = row.state;
+    } else if (row.kind === "result") {
+        attrs["data-pi-subagents-result-row"] = "true";
+        attrs["data-pi-result-status"] = row.state;
+    } else {
+        attrs["data-pi-subagents-async-row"] = "true";
+        attrs["data-pi-state"] = row.state;
+    }
+    return attrs;
+}
+
+function focusMissionLogSeq(seq?: number | null): void {
+    if (!seq || typeof document === "undefined") return;
+    const selector = `[data-pi-log-seq="${String(seq)}"]`;
+    const node = document.querySelector<HTMLElement>(selector);
+    if (!node) return;
+    node.scrollIntoView({ block: "center", behavior: "smooth" });
+    node.classList.add("is-focus-pulse");
+    window.setTimeout(() => node.classList.remove("is-focus-pulse"), 1800);
+}
+
+function PiSubagentsObservabilityBridge({ state, runtimeSlots }: { state: MissionState; runtimeSlots: RuntimeSlotView[] }) {
+    const rows = useMemo(() => buildPiSubagentsBridgeRows(state, runtimeSlots), [state.piEvents, state.lastSeq, state.logs, runtimeSlots]);
+    if (rows.length === 0) return null;
+    const statusCount = rows.filter((row) => row.kind === "status" && row.state === "running").length;
+    const controlCount = rows.filter((row) => row.kind === "control" || /review|failed|error/i.test(row.state)).length;
+    const resultCount = rows.filter((row) => row.kind === "result" || row.state === "done").length;
+
+    return (
+        <section
+            className="mc3-pi-subagents-bridge"
+            aria-label="Pi subagents observability"
+            data-pi-subagents-observability="true"
+            data-pi-subagents-runtime="pi-subagents"
+            data-pi-subagents-package={PI_SUBAGENTS_PACKAGE.packageName}
+            data-pi-subagents-status-count={statusCount}
+            data-pi-subagents-control-count={controlCount}
+            data-pi-subagents-result-count={resultCount}
+            data-pi-orchestration-package={PI_ORCHESTRATION_RUNTIME_PACKAGE.packageName}
+            data-pi-extension-surface={PI_MISSION_UI_EXTENSION.packageName}
+            data-pi-log-compaction-package={PI_LOG_COMPACTION_EXTENSION.packageName}
+        >
+            <header className="mc3-pi-subagents-bridge__header">
+                <strong>Delegated work</strong>
+                <span>{statusCount} active · {controlCount} needs review · {resultCount} done</span>
+            </header>
+            <div className="mc3-pi-subagents-bridge__rows">
+                {rows.map((row) => (
+                    <Button key={row.key} appearance="transparent" className={`mc3-pi-subagents-bridge__row mc3-pi-subagents-bridge__row--${row.kind}`} onClick={() => focusMissionLogSeq(row.seq)} aria-label={`Show ${row.title} activity in the mission log`} {...piSubagentsRowAttributes(row)}>
+                        <div>
+                            <strong>{row.title}</strong>
+                            <span>{row.state}</span>
+                        </div>
+                        <p>{row.summary}</p>
+                        {row.meta.length > 0 && (
+                            <footer>{row.meta.slice(0, 3).map((item) => <span key={item}>{piBridgeText(item, "detail", 80)}</span>)}</footer>
+                        )}
+                    </Button>
+                ))}
+            </div>
+        </section>
+    );
+}
+
+type MissionContextChipVariant = "workspace" | "lakehouse" | "warehouse" | "item" | "pdf" | "image" | "attachment";
+
+interface MissionContextChip {
+    key: string;
+    label: string;
+    meta: string;
+    variant: MissionContextChipVariant;
+}
+
+function missionWorkspaceName(job: MissionControlPageProps["initialJob"] | null | undefined): string {
+    return job?.workspace_name || String((job?.context as any)?.workspace_name || job?.workspace_id || "Fabric workspace");
+}
+
+function chipVariantForContextType(typeValue: unknown): MissionContextChipVariant {
+    const type = String(typeValue || "").toLowerCase();
+    if (type === "workspace") return "workspace";
+    if (type === "lakehouse") return "lakehouse";
+    if (type === "warehouse") return "warehouse";
+    return "item";
+}
+
+function chipVariantForAttachment(attachment: Record<string, any>): MissionContextChipVariant {
+    const kind = String(attachment.kind || attachment.type || attachment.mime || "").toLowerCase();
+    if (kind.includes("pdf")) return "pdf";
+    if (kind.includes("image") || /\.(png|jpe?g|gif|webp)$/i.test(String(attachment.name || ""))) return "image";
+    return "attachment";
+}
+
+function missionContextChips(job: MissionControlPageProps["initialJob"] | null | undefined): MissionContextChip[] {
+    const context = plainRecord(job?.context);
+    const rawItems = Array.isArray(context.context_items) ? context.context_items : [];
+    const rawAttachments = Array.isArray(context.prompt_attachments)
+        ? context.prompt_attachments
+        : Array.isArray(context.attachments)
+            ? context.attachments
+            : [];
+    const chips: MissionContextChip[] = [];
+    const seen = new Set<string>();
+
+    const push = (chip: MissionContextChip) => {
+        const key = chip.key || `${chip.variant}:${chip.label}`;
+        if (!chip.label || seen.has(key)) return;
+        seen.add(key);
+        chips.push({ ...chip, key });
+    };
+
+    for (const item of rawItems) {
+        const record = plainRecord(item);
+        const label = String(record.name || record.displayName || record.id || "").trim();
+        const variant = chipVariantForContextType(record.type || record.itemType);
+        const meta = variant === "workspace" ? "Workspace" : String(record.type || record.itemType || "Fabric item");
+        push({ key: `${variant}:${record.id || label}`, label, meta, variant });
+    }
+
+    if (job?.workspace_id || job?.workspace_name || context.workspace_name) {
+        push({
+            key: `workspace:${job?.workspace_id || context.workspace_id || context.workspace_name || job?.workspace_name}`,
+            label: missionWorkspaceName(job),
+            meta: "Workspace",
+            variant: "workspace",
+        });
+    }
+
+    for (const attachment of rawAttachments) {
+        const record = plainRecord(attachment);
+        const label = String(record.name || record.file_name || record.filename || "Attached file").trim();
+        const variant = chipVariantForAttachment(record);
+        const size = Number(record.size || record.byteLength || 0);
+        const sizeLabel = Number.isFinite(size) && size > 0
+            ? size > 1024 * 1024
+                ? `${(size / (1024 * 1024)).toFixed(1)} MB`
+                : `${Math.max(1, Math.round(size / 1024))} KB`
+            : variant === "pdf"
+                ? "PDF"
+                : variant === "image"
+                    ? "Image"
+                    : "File";
+        push({ key: `file:${record.id || label}`, label, meta: sizeLabel, variant });
+    }
+
+    return chips.slice(0, 18);
+}
+
+function MissionContextChipIcon({ variant }: { variant: MissionContextChipVariant }) {
+    if (variant === "workspace") return <PeopleTeam20Regular />;
+    if (variant === "warehouse") return <BuildingFactory20Regular />;
+    if (variant === "lakehouse" || variant === "item") return <Database20Regular />;
+    if (variant === "pdf") return <DocumentPdf20Regular />;
+    if (variant === "image") return <Image20Regular />;
+    return <Document16Regular />;
+}
+
+function MissionPromptMessage({ job, state }: { job: MissionControlPageProps["initialJob"] | null | undefined; state: MissionState }) {
+    const task = job?.task_description || (state.composition as any)?.task || "Mission started.";
+    const chips = useMemo(() => missionContextChips(job), [job]);
+    return (
+        <article className="mc3-chat-message mc3-chat-message--user mc3-task-context-message" data-mission-prompt-message="true">
+            <div className="mc3-chat-avatar" aria-hidden="true">You</div>
+            <div className="mc3-chat-bubble mc3-chat-bubble--prompt">
+                <div className="mc3-chat-bubble__meta">
+                    <span>Task prompt</span>
+                    <span>{missionWorkspaceName(job)}</span>
+                </div>
+                <p className="mc3-task-context-message__text">{task}</p>
+                {chips.length > 0 && (
+                    <div className="composer-pills mc3-context-pills" aria-label="Attached mission context">
+                        {chips.map((chip) => (
+                            <span key={chip.key} className={`ctx-pill ctx-pill--${chip.variant}`} title={`${chip.label} · ${chip.meta}`}>
+                                <MissionContextChipIcon variant={chip.variant} />
+                                <span className="ctx-pill-name">{chip.label}</span>
+                            </span>
+                        ))}
+                    </div>
+                )}
+            </div>
+        </article>
+    );
+}
+
+function MissionOutcomeChatNotice({ state }: { state: MissionState }) {
+    const failure = latestFailureMessage(state);
+    const verifierIssue = latestVerifierIssueMessage(state);
+    if ((state.terminalType === "job_complete" || state.jobStatus === "completed") && verifierIssue) {
+        return (
+            <article className="mc3-chat-message mc3-chat-message--system mc3-chat-notice mc3-chat-notice--attention" role="alert" aria-label="Mission verifier issue summary">
+                <div className="mc3-chat-avatar" aria-hidden="true">!</div>
+                <div className="mc3-chat-bubble">
+                    <div className="mc3-chat-bubble__meta"><span>Verifier</span><span>Review evidence</span></div>
+                    <p>{verifierIssue}</p>
+                </div>
+            </article>
+        );
+    }
+    if (state.terminalType !== "job_failed" && state.jobStatus !== "failed") return null;
+    return (
+        <article className="mc3-chat-message mc3-chat-message--system mc3-chat-notice mc3-chat-notice--failed" role="alert" aria-label="Mission failure summary">
+            <div className="mc3-chat-avatar" aria-hidden="true">!</div>
+            <div className="mc3-chat-bubble">
+                <div className="mc3-chat-bubble__meta"><span>Runtime</span><span>Mission failed</span></div>
+                <p>{failure || "AgentHub stopped this mission before execution telemetry was published. This usually points to a backend/runtime startup failure, not a problem with the mission prompt."}</p>
+            </div>
+        </article>
+    );
+}
+
+function MissionChatEventRow({ row, state, slots }: { row: ReturnType<typeof buildExecutionTranscriptRows>[number]; state: MissionState; slots: RuntimeSlotView[] }) {
+    const [expanded, setExpanded] = useState(false);
+    const log = row.entry;
+    const agent = canvasLogAgent(log, slots, state);
+    const agentTitle = canvasLogAgentTitle(log, slots, state);
+    const rowState = row.state;
+    const level = resolvedLogLevel(log);
+    const messageTone = level === "error" || rowState === "error" ? "failed" : level === "warn" || rowState === "warn" ? "attention" : row.isLive ? "live" : "normal";
+    return (
+        <article
+            className={`mc3-chat-message mc3-chat-message--assistant mc3-chat-event mc3-chat-event--${messageTone} canvas-log-row mc3-transcript-row mc3-exec-row canvas-log-row--${agent.kind} mc3-transcript-row--${rowState}${row.isLive ? " mc3-exec-row--live" : ""}${row.isAttention ? " mc3-exec-row--attention" : ""}`}
+            data-kind={log.kind}
+            data-state={rowState}
+            data-pi-live-log-row="true"
+            data-pi-log-seq={log.seq}
+            data-pi-log-kind={log.kind}
+            data-pi-log-level={level}
+            data-pi-log-collapse-state={row.isReceipt ? "collapsed" : row.isLive ? "recent" : "current"}
+        >
+            <div className="mc3-chat-avatar" aria-hidden="true" title={agentTitle}>{agent.label.slice(0, 2).toUpperCase()}</div>
+            <div className="mc3-chat-bubble">
+                <header className="mc3-transcript-row__head mc3-chat-event__head">
+                    <span className={`canvas-log-row__agent canvas-log-row__agent--${agent.kind}`} title={agentTitle}>{agent.label}</span>
+                    {row.isLive && <span className="mc3-transcript-row__running">Streaming</span>}
+                    <time className="canvas-log-row__time">{fmtLogTs(log.ts)}</time>
+                </header>
+                {row.isTextStream ? (
+                    <div className={`mc3-stream-block mc3-stream-block--${row.streamKind || "assistant"}${row.isLive ? " is-live" : ""}`}>
+                        <p className="mc3-stream-block__label">{row.streamKind === "thinking" ? "Thinking" : "Assistant"}</p>
+                        <p className="mc3-stream-block__text">{visibleRuntimeText(row.streamText || log.message)}{row.isLive && <span className="mc3-stream-cursor" aria-hidden="true" />}</p>
+                    </div>
+                ) : row.isLive ? (
+                    <>
+                        <div className={`mc3-exec-current mc3-exec-current--${row.progress.semanticClass}`} data-spinner-mode={row.progress.mode} aria-label="Current execution spinner">
+                            <span className="mc3-exec-spinner" aria-hidden="true" />
+                            <span className="mc3-exec-glimmer">{visibleRuntimeText(row.progress.spinnerMessage)}</span>
+                        </div>
+                        <div className="mc3-agent-progress-line" aria-label="Current execution step">
+                            <span className="mc3-agent-progress-line__marker" aria-hidden="true">⎿</span>
+                            <span className="mc3-agent-progress-line__text">{visibleRuntimeText(row.progress.statusText)}</span>
+                        </div>
+                    </>
+                ) : (
+                    <p className="mc3-exec-headline">{visibleRuntimeText(row.headline)}</p>
+                )}
+                {row.meta.length > 0 && (
+                    <div className="mc3-transcript-row__meta">
+                        {row.meta.map((part) => <span key={part}>{part}</span>)}
+                    </div>
+                )}
+                {row.isLive && row.activities.length > 0 && (
+                    <div className="mc3-exec-activity-list" aria-label="Current task details">
+                        {row.activities.map((activity) => (
+                            <div key={activity.seq} className={`mc3-exec-activity${activity.current ? " is-current" : ""}${activity.muted ? " is-muted" : ""}`}>
+                                <span className="mc3-exec-activity__marker" data-category={activity.category}>{activity.badge}</span>
+                                <span className="mc3-exec-activity__text">{visibleRuntimeText(activity.text)}</span>
+                            </div>
+                        ))}
+                    </div>
+                )}
+                {(row.hiddenCount > 0 || row.children.length > 0) && (
+                    <Button appearance="transparent" size="small" className="mc3-transcript-row__expand" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded}>
+                        {expanded ? "Hide details" : `Show details (+${row.hiddenCount || row.children.length})`}
+                    </Button>
+                )}
+                {expanded && row.children.length > 0 && (
+                    <div className="mc3-transcript-row__children">
+                        {row.children.map((child) => (
+                            <div key={child.seq} className={`mc3-transcript-child mc3-transcript-child--${child.kind}`}>
+                                <span className="mc3-transcript-child__marker">⎿</span>
+                                <span className="mc3-transcript-child__time">{fmtLogTs(child.ts)}</span>
+                                <span className="mc3-transcript-child__text">{visibleRuntimeText(child.message)}</span>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
+        </article>
+    );
+}
+
+function MissionChatHistory({
+    job,
+    state,
+    runtimeSlots,
+    streamStatus,
+    connectionLabel,
+    connectionState,
+    connected,
+    patternLabel,
+    visibleAgentTotal,
+    sessionId,
+    githubToken,
+    fabricToken,
+}: {
+    job: MissionControlPageProps["initialJob"] | null | undefined;
+    state: MissionState;
+    runtimeSlots: RuntimeSlotView[];
+    streamStatus?: string | null;
+    connectionLabel: string;
+    connectionState: string;
+    connected: boolean;
+    patternLabel: string;
+    visibleAgentTotal: number;
+    sessionId: string;
+    githubToken: string;
+    fabricToken?: string;
+}) {
+    const scrollRef = useRef<HTMLDivElement>(null);
+    const followRef = useRef(true);
+    const rows = useMemo(() => buildExecutionTranscriptRows(state.logs.slice(-192), state, state.logs), [state.logs, state]);
+    const terminal = !!state.terminalType;
+
+    const scrollToLatest = useCallback((behavior: ScrollBehavior = "auto") => {
+        const element = scrollRef.current;
+        if (!element) return;
+        element.scrollTo({ top: element.scrollHeight, behavior });
+    }, []);
+
+    const handleScroll = useCallback(() => {
+        const element = scrollRef.current;
+        if (!element) return;
+        const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+        followRef.current = distanceFromBottom < 140;
+    }, []);
+
+    useEffect(() => {
+        const frame = window.requestAnimationFrame(() => scrollToLatest("auto"));
+        return () => window.cancelAnimationFrame(frame);
+    }, [scrollToLatest]);
+
+    useEffect(() => {
+        if (!followRef.current) return;
+        const frame = window.requestAnimationFrame(() => scrollToLatest("auto"));
+        return () => window.cancelAnimationFrame(frame);
+    }, [rows.length, state.logs.length, state.lastSeq, state.jobStatus, scrollToLatest]);
+
+    return (
+        <section className="mc3-chat-history" aria-label="Mission conversation">
+            <div ref={scrollRef} className="mc3-chat-scroll canvas-log-stream mc3-log" role="log" aria-label="Mission log stream" data-pi-live-log="true" onScroll={handleScroll} data-auto-follow="true">
+                <MissionChatStatusBar
+                    state={state}
+                    streamStatus={streamStatus}
+                    connectionLabel={connectionLabel}
+                    connectionState={connectionState}
+                    connected={connected}
+                    patternLabel={patternLabel}
+                    visibleAgentTotal={visibleAgentTotal}
+                />
+                <MissionPromptMessage job={job} state={state} />
+                <MissionOutcomeChatNotice state={state} />
+                {rows.length === 0 ? (
+                    <div className="mc3-chat-message mc3-chat-message--assistant">
+                        <div className="mc3-chat-avatar" aria-hidden="true">AI</div>
+                        <div className="mc3-chat-bubble">
+                            <EmptyTranscriptState state={state} streamStatus={streamStatus} />
+                        </div>
+                    </div>
+                ) : rows.map((row) => (
+                    <MissionChatEventRow key={row.key} row={row} state={state} slots={runtimeSlots} />
+                ))}
+            </div>
+            <MissionSteeringComposer
+                sessionId={sessionId}
+                githubToken={githubToken}
+                fabricToken={fabricToken}
+                state={state}
+                runtimeSlots={runtimeSlots}
+                terminal={terminal}
+            />
+        </section>
+    );
+}
+
+function MissionOutputNodeRow({ node, workloadClient, depth = 0 }: { node: MissionOutputNode; workloadClient: WorkloadClientAPI; depth?: number }) {
+    const icon = node.isFolder ? <Folder20Regular /> : <Document16Regular />;
+    return (
+        <article className={`mc3-summary-output ${node.isFolder ? "mc3-summary-output--folder" : "mc3-summary-output--item"}`} style={{ ["--output-depth" as string]: depth }}>
+            <div className="mc3-summary-output__row">
+                <span className="mc3-summary-output__icon">{icon}</span>
+                <div className="mc3-summary-output__body">
+                    <strong>{node.name}</strong>
+                    <span className="mc3-summary-output__meta">
+                        <Badge appearance="tint" color={node.isFolder ? "informative" : "subtle"} className="mc3-summary-output__badge">{outputTypeLabel(node.type)}</Badge>
+                        <Badge appearance="tint" color={outputModeBadgeColor(node.mode)} className="mc3-summary-output__mode">{outputModeLabel(node.mode)}</Badge>
+                        {node.status && <Badge appearance="tint" color={changeBadgeColor(node.status)}>{changeStatusLabel(node.status)}</Badge>}
+                    </span>
+                    {node.summary && <p>{visibleRuntimeText(node.summary)}</p>}
+                </div>
+                {node.webUrl && (
+                    <a href={node.webUrl} target="_blank" rel="noopener noreferrer" aria-label={`Open ${node.name}`} onClick={externalLinkOnClick(workloadClient, node.webUrl)}>
+                        <Open20Regular />
+                    </a>
+                )}
+            </div>
+            {node.children.length > 0 && (
+                <div className="mc3-summary-output__children">
+                    {node.children.map((child) => <MissionOutputNodeRow key={child.key} node={child} workloadClient={workloadClient} depth={depth + 1} />)}
+                </div>
+            )}
+        </article>
+    );
+}
+
+function MissionSummaryPanel({ state, runtimeSlots, workloadClient }: { state: MissionState; runtimeSlots: RuntimeSlotView[]; workloadClient: WorkloadClientAPI }) {
+    const changes = useMemo(() => state.changeOrder.map((id) => state.changes[id]).filter(Boolean), [state.changeOrder, state.changes]);
+    const artifacts = useMemo(() => state.artifactOrder.map((id) => state.artifacts[id]).filter((artifact): artifact is Artifact => Boolean(artifact) && !isHiddenOutputType(artifact.kind)), [state.artifactOrder, state.artifacts]);
+    const outputNodes = useMemo(() => buildMissionOutputTree(changes, artifacts), [changes, artifacts]);
+    const outputCount = useMemo(() => countOutputNodes(outputNodes), [outputNodes]);
+    const pendingApprovals = useMemo(() => Object.values(state.approvals).filter((approval) => !approval.resolved), [state.approvals]);
+    const errorCount = useMemo(() => state.logs.filter((entry) => resolvedLogLevel(entry) === "error" || entry.kind === "error").length, [state.logs]);
+    const warningCount = useMemo(() => state.logs.filter((entry) => resolvedLogLevel(entry) === "warn" && !/approval required/i.test(entry.message)).length, [state.logs]);
+    const latestIssue = useMemo(() => [...state.logs].reverse().find((entry) => resolvedLogLevel(entry) !== "info" || entry.kind === "error"), [state.logs]);
+    const lastRollup = useMemo(() => [...state.logs].reverse().find((entry) => entry.kind === "rollup"), [state.logs]);
+    const activeAgent = activeAgentNameFor(state, runtimeSlots);
+    const activeRuntimeCount = runtimeSlots.filter((slot) => slot.lifecycle === "running" || slot.lifecycle === "waiting" || slot.lifecycle === "spinning_up" || slot.isActive).length;
+    const applied = changes.filter((change) => change.status === "applied" || change.status === "completed").length;
+    const visibleChanges = changes.slice(0, 8);
+    const terminal = !!state.terminalType;
+    const status = missionHeaderStatus(state);
+    const issueCount = errorCount + warningCount + pendingApprovals.length;
+    const statusColor = status.tone === "complete" ? "success" : status.tone === "failed" || status.tone === "cancelled" ? "danger" : status.tone === "waiting" ? "warning" : "brand";
+    const latestText = pendingApprovals[0]?.summary
+        || latestIssue && visibleRuntimeText(latestIssue.message).slice(0, 220)
+        || lastRollup && visibleRuntimeText(lastRollup.message).slice(0, 220)
+        || (terminal ? "Run settled." : "Waiting for the next mission update.");
+    const latestSeq = pendingApprovals[0] ? null : latestIssue?.seq ?? lastRollup?.seq ?? null;
+    const attentionSeq = latestIssue?.seq ?? null;
+    const attentionText = pendingApprovals.length > 0
+        ? "Needs approval"
+        : errorCount > 0
+            ? `${errorCount} error${errorCount === 1 ? "" : "s"}`
+            : warningCount > 0
+                ? `${warningCount} warning${warningCount === 1 ? "" : "s"}`
+                : "None";
+
+    return (
+        <aside
+            className={`mc3-intel mc3-summary-rail mc3-rail mc3-summary-rail--${status.tone}`}
+            aria-label="Mission intelligence"
+            data-design-intent="chat-execution-summary-output-pane"
+        >
+            <header className="mc3-summary-rail__header">
+                <span className="mc3-summary-rail__pulse" data-state={status.tone} aria-hidden="true" />
+                <div>
+                    <span>Summary</span>
+                    <strong>{status.tone === "failed" ? "Needs attention" : terminal ? "Run settled" : "Mission running"}</strong>
+                </div>
+                <Badge appearance="tint" color={statusColor} className="mc3-summary-status" data-state={status.tone}>{status.statusLabel}</Badge>
+            </header>
+            <div className="mc3-summary-metrics" aria-label="Mission health metrics">
+                <article className="mc3-summary-metric">
+                    <span>Outputs</span>
+                    <strong>{outputCount}</strong>
+                </article>
+                <article className="mc3-summary-metric">
+                    <span>Changes</span>
+                    <strong>{applied || changes.length}</strong>
+                </article>
+                <article className={`mc3-summary-metric${issueCount > 0 ? " mc3-summary-metric--attention" : ""}`}>
+                    <span>Attention</span>
+                    <strong>{issueCount}</strong>
+                </article>
+                <article className="mc3-summary-metric">
+                    <span>Active</span>
+                    <strong>{activeRuntimeCount || (terminal ? 0 : Math.min(runtimeSlots.length || 1, 1))}</strong>
+                </article>
+            </div>
+            <section className="mc3-summary-section mc3-summary-section--current">
+                <h2>Current</h2>
+                <dl className="mc3-summary-facts">
+                    <div><dt>Active</dt><dd>{visibleAgentName(activeAgent) || (terminal ? "Complete" : "System routing")}</dd></div>
+                    <div><dt>Latest update</dt><dd>{latestSeq ? <Button appearance="transparent" className="mc3-summary-focus" onClick={() => focusMissionLogSeq(latestSeq)}>{latestText}</Button> : latestText}</dd></div>
+                    <div><dt>Open attention</dt><dd>{attentionSeq ? <Button appearance="transparent" className="mc3-summary-focus mc3-summary-focus--attention" onClick={() => focusMissionLogSeq(attentionSeq)}>{attentionText}</Button> : attentionText}</dd></div>
+                </dl>
+            </section>
+            <section className="mc3-summary-section" aria-label="Mission outputs and changes">
+                <div className="mc3-summary-section__head">
+                    <h2>Outputs</h2>
+                    <span>{outputCount}</span>
+                </div>
+                <div className="mc3-summary-list mc3-summary-output-tree">
+                    {outputNodes.length === 0 ? (
+                        <p className="mc3-summary-empty">Outputs appear here as Fabric items and files are published.</p>
+                    ) : outputNodes.map((node) => <MissionOutputNodeRow key={node.key} node={node} workloadClient={workloadClient} />)}
+                </div>
+            </section>
+            <section className="mc3-summary-section">
+                <div className="mc3-summary-section__head">
+                    <h2>Changes</h2>
+                    <span>{applied || changes.length}</span>
+                </div>
+                <div className="mc3-summary-list">
+                    {visibleChanges.length === 0 ? (
+                        <p className="mc3-summary-empty">No workspace changes have been published yet.</p>
+                    ) : visibleChanges.map((change) => (
+                        <article key={change.recordId} className={`mc3-intel-change mc3-summary-change mc3-summary-change--${change.kind}`}>
+                            <span className="mc3-summary-change__icon">{changeIcon(change.kind, change.targetScope)}</span>
+                            <div>
+                                <div className="mc3-summary-change__meta">
+                                    <Badge appearance="tint" color="subtle">{visibleAgentName(change.agentName || change.agentId) || "runtime"}</Badge>
+                                    <Badge appearance="tint" color={changeBadgeColor(change.status)}>{changeStatusLabel(change.status)}</Badge>
+                                </div>
+                                <strong>{change.targetName}</strong>
+                                <p>{visibleRuntimeText(change.summary)}</p>
+                            </div>
+                            {change.webUrl && (
+                                <a href={change.webUrl} target="_blank" rel="noopener noreferrer" aria-label={`Open ${change.targetName}`} onClick={externalLinkOnClick(workloadClient, change.webUrl)}>
+                                    <Open20Regular />
+                                </a>
+                            )}
+                        </article>
+                    ))}
+                </div>
+            </section>
+            {pendingApprovals.length > 0 && (
+                <section className="mc3-summary-section mc3-summary-section--approval">
+                    <h2>Waiting For You</h2>
+                    {pendingApprovals.map((approval) => (
+                        <article key={approval.approvalId} className="mc3-summary-approval">
+                            <Badge appearance="tint" color="warning" className="mc3-summary-approval__badge">Approval required</Badge>
+                            <p>{approval.summary}</p>
+                        </article>
+                    ))}
+                </section>
+            )}
+        </aside>
+    );
+}
+
+function MissionIntelligencePanel({ state, runtimeSlots, workloadClient }: { state: MissionState; runtimeSlots: RuntimeSlotView[]; workloadClient: WorkloadClientAPI }) {
+    const changes = useMemo(
+        () => state.changeOrder.map((id) => state.changes[id]).filter(Boolean),
+        [state.changeOrder, state.changes],
+    );
+    const artifacts = useMemo(
+        () => state.artifactOrder.map((id) => state.artifacts[id]).filter((artifact): artifact is Artifact => Boolean(artifact) && !isHiddenOutputType(artifact.kind)),
+        [state.artifactOrder, state.artifacts],
+    );
+    const pendingApprovals = useMemo(
+        () => Object.values(state.approvals).filter((approval) => !approval.resolved),
+        [state.approvals],
+    );
+    const errorCount = useMemo(
+        () => state.logs.filter((entry) => resolvedLogLevel(entry) === "error" || entry.kind === "error").length,
+        [state.logs],
+    );
+    const warningCount = useMemo(
+        () => state.logs.filter((entry) => resolvedLogLevel(entry) === "warn" && !/approval required/i.test(entry.message)).length,
+        [state.logs],
+    );
+    const lastRollup = useMemo(
+        () => [...state.logs].reverse().find((entry) => entry.kind === "rollup"),
+        [state.logs],
+    );
+    const latestIssue = useMemo(
+        () => [...state.logs].reverse().find((entry) => resolvedLogLevel(entry) !== "info" || entry.kind === "error"),
+        [state.logs],
+    );
+    const rows = changes.slice(0, 5);
+    const applied = changes.filter((change) => change.status === "applied" || change.status === "completed").length || changes.length;
+    const activeAgent = activeAgentNameFor(state, runtimeSlots);
+    const terminalLatest = state.terminalType === "job_failed"
+        ? (latestFailureMessage(state) || "Run failed before public evidence was published.")
+        : state.terminalType === "job_cancelled"
+            ? "Run cancelled."
+            : state.terminalType
+                ? "Run completed."
+                : "Waiting for the first mission update.";
+    const attentionText = pendingApprovals[0]?.summary || (latestIssue ? visibleRuntimeText(latestIssue.message).slice(0, 180) : "No open issues");
+    const panelTone = pendingApprovals.length > 0 || latestIssue
+        ? "attention"
+        : state.terminalType === "job_failed"
+            ? "failed"
+            : state.terminalType
+                ? "settled"
+                : "live";
+    const headline = pendingApprovals.length > 0
+        ? "Decision needed"
+        : state.terminalType
+            ? "Run settled"
+            : "Live execution";
+    const badge = pendingApprovals.length > 0
+        ? "approval needed"
+        : `${applied} applied`;
+
+    return (
+        <aside
+            className={`mc3-intel mc3-rail mc3-intel--${panelTone}`}
+            aria-label="Mission intelligence"
+            data-design-intent="agentic-run-intelligence"
+            data-design-palette="fabric-blue-cyan-purple-magenta-amber"
+        >
+            <header className="mc3-intel__header">
+                <div>
+                    <span className="mc3-intel__eyebrow">Run intelligence</span>
+                    <strong>{headline}</strong>
+                </div>
+                <span className="mc3-intel__badge">{badge}</span>
+            </header>
+            <div className="mc3-intel__signals" aria-label="Mission signals">
+                <article className="mc3-intel-signal mc3-intel-signal--latest">
+                    <span>Latest update</span>
+                    <strong>{lastRollup ? visibleRuntimeText(lastRollup.message).slice(0, 180) : terminalLatest}</strong>
+                </article>
+                <article className="mc3-intel-signal mc3-intel-signal--agent">
+                    <span>Active lane</span>
+                    <strong>{visibleAgentName(activeAgent) || (state.terminalType ? "Complete" : "System routing")}</strong>
+                </article>
+                <article className="mc3-intel-signal mc3-intel-signal--attention">
+                    <span>{pendingApprovals[0] ? "Needs approval" : latestIssue ? "Needs review" : "Attention"}</span>
+                    <strong>{attentionText}</strong>
+                </article>
+            </div>
+            <section className="mc3-intel__changes" aria-label="Mission outputs and changes">
+                <div className="mc3-intel__section-head">
+                    <span>Outputs and changes</span>
+                    <strong>{changes.length}</strong>
+                </div>
+                {rows.length === 0 ? (
+                    <p className="mc3-intel__empty">No published workspace changes yet.</p>
+                ) : rows.map((change) => (
+                    <article key={change.recordId} className={`mc3-intel-change mc3-intel-change--${String(change.status || "tracked").toLowerCase()}`}>
+                        <span className="mc3-intel-change__icon">{changeIcon(change.kind, change.targetScope)}</span>
+                        <div>
+                            <div className="mc3-intel-change__meta">
+                                <span>{visibleAgentName(change.agentName || change.agentId) || "runtime"}</span>
+                                <span>{changeStatusLabel(change.status)}</span>
+                            </div>
+                            <strong>{change.targetName}</strong>
+                            <small>{visibleRuntimeText(change.summary)}</small>
+                        </div>
+                        {change.webUrl && (
+                            <a
+                                href={change.webUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="mc3-intel-change__link"
+                                aria-label={`Open ${change.targetName}`}
+                                onClick={externalLinkOnClick(workloadClient, change.webUrl)}
+                            >
+                                <Open20Regular />
+                            </a>
+                        )}
+                    </article>
+                ))}
+            </section>
+            {artifacts.length > 0 && (
+                <section className="dmc-live__outputs" aria-label="Mission output inventory">
+                    {artifacts.map((artifact) => (
+                        <Card key={artifact.artifactId} className="ledger-row ledger-row--created">
+                            <span className="ledger-row__fluent-icon">{changeIcon("created", artifact.kind)}</span>
+                            <div className="ledger-row__body">
+                                <div className="ledger-row__meta">
+                                    <Badge appearance="outline" color="subtle" className="ledger-agent">{visibleAgentName(artifact.agentId) || "runtime"}</Badge>
+                                    <Badge appearance="tint" color={artifact.state === "written" ? "success" : "warning"} className={`ledger-status ledger-status--${artifact.state}`}>{artifact.state === "written" ? "Written" : "Draft"}</Badge>
+                                </div>
+                                <strong>{artifact.name}</strong>
+                                <small>{visibleRuntimeText(artifact.summary)}</small>
+                            </div>
+                            {artifact.webUrl && (
+                                <a
+                                    href={artifact.webUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="mc3-change-card__link"
+                                    aria-label={`Open ${artifact.name}`}
+                                    onClick={externalLinkOnClick(workloadClient, artifact.webUrl)}
+                                >
+                                    <Open20Regular />
+                                </a>
+                            )}
+                        </Card>
+                    ))}
+                </section>
+            )}
+        </aside>
+    );
+}
+
+function MissionSteeringComposer({
+    sessionId,
+    githubToken,
+    fabricToken,
+    state,
+    runtimeSlots,
+    terminal,
+}: {
+    sessionId: string;
+    githubToken: string;
+    fabricToken?: string;
+    state: MissionState;
+    runtimeSlots: RuntimeSlotView[];
+    terminal: boolean;
+}) {
+    const activeTargets = useMemo(
+        () => runtimeSlots.filter((slot) => ["running", "waiting", "spinning_up"].includes(slot.lifecycle)),
+        [runtimeSlots],
+    );
+    const preferredTarget = activeTargets.length === 1 ? activeTargets[0].slotId : "broadcast";
+    const [message, setMessage] = useState("");
+    const [target, setTarget] = useState(preferredTarget);
+    const [busyMode, setBusyMode] = useState<"queue" | "interrupt" | null>(null);
+    const [status, setStatus] = useState<string | null>(null);
+    const targetSlot = runtimeSlots.find((slot) => slot.slotId === target);
+    const targetLabel = target === "broadcast"
+        ? `All active agents${activeTargets.length > 0 ? ` (${activeTargets.length})` : ""}`
+        : targetSlot ? readableSlotLabel(targetSlot) : "Selected agent";
+    const pendingSteering = useMemo(() => {
+        const latestById = new Map<string, LogEntry>();
+        for (const entry of state.logs) {
+            if (entry.kind !== "steering" || !entry.steeringId) continue;
+            latestById.set(entry.steeringId, entry);
+        }
+        return [...latestById.values()]
+            .filter((entry) => /queued|requested|deferred/i.test(entry.message) && !/delivered|failed|broadcast/i.test(entry.message))
+            .slice(-3)
+            .reverse();
+    }, [state.logs]);
+
+    useEffect(() => {
+        const validTargets = new Set(["broadcast", ...runtimeSlots.map((slot) => slot.slotId)]);
+        if (!validTargets.has(target)) setTarget(preferredTarget);
+    }, [preferredTarget, runtimeSlots, target]);
+
+    const submit = useCallback(async (mode: "queue" | "interrupt") => {
+        const trimmed = message.trim();
+        if (!trimmed || busyMode || terminal) return;
+        setBusyMode(mode);
+        setStatus(mode === "interrupt" ? "Interrupt request queued…" : "Directive queued…");
+        try {
+            const res = await api.sendMessage(
+                sessionId,
+                trimmed,
+                target === "broadcast" ? null : target,
+                { githubToken, fabricToken, agentHubSessionId: sessionId },
+                mode,
+            );
+            setMessage("");
+            const count = res.targetCount ?? res.targetAgentSessionIds?.length ?? 1;
+            setStatus(`${mode === "interrupt" ? "Interrupt" : "Directive"} accepted · ${count} target${count === 1 ? "" : "s"}`);
+        } catch (err) {
+            setStatus(err instanceof Error ? err.message.slice(0, 240) : "Unable to send directive");
+        } finally {
+            setBusyMode(null);
+        }
+    }, [busyMode, fabricToken, githubToken, message, sessionId, target, terminal]);
+
+    return (
+        <section className={`mc3-steering${terminal ? " mc3-steering--terminal" : ""}`} aria-label="Mission steering" data-design-intent="agentic-steering-composer">
+            {pendingSteering.length > 0 && (
+                <div className="mc3-steering__queue" aria-label="Queued steering messages">
+                    <Badge appearance="tint" color="warning" className="mc3-steering__queue-count">{pendingSteering.length} queued</Badge>
+                    {pendingSteering.map((entry) => (
+                        <Tooltip key={entry.steeringId} content={visibleRuntimeText(entry.message)} relationship="label">
+                            <Button
+                                appearance="subtle"
+                                size="small"
+                                className="mc3-steering-queued"
+                                onClick={() => focusMissionLogSeq(entry.seq)}
+                                icon={<span className={`mc3-steering-queued__dot mc3-steering-queued__dot--${entry.deliveryMode === "interrupt" ? "interrupt" : "queue"}`} />}
+                            >
+                                <span>{visibleRuntimeText(entry.message.replace(/^.*?:\s*/, "")).slice(0, 120)}</span>
+                            </Button>
+                        </Tooltip>
+                    ))}
+                </div>
+            )}
+            <div className="mc3-steering__composer">
+                <Textarea
+                    id="mc3-steering-message"
+                    className="mc3-steering__input"
+                    aria-label="Steer mission"
+                    value={message}
+                    onChange={(_, data) => setMessage(data.value)}
+                    onKeyDown={(event) => {
+                        if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+                            event.preventDefault();
+                            void submit("queue");
+                        }
+                    }}
+                    disabled={terminal}
+                    resize="vertical"
+                    textarea={{ rows: 2, maxLength: 8000 }}
+                    maxLength={8000}
+                    placeholder={terminal ? "Run is complete" : "Message the active agents"}
+                />
+                <div className="mc3-steering__dock">
+                    <div className="mc3-steering__target-wrap">
+                        <Target20Regular />
+                        <Dropdown
+                            id="mc3-steering-target"
+                            className="mc3-steering__target"
+                            value={targetLabel}
+                            selectedOptions={[target]}
+                            onOptionSelect={(_, data) => data.optionValue && setTarget(data.optionValue)}
+                            disabled={terminal}
+                            aria-label="Message target"
+                            size="small"
+                        >
+                            <Option value="broadcast" text="All active agents">All active agents</Option>
+                            {runtimeSlots.map((slot) => (
+                                <Option key={slot.slotId} value={slot.slotId} text={readableSlotLabel(slot)}>{readableSlotLabel(slot)}</Option>
+                            ))}
+                        </Dropdown>
+                    </div>
+                    {status && <div className="mc3-steering__status" role="status">{status}</div>}
+                    <div className="mc3-steering__actions">
+                        <Tooltip content="Interrupt active work" relationship="label">
+                        <Button
+                            appearance="secondary"
+                            size="small"
+                            className="mc3-steering__btn mc3-steering__btn--interrupt"
+                            disabled={!message.trim() || !!busyMode || terminal}
+                            onClick={() => void submit("interrupt")}
+                            aria-label="Interrupt active work"
+                            icon={busyMode === "interrupt" ? <Spinner size="tiny" /> : <Stop20Regular />}
+                        >
+                            <span>Interrupt</span>
+                        </Button>
+                        </Tooltip>
+                        <Tooltip content="Send message" relationship="label">
+                        <Button
+                            appearance="primary"
+                            size="small"
+                            className="mc3-steering__btn mc3-steering__btn--primary"
+                            disabled={!message.trim() || !!busyMode || terminal}
+                            onClick={() => void submit("queue")}
+                            aria-label="Send message"
+                            icon={busyMode === "queue" ? <Spinner size="tiny" /> : <Send20Regular />}
+                        >
+                            <span>Send</span>
+                        </Button>
+                        </Tooltip>
+                    </div>
+                </div>
+            </div>
+        </section>
+    );
+}
+
 // ════════════════════════════════════════════════════════════════════
 // ROOT
 // ════════════════════════════════════════════════════════════════════
@@ -1037,8 +2373,9 @@ export function MissionControlPage({
         return () => { c = true; };
     }, [workloadClient, initialFabricToken]);
 
-    const { state, isConnected, reconnectCount, error } = useMissionStream(sessionId, {
+    const { state, error: streamError, isConnected, reconnectCount } = useMissionStream(sessionId, {
         getSessionOpts: { githubToken, fabricToken },
+        initialJob,
     });
 
     const [fetchedJob, setFetchedJob] = useState<MissionControlPageProps["initialJob"]>(null);
@@ -1052,8 +2389,10 @@ export function MissionControlPage({
                 setFetchedJob({
                     task_description: j.task_description, workspace_id: j.workspace_id,
                     workspace_name: j.context?.workspace_name ?? null,
+                    runtime: j.runtime ?? null,
                     started_at: j.started_at ?? null, status: j.status,
                     context: j.context ?? null,
+                    composition: j.composition ?? null,
                 });
             } catch { /* best-effort */ }
         })();
@@ -1061,38 +2400,30 @@ export function MissionControlPage({
     }, [initialJob, sessionId, fabricToken, githubToken]);
     const job = initialJob ?? fetchedJob;
 
-    const startedAtMs = useMemo(() => {
-        const iso = job?.started_at ?? null;
-        return iso ? new Date(iso).getTime() : Date.now();
-    }, [job?.started_at]);
-    const [elapsedSec, setElapsedSec] = useState(0);
-    useEffect(() => {
-        if (state.terminalType) return undefined;
-        const tick = () => setElapsedSec(Math.max(0, Math.floor((Date.now() - startedAtMs) / 1000)));
-        tick();
-        const id = window.setInterval(tick, 1000);
-        return () => window.clearInterval(id);
-    }, [startedAtMs, state.terminalType]);
-
-    const [terminating, setTerminating] = useState(false);
-    const [optimisticCancelled, setOptimisticCancelled] = useState(false);
-    const handleTerminate = useCallback(async () => {
-        if (terminating) return;
-        setTerminating(true); setOptimisticCancelled(true);
-        try { await api.cancelSession(sessionId, { githubToken, fabricToken }); }
-        catch (e) { console.warn("[mc] cancel failed", e); }
-        finally { setTerminating(false); }
-    }, [sessionId, githubToken, fabricToken, terminating]);
-
-    const effectiveStatus: JobStatusLite = optimisticCancelled && !state.terminalType
-        ? "cancelled" : state.jobStatus;
     const runtimeSlots = useMemo(
         () => buildRuntimeSlotViews(state),
         [state.composition, state.slotProgress, state.agentStatus, state.activeAgentId, state.approvals, state.logs.length, state.jobStatus],
     );
     const terminal = !!state.terminalType;
+    const streamStatus = terminal
+        ? null
+        : streamError || (isConnected ? null : reconnectCount > 0 ? "Reconnecting event stream; latest session status remains visible." : null);
+    const headerStatus = missionHeaderStatus(state);
+    const statusLabel = headerStatus.statusLabel;
+    const pendingApproval = hasPendingApproval(state);
+    const connectionLabel = terminal
+        ? headerStatus.connectionLabel
+        : pendingApproval
+            ? headerStatus.connectionLabel
+        : isConnected
+            ? "streaming"
+            : streamError
+                ? "quiet"
+                : reconnectCount > 0
+                    ? "reconnecting"
+                    : headerStatus.connectionLabel;
     const comp: any = state.composition;
-    const patternLabel = comp?.architecture || "supervisor";
+    const patternLabel = comp?.architecture || "dynamic";
     const visibleCompositionSlotCount = Array.isArray(comp?.slots)
         ? comp.slots.filter((slot: any) => !isInternalRuntimeSlot({
             id: String(slot.id || ""),
@@ -1100,104 +2431,70 @@ export function MissionControlPage({
             role: String(slot.role || ""),
         })).length
         : 0;
-    const agentCount = Math.max(visibleCompositionSlotCount, runtimeSlots.length);
-    const activeNameRaw = state.activeAgentId ? nameFor(state, state.activeAgentId) : null;
-    const activeName = visibleAgentName(activeNameRaw);
-    const [canvasLogCategory, setCanvasLogCategory] = useState<LogCategoryFilter>("high_level");
-    const pendingApprovals = useMemo(
-        () => Object.values(state.approvals).filter((a) => !a.resolved),
-        [state.approvals],
-    );
-    const pendingApprovalCount = pendingApprovals.length;
+    const visibleAgentTotal = Math.max(visibleCompositionSlotCount, runtimeSlots.length);
+    const missionBrief = missionSummaryLine(job, state);
+    const connectionState = headerStatus.connectionLabel === "complete" || terminal
+        ? headerStatus.connectionLabel
+        : connectionLabel;
+    const jobContext = (job?.context || {}) as Record<string, any>;
+    const nativePiSession = isNativePiSurfaceRequested(job, jobContext);
 
-    const slotStats = useMemo(() => {
-        const done = runtimeSlots.filter((s) => s.lifecycle === "finished").length;
-        const running = runtimeSlots.filter((s) => s.lifecycle === "running").length;
-        const waiting = runtimeSlots.filter((s) => s.lifecycle === "waiting" || s.lifecycle === "spinning_up").length;
-        const failed = runtimeSlots.filter((s) => s.lifecycle === "failed").length;
-        return { done, running, waiting, failed, total: Math.max(agentCount, runtimeSlots.length) };
-    }, [runtimeSlots, agentCount]);
-    const statusPill: Record<string, [string, string]> = {
-        planned: ["mc-pill mc-pill--planned", "Planned"],
-        approved: ["mc-pill mc-pill--running", "Starting"],
-        running: ["mc-pill mc-pill--running", "Running"],
-        completed: ["mc-pill mc-pill--done", "Complete"],
-        failed: ["mc-pill mc-pill--failed", "Failed"],
-        cancelled: ["mc-pill mc-pill--waiting", "Cancelled"],
-    };
-    const [, pillLabel] = statusPill[effectiveStatus] ?? ["mc-pill", effectiveStatus];
-
-    // Use the full task description; the heading clamps to 2 lines
-    // via CSS so it never breaks the layout but still gives meaningful
-    // context (a single-line ellipsis at 55 chars was too aggressive).
-    const terminalActionLabel = effectiveStatus === "completed" ? "Completed" : "Terminated";
-    const terminateButtonClass = terminal && effectiveStatus === "completed"
-        ? "mc3-btn mc3-btn--muted"
-        : "mc3-btn mc3-btn--danger";
-    const TerminateIcon = terminal && effectiveStatus === "completed" ? Checkmark12Filled : Dismiss12Filled;
-    const statusIntent = terminal && effectiveStatus === "completed" ? "success" : pendingApprovalCount > 0 ? "warning" : effectiveStatus === "failed" ? "danger" : "success";
-    const visibleAgentTotal = runtimeSlots.length || agentCount;
-
-    return (
-        <div className={`mc3 mc3-dmc-live${terminal ? " mc3--terminal" : ""}`}>
-            <div className="run-status-strip mc3-dmc-status-strip">
-                <div className="mc3-dmc-status-main">
-                    <span className="mc3-dmc-status-title"><Play16Filled /> Mission Control</span>
-                    <Badge appearance="filled" color={statusIntent as any} icon={terminal && effectiveStatus === "completed" ? <CheckmarkCircle16Filled /> : undefined}>
-                        {pillLabel}
-                    </Badge>
-                    <span className="mc3-dmc-status-chip">{patternLabel}</span>
-                    <span className="mc3-dmc-status-chip">{visibleAgentTotal} agents</span>
-                    {activeName && <span className="mc3-dmc-status-active">Active: {activeName}</span>}
-                </div>
-                <div className="mc3-dmc-status-actions">
-                    {!isConnected && !terminal && (
-                        <Badge appearance="tint" color="danger" className="mc3-dmc-reconnect-badge">
-                            Reconnecting{reconnectCount > 0 ? ` (${reconnectCount})` : ""}…
-                        </Badge>
-                    )}
-                    {error && <Badge appearance="tint" color="danger">{error}</Badge>}
-                    <div className="mc3-identity__timer">
-                        <span className={`mc3-identity__timer-dot${terminal ? " mc3-identity__timer-dot--done" : " mc3-identity__timer-dot--live"}`} />
-                        <span className="mc3-identity__timer-val">{terminal && state.totalDuration ? state.totalDuration : fmtElapsed(elapsedSec)}</span>
-                    </div>
-                    <Tooltip content="Pause is coming soon" relationship="label">
-                        <Button appearance="subtle" icon={<Timer16Regular />} disabled size="small">
-                            Pause
-                        </Button>
-                    </Tooltip>
-                    <Button
-                        appearance={terminal && effectiveStatus === "completed" ? "subtle" : "outline"}
-                        className={terminateButtonClass}
-                        icon={<TerminateIcon />}
-                        onClick={handleTerminate}
-                        disabled={terminating || terminal}
-                        size="small"
-                    >
-                        {terminating ? "Stopping…" : terminal ? terminalActionLabel : "Terminate"}
-                    </Button>
-                </div>
-            </div>
-
-            {/* ── Task prompt recap ──────────────────────────── */}
-            <TaskPromptRecap
-                task={job?.task_description || ""}
-                workspaceName={(job?.workspace_name as string) || null}
-                workspaceId={(job?.workspace_id as string) || null}
-                workspaceItems={(job?.context?.context_items as any) || null}
-                attachments={(job?.context?.prompt_attachments as any) || null}
-                defaultOpen={false}
-            />
-
-            <div className="mission-grid mission-grid--right mc3-dmc-grid">
-                <DynamicMissionCanvas
+    if (nativePiSession) {
+        return (
+            <div
+                className={`mc3 mc3-pi-web-ui-page mc3-pi-web-ui-page--${headerStatus.tone}${terminal ? " mc3--terminal" : ""}`}
+                data-design-intent="native-pi-web-ui-mission-page"
+                data-mission-status={statusLabel}
+                data-stream-status={connectionLabel}
+                data-mission-summary={missionBrief}
+            >
+                <MissionPiSurface
                     state={state}
                     runtimeSlots={runtimeSlots}
-                    categoryFilter={canvasLogCategory}
-                    onCategoryChange={setCanvasLogCategory}
+                    streamStatus={streamStatus}
+                    sessionId={sessionId}
+                    githubToken={githubToken}
+                    fabricToken={fabricToken}
+                    workloadClient={workloadClient}
+                    variant="web-ui"
                 />
-                <ChangeLedgerRail state={state} workloadClient={workloadClient} />
             </div>
+        );
+    }
+
+    return (
+        <div
+            className={`mc3 mc3-dmc-live mc3-dmc-live--pi-augmented${terminal ? " mc3--terminal" : ""}`}
+            data-design-intent="agenthub-mission-page-with-pi-runtime"
+            data-mission-status={statusLabel}
+            data-stream-status={connectionLabel}
+            data-mission-summary={missionBrief}
+        >
+            <section className="mc3-terminal-shell mc3-chat-shell" role="region" aria-label="Mission execution" data-design-intent="chat-first-mission-execution">
+                <div className="mission-grid mission-grid--right mc3-dmc-grid mc3-chat-layout">
+                    <main className="mc3-chat-main" aria-label="Mission logs">
+                        <MissionChatHistory
+                            job={job}
+                            state={state}
+                            runtimeSlots={runtimeSlots}
+                            streamStatus={streamStatus}
+                            connectionLabel={connectionLabel}
+                            connectionState={connectionState}
+                            connected={isConnected && !terminal}
+                            patternLabel={patternLabel}
+                            visibleAgentTotal={visibleAgentTotal}
+                            sessionId={sessionId}
+                            githubToken={githubToken}
+                            fabricToken={fabricToken}
+                        />
+                    </main>
+                    <MissionSummaryPanel
+                        state={state}
+                        runtimeSlots={runtimeSlots}
+                        workloadClient={workloadClient}
+                    />
+                </div>
+            </section>
         </div>
     );
 }
@@ -1206,11 +2503,8 @@ export function MissionControlPage({
 // LIVE LOG
 // ════════════════════════════════════════════════════════════════════
 
-type LiveLogFilterMode = "all" | "agent" | "step" | "signals";
-
-function LiveLog({ state, runtimeSlots, logFocusMode, onToggleLogFocus, onApproval, approvalBusy, mode, onModeChange }: {
+function LiveLog({ state, logFocusMode, onToggleLogFocus, onApproval, approvalBusy, mode, onModeChange }: {
     state: MissionState;
-    runtimeSlots: RuntimeSlotView[];
     logFocusMode: boolean;
     onToggleLogFocus: () => void;
     onApproval: (ap: PendingApproval, action: RecoveryAction) => void;
@@ -1221,10 +2515,6 @@ function LiveLog({ state, runtimeSlots, logFocusMode, onToggleLogFocus, onApprov
     const scrollRef = useRef<HTMLDivElement>(null);
     const pinnedRef = useRef(true);
     const [followStream, setFollowStream] = useState(true);
-    const [categoryFilter, setCategoryFilter] = useState<LogCategoryFilter>("high_level");
-    const [filterMode, setFilterMode] = useState<LiveLogFilterMode>("all");
-    const [agentFilter, setAgentFilter] = useState("all");
-    const [stepFilter, setStepFilter] = useState("all");
 
     const onScroll = useCallback(() => {
         const el = scrollRef.current;
@@ -1249,140 +2539,7 @@ function LiveLog({ state, runtimeSlots, logFocusMode, onToggleLogFocus, onApprov
     }, [state.logs.length, followStream]);
 
     const terminal = !!state.terminalType;
-
-    const categoryCounts = useMemo(() => {
-        const counts: Record<LogCategoryFilter, number> = {
-            high_level: 0,
-            detailed: 0,
-            diagnostic: 0,
-        };
-        for (const entry of state.logs) {
-            const category = entry.logCategory;
-            if (category === "high_level" || category === "detailed" || category === "diagnostic") {
-                counts[category] += 1;
-            }
-        }
-        return counts;
-    }, [state.logs]);
-
-    const categoryLogs = useMemo(
-        () => state.logs.filter((entry) => entry.logCategory === categoryFilter),
-        [state.logs, categoryFilter],
-    );
-
-    const agentBuckets = useMemo(() => {
-        const buckets = new Map<string, {
-            key: string;
-            label: string;
-            ids: Set<string>;
-            names: Set<string>;
-            count: number;
-            kind: string;
-        }>();
-
-        for (const l of categoryLogs) {
-            if (!l.agentId) continue;
-            const rawLabel = (l.agentName || nameFor(state, l.agentId) || l.agentId).trim();
-            if (isInternalAgentRef(l.agentId) || isInternalAgentRef(rawLabel)) continue;
-            const label = rawLabel;
-            if (!label) continue;
-            const key = canonicalAgentLabel(label);
-            const kind = kindForWithProgress(l.agentId, state.composition, state.slotProgress);
-            const existing = buckets.get(key);
-
-            if (!existing) {
-                buckets.set(key, {
-                    key,
-                    label,
-                    ids: new Set([l.agentId]),
-                    names: new Set([key]),
-                    count: 1,
-                    kind,
-                });
-                continue;
-            }
-
-            existing.ids.add(l.agentId);
-            existing.names.add(key);
-            existing.count += 1;
-            if (existing.label === existing.label.toLowerCase() && /[A-Z]/.test(label)) {
-                existing.label = label;
-            }
-            if (existing.kind === "generic" && kind !== "generic") {
-                existing.kind = kind;
-            }
-        }
-
-        return buckets;
-    }, [categoryLogs, state.slotProgress, state.composition]);
-
-    const agents = useMemo(() => Array.from(agentBuckets.values()), [agentBuckets]);
-
-    const stepBuckets = useMemo(() => {
-        return runtimeSlots.map((slot, idx) => {
-            const ids = new Set<string>([slot.slotId, slot.agentId]);
-            for (const p of Object.values(state.slotProgress || {})) {
-                if (progressMatchesSlot(p, {
-                    id: slot.slotId,
-                    agentId: slot.agentId,
-                    role: slot.role,
-                })) {
-                    const pid = String((p as any).agentId || "");
-                    const psid = String((p as any).slotId || "");
-                    if (pid) ids.add(pid);
-                    if (psid) ids.add(psid);
-                }
-            }
-            const count = categoryLogs.filter((l) => !!l.agentId && ids.has(l.agentId)).length;
-            const title = `${idx + 1}. ${slot.role || slot.agentName || slot.agentId}`;
-            return {
-                key: slot.slotId,
-                title,
-                lifecycle: slot.lifecycle,
-                ids,
-                count,
-            };
-        });
-    }, [runtimeSlots, categoryLogs, state.slotProgress]);
-
-    useEffect(() => {
-        if (agentFilter !== "all" && !agentBuckets.has(agentFilter)) {
-            setAgentFilter("all");
-        }
-    }, [agentFilter, agentBuckets]);
-
-    useEffect(() => {
-        if (stepFilter !== "all" && !stepBuckets.some((s) => s.key === stepFilter)) {
-            setStepFilter("all");
-        }
-    }, [stepFilter, stepBuckets]);
-
-    const logs = useMemo(() => {
-        if (filterMode === "signals") {
-            return categoryLogs.filter(isHighSignalLog);
-        }
-
-        if (filterMode === "agent") {
-            if (agentFilter === "all") return categoryLogs;
-            const bucket = agentBuckets.get(agentFilter);
-            if (!bucket) return categoryLogs;
-            return categoryLogs.filter((l) => {
-                if (!l.agentId) return false;
-                if (bucket.ids.has(l.agentId)) return true;
-                const logName = canonicalAgentLabel(String(l.agentName || ""));
-                return !!logName && bucket.names.has(logName);
-            });
-        }
-
-        if (filterMode === "step") {
-            if (stepFilter === "all") return categoryLogs;
-            const bucket = stepBuckets.find((s) => s.key === stepFilter);
-            if (!bucket) return categoryLogs;
-            return categoryLogs.filter((l) => !!l.agentId && bucket.ids.has(l.agentId));
-        }
-
-        return categoryLogs;
-    }, [categoryLogs, filterMode, agentFilter, stepFilter, agentBuckets, stepBuckets]);
+    const logs = useMemo(() => state.logs, [state.logs]);
     const pending = Object.values(state.approvals).filter((a) => !a.resolved);
 
     // Determine which entries are "major" (get a step-connector dot)
@@ -1391,10 +2548,6 @@ function LiveLog({ state, runtimeSlots, logFocusMode, onToggleLogFocus, onApprov
         const MAJOR_KINDS = new Set(["phase", "decision", "log", "action", "error"]);
         const result: Array<{ entry: LogEntry; children: LogEntry[]; major: boolean }> = [];
         for (const e of logs) {
-            if (filterMode === "signals") {
-                result.push({ entry: e, children: [], major: true });
-                continue;
-            }
             if (MAJOR_KINDS.has(e.kind)) {
                 result.push({ entry: e, children: [], major: true });
             } else if (mode === "detail") {
@@ -1409,7 +2562,7 @@ function LiveLog({ state, runtimeSlots, logFocusMode, onToggleLogFocus, onApprov
             }
         }
         return result;
-    }, [logs, mode, filterMode]);
+    }, [logs, mode]);
 
     const handleCopyLog = useCallback(() => {
         const text = logs.map(l => {
@@ -1433,140 +2586,63 @@ function LiveLog({ state, runtimeSlots, logFocusMode, onToggleLogFocus, onApprov
                 <span className="mc3-log__bar-title">{terminal ? "Full run log" : "Live log"}</span>
                 {logs.length > 0 && (
                     <span className="mc3-log__bar-meta">
-                        {logs.length} shown · {state.logs.length} total · {categoryCounts[categoryFilter]} {LOG_CATEGORY_LABEL[categoryFilter].toLowerCase()}{state.totalDuration ? ` · ${state.totalDuration}` : ""}
+                        {logs.length} shown · {state.logs.length} total{state.totalDuration ? ` · ${state.totalDuration}` : ""}
                     </span>
                 )}
                 <div className="mc3-log__bar-spacer" />
                 <div className="mc3-log__bar-actions">
-                    <div className="mc3-inline-toggle" role="tablist" aria-label="Log category">
-                        {LOG_CATEGORY_ORDER.map((category) => (
-                            <button
-                                key={category}
-                                role="tab"
-                                className={`mc3-inline-toggle__btn${categoryFilter === category ? " is-active" : ""}`}
-                                aria-selected={categoryFilter === category}
-                                onClick={() => {
-                                    setCategoryFilter(category);
-                                    setAgentFilter("all");
-                                    setStepFilter("all");
-                                }}
-                            >
-                                {LOG_CATEGORY_LABEL[category]} ({categoryCounts[category]})
-                            </button>
-                        ))}
-                    </div>
                     <div className="mc3-inline-toggle" role="tablist" aria-label="Live log density">
-                        <button
+                        <Button
+                            appearance="transparent"
                             role="tab"
                             className={`mc3-inline-toggle__btn${mode === "overview" ? " is-active" : ""}`}
                             aria-selected={mode === "overview"}
                             onClick={() => onModeChange("overview")}
                         >
                             Condensed
-                        </button>
-                        <button
+                        </Button>
+                        <Button
+                            appearance="transparent"
                             role="tab"
                             className={`mc3-inline-toggle__btn${mode === "detail" ? " is-active" : ""}`}
                             aria-selected={mode === "detail"}
                             onClick={() => onModeChange("detail")}
                         >
                             Expanded
-                        </button>
+                        </Button>
                     </div>
-                    <button
+                    <Button
+                        appearance="transparent"
                         className={`mc3-log__bar-action${followStream ? " is-active" : ""}`}
                         title={followStream ? "Following latest output" : "Resume following stream"}
                         onClick={handleJumpToLatest}
                     >
                         {followStream ? "Following" : "Follow"}
-                    </button>
+                    </Button>
                     <div className="mc3-log-layout-toggle" role="tablist" aria-label="Log layout">
-                        <button
+                        <Button
+                            appearance="transparent"
                             role="tab"
                             className={`mc3-log-layout-toggle__btn${!logFocusMode ? " is-active" : ""}`}
                             aria-selected={!logFocusMode}
                             onClick={() => logFocusMode && onToggleLogFocus()}
                         >
                             Standard
-                        </button>
-                        <button
+                        </Button>
+                        <Button
+                            appearance="transparent"
                             role="tab"
                             className={`mc3-log-layout-toggle__btn${logFocusMode ? " is-active" : ""}`}
                             aria-selected={logFocusMode}
                             onClick={() => !logFocusMode && onToggleLogFocus()}
                         >
                             Expanded log
-                        </button>
+                        </Button>
                     </div>
-                    <button className="mc3-log__bar-action" title="Copy log" onClick={handleCopyLog}>
+                    <Button appearance="transparent" className="mc3-log__bar-action" title="Copy log" onClick={handleCopyLog}>
                         <Copy20Regular /> Copy
-                    </button>
+                    </Button>
                 </div>
-            </div>
-
-            <div className="mc3-log__filters" aria-label="Log filters">
-                <div className="mc3-log__filter-control">
-                    <span className="mc3-log__filter-label">Focus</span>
-                    <Dropdown
-                        size="small"
-                        selectedOptions={[filterMode]}
-                        value={
-                            filterMode === "all" ? `All activity (${categoryLogs.length})`
-                            : filterMode === "agent" ? "By agent"
-                            : filterMode === "step" ? "By route step"
-                            : "Issues + key decisions"
-                        }
-                        onOptionSelect={(_, data) => {
-                            const next = String(data.optionValue || "all") as LiveLogFilterMode;
-                            setFilterMode(next);
-                            if (next !== "agent") setAgentFilter("all");
-                            if (next !== "step") setStepFilter("all");
-                        }}
-                    >
-                        <Option value="all" text={`All activity (${categoryLogs.length})`}>All activity ({categoryLogs.length})</Option>
-                        <Option value="agent" text="By agent" disabled={agents.length === 0}>By agent</Option>
-                        <Option value="step" text="By route step" disabled={stepBuckets.length === 0}>By route step</Option>
-                        <Option value="signals" text="Issues + key decisions">Issues + key decisions</Option>
-                    </Dropdown>
-                </div>
-
-                {filterMode === "agent" && (
-                    <div className="mc3-log__filter-control mc3-log__filter-control--wide">
-                        <span className="mc3-log__filter-label">Agent</span>
-                        <Dropdown
-                            size="small"
-                            selectedOptions={[agentFilter]}
-                            onOptionSelect={(_, data) => setAgentFilter(String(data.optionValue || "all"))}
-                        >
-                            <Option value="all" text={`All agents (${categoryLogs.length})`}>All agents ({categoryLogs.length})</Option>
-                            {agents.map((a) => (
-                                <Option key={a.key} value={a.key} text={`${a.label} (${a.count})`}>{a.label} ({a.count})</Option>
-                            ))}
-                        </Dropdown>
-                    </div>
-                )}
-
-                {filterMode === "step" && (
-                    <div className="mc3-log__filter-control mc3-log__filter-control--wide">
-                        <span className="mc3-log__filter-label">Step</span>
-                        <Dropdown
-                            size="small"
-                            selectedOptions={[stepFilter]}
-                            onOptionSelect={(_, data) => setStepFilter(String(data.optionValue || "all"))}
-                        >
-                            <Option value="all" text={`All steps (${categoryLogs.length})`}>All steps ({categoryLogs.length})</Option>
-                            {stepBuckets.map((s) => (
-                                <Option key={s.key} value={s.key} text={`${s.title} (${s.count})`}>{s.title} ({s.count})</Option>
-                            ))}
-                        </Dropdown>
-                    </div>
-                )}
-
-                {filterMode === "signals" && (
-                    <div className="mc3-log__signals-pill">
-                        <Badge appearance="outline" color="informative">High-signal mode</Badge>
-                    </div>
-                )}
             </div>
 
             {/* Scrollable log body */}
@@ -1588,17 +2664,15 @@ function LiveLog({ state, runtimeSlots, logFocusMode, onToggleLogFocus, onApprov
                 ))}
                 {!terminal && logs.length === 0 && (
                     <p className="mc3-log__empty">
-                        {filterMode === "all"
-                            ? "Waiting for the first agent to come online…"
-                            : "No events match the current focus filter."}
+                        Waiting for the first agent to come online…
                     </p>
                 )}
                 {!followStream && logs.length > 0 && (
                     <div className="mc3-log__tail">
                         <span className="mc3-log__tail-note">New output available</span>
-                        <button className="mc3-log__tail-btn" onClick={handleJumpToLatest}>
+                        <Button appearance="transparent" className="mc3-log__tail-btn" onClick={handleJumpToLatest}>
                             Jump to latest
-                        </button>
+                        </Button>
                     </div>
                 )}
             </div>
@@ -1836,6 +2910,7 @@ function ToolCallBlock({ group }: { group: ToolGroup }) {
     const command = formatToolCommand(toolName, start?.argsPreview);
     const argsSummary = terminalLines.length > 0 ? null : formatToolArgsSummary(start?.argsPreview);
     const duration = end?.durationMs != null ? formatDurationMs(end.durationMs) : null;
+    const latencyBreakdown = formatLatencyBreakdownMs(end?.latencyBreakdownMs);
     const hasError = status === "error";
 
     if (terminalLines.length > 0) {
@@ -1864,12 +2939,13 @@ function ToolCallBlock({ group }: { group: ToolGroup }) {
                     {status === "running" ? "running" : hasError ? "failed" : "done"}
                 </span>
                 {duration && <span className="mc3-tool-block__duration">{duration}</span>}
-                <button className="mc3-tool-block__copy" onClick={copyCommand} title="Copy command">
+                <Button appearance="transparent" size="small" className="mc3-tool-block__copy" onClick={copyCommand} title="Copy command">
                     Copy
-                </button>
+                </Button>
             </div>
             <div className="mc3-tool-block__cmd">$ {command}</div>
             {argsSummary && <div className="mc3-tool-block__meta">args: {argsSummary}</div>}
+            {latencyBreakdown && <div className="mc3-tool-block__meta">latency: {latencyBreakdown}</div>}
             {end?.errorPreview && <div className="mc3-tool-block__stderr">{visibleRuntimeText(end.errorPreview)}</div>}
             {!end && <div className="mc3-tool-block__line">{formatToolLine(start as LogEntry)} …</div>}
         </div>
@@ -1932,7 +3008,7 @@ function RunOverviewRail({
 
     const slots = runtimeSlots;
 
-    const artifacts = state.artifactOrder.map((id) => state.artifacts[id]).filter(Boolean);
+    const artifacts = state.artifactOrder.map((id) => state.artifacts[id]).filter((artifact): artifact is Artifact => Boolean(artifact) && !isHiddenOutputType(artifact.kind));
     const changes = useMemo(
         () => state.changeOrder.map((id) => state.changes[id]).filter(Boolean),
         [state.changeOrder, state.changes],
@@ -1975,15 +3051,17 @@ function RunOverviewRail({
                 )}
             </div>
             <div className="mc3-rail__tabs" role="tablist" aria-label="Run overview panels">
-                <button
+                <Button
+                    appearance="transparent"
                     role="tab"
                     className={`mc3-rail__tab${tab === "overview" ? " is-active" : ""}`}
                     aria-selected={tab === "overview"}
                     onClick={() => onTabChange("overview")}
                 >
                     Overview
-                </button>
-                <button
+                </Button>
+                <Button
+                    appearance="transparent"
                     role="tab"
                     className={`mc3-rail__tab${tab === "diagnostics" ? " is-active" : ""}`}
                     aria-selected={tab === "diagnostics"}
@@ -1991,7 +3069,7 @@ function RunOverviewRail({
                 >
                     Diagnostics
                     {issuesCount > 0 && <span className="mc3-rail__tab-count">{issuesCount}</span>}
-                </button>
+                </Button>
             </div>
             <div className="mc3-rail__scroll">
                 {tab === "diagnostics" ? (
@@ -2130,16 +3208,6 @@ function RunOverviewRail({
                         </div>
                     )}
                 </div>
-
-                {/* Completion summary */}
-                {terminal && (
-                    <CompletionPanel
-                        state={state}
-                        warnings={warningCount}
-                        errors={errorCount}
-                        appliedChanges={appliedChanges.length}
-                    />
-                )}
                     </>
                 )}
             </div>
@@ -2276,82 +3344,16 @@ function DiagnosticsPanel({ state, runtimeSlots }: { state: MissionState; runtim
     );
 }
 
-// ── Completion ──────────────────────────────────────────────────────
-
-function CompletionPanel({
-    state,
-    warnings,
-    errors,
-    appliedChanges,
-}: {
-    state: MissionState;
-    warnings: number;
-    errors: number;
-    appliedChanges: number;
-}) {
-    const artifacts = useMemo(() => state.artifactOrder.map((id) => state.artifacts[id]).filter(Boolean), [state.artifactOrder, state.artifacts]);
-    const writtenArtifacts = useMemo(() => artifacts.filter((a) => a.state === "written").length, [artifacts]);
-
-    const handleExport = () => {
-        const blob = new Blob([JSON.stringify({
-            jobStatus: state.jobStatus, totalDuration: state.totalDuration,
-            artifacts: Object.values(state.artifacts), changes: Object.values(state.changes), logs: state.logs,
-            streamObservability: getMissionObservationSnapshot(),
-        }, null, 2)], { type: "application/json" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url; a.download = `mission-${new Date().toISOString()}.json`;
-        a.click(); URL.revokeObjectURL(url);
-    };
-
-    const isSuccess = state.terminalType === "job_complete";
-    const isFailed = state.terminalType === "job_failed";
-
-    return (
-        <div className={`mc3-rail__section mc3-completion${isSuccess ? " mc3-completion--success" : isFailed ? " mc3-completion--failed" : ""}`}>
-            <div className="mc3-completion__header">
-                {isSuccess && <CheckmarkCircle16Filled />}
-                <h3 className="mc3-completion__title">
-                    {isSuccess ? "Run complete" : isFailed ? "Run failed" : "Run cancelled"}
-                    {state.totalDuration && <span className="mc3-completion__duration"> · {state.totalDuration}</span>}
-                </h3>
-            </div>
-            <div className="mc3-completion__summary-grid">
-                <div className="mc3-completion__tile">
-                    <span className="mc3-completion__tile-label">Artifacts written</span>
-                    <strong className="mc3-completion__tile-value">{writtenArtifacts} / {artifacts.length}</strong>
-                </div>
-                <div className="mc3-completion__tile">
-                    <span className="mc3-completion__tile-label">Applied changes</span>
-                    <strong className="mc3-completion__tile-value">{appliedChanges}</strong>
-                </div>
-                <div className="mc3-completion__tile">
-                    <span className="mc3-completion__tile-label">Warnings</span>
-                    <strong className="mc3-completion__tile-value">{warnings}</strong>
-                </div>
-                <div className="mc3-completion__tile">
-                    <span className="mc3-completion__tile-label">Errors</span>
-                    <strong className="mc3-completion__tile-value">{errors}</strong>
-                </div>
-            </div>
-            <div className="mc3-completion__cta">
-                <button className="mc3-btn mc3-btn--muted" onClick={handleExport}>
-                    <ArrowDownload20Regular /> Export
-                </button>
-                <button className="mc3-btn mc3-btn--primary" onClick={() => window.location.assign("/agent-hub/orchestrator")}>
-                    Start another
-                </button>
-            </div>
-        </div>
-    );
-}
-
 const legacyMissionSurfaceReferences = [
     TeamPanel,
     applyRuntimeTeam,
+    CanvasLogStream,
+    DynamicMissionCanvas,
+    MissionOutcomeBanner,
+    ChangeLedgerRail,
+    MissionIntelligencePanel,
     LiveLog,
     RunOverviewRail,
     DiagnosticsPanel,
-    CompletionPanel,
 ];
 void legacyMissionSurfaceReferences;

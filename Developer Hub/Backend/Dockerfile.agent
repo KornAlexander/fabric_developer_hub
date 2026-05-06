@@ -1,11 +1,11 @@
 # ─────────────────────────────────────────────────────────────────────
-# agenthub-agent — ephemeral per-slot agent container
+# developer-hub-agent — ephemeral per-slot agent container
 # ─────────────────────────────────────────────────────────────────────
 # Minimal image: Python runtime + httpx for LLM calls + pydantic for
 # config parsing. No framework (no FastAPI, no uvicorn). The agent is
 # a CLI process, not a server.
 #
-# Build:   docker build -f Dockerfile.agent -t agenthub-agent:latest .
+# Build:   docker build -f Dockerfile.agent -t developer-hub-agent:dev .
 # Run:     (spawned by ContainerSlotRunner — not run manually)
 # ─────────────────────────────────────────────────────────────────────
 
@@ -27,5 +27,7 @@ COPY src/services/agenthub/agent/ /app/agent/
 RUN useradd -m -u 1001 agentuser
 USER agentuser
 
-# The agent reads SLOT_CONFIG from env and runs to completion
+# Cold starts use this entrypoint directly. Warm-pool containers override it
+# with an idle Python process, then run this same module through docker exec
+# with SLOT_CONFIG for a single slot before the sandbox is discarded.
 ENTRYPOINT ["python", "-m", "agent"]

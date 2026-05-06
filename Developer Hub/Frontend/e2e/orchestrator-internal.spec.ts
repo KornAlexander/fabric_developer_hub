@@ -10,25 +10,28 @@ test.describe("internal orchestrator visibility", () => {
         await page.goto(`/agent-hub/session/${SESSION_ID}?agenthubE2E=1`, { waitUntil: "domcontentloaded" });
 
         await expect(page.locator(".mc3")).toBeVisible({ timeout: 30_000 });
-        await expect(page.getByRole("heading", { name: "Plan a Fabric solution." })).toBeVisible();
+        await expect(page.getByText("Internal Orchestration Workspace · Plan a Fabric solution.")).toBeVisible();
         await expect(page.getByText(/Orchestrator/i)).toHaveCount(0);
-        await expect(page.getByText("Generalist", { exact: true })).toHaveCount(0);
-        await expect(page.getByText("Generalist checkpoint: 2 ready, 0 running, 0 complete")).toBeVisible();
-        await expect(page.getByText("Delegated structured context to Builder for Build report")).toBeVisible();
-        await expect(page.getByText("Generalist handled directly: Review verification feedback - Generalist chose to handle routing directly.")).toBeVisible();
+        await expect(page.locator(".mc3-agent-lane", { hasText: "System" })).toHaveCount(1);
+        await expect(page.getByText(/Generalist checkpoint: 2 ready for assignment/i)).toBeVisible();
+        await expect(page.getByText(/Generalist delegated structured context to Builder for Build report/i)).toBeVisible();
+        await expect(page.getByText(/Generalist handled directly instead of delegating: Review verification feedback/i)).toBeVisible();
         await expect(page.getByText("Started 2 tasks in parallel")).toBeVisible();
-        await expect(page.getByText("Generalist integrated feedback: Report artifact created and ready for verification.")).toBeVisible();
-        await expect(page.getByText("Generalist steered Fabric Verifier: Verifier needs the repaired report id from the builder result.")).toBeVisible();
-        await expect(page.getByText("Subagent reassigned to repair-retry-1: Repeated tool loop continued after steering.")).toBeVisible();
-        await expect(page.getByText("Task result: Verifier accepted the repaired report with screenshot evidence.")).toBeVisible();
+        await expect(page.getByText(/Generalist intervened and steered Fabric Verifier/i)).toBeVisible();
+        await expect(page.getByLabel("Mission logs").getByText(/Generalist reassigned repair to repair-retry-1/i)).toBeVisible();
+        await expect(page.getByText(/Specialist result for verify: success/i)).toBeVisible();
         await expect(page.getByText("Mission complete")).toBeVisible();
-        const logCategoryTabs = page.getByRole("tablist", { name: "Log category" });
-        const diagnosticsTab = logCategoryTabs.getByRole("tab", { name: /Diagnostics \(1\)/ });
-        await diagnosticsTab.evaluate((element) => (element as HTMLElement).click());
-        await expect(page.getByText("Generalist inspected subagent tool_loop (create fabric item)")).toBeVisible();
-        const detailedTab = logCategoryTabs.getByRole("tab", { name: /Detailed \(2\)/ });
-        await detailedTab.evaluate((element) => (element as HTMLElement).click());
-        await expect(page.getByText(/system recovery decision/i)).toBeVisible();
+        await expect(page.getByRole("tablist", { name: "Log category" })).toHaveCount(0);
+
+        const buildRow = page.locator(".mc3-transcript-row", { hasText: "Completed substep with 2 activity updates" }).first();
+        await expect(buildRow).toBeVisible();
+        await buildRow.getByRole("button", { name: /Show details/ }).click({ force: true });
+        await expect(page.getByText(/Generalist inspected specialist progress for build: latest tool_loop \(create fabric item\)/i)).toBeVisible();
+        await expect(page.getByText(/Generalist reviewed specialist feedback for build: Report artifact created and ready for verification/i)).toBeVisible();
+
+        const decisionRow = page.locator(".mc3-transcript-row", { hasText: /system recovery decision/i }).first();
+        await expect(decisionRow).toBeVisible();
+        await decisionRow.getByRole("button", { name: /Show details/ }).click({ force: true });
     });
 });
 

@@ -32,6 +32,9 @@ _WORKSPACE_ID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
 _AGENT_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_\-]{0,63}$")
+_TARGET_AGENT_ID_RE = re.compile(
+    r"^(?:[A-Za-z][A-Za-z0-9_\-]{0,127}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$"
+)
 
 # ── Enums ────────────────────────────────────────────────────────────
 
@@ -324,14 +327,15 @@ class ApprovePlanRequest(BaseModel):
 
 class SendMessageRequest(BaseModel):
     message: str = Field(min_length=1, max_length=_MAX_MESSAGE_LEN)
-    target_agent_id: str | None = Field(default=None, max_length=64)
+    target_agent_id: str | None = Field(default=None, max_length=128)
+    mode: str = Field(default="queue", pattern="^(queue|interrupt)$")
 
     @field_validator("target_agent_id")
     @classmethod
     def _validate_agent_id(cls, v: str | None) -> str | None:
         if v is None:
             return v
-        if not _AGENT_ID_RE.match(v):
+        if not _TARGET_AGENT_ID_RE.match(v):
             raise ValueError("target_agent_id has an invalid format")
         return v
 

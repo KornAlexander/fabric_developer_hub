@@ -46,6 +46,7 @@ from domain.models.dynamic_orchestration import (
     TaskNode,
 )
 from services.agenthub import dynamic_mission_store
+from services.agenthub.agent.chat_client import stream_chat_completion
 from services.agenthub.agent_registry import GENERALIST_AGENT_ID, get_template
 from services.agenthub.attachments import ATTACHMENT_SHIELD_PROMPT
 from services.agenthub.compose_service import ComposeService, get_compose_service
@@ -53,6 +54,7 @@ from services.agenthub.drivers.handoff import HandoffPayload
 from services.agenthub.dynamic_orchestrator import DynamicMissionController
 from services.agenthub.event_ledger import ledger_digest, ledger_preview, record_event
 from services.agenthub import session_event_store
+from services.agenthub.pi_backend_harness import build_pi_harness_manifest
 from services.agenthub.session_store import log_audit, update_session
 from services.correlation import get_current_otel_ids, get_request_id, reset_session_id, set_session_id
 from services.logging_categories import (
@@ -75,7 +77,13 @@ TOOL_MODEL = "gpt-4o"
 MAX_AGENT_ROUNDS = 15
 AGENT_ROUND_TIMEOUT = int(os.environ.get("AGENT_ROUND_TIMEOUT_SECONDS", "90"))
 AGENT_LLM_MAX_ATTEMPTS = int(os.environ.get("AGENT_LLM_MAX_ATTEMPTS", "3"))
-MODEL_TOOL_SCHEMA_LIMIT = int(os.environ.get("AGENTHUB_OPENAI_TOOL_SCHEMA_LIMIT", "120"))
+OPENAI_COMPAT_TOOL_SCHEMA_HARD_LIMIT = 128
+AGENTHUB_TOOL_SCHEMA_SAFE_LIMIT = 120
+MODEL_TOOL_SCHEMA_LIMIT = min(
+    int(os.environ.get("AGENTHUB_OPENAI_TOOL_SCHEMA_LIMIT", "120")),
+    AGENTHUB_TOOL_SCHEMA_SAFE_LIMIT,
+    OPENAI_COMPAT_TOOL_SCHEMA_HARD_LIMIT,
+)
 
 _GENERALIST_BOOTSTRAP_TOOLS = frozenset({
     "fabric_list_workspaces",
@@ -84,6 +92,14 @@ _GENERALIST_BOOTSTRAP_TOOLS = frozenset({
     "fabric_create_folder",
     "fabric_verify_workspace_inventory_solution",
     "fabric_create_workspace_inventory_solution",
+    # Cross-cutting utilities — safe everywhere, no Fabric side-effects.
+    # Keep the generalist's mission-controller loop able to plan and
+    # ground without escalating to a specialist for trivial helpers.
+    "sequentialthinking",
+    "get_current_time",
+    "convert_time",
+    "web_search",
+    "web_fetch_url",
 })
 
 _TRANSIENT_LLM_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504}
@@ -92,13 +108,29 @@ _PUBLIC_LOG_CATEGORIES = PUBLIC_LOG_CATEGORIES
 _HIGH_LEVEL_EVENT_TYPES = {
     "agent_added",
     "agent_context_received",
+    "activity_rollup",
     "approval.resolved",
+    "approval_fallback_required",
+    "approval_repeated_denial",
     "approval_required",
     "change_recorded",
     "composition_ready",
+    "diagnostic_new_issues",
+    "diagnostic_resolved_issues",
     "job_cancelled",
     "job_complete",
     "job_failed",
+    "mcp_server_approval_required",
+    "mcp_server_approved",
+    "mcp_server_rejected",
+    "memory_loaded",
+    "memory_written",
+    "memory_updated",
+    "memory_ignored",
+    "plugin_enabled",
+    "plugin_disabled",
+    "capability_pack_enabled",
+    "capability_pack_disabled",
     "mission_blocked",
     "mission_cancelled",
     "mission_completed",
@@ -120,16 +152,37 @@ _HIGH_LEVEL_EVENT_TYPES = {
     "task_blocked",
     "task_created",
     "task_failed",
+    "turn_interrupt_deferred",
+    "turn_interrupt_requested",
+    "turn_interrupted",
+    "user_message_broadcast",
+    "user_message_delivered",
+    "user_message_failed",
+    "user_message_queued",
     "verifier_verdict",
+    "pi.orchestration.start",
+    "pi.subagents.status",
+    "pi.subagents.control",
+    "pi.subagents.result",
+    "pi.subagents.async",
 }
 _DIAGNOSTIC_EVENT_TYPES = {
     "agent_error",
+    "diagnostic_required",
+    "diagnostic_baseline_captured",
+    "mcp_session_refreshed",
+    "runtime_config_refreshed",
     "subagent_inspected",
     "subagent_stale",
     "subagent_steered",
     "tool_progress",
     "tool_call_ended",
     "tool_call_started",
+    "pi.tool.start",
+    "pi.tool.end",
+    "pi.turn.start",
+    "pi.turn.delta",
+    "pi.turn.end",
 }
 _TRACE_ONLY_EVENT_TYPES = {
     "resource_lock_acquired",
@@ -146,6 +199,12 @@ def _event_log_category(event_type: str, payload: dict[str, Any]) -> LogCategory
 
     if event_type in _TRACE_ONLY_EVENT_TYPES:
         return "trace"
+    if event_type.startswith("pi."):
+        if event_type in _HIGH_LEVEL_EVENT_TYPES:
+            return "high_level"
+        if event_type in _DIAGNOSTIC_EVENT_TYPES:
+            return "diagnostic"
+        return "detailed"
     if event_type in _HIGH_LEVEL_EVENT_TYPES:
         return "high_level"
     if event_type in _DIAGNOSTIC_EVENT_TYPES:
@@ -167,6 +226,56 @@ def _event_log_category(event_type: str, payload: dict[str, Any]) -> LogCategory
     return "detailed"
 
 
+@dataclass(frozen=True)
+class QueuedUserMessage:
+    steering_id: str
+    message: str
+    target_agent_session_id: str | None
+    target_mode: str
+    mode: str
+    queued_at: str
+    message_preview: str
+
+
+def _preview_user_message(message: str, *, max_chars: int = 220) -> str:
+    return bounded_text(message.replace("\n", " "), max_chars=max_chars)
+
+
+def _tool_operation_kind(tool_name: str) -> str:
+    name = (tool_name or "").lower()
+    if any(token in name for token in ("delete", "remove", "revoke", "drop")):
+        return "destructive"
+    if any(token in name for token in ("create", "write", "update", "publish", "deploy", "apply", "grant", "run", "execute")):
+        return "write"
+    if any(token in name for token in ("verify", "validate", "diagnose", "check")):
+        return "validation"
+    if any(token in name for token in ("list", "read", "get", "fetch", "inspect", "query", "search")):
+        return "read"
+    return "tool"
+
+
+def _tool_rollup_summary(tool_name: str, status: str, duration_ms: int | None = None) -> str:
+    operation_kind = _tool_operation_kind(tool_name)
+    clean_name = tool_name.replace("fabric_", "").replace("_", " ").strip() or "tool"
+    verb = "Completed" if status == "ok" else "Failed"
+    if operation_kind == "read":
+        action = f"{verb} inspection with {clean_name}"
+    elif operation_kind == "validation":
+        action = f"{verb} validation with {clean_name}"
+    elif operation_kind == "write":
+        action = f"{verb} Fabric update with {clean_name}"
+    elif operation_kind == "destructive":
+        action = f"{verb} guarded destructive action with {clean_name}"
+    else:
+        action = f"{verb} {clean_name}"
+    if duration_ms is not None:
+        if duration_ms < 1000:
+            action = f"{action} in {duration_ms} ms"
+        else:
+            action = f"{action} in {round(duration_ms / 1000, 1)} s"
+    return action
+
+
 def _summary_scalar(value: Any) -> Any:
     if isinstance(value, (int, float, bool)) or value is None:
         return value
@@ -178,7 +287,11 @@ def _event_payload_summary(event_type: str, payload: dict[str, Any]) -> dict[str
     summary: dict[str, Any] = {}
     for key in (
         "agentId", "agentName", "slotId", "taskId", "runId", "callId",
-        "toolName", "status", "level", "durationMs", "approvalId",
+        "toolName", "toolKind", "operationKind", "status", "level", "durationMs",
+        "approvalId", "steeringId", "targetAgentSessionId", "targetMode", "mode",
+        "scope", "detailCount", "coveredSeqStart", "coveredSeqEnd", "baselineCount",
+        "newIssueCount", "resolvedIssueCount", "source", "serverId", "pluginId",
+        "memoryScope", "configVersion",
     ):
         if key in payload and payload[key] not in (None, ""):
             summary[key] = _summary_scalar(payload[key])
@@ -196,8 +309,50 @@ def _event_payload_summary(event_type: str, payload: dict[str, Any]) -> dict[str
         for key in ("policyDecision", "argHash", "outputChars", "resultDigest"):
             if key in payload and payload[key] not in (None, ""):
                 summary[key] = _summary_scalar(payload[key])
+        if isinstance(payload.get("latencyBreakdownMs"), dict):
+            summary["latencyBreakdownMs"] = {
+                key: _summary_scalar(value)
+                for key, value in payload["latencyBreakdownMs"].items()
+                if value not in (None, "")
+            }
         if payload.get("errorPreview"):
             summary["errorPreview"] = bounded_text(payload.get("errorPreview"), max_chars=260)
+    elif event_type in {
+        "user_message_queued", "user_message_delivered", "user_message_broadcast",
+        "user_message_failed", "turn_interrupt_requested", "turn_interrupt_deferred",
+        "turn_interrupted",
+    }:
+        if payload.get("messagePreview"):
+            summary["messagePreview"] = bounded_text(payload.get("messagePreview"), max_chars=220)
+        if payload.get("reason"):
+            summary["reason"] = bounded_text(payload.get("reason"), max_chars=220)
+    elif event_type == "activity_rollup":
+        summary["summary"] = bounded_text(payload.get("summary"), max_chars=320)
+        if isinstance(payload.get("counts"), dict):
+            summary["counts"] = {
+                key: _summary_scalar(value)
+                for key, value in payload["counts"].items()
+                if value not in (None, "")
+            }
+    elif event_type.startswith("diagnostic_"):
+        if payload.get("summary"):
+            summary["summary"] = bounded_text(payload.get("summary"), max_chars=260)
+        if isinstance(payload.get("issues"), list):
+            summary["issuePreview"] = [
+                bounded_text(issue.get("message") if isinstance(issue, dict) else issue, max_chars=160)
+                for issue in payload["issues"][:3]
+            ]
+    elif event_type.startswith("mcp_server_"):
+        if payload.get("risk"):
+            summary["risk"] = bounded_text(payload.get("risk"), max_chars=220)
+        if isinstance(payload.get("toolsPreview"), list):
+            summary["toolsPreview"] = list(payload.get("toolsPreview") or [])[:8]
+    elif event_type.startswith("memory_"):
+        if payload.get("summary"):
+            summary["summary"] = bounded_text(payload.get("summary"), max_chars=260)
+    elif event_type in {"runtime_config_refreshed", "plugin_enabled", "plugin_disabled", "capability_pack_enabled", "capability_pack_disabled", "mcp_session_refreshed"}:
+        if payload.get("summary"):
+            summary["summary"] = bounded_text(payload.get("summary"), max_chars=260)
     elif event_type == "orchestrator_decision" and isinstance(payload.get("decision"), dict):
         decision = payload["decision"]
         summary["decisionType"] = _summary_scalar(decision.get("type"))
@@ -291,6 +446,24 @@ def _event_payload_summary(event_type: str, payload: dict[str, Any]) -> dict[str
         for key in ("toolName", "step", "status", "elapsedMs", "digest"):
             if payload.get(key) not in (None, "", []):
                 summary[key] = _summary_scalar(payload.get(key))
+    elif event_type.startswith("pi."):
+        for key in (
+            "runtime", "runtimePackage", "subagentRuntime", "runId", "asyncId", "mode",
+            "state", "status", "agentId", "agentName", "agent", "turnId", "toolCallId",
+            "toolName", "activityState", "currentTool", "turnCount", "toolCount",
+            "durationMs", "tokens", "reason", "title",
+        ):
+            if key in payload and payload[key] not in (None, "", []):
+                summary[key] = _summary_scalar(payload[key])
+        for key in ("summary", "task", "message", "textDelta"):
+            if payload.get(key):
+                summary[key] = bounded_text(payload.get(key), max_chars=300)
+    elif event_type == "diagnostic_required":
+        for key in ("toolName", "policyDecision", "reason", "status", "diagnosticTool"):
+            if payload.get(key) not in (None, "", []):
+                summary[key] = _summary_scalar(payload.get(key))
+        if payload.get("directivePreview"):
+            summary["directivePreview"] = bounded_text(payload.get("directivePreview"), max_chars=260)
     elif event_type == "action" and isinstance(payload.get("action"), dict):
         action = payload["action"]
         for source, target in (("action_type", "actionType"), ("entity_name", "entityName"), ("entity_type", "entityType"), ("fabric_item_id", "fabricItemId")):
@@ -386,6 +559,12 @@ _MAJOR_ERROR_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"inactive\s+due\s+to\s+the\s+`?capacitynotactive`?", re.IGNORECASE),
     re.compile(r"workspace\s+capacity\s+is\s+inactive", re.IGNORECASE),
     re.compile(r"cannot\s+proceed\s+until\s+capacity", re.IGNORECASE),
+    re.compile(r"semantic\s+model\s+refresh\s+failed", re.IGNORECASE),
+    re.compile(r"0xC14700C7", re.IGNORECASE),
+    re.compile(r"source\s+Delta\s+table", re.IGNORECASE),
+    re.compile(r"access\s+permissions", re.IGNORECASE),
+    re.compile(r"Direct\s*Lake\s+identity\s+risk", re.IGNORECASE),
+    re.compile(r"owner/effective-identity\s+mismatch", re.IGNORECASE),
 )
 
 _MAJOR_WARN_PATTERNS: tuple[re.Pattern[str], ...] = (
@@ -576,7 +755,33 @@ class _RuntimeSubagentExecutor:
             steeringPreview=bounded_text(assignment.goal, max_chars=900),
             upstreamResultCount=len(context_pack.get("upstreamResults") or []),
             specialistCatalogCount=len(context_pack.get("specialistCatalog") or []),
+            **_dynamic_context_pack_v2_summary(context_pack),
         )
+        if _pi_subagents_observability_enabled():
+            self.execution.emit(
+                "pi.subagents.status",
+                schemaVersion=1,
+                runId=run.id,
+                agentId=run.agent_id,
+                agentName=_agent_display_name(run.agent_id),
+                agent=run.agent_id,
+                mode="single",
+                state="queued",
+                task=task.title,
+                summary=bounded_text(task.objective, max_chars=500),
+                progress=[{
+                    "index": 0,
+                    "agent": run.agent_id,
+                    "status": "queued",
+                    "task": task.title,
+                    "recentOutput": [],
+                    "recentTools": [],
+                    "toolCount": 0,
+                    "tokens": 0,
+                    "durationMs": 0,
+                }],
+                extension=_pi_subagent_extension(),
+            )
         return assignment
 
     def _assignment_for_run(self, run: SubagentRun) -> AgentAssignment | None:
@@ -593,7 +798,7 @@ class _RuntimeSubagentExecutor:
 
     def _resolve_tool_scope(self, run: SubagentRun) -> set[str] | None:
         if "*" in run.tool_scope:
-            return _resolve_wildcard_tool_scope(run.agent_id, self.engine.mcp_manager)
+            return _resolve_wildcard_tool_scope(run.agent_id, self.execution.mcp_manager)
         if run.tool_scope:
             return set(run.tool_scope)
         return None
@@ -644,6 +849,43 @@ def _major_issue_level(text: str | None) -> str | None:
     if any(p.search(text) for p in _MAJOR_WARN_PATTERNS):
         return "warn"
     return None
+
+
+_STRUCTURED_SUCCESS_STATUSES = {
+    "completed",
+    "created",
+    "ok",
+    "rendered",
+    "success",
+    "verified",
+}
+
+
+def _structured_tool_result_is_success(parsed: dict[str, Any]) -> bool:
+    status = str(parsed.get("status") or "").strip().lower()
+    if status not in _STRUCTURED_SUCCESS_STATUSES:
+        return False
+    errors = parsed.get("errors")
+    if isinstance(errors, list) and any(str(error).strip() for error in errors):
+        return False
+    if isinstance(errors, str) and errors.strip():
+        return False
+    return True
+
+
+def _tool_result_major_issue_level(tool_result: str) -> str | None:
+    """Classify raw tool output without treating successful diagnostics as failures.
+
+    Some read-only diagnostic tools intentionally include historical Fabric
+    errors, refresh messages, or permission strings as evidence. If their
+    structured top-level status is successful, those nested strings should not
+    fail the agent slot; actual structured failures are handled separately by
+    ``_tool_result_requires_diagnostics``.
+    """
+    parsed = _parsed_tool_result_dict(tool_result)
+    if parsed and _structured_tool_result_is_success(parsed):
+        return None
+    return _major_issue_level(tool_result)
 
 
 def _is_transient_llm_exception(exc: Exception) -> bool:
@@ -712,6 +954,147 @@ def _emit_blocking_slot_progress(execution, assignment: AgentAssignment, templat
     )
 
 
+_DIAGNOSTIC_WARNING_MARKERS = (
+    "access",
+    "auth",
+    "capacity",
+    "credential",
+    "delta table",
+    "direct lake",
+    "forbidden",
+    "owner",
+    "permission",
+    "quota",
+    "refresh",
+    "role",
+    "semantic model",
+    "token",
+    "unauthorized",
+)
+
+
+def _tool_result_requires_diagnostics(rt_result: Any, tool_result: str) -> tuple[bool, str]:
+    """Return whether the next agent turn must diagnose before retrying.
+
+    This is intentionally generic: any failed policy/runtime dispatch, any
+    structured partial/blocked/error result, any non-empty errors array, or any
+    high-risk warning asks the agent to inspect evidence before another write.
+    """
+    if not getattr(rt_result, "ok", False):
+        return True, str(getattr(rt_result, "policy_decision", "tool_failed") or "tool_failed")
+    parsed = _parsed_tool_result_dict(tool_result)
+    if not parsed:
+        return False, ""
+    status = str(parsed.get("status") or "").strip().lower()
+    if _is_transient_browser_capture_miss(parsed):
+        return False, ""
+    if status in {"partial", "failed", "failure", "error", "blocked", "cancelled", "canceled"}:
+        return True, f"structured_status:{status}"
+    errors = parsed.get("errors")
+    if isinstance(errors, list) and any(str(error).strip() for error in errors):
+        return True, "structured_errors"
+    if isinstance(errors, str) and errors.strip():
+        return True, "structured_errors"
+    progress = parsed.get("progress")
+    if isinstance(progress, list):
+        for row in progress:
+            if isinstance(row, dict) and str(row.get("status") or "").lower() in {"failed", "blocked", "error"}:
+                return True, f"progress:{row.get('step') or 'unknown'}:{row.get('status')}"
+    warnings = parsed.get("warnings")
+    warning_text = " ".join(str(w) for w in warnings) if isinstance(warnings, list) else str(warnings or "")
+    if warning_text and any(marker in warning_text.lower() for marker in _DIAGNOSTIC_WARNING_MARKERS):
+        return True, "high_risk_warning"
+    return False, ""
+
+
+def _is_transient_browser_capture_miss(parsed: dict[str, Any]) -> bool:
+    status = str(parsed.get("status") or "").strip().lower()
+    if status not in {"failed", "failure", "error"}:
+        return False
+    error_code = str(parsed.get("errorCode") or parsed.get("error_code") or "").strip().upper()
+    if error_code not in {"EXPECTED_TEXT_NOT_VISIBLE", "SCREENSHOT_EMPTY_OR_TOO_SMALL", "BROWSER_CAPTURE_TIMEOUT"}:
+        return False
+    text = " ".join(
+        str(parsed.get(key) or "")
+        for key in ("reason", "error", "bodyTextSample", "title", "finalUrl")
+    ).lower()
+    terminal_markers = (
+        "couldn't load",
+        "could not load",
+        "something went wrong",
+        "unable to render",
+        "can't display",
+        "you don't have access",
+        "permission",
+        "auth",
+        "sign in",
+    )
+    return not any(marker in text for marker in terminal_markers)
+
+
+def _diagnostic_directive(tool_name: str, tool_args: dict, tool_result: str, reason: str) -> str:
+    parsed = _parsed_tool_result_dict(tool_result)
+    workspace_id = (
+        tool_args.get("workspace_id")
+        or tool_args.get("workspaceId")
+        or parsed.get("workspaceId")
+        or parsed.get("workspace_id")
+    )
+    folder_id = parsed.get("folderId") or tool_args.get("folder_id") or tool_args.get("folderId")
+    folder_name = parsed.get("folderName") or tool_args.get("folder_name") or tool_args.get("folderName")
+    item_ids = _diagnostic_item_ids(parsed)
+    error_preview = _compact_issue_text(tool_result, limit=900)
+    diagnose_call = None
+    if workspace_id:
+        args = {"workspace_id": workspace_id}
+        if folder_id:
+            args["folder_id"] = folder_id
+        elif folder_name:
+            args["folder_name"] = folder_name
+        if item_ids:
+            args["item_ids"] = item_ids[:12]
+        diagnose_call = f"fabric_diagnose_workspace_artifacts({json.dumps(args, sort_keys=True)})"
+
+    lines = [
+        "DIAGNOSTIC CHECKPOINT REQUIRED BEFORE RETRY",
+        f"The previous tool call `{tool_name}` produced `{reason}`. Do not call the same mutating tool again until you have diagnosed the observed failure.",
+        "Use read-only evidence first, then decide whether to repair, block, or ask for admin/user action.",
+        "",
+        "Required diagnostic steps:",
+        "1. Inspect actual workspace state: list/get the relevant folder and items, including owner/createdBy/lastModifiedBy metadata.",
+        "2. Inspect access prerequisites: workspace roles, capacity state, and whether the effective identity/owner can access upstream data sources.",
+        "3. Inspect artifact-specific failure evidence: refresh history/serviceExceptionJson for semantic models, operation/job state for long-running jobs, definitions/bindings for reports/models, and browser/render evidence for user-facing items.",
+        "4. Compare intended vs actual names, ids, schemas, bindings, storage modes, and permissions. Classify the failing layer as one of: schema, binding, data missing, owner/permission, capacity/quota, catalog propagation, browser/render, service bug, or unknown.",
+        "5. Only after recording the root cause and evidence should you call a write/repair tool. If the cause is permission/owner/capacity/admin control or remains unknown after diagnostics, stop and report blocked instead of creating duplicates.",
+    ]
+    if diagnose_call:
+        lines.append("")
+        lines.append(f"Start with: `{diagnose_call}`")
+    lines.append("")
+    lines.append("Return your next message/tool sequence with a concise diagnostic finding: rootCause, evidence, and nextAction.")
+    lines.append(f"Failure evidence preview: {error_preview}")
+    return "\n".join(lines)
+
+
+def _diagnostic_item_ids(parsed: dict[str, Any]) -> list[str]:
+    item_ids: list[str] = []
+    for key in ("semanticModelId", "reportId", "lakehouseId", "warehouseId", "notebookId"):
+        value = parsed.get(key)
+        if isinstance(value, str) and value:
+            item_ids.append(value)
+    for item in parsed.get("createdItems") or []:
+        if isinstance(item, dict):
+            value = item.get("id")
+            if isinstance(value, str) and value and value not in item_ids:
+                item_ids.append(value)
+    store = parsed.get("persistentDataStore")
+    if isinstance(store, dict):
+        value = store.get("id")
+        if isinstance(value, str) and value and value not in item_ids:
+            item_ids.append(value)
+    return item_ids
+
+
 class _JobExecution:
     """Runtime state for a single running job."""
 
@@ -730,8 +1113,11 @@ class _JobExecution:
         self.job = job
         self.copilot_token = copilot_token
         self.mcp_tokens = mcp_tokens
+        self.mcp_manager = None
+        self.mcp_runtime = None
         self.event_queue: asyncio.Queue = asyncio.Queue()
         self.user_message_queues: dict[str, asyncio.Queue] = {}  # session_id -> Queue
+        self.pending_interrupts: dict[str, QueuedUserMessage] = {}
         self.tasks: list[asyncio.Task] = []
         self.cancelled = False
         # P1 · Mission Control — cancellation signal every await site
@@ -766,6 +1152,12 @@ class _JobExecution:
         self.dynamic_mission_state: MissionState | None = None
         self.dynamic_controller: DynamicMissionController | None = None
 
+    async def close_mcp_runtime(self) -> None:
+        runtime = self.mcp_runtime
+        if runtime is not None and hasattr(runtime, "close"):
+            await runtime.close()
+        self.mcp_runtime = None
+
     def _next_seq(self) -> int:
         self._seq += 1
         return self._seq
@@ -784,7 +1176,7 @@ class _JobExecution:
         """
         session_token = set_session_id(self.job.id)
         try:
-            self._emit_with_bound_session(event_type, **kwargs)
+            return self._emit_with_bound_session(event_type, **kwargs)
         finally:
             reset_session_id(session_token)
 
@@ -836,7 +1228,7 @@ class _JobExecution:
                 )
             except Exception:
                 pass
-            return
+            return payload
 
         seq = self._next_seq()
         payload: dict = {
@@ -960,6 +1352,197 @@ class _JobExecution:
         except Exception:
             logger.debug("mission event audit append failed", exc_info=True)
         self.event_queue.put_nowait(payload)
+        self._emit_pi_subagents_projection(event_type, payload)
+        return payload
+
+    def _dynamic_pi_context_for_event(self, payload: dict) -> dict[str, Any] | None:
+        mission = self.dynamic_mission_state
+        if mission is None:
+            return None
+        run_id = str(payload.get("runId") or "").strip()
+        agent_session_id = str(payload.get("agentId") or payload.get("slotId") or payload.get("activeAgentId") or "").strip()
+        run: SubagentRun | None = None
+        if run_id:
+            run = mission.subagent_runs.get(run_id)
+        if run is None and agent_session_id:
+            run = next(
+                (candidate for candidate in mission.subagent_runs.values() if candidate.agent_session_id == agent_session_id),
+                None,
+            )
+        if run is None:
+            return None
+        assignment = next(
+            (agent for agent in self.job.agents if agent.session_id == run.agent_session_id),
+            None,
+        )
+        task = mission.tasks.get(run.task_id)
+        agent_name = str(payload.get("agentName") or "").strip() or _agent_display_name(run.agent_id)
+        return {
+            "runId": run.id,
+            "taskId": run.task_id,
+            "taskTitle": task.title if task is not None else None,
+            "taskObjective": task.objective if task is not None else None,
+            "agent": run.agent_id,
+            "agentId": run.agent_session_id or agent_session_id or run.agent_id,
+            "agentName": agent_name,
+            "role": assignment.role if assignment is not None else agent_name,
+        }
+
+    def _emit_pi_subagents_projection(self, event_type: str, payload: dict) -> None:
+        if event_type.startswith("pi.") or not _pi_subagents_observability_enabled():
+            return
+        context = self._dynamic_pi_context_for_event(payload)
+        if context is None:
+            return
+
+        source_seq = payload.get("seq")
+        status = str(payload.get("status") or "").lower()
+        current_step = str(payload.get("currentStep") or payload.get("summary") or "").strip()
+        tool_name = str(payload.get("toolName") or "").strip()
+        duration_ms = payload.get("durationMs") if isinstance(payload.get("durationMs"), int) else None
+        tool_count = sum(1 for agent in self.job.agents if agent.session_id == context["agentId"] for _ in agent.actions)
+
+        state = "running"
+        activity_state = "active_long_running"
+        summary = current_step or "Subagent is running."
+        current_tool = None
+        if event_type == "agent_added":
+            state = "queued"
+            activity_state = "queued"
+            summary = bounded_text(str(context.get("taskObjective") or context.get("taskTitle") or "Queued"), max_chars=500)
+        elif event_type in {"tool_call_started", "diagnostic_baseline_captured"}:
+            state = "running"
+            current_tool = tool_name or None
+            summary = f"Running {tool_name}" if tool_name else "Running tool"
+        elif event_type == "tool_call_ended":
+            current_tool = tool_name or None
+            state = "running" if status == "ok" else "failed"
+            activity_state = "active_long_running" if status == "ok" else "needs_attention"
+            summary = f"{tool_name} completed" if status == "ok" else f"{tool_name} failed"
+        elif event_type == "slot_progress":
+            if status in {"done", "completed", "success"}:
+                state = "complete"
+                activity_state = "complete"
+                summary = str(payload.get("reason") or "Subagent completed.")
+            elif status in {"failed", "error"}:
+                state = "failed"
+                activity_state = "needs_attention"
+                summary = str(payload.get("reason") or "Subagent needs attention.")
+            elif status == "running":
+                summary = str(payload.get("reason") or "Subagent is running.")
+        elif event_type == "agent_status":
+            if status in {"completed", "done", "success"}:
+                state = "complete"
+                activity_state = "complete"
+                summary = current_step or "Subagent completed."
+            elif status in {"error", "failed"}:
+                state = "failed"
+                activity_state = "needs_attention"
+                summary = current_step or "Subagent needs attention."
+            elif status == "queued":
+                state = "queued"
+                activity_state = "queued"
+                summary = current_step or "Subagent queued."
+            else:
+                state = "running"
+                summary = current_step or "Subagent is running."
+                if summary.lower().startswith("calling ") and summary.endswith("..."):
+                    current_tool = summary[len("Calling "):-3]
+        elif event_type == "agent_error":
+            state = "failed"
+            activity_state = "needs_attention"
+            summary = str(payload.get("error") or "Subagent failed.")
+        elif event_type == "diagnostic_required":
+            state = "blocked"
+            activity_state = "needs_attention"
+            current_tool = tool_name or None
+            summary = str(payload.get("directivePreview") or payload.get("reason") or "Diagnostic checkpoint required.")
+        else:
+            return
+
+        common = {
+            "schemaVersion": 1,
+            "runId": context["runId"],
+            "taskId": context["taskId"],
+            "taskTitle": context.get("taskTitle"),
+            "agent": context["agent"],
+            "agentId": context["agentId"],
+            "agentName": context["agentName"],
+            "extension": _pi_subagent_extension(),
+            "sourceEventSeq": source_seq,
+        }
+        self._emit_with_bound_session(
+            "pi.subagents.status",
+            **common,
+            mode="single",
+            state=state,
+            activityState=activity_state,
+            task=context.get("taskTitle") or context.get("role"),
+            summary=bounded_text(summary, max_chars=1000),
+            currentTool=current_tool,
+            toolCount=tool_count,
+            durationMs=duration_ms,
+            progress=[{
+                "index": 0,
+                "agent": context["agent"],
+                "status": state,
+                "task": context.get("taskTitle") or context.get("role"),
+                "recentOutput": [bounded_text(summary, max_chars=500)],
+                "recentTools": [current_tool] if current_tool else [],
+                "toolCount": tool_count,
+                "tokens": 0,
+                "durationMs": duration_ms or 0,
+            }],
+        )
+
+        if event_type == "tool_call_started":
+            self._emit_with_bound_session(
+                "pi.subagents.control",
+                **common,
+                controlType="active_long_running",
+                to="tool",
+                message=bounded_text(f"Calling {tool_name} through AgentHub policy.", max_chars=1000),
+                currentTool=tool_name or None,
+                toolCount=tool_count,
+            )
+        elif event_type in {"diagnostic_required", "agent_error"} or (event_type == "slot_progress" and state == "failed"):
+            self._emit_with_bound_session(
+                "pi.subagents.control",
+                **common,
+                controlType="needs_attention",
+                to="operator",
+                message=bounded_text(summary, max_chars=1000),
+                reason=str(payload.get("reason") or payload.get("status") or event_type),
+                currentTool=current_tool,
+                toolCount=tool_count,
+            )
+        elif event_type in {"agent_added", "agent_status"} and state in {"queued", "running"}:
+            self._emit_with_bound_session(
+                "pi.subagents.async",
+                **common,
+                asyncId=f"async-{context['runId']}",
+                mode="single",
+                state=state,
+                agents=[context["agent"]],
+                summary=bounded_text(summary, max_chars=500),
+                sessionDir=f"agenthub://sessions/{self.job.id}/subagents",
+                outputFile=f"agenthub://sessions/{self.job.id}/subagents/{context['runId']}.jsonl",
+            )
+
+        if event_type == "slot_progress" and state in {"complete", "failed"}:
+            self._emit_with_bound_session(
+                "pi.subagents.result",
+                **common,
+                mode="single",
+                status="completed" if state == "complete" else "failed",
+                summary=bounded_text(summary, max_chars=4000),
+                usage={"toolCount": tool_count, "durationMs": duration_ms or 0},
+                sessionFile=f"agenthub://sessions/{self.job.id}/subagents/{context['runId']}.jsonl",
+                artifactPaths={
+                    "jsonlPath": f"agenthub://sessions/{self.job.id}/subagents/{context['runId']}.jsonl",
+                    "metadataPath": f"agenthub://sessions/{self.job.id}/subagents/{context['runId']}_meta.json",
+                },
+            )
 
     def snapshot_run_overview(self) -> dict:
         """Build a ``run_overview`` event payload the UI can use as the
@@ -1049,16 +1632,40 @@ def _resolve_wildcard_tool_scope(agent_id: str, mcp_manager: Any) -> set[str]:
         return set()
 
     if agent_id == GENERALIST_AGENT_ID:
-        desired = set(_GENERALIST_BOOTSTRAP_TOOLS)
+        desired_ordered = list(_GENERALIST_BOOTSTRAP_TOOLS)
     else:
         template = get_template(agent_id)
-        desired = set(template.available_tools) if template else set()
+        desired_ordered = list(template.available_tools) if template else []
 
-    if desired:
-        resolved = available.intersection(desired)
+    if desired_ordered:
+        resolved = [tool for tool in desired_ordered if tool in available]
     else:
-        resolved = available
-    return set(sorted(resolved)[:MODEL_TOOL_SCHEMA_LIMIT])
+        resolved = sorted(available)
+    return set(resolved[:MODEL_TOOL_SCHEMA_LIMIT])
+
+
+def _mission_mcp_runtime_required() -> bool:
+    mode = os.environ.get("AGENTHUB_MCP_RUNTIME", "auto").lower()
+    if mode in {"container", "sidecar", "required", "pi-subagents", "container-pi-subagents"}:
+        return True
+    if mode in {"off", "disabled", "global"}:
+        return False
+    return os.environ.get("AGENT_ISOLATION", "inprocess").lower() == "container"
+
+
+def _pi_subagents_observability_enabled() -> bool:
+    runtime = os.environ.get("AGENTHUB_ORCHESTRATION_RUNTIME", "dynamic").strip().lower()
+    observability = os.environ.get("AGENTHUB_PI_OBSERVABILITY", "").strip().lower()
+    return runtime in {"pi-subagents", "pisubagents", "pi_subagents"} or observability in {"pi-subagents", "pisubagents", "pi_subagents", "1", "true", "on"}
+
+
+def _pi_subagent_extension() -> dict[str, str]:
+    return {
+        "id": "pi-subagents",
+        "label": "pi-subagents",
+        "packageName": "pi-subagents",
+        "version": "0.21.3",
+    }
 
 
 class OrchestratorEngine:
@@ -1088,6 +1695,191 @@ class OrchestratorEngine:
         self.mcp_manager = mcp_manager
         self.copilot_token_fn = copilot_token_fn
         self.acquire_mcp_tokens_fn = acquire_mcp_tokens_fn
+
+    async def dispose_async(self) -> None:
+        """Best-effort cleanup for active mission resources during shutdown."""
+        executions = list(self._active_jobs.values())
+        if executions:
+            for execution in executions:
+                execution.cancelled = True
+                execution.cancel_event.set()
+                for task in execution.tasks:
+                    if not task.done():
+                        task.cancel()
+
+            await asyncio.gather(
+                *(execution.close_mcp_runtime() for execution in executions),
+                return_exceptions=True,
+            )
+
+        try:
+            from services.mcp.mission_runtime_manager import cleanup_mission_mcp_runtimes
+
+            await cleanup_mission_mcp_runtimes(active_session_ids=set())
+        except Exception as exc:
+            logger.warning(
+                "[ORCHESTRATOR] failed to sweep mission MCP runtimes during shutdown: %s",
+                exc,
+                extra=_log_extra("diagnostic"),
+            )
+
+        if executions:
+            await asyncio.gather(
+                *(task for execution in executions for task in execution.tasks),
+                return_exceptions=True,
+            )
+        self._active_jobs.clear()
+
+    async def _attach_mission_mcp_runtime(self, execution: _JobExecution) -> None:
+        if not _mission_mcp_runtime_required():
+            execution.mcp_manager = self.mcp_manager
+            return
+        if self.mcp_manager is None:
+            raise RuntimeError("Mission MCP runtime requires a validated startup MCP manager")
+        from services.mcp.mission_runtime_manager import start_mission_mcp_runtime
+
+        runtime = await start_mission_mcp_runtime(execution.job.id, self.mcp_manager)
+        execution.mcp_runtime = runtime
+        execution.mcp_manager = runtime
+
+    def _duration_text(self, job: Job) -> str:
+        if not job.started_at:
+            return "0s"
+        completed_at = job.completed_at or datetime.now(UTC)
+        secs = max(0, int((completed_at - job.started_at).total_seconds()))
+        mins = secs // 60
+        secs_rem = secs % 60
+        return f"{mins}m {secs_rem}s" if mins else f"{secs_rem}s"
+
+    def _emit_startup_snapshot(self, execution: _JobExecution) -> None:
+        context = execution.job.context if isinstance(execution.job.context, dict) else {}
+        pi_context = context.get("pi_orchestration") if isinstance(context.get("pi_orchestration"), dict) else {}
+        if context.get("runtime") == "pi" or context.get("orchestration_runtime") == "pi" or pi_context.get("runtime") == "pi":
+            extensions = pi_context.get("extensions") if isinstance(pi_context.get("extensions"), list) else []
+            extension_sources = [
+                str(item.get("source"))
+                for item in extensions
+                if isinstance(item, dict) and item.get("source")
+            ]
+            harness_manifest = build_pi_harness_manifest()
+            context_tools = pi_context.get("tools") if isinstance(pi_context.get("tools"), list) else None
+            context_policy_summary = pi_context.get("toolPolicySummary") if isinstance(pi_context.get("toolPolicySummary"), dict) else None
+            execution.emit(
+                "pi.orchestration.start",
+                schemaVersion=1,
+                runtime="pi",
+                subagentRuntime=str(pi_context.get("subagent_runtime") or "pi-subagents"),
+                subagentPackage=str(pi_context.get("subagent_package") or "npm:pi-subagents@0.21.3"),
+                subagentHarness=str(pi_context.get("subagentHarness") or harness_manifest.get("subagentHarness") or "pi-subagents"),
+                subagentRuntimeMode=str(pi_context.get("subagentRuntimeMode") or harness_manifest.get("subagentRuntimeMode") or "foreground-status-control-results"),
+                subagentObservability=pi_context.get("subagent_observability") or harness_manifest.get("subagentObservability"),
+                runtimePackage=str(pi_context.get("runtime_package_name") or "@mariozechner/pi-agent-core"),
+                runtimePackageSource=str(pi_context.get("runtime_package") or "npm:@mariozechner/pi-agent-core@0.71.1"),
+                frontendRuntimePackage=str(pi_context.get("frontend_runtime_package_name") or "@mariozechner/pi-web-ui"),
+                executionSurfaceExtension=str(pi_context.get("execution_surface_extension") or "@fabric-clawhub/pi-mission-ui"),
+                agenticEngineeringExtension=str(pi_context.get("agentic_engineering_extension") or "@fabric-clawhub/pi-agentic-engineering"),
+                rpiProtocol=str(pi_context.get("rpi_protocol") or "research-plan-implement-context-gates"),
+                qrspiProtocol=str(pi_context.get("qrspi_protocol") or "question-research-design-structure-plan-implement-verify-review"),
+                qrspiPhaseModel=list(pi_context.get("qrspi_phase_model") or ["question", "research", "design", "structure", "plan", "worktree", "implement", "verify", "review"]),
+                qrspiQuestionPolicy=pi_context.get("qrspi_question_policy"),
+                qrspiResearchPolicy=pi_context.get("qrspi_research_policy"),
+                qrspiDesignStructurePolicy=pi_context.get("qrspi_design_structure_policy"),
+                qrspiInstructionBudget=pi_context.get("qrspi_instruction_budget"),
+                qrspiVerticalSlicePolicy=pi_context.get("qrspi_vertical_slice_policy"),
+                qrspiBacktrackPolicy=pi_context.get("qrspi_backtrack_policy"),
+                qrspiReviewPolicy=pi_context.get("qrspi_review_policy"),
+                contextPackSchema=str(pi_context.get("context_pack_schema") or "ContextPackV2"),
+                subagentWorkModel=str(pi_context.get("subagent_work_model") or "context-window-fork"),
+                contextWindowPolicy=pi_context.get("context_window_policy"),
+                contextModeFacade=str(pi_context.get("context_mode_facade") or "agenthub-governed-context-mode"),
+                contextModeEvents=list(pi_context.get("context_mode_events") or []),
+                contextModeControls=pi_context.get("context_mode_controls"),
+                streamTransport=str(pi_context.get("stream_transport") or "agenthub-sse-to-pi-extension"),
+                extensions=extension_sources,
+                orchestrationHarness=str(pi_context.get("orchestrationHarness") or harness_manifest["orchestrationHarness"]),
+                harnessPackage=str(pi_context.get("harnessPackage") or harness_manifest["harnessPackage"]),
+                toolRegistry=str(pi_context.get("toolRegistry") or harness_manifest["toolRegistry"]),
+                toolExecutionBridge=str(pi_context.get("toolExecutionBridge") or harness_manifest["toolExecutionBridge"]),
+                toolCount=int(pi_context.get("toolCount") or harness_manifest["toolCount"]),
+                emittedToolCount=int(pi_context.get("emittedToolCount") or len(context_tools or harness_manifest["tools"])),
+                toolPolicySummary=context_policy_summary or harness_manifest["toolPolicySummary"],
+                tools=context_tools or harness_manifest["tools"],
+                backendBridge="agenthub-fabric-runtime",
+                extension={
+                    "id": "fabric-clawhub-mission-ui",
+                    "label": "Fabric ClawHub Pi Mission UI",
+                    "packageName": "@fabric-clawhub/pi-mission-ui",
+                    "version": "0.1.0",
+                },
+                logCategory="high_level",
+            )
+        execution.emit(
+            "composition_ready",
+            composition=execution.job.composition.model_dump(mode="json", by_alias=True),
+        )
+        execution.emit("run_overview", **execution.snapshot_run_overview())
+        execution.emit(
+            "slot_progress",
+            slotId=GENERALIST_AGENT_ID,
+            agentId=GENERALIST_AGENT_ID,
+            agentName="Generalist",
+            role="Mission controller",
+            status="running",
+            currentStep="Preparing isolated tool runtime",
+        )
+        execution.emit(
+            "log_line",
+            agentId=GENERALIST_AGENT_ID,
+            agentName="Generalist",
+            level="info",
+            message="Mission accepted. Preparing the isolated tool runtime and attaching live events.",
+            tags=["startup"],
+        )
+
+    async def _fail_job_before_runtime_ready(self, execution: _JobExecution, exc: Exception) -> str:
+        job = execution.job
+        reason = bounded_text(str(exc) or exc.__class__.__name__, max_chars=1200)
+        user_message = (
+            "Mission failed while preparing the isolated tool runtime. "
+            "This is an AgentHub runtime/startup error, not a problem with your prompt. "
+            f"Details: {reason}"
+        )
+        job.status = JobStatus.FAILED
+        job.completed_at = datetime.now(UTC)
+        update_session(job)
+        execution.emit(
+            "slot_progress",
+            slotId=GENERALIST_AGENT_ID,
+            agentId=GENERALIST_AGENT_ID,
+            agentName="Generalist",
+            role="Mission controller",
+            status="failed",
+            currentStep="Tool runtime failed before work started",
+            reason="runtime_start_failed",
+        )
+        execution.emit(
+            "agent_error",
+            agentId=GENERALIST_AGENT_ID,
+            agentName="Generalist",
+            error=user_message,
+        )
+        execution.emit(
+            "job_failed",
+            jobId=job.id,
+            status=job.status.value,
+            totalDuration=self._duration_text(job),
+            reason=user_message,
+        )
+        try:
+            await asyncio.shield(execution.close_mcp_runtime())
+        except Exception as close_exc:
+            logger.warning(
+                "[ORCHESTRATOR] failed to close failed-start mission MCP runtime: %s",
+                close_exc,
+                extra=_log_extra("diagnostic"),
+            )
+        self._active_jobs.pop(job.id, None)
+        return job.id
 
     # ── Composition (single LLM analysis step) ──────────────────────
 
@@ -1190,17 +1982,24 @@ class OrchestratorEngine:
         execution = _JobExecution(job, copilot_token, mcp_tokens)
         execution.correlation_id = get_request_id()
         self._active_jobs[job.id] = execution
-
-        # Emit the initial composition frame so the UI can render the
-        # graph immediately, even before any slot starts.
+        self._emit_startup_snapshot(execution)
+        try:
+            await self._attach_mission_mcp_runtime(execution)
+        except Exception as exc:
+            logger.exception(
+                "[ORCHESTRATOR] Mission MCP runtime failed before fixed mission start: %s",
+                exc,
+                extra=_log_extra("high_level"),
+            )
+            return await self._fail_job_before_runtime_ready(execution, exc)
         execution.emit(
-            "composition_ready",
-            composition=job.composition.model_dump(mode="json", by_alias=True),
+            "log_line",
+            agentId=GENERALIST_AGENT_ID,
+            agentName="Generalist",
+            level="info",
+            message="Tool runtime is ready. Starting the mission controller.",
+            tags=["startup"],
         )
-        # P1 · Mission Control — seed every subscriber with a
-        # ``run_overview`` so a late / reconnecting client can render
-        # without a separate fetch.
-        execution.emit("run_overview", **execution.snapshot_run_overview())
 
         for agent in job.agents:
             tpl = get_template(agent.agent_id)
@@ -1267,12 +2066,24 @@ class OrchestratorEngine:
         execution = _JobExecution(job, copilot_token, mcp_tokens)
         execution.correlation_id = get_request_id()
         self._active_jobs[job.id] = execution
-
+        self._emit_startup_snapshot(execution)
+        try:
+            await self._attach_mission_mcp_runtime(execution)
+        except Exception as exc:
+            logger.exception(
+                "[ORCHESTRATOR] Mission MCP runtime failed before dynamic mission start: %s",
+                exc,
+                extra=_log_extra("high_level"),
+            )
+            return await self._fail_job_before_runtime_ready(execution, exc)
         execution.emit(
-            "composition_ready",
-            composition=job.composition.model_dump(mode="json", by_alias=True),
+            "log_line",
+            agentId=GENERALIST_AGENT_ID,
+            agentName="Generalist",
+            level="info",
+            message="Tool runtime is ready. Starting the mission controller.",
+            tags=["startup"],
         )
-        execution.emit("run_overview", **execution.snapshot_run_overview())
 
         from services.agenthub.drivers.budget import BudgetTracker
         from services.agenthub.drivers.slot_runner import SlotRunner
@@ -1396,8 +2207,9 @@ class OrchestratorEngine:
         # P4 · Honour cancellation as a distinct terminal state so the
         # UI doesn't misclassify a user-initiated stop as a failure.
         was_cancelled = execution.cancelled or execution.cancel_event.is_set()
-        any_error = any(self._assignment_error_is_unrecovered(job, a) for a in job.agents)
         mission_status = execution.dynamic_mission_state.status if execution.dynamic_mission_state else None
+        dynamic_completed = mission_status == MissionStatus.COMPLETED
+        any_error = False if dynamic_completed else any(self._assignment_error_is_unrecovered(job, a) for a in job.agents)
         dynamic_failed = mission_status in (MissionStatus.FAILED, MissionStatus.BLOCKED)
         dynamic_cancelled = mission_status == MissionStatus.CANCELLED
         if was_cancelled:
@@ -1418,7 +2230,7 @@ class OrchestratorEngine:
 
         if was_cancelled:
             terminal = "job_cancelled"
-        elif any_error:
+        elif job.status == JobStatus.FAILED:
             terminal = "job_failed"
         else:
             terminal = "job_complete"
@@ -1428,6 +2240,14 @@ class OrchestratorEngine:
             status=job.status.value,
             totalDuration=duration,
         )
+        try:
+            await asyncio.shield(execution.close_mcp_runtime())
+        except Exception as exc:
+            logger.warning(
+                "[ORCHESTRATOR] failed to stop mission MCP runtime: %s",
+                exc,
+                extra=_log_extra("diagnostic"),
+            )
         self._active_jobs.pop(job.id, None)
 
     async def _supervise_agent_failures(self, execution: _JobExecution) -> None:
@@ -1784,12 +2604,20 @@ class OrchestratorEngine:
         # Filter tools for this agent — narrow to composition-selected
         # skills' tools when provided; else fall back to the template's
         # full tool belt.
-        all_tools = self.mcp_manager.get_openai_tools_schema() if self.mcp_manager else []
+        mcp_manager = execution.mcp_manager or self.mcp_manager
+        all_tools = mcp_manager.get_openai_tools_schema() if mcp_manager else []
         allowed_names = set(allowed_tools) if allowed_tools is not None else set(template.available_tools)
-        required_creation_tools = _required_creation_tools_for_goal(assignment.goal)
-        allowed_names = _limit_creation_tools_for_goal(
-            assignment.goal, allowed_names, required_creation_tools,
-        )
+        # The generalist is the planner/router and must delegate every mutation
+        # to a specialist (see dynamic_orchestrator._seed_generalist_task). Do
+        # NOT enforce required-creation tool gates on its run \u2014 the gate
+        # belongs on the specialist that actually owns the build.
+        if assignment.agent_id == GENERALIST_AGENT_ID:
+            required_creation_tools: tuple[str, ...] = ()
+        else:
+            required_creation_tools = _required_creation_tools_for_goal(assignment.goal)
+            allowed_names = _limit_creation_tools_for_goal(
+                assignment.goal, allowed_names, required_creation_tools,
+            )
         tools = [t for t in all_tools if t.get("function", {}).get("name") in allowed_names]
         available_tool_names = {t.get("function", {}).get("name") for t in tools}
 
@@ -1811,7 +2639,33 @@ class OrchestratorEngine:
             # Check for user messages
             while not user_queue.empty():
                 try:
-                    user_msg = user_queue.get_nowait()
+                    queued = user_queue.get_nowait()
+                    if isinstance(queued, QueuedUserMessage):
+                        user_msg = queued.message
+                        execution.emit(
+                            "user_message_delivered",
+                            steeringId=queued.steering_id,
+                            agentId=assignment.session_id,
+                            agentName=template.display_name,
+                            targetAgentSessionId=assignment.session_id,
+                            targetMode=queued.target_mode,
+                            mode=queued.mode,
+                            messagePreview=queued.message_preview,
+                            deliveredAtRound=round_num + 1,
+                        )
+                        if queued.mode == "interrupt":
+                            execution.pending_interrupts.pop(queued.steering_id, None)
+                            execution.emit(
+                                "turn_interrupted",
+                                steeringId=queued.steering_id,
+                                agentId=assignment.session_id,
+                                agentName=template.display_name,
+                                targetAgentSessionId=assignment.session_id,
+                                messagePreview=queued.message_preview,
+                                reason="Instruction delivered at the next safe agent round.",
+                            )
+                    else:
+                        user_msg = str(queued)
                     messages.append({"role": "user", "content": user_msg})
                     execution.emit("agent_status", agentId=assignment.session_id,
                                     agentName=template.display_name, status="running",
@@ -1851,21 +2705,38 @@ class OrchestratorEngine:
                 "stream": False,
             }
             if tools:
-                body["tools"] = tools
                 required_creation_tool = _missing_required_creation_tool(assignment, required_creation_tools)
                 if (
                     required_creation_tool
                     and required_creation_tool in available_tool_names
                 ):
+                    selected_tools = [
+                        tool_schema for tool_schema in tools
+                        if _tool_schema_name(tool_schema) == required_creation_tool
+                    ][:1]
                     body["tool_choice"] = {
                         "type": "function",
                         "function": {"name": required_creation_tool},
                     }
                 else:
+                    selected_tools = _limit_tools_for_model(
+                        tools,
+                        goal=assignment.goal,
+                        required_tool_names=required_creation_tools,
+                    )
                     body["tool_choice"] = "auto"
+                if selected_tools:
+                    body["tools"] = selected_tools
+                if len(selected_tools) < len(tools):
+                    logger.info(
+                        "[AGENT:%s] Round %d tool schemas limited %d → %d",
+                        agent_label, round_num + 1, len(tools), len(selected_tools),
+                        extra=_log_extra("diagnostic"),
+                    )
 
             logger.info("[AGENT:%s] Round %d: %d messages, %d tools",
-                        agent_label, round_num + 1, len(messages), len(tools), extra=_log_extra("diagnostic"))
+                        agent_label, round_num + 1, len(messages),
+                        len(body.get("tools", [])), extra=_log_extra("diagnostic"))
 
             response: dict[str, Any] | None = None
             round_start_time = time.monotonic()
@@ -1873,50 +2744,124 @@ class OrchestratorEngine:
             for attempt in range(1, max(1, AGENT_LLM_MAX_ATTEMPTS) + 1):
                 try:
                     headers = _copilot_headers(execution.copilot_token)
+                    request_id = f"{assignment.session_id}-round-{round_num + 1}-attempt-{attempt}"
+                    streamed_token_count = 0
+                    streamed_any_text = False
+                    resp: httpx.Response | None = None
+
+                    execution.emit(
+                        "llm_request_started",
+                        agentId=assignment.session_id,
+                        agentName=template.display_name,
+                        requestId=request_id,
+                        model=body.get("model"),
+                        taskTitle=assignment.role,
+                        promptSummary=assignment.goal[:500],
+                    )
+
+                    async def emit_assistant_delta(delta: str) -> None:
+                        nonlocal streamed_token_count, streamed_any_text
+                        if not delta:
+                            return
+                        streamed_any_text = True
+                        streamed_token_count += max(1, len(delta.split()))
+                        execution.emit(
+                            "assistant_text_delta",
+                            agentId=assignment.session_id,
+                            agentName=template.display_name,
+                            requestId=request_id,
+                            delta=delta,
+                            tokenCount=streamed_token_count,
+                        )
+
                     # P4 · Race the HTTP call against the cancel event so
                     # a user-initiated terminate lands within one RTT
                     # rather than waiting for the full client timeout.
-                    async with httpx.AsyncClient(timeout=AGENT_ROUND_TIMEOUT) as client:
-                        post_task = asyncio.create_task(client.post(
-                            f"{COPILOT_API_BASE}/chat/completions",
-                            json=body, headers=headers,
-                        ))
-                        cancel_task = asyncio.create_task(execution.cancel_event.wait())
-                        done, pending = await asyncio.wait(
-                            {post_task, cancel_task},
-                            return_when=asyncio.FIRST_COMPLETED,
+                    try:
+                        response = await stream_chat_completion(
+                            url=f"{COPILOT_API_BASE}/chat/completions",
+                            body=body,
+                            headers=headers,
+                            timeout=AGENT_ROUND_TIMEOUT,
+                            label="Copilot",
+                            on_delta=emit_assistant_delta,
+                            should_cancel=execution.cancel_event.is_set,
                         )
-                        for t in pending:
-                            t.cancel()
-                        if cancel_task in done and post_task not in done:
-                            # Cancel took first — drop out of the agent
-                            # loop. _monitor_job will emit job_cancelled.
-                            raise asyncio.CancelledError("cancelled mid-LLM")
-                        resp = post_task.result()
-                    if resp.status_code != 200:
-                        error = RuntimeError(f"HTTP {resp.status_code}: {resp.text[:200]}")
-                        if (
-                            resp.status_code in _TRANSIENT_LLM_STATUS_CODES
-                            and attempt < max(1, AGENT_LLM_MAX_ATTEMPTS)
-                        ):
-                            last_llm_error = error
-                            logger.warning(
-                                "[AGENT:%s] Transient LLM HTTP failure round %d attempt %d/%d: %s",
-                                agent_label, round_num + 1, attempt, AGENT_LLM_MAX_ATTEMPTS, error,
-                                extra=_log_extra("diagnostic"),
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as stream_error:
+                        logger.warning(
+                            "[AGENT:%s] Streaming LLM call failed round %d attempt %d/%d, retrying without streaming: %s",
+                            agent_label, round_num + 1, attempt, AGENT_LLM_MAX_ATTEMPTS, stream_error,
+                            extra=_log_extra("diagnostic"),
+                        )
+                        fallback_body = {**body, "stream": False}
+                        async with httpx.AsyncClient(timeout=AGENT_ROUND_TIMEOUT) as client:
+                            post_task = asyncio.create_task(client.post(
+                                f"{COPILOT_API_BASE}/chat/completions",
+                                json=fallback_body, headers=headers,
+                            ))
+                            cancel_task = asyncio.create_task(execution.cancel_event.wait())
+                            done, pending = await asyncio.wait(
+                                {post_task, cancel_task},
+                                return_when=asyncio.FIRST_COMPLETED,
                             )
+                            for t in pending:
+                                t.cancel()
+                            if cancel_task in done and post_task not in done:
+                                # Cancel took first — drop out of the agent
+                                # loop. _monitor_job will emit job_cancelled.
+                                raise asyncio.CancelledError("cancelled mid-LLM")
+                            resp = post_task.result()
+                    if resp is not None:
+                        if resp.status_code != 200:
+                            error = RuntimeError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+                            if (
+                                resp.status_code in _TRANSIENT_LLM_STATUS_CODES
+                                and attempt < max(1, AGENT_LLM_MAX_ATTEMPTS)
+                            ):
+                                last_llm_error = error
+                                logger.warning(
+                                    "[AGENT:%s] Transient LLM HTTP failure round %d attempt %d/%d: %s",
+                                    agent_label, round_num + 1, attempt, AGENT_LLM_MAX_ATTEMPTS, error,
+                                    extra=_log_extra("diagnostic"),
+                                )
+                                execution.emit(
+                                    "log_line",
+                                    agentId=assignment.session_id,
+                                    agentName=template.display_name,
+                                    level="warn",
+                                    message=f"Retrying transient LLM HTTP {resp.status_code} (attempt {attempt}/{AGENT_LLM_MAX_ATTEMPTS})",
+                                    tags=["llm_retry"],
+                                )
+                                await asyncio.sleep(min(attempt, 3))
+                                continue
+                            raise error
+                        response = resp.json()
+                    if response is not None:
+                        streamed_choice = response.get("choices", [{}])[0]
+                        streamed_message = streamed_choice.get("message", {})
+                        streamed_content = streamed_message.get("content") or ""
+                        if streamed_content and not streamed_any_text:
+                            streamed_token_count = max(1, len(streamed_content.split()))
                             execution.emit(
-                                "log_line",
+                                "assistant_text_delta",
                                 agentId=assignment.session_id,
                                 agentName=template.display_name,
-                                level="warn",
-                                message=f"Retrying transient LLM HTTP {resp.status_code} (attempt {attempt}/{AGENT_LLM_MAX_ATTEMPTS})",
-                                tags=["llm_retry"],
+                                requestId=request_id,
+                                delta=streamed_content,
+                                tokenCount=streamed_token_count,
                             )
-                            await asyncio.sleep(min(attempt, 3))
-                            continue
-                        raise error
-                    response = resp.json()
+                            streamed_any_text = True
+                        if streamed_content and streamed_any_text:
+                            execution.emit(
+                                "assistant_text_finalized",
+                                agentId=assignment.session_id,
+                                agentName=template.display_name,
+                                requestId=request_id,
+                                text=streamed_content,
+                                tokenCount=streamed_token_count,
+                            )
                     break
                 except asyncio.CancelledError:
                     # Propagate cleanly so asyncio.gather in _monitor_job
@@ -2188,11 +3133,27 @@ class OrchestratorEngine:
                 call_id = tc.get("id") or str(uuid.uuid4())
                 args_preview = {k: (str(v)[:120] if not isinstance(v, (int, float, bool)) else v)
                                 for k, v in (tool_args or {}).items()}
-                execution.emit("tool_call_started",
-                                agentId=assignment.session_id,
-                                agentName=template.display_name,
-                                callId=call_id, toolName=tool_name,
-                                argsPreview=args_preview)
+                operation_kind = _tool_operation_kind(tool_name)
+                tool_started_payload = execution.emit("tool_call_started",
+                                                      agentId=assignment.session_id,
+                                                      agentName=template.display_name,
+                                                      callId=call_id, toolName=tool_name,
+                                                      toolKind=operation_kind,
+                                                      operationKind=operation_kind,
+                                                      argsPreview=args_preview)
+                if operation_kind in {"write", "destructive"}:
+                    execution.emit(
+                        "diagnostic_baseline_captured",
+                        agentId=assignment.session_id,
+                        agentName=template.display_name,
+                        callId=call_id,
+                        toolName=tool_name,
+                        toolKind=operation_kind,
+                        operationKind=operation_kind,
+                        status="recorded",
+                        baselineCount=0,
+                        summary="Recorded the pre-change diagnostic boundary before a Fabric mutation.",
+                    )
                 tool_started_at = datetime.now(UTC)
 
                 # All dispatch routes through the tool runtime, which is
@@ -2232,7 +3193,7 @@ class OrchestratorEngine:
                     tool_name=tool_name,
                     arguments=tool_args,
                     ctx=ctx,
-                    mcp_manager=self.mcp_manager,
+                    mcp_manager=mcp_manager,
                     mcp_tokens=execution.mcp_tokens,
                     allowed_tools=allowed_names,
                 )
@@ -2244,7 +3205,7 @@ class OrchestratorEngine:
                     rt_result.ok, len(tool_result),
                     extra=_log_extra("diagnostic"),
                 )
-                issue_level = _major_issue_level(tool_result)
+                issue_level = _tool_result_major_issue_level(tool_result)
                 if issue_level:
                     issue_text = _compact_issue_text(tool_result)
                     log_fn = logger.error if issue_level == "error" else logger.warning
@@ -2286,13 +3247,15 @@ class OrchestratorEngine:
                         # follows the action type ("Created"/"Modified"
                         # land as "written"; queries stay "draft").
                         written = action.action_type in ("Created", "Modified", "Deleted")
-                        execution.emit("artifact_added",
-                                        artifactId=action.id,
-                                        agentId=assignment.session_id,
-                                        kind=action.entity_type,
-                                        name=action.entity_name,
-                                        state="written" if written else "draft",
-                                        webUrl=getattr(action, "web_url", None))
+                        if _should_emit_artifact_for_action(action):
+                            execution.emit("artifact_added",
+                                            artifactId=action.id,
+                                            agentId=assignment.session_id,
+                                            kind=action.entity_type,
+                                            name=action.entity_name,
+                                            state="written" if written else "draft",
+                                            details=_action_details_dict(action) or None,
+                                            webUrl=getattr(action, "web_url", None))
                     change_record = _change_record_from_tool(
                         tool_name, tool_args, tool_result, action,
                     )
@@ -2307,16 +3270,94 @@ class OrchestratorEngine:
                 duration_ms = int(
                     (datetime.now(UTC) - tool_started_at).total_seconds() * 1000
                 )
-                execution.emit(
+                runtime_latency_ms = getattr(rt_result, "latency_ms", None)
+                if runtime_latency_ms is not None:
+                    duration_ms = runtime_latency_ms
+                tool_ended_payload = execution.emit(
                     "tool_call_ended",
                     agentId=assignment.session_id,
                     callId=call_id, toolName=tool_name,
+                    toolKind=operation_kind,
+                    operationKind=operation_kind,
                     durationMs=duration_ms,
+                    latencyBreakdownMs=getattr(rt_result, "latency_breakdown_ms", None) or {},
                     status="ok" if rt_result.ok else "error",
                     errorPreview=None if rt_result.ok else result_preview,
+                    policyDecision=rt_result.policy_decision,
+                    outputChars=len(tool_result),
+                    resultDigest=stable_digest(tool_result),
+                )
+                if not rt_result.ok:
+                    execution.emit(
+                        "diagnostic_new_issues",
+                        agentId=assignment.session_id,
+                        agentName=template.display_name,
+                        callId=call_id,
+                        toolName=tool_name,
+                        toolKind=operation_kind,
+                        operationKind=operation_kind,
+                        status="new_issues",
+                        baselineCount=0,
+                        newIssueCount=1,
+                        summary=f"New issue observed while running {tool_name}.",
+                        issues=[{
+                            "severity": "error",
+                            "code": "ToolExecutionFailed",
+                            "message": result_preview,
+                        }],
+                    )
+                started_seq = tool_started_payload.get("seq") if isinstance(tool_started_payload, dict) else None
+                ended_seq = tool_ended_payload.get("seq") if isinstance(tool_ended_payload, dict) else None
+                execution.emit(
+                    "activity_rollup",
+                    scope="tool_batch",
+                    agentId=assignment.session_id,
+                    agentName=template.display_name,
+                    callId=call_id,
+                    toolName=tool_name,
+                    toolKind=operation_kind,
+                    operationKind=operation_kind,
+                    status="completed" if rt_result.ok else "failed",
+                    summary=_tool_rollup_summary(tool_name, "ok" if rt_result.ok else "error", duration_ms),
+                    coveredSeqStart=started_seq,
+                    coveredSeqEnd=ended_seq,
+                    detailCount=max(0, (ended_seq or 0) - (started_seq or 0) + 1) if started_seq and ended_seq else 2,
+                    durationMs=duration_ms,
+                    counts={"toolCalls": 1, "outputChars": len(tool_result)},
                 )
 
                 messages.append({"role": "tool", "tool_call_id": tc["id"], "content": tool_result})
+                needs_diagnostics, diagnostic_reason = _tool_result_requires_diagnostics(rt_result, tool_result)
+                if needs_diagnostics:
+                    directive = _diagnostic_directive(tool_name, tool_args, tool_result, diagnostic_reason)
+                    logger.warning(
+                        "[AGENT:%s] Diagnostic checkpoint required after %s (%s)",
+                        agent_label, tool_name, diagnostic_reason,
+                        extra=_log_extra("high_level"),
+                    )
+                    execution.emit(
+                        "diagnostic_required",
+                        agentId=assignment.session_id,
+                        agentName=template.display_name,
+                        toolName=tool_name,
+                        policyDecision=rt_result.policy_decision,
+                        reason=diagnostic_reason,
+                        status="required",
+                        diagnosticTool="fabric_diagnose_workspace_artifacts",
+                        directivePreview=directive[:1000],
+                    )
+                    execution.emit(
+                        "log_line",
+                        agentId=assignment.session_id,
+                        agentName=template.display_name,
+                        level="warn",
+                        message=(
+                            f"Diagnostic checkpoint required after {tool_name}: {diagnostic_reason}. "
+                            "The agent must inspect read-only evidence before retrying a write."
+                        ),
+                        tags=["diagnostic_required", "tool_result", "root_cause"],
+                    )
+                    messages.append({"role": "user", "content": directive})
 
             if assignment.phases:
                 assignment.phases[-1].status = PhaseStatus.COMPLETED
@@ -2406,17 +3447,123 @@ class OrchestratorEngine:
             t.cancel()
         return True
 
-    def inject_message(self, job_id: str, message: str, target_agent_session_id: str | None = None) -> bool:
-        """Push a user message into a running agent's queue."""
+    def inject_message(
+        self,
+        job_id: str,
+        message: str,
+        target_agent_session_id: str | None = None,
+        *,
+        mode: str = "queue",
+    ) -> dict[str, Any] | None:
+        """Push a user message into a running agent queue and emit public
+        queue/delivery semantics for Mission Control.
+
+        ``mode='interrupt'`` is conservative: it records the interrupt
+        request and delivers at the next safe agent-round boundary instead
+        of cancelling an in-flight Fabric mutation.
+        """
         exe = self._active_jobs.get(job_id)
         if not exe:
-            return False
-        if target_agent_session_id and target_agent_session_id in exe.user_message_queues:
-            exe.user_message_queues[target_agent_session_id].put_nowait(message)
+            return None
+
+        requested_mode = "interrupt" if mode == "interrupt" else "queue"
+        message_preview = _preview_user_message(message)
+        steering_id = f"steer-{uuid.uuid4().hex[:12]}"
+        queued_at = datetime.now(UTC).isoformat()
+
+        if target_agent_session_id:
+            target_queue = exe.user_message_queues.get(target_agent_session_id)
+            if target_queue is None:
+                exe.emit(
+                    "user_message_failed",
+                    steeringId=steering_id,
+                    targetAgentSessionId=target_agent_session_id,
+                    targetMode="agent",
+                    mode=requested_mode,
+                    messagePreview=message_preview,
+                    reason="Target agent session is not running.",
+                )
+                return None
+            targets = [(target_agent_session_id, target_queue)]
+            target_mode = "agent"
         else:
-            for q in exe.user_message_queues.values():
-                q.put_nowait(message)
-        return True
+            targets = list(exe.user_message_queues.items())
+            target_mode = "broadcast"
+
+        if not targets:
+            exe.emit(
+                "user_message_failed",
+                steeringId=steering_id,
+                targetAgentSessionId=target_agent_session_id,
+                targetMode=target_mode,
+                mode=requested_mode,
+                messagePreview=message_preview,
+                reason="No live agent queues are available.",
+            )
+            return None
+
+        queued = QueuedUserMessage(
+            steering_id=steering_id,
+            message=message,
+            target_agent_session_id=target_agent_session_id,
+            target_mode=target_mode,
+            mode=requested_mode,
+            queued_at=queued_at,
+            message_preview=message_preview,
+        )
+        for _, queue in targets:
+            queue.put_nowait(queued)
+
+        if requested_mode == "interrupt":
+            exe.pending_interrupts[steering_id] = queued
+            exe.emit(
+                "turn_interrupt_requested",
+                steeringId=steering_id,
+                targetAgentSessionId=target_agent_session_id,
+                targetMode=target_mode,
+                mode=requested_mode,
+                messagePreview=message_preview,
+            )
+            exe.emit(
+                "turn_interrupt_deferred",
+                steeringId=steering_id,
+                targetAgentSessionId=target_agent_session_id,
+                targetMode=target_mode,
+                mode=requested_mode,
+                messagePreview=message_preview,
+                reason="Current work will receive the instruction at the next safe agent round.",
+            )
+
+        exe.emit(
+            "user_message_queued",
+            steeringId=steering_id,
+            targetAgentSessionId=target_agent_session_id,
+            targetAgentSessionIds=[target_id for target_id, _ in targets],
+            targetMode=target_mode,
+            mode=requested_mode,
+            messagePreview=message_preview,
+            queuedAt=queued_at,
+            targetCount=len(targets),
+        )
+        if target_mode == "broadcast":
+            exe.emit(
+                "user_message_broadcast",
+                steeringId=steering_id,
+                targetAgentSessionIds=[target_id for target_id, _ in targets],
+                targetMode=target_mode,
+                mode=requested_mode,
+                messagePreview=message_preview,
+                targetCount=len(targets),
+            )
+        return {
+            "status": "queued",
+            "steeringId": steering_id,
+            "targetMode": target_mode,
+            "mode": requested_mode,
+            "targetAgentSessionIds": [target_id for target_id, _ in targets],
+            "targetCount": len(targets),
+            "messagePreview": message_preview,
+        }
 
     async def add_agent_to_job(
         self,
@@ -2539,6 +3686,7 @@ def _build_dynamic_agent_goal(
     upstream_results = context_pack.get("upstreamResults") or []
     upstream_text = json.dumps(upstream_results, default=str, ensure_ascii=False)
     specialist_catalog = _render_dynamic_specialist_catalog(context_pack.get("specialistCatalog") or [])
+    context_contract = json.dumps(_dynamic_context_window_contract(context_pack), default=str, ensure_ascii=False, indent=2)
     task_brief = json.dumps(
         {
             "taskId": task.id,
@@ -2584,6 +3732,8 @@ def _build_dynamic_agent_goal(
         f"{upstream_text if upstream_results else '(none)'}\n\n"
         "STRUCTURED TASK BRIEF:\n"
         f"{task_brief}\n\n"
+        "CONTEXT WINDOW CONTRACT:\n"
+        f"{context_contract}\n\n"
         "SPECIALIST CATALOG:\n"
         f"{specialist_catalog}\n\n"
         "AGENT CONTRACT:\n"
@@ -2600,6 +3750,72 @@ def _build_dynamic_agent_goal(
         '{"followupTasks":[{"title":"...","objective":"...","candidateAgentIds":["fabric-admin"],"requiredCapabilities":[],"delegationReason":"Why this specialist should own it.","contextSummary":"Important prior findings and constraints.","touchTargets":["workspace item or artifact to change/read"],"doNotTouch":["out-of-scope item or protected artifact"],"acceptanceCriteria":["observable done condition"],"resourceClaims":[{"kind":"workspace-item","id":"item-id-or-name","mode":"read"}],"parallelismSafe":false,"parallelismNotes":"Why this must serialize, or why it is independent."}]}\n'
         "DYNAMIC_RESULT_END\n"
     )
+
+
+def _dynamic_context_pack_v2_summary(context_pack: dict[str, Any]) -> dict[str, Any]:
+    context_pack_v2 = context_pack.get("contextPackV2") if isinstance(context_pack.get("contextPackV2"), dict) else {}
+    context_budget = context_pack_v2.get("contextBudget") if isinstance(context_pack_v2.get("contextBudget"), dict) else {}
+    instruction_budget = context_pack_v2.get("instructionBudget") if isinstance(context_pack_v2.get("instructionBudget"), dict) else {}
+    phase_inputs = context_pack_v2.get("phaseInputs") if isinstance(context_pack_v2.get("phaseInputs"), dict) else {}
+    backtrack_policy = context_pack_v2.get("backtrackPolicy") if isinstance(context_pack_v2.get("backtrackPolicy"), dict) else {}
+    context_mode = context_pack_v2.get("contextMode") if isinstance(context_pack_v2.get("contextMode"), dict) else {}
+    return {
+        "contextPackSchemaVersion": context_pack_v2.get("schemaVersion"),
+        "qrspiProtocol": context_pack_v2.get("qrspiProtocol"),
+        "qrspiPhaseModel": list(context_pack_v2.get("qrspiPhaseModel") or [])[:12],
+        "contextPhase": context_pack_v2.get("phase"),
+        "contextGoal": bounded_text(context_pack_v2.get("contextGoal"), max_chars=280),
+        "contextBudgetEstimatedTokens": context_budget.get("estimatedTokens"),
+        "contextBudgetMaxTokens": context_budget.get("maxTokens"),
+        "contextCompactionThreshold": context_budget.get("compactionThreshold"),
+        "instructionBudgetPhaseLimit": instruction_budget.get("phaseInstructionLimit"),
+        "instructionBudgetBasis": instruction_budget.get("budgetBasis"),
+        "phaseOriginalTaskHiddenFromResearch": phase_inputs.get("originalTaskHiddenFromResearch"),
+        "phaseQuestionCount": len(phase_inputs.get("neutralQuestions") or []),
+        "subagentWorkModel": (context_pack_v2.get("executionTemplate") or {}).get("subagentWorkModel") if isinstance(context_pack_v2.get("executionTemplate"), dict) else None,
+        "verticalSlicePolicy": context_pack_v2.get("verticalSlicePolicy"),
+        "backtrackAllowed": backtrack_policy.get("allowed"),
+        "backtrackTargetPhases": list(backtrack_policy.get("validPreviousPhases") or [])[:8],
+        "reviewPolicy": context_pack_v2.get("reviewPolicy"),
+        "contextHandoffDigest": context_pack_v2.get("handoffDigest"),
+        "contextModePackage": context_mode.get("package"),
+        "contextModeFacade": context_mode.get("facade"),
+        "contextModeSavedTokenEstimate": context_mode.get("savedTokenEstimate"),
+        "contextModePurgeHandle": context_mode.get("purgeHandle"),
+    }
+
+
+def _dynamic_context_window_contract(context_pack: dict[str, Any]) -> dict[str, Any]:
+    context_pack_v2 = context_pack.get("contextPackV2") if isinstance(context_pack.get("contextPackV2"), dict) else {}
+    context_mode = context_pack_v2.get("contextMode") if isinstance(context_pack_v2.get("contextMode"), dict) else {}
+    return {
+        "schemaVersion": context_pack_v2.get("schemaVersion"),
+        "qrspiProtocol": context_pack_v2.get("qrspiProtocol"),
+        "qrspiPhaseModel": context_pack_v2.get("qrspiPhaseModel"),
+        "phase": context_pack_v2.get("phase"),
+        "subagentWorkModel": (context_pack_v2.get("executionTemplate") or {}).get("subagentWorkModel") if isinstance(context_pack_v2.get("executionTemplate"), dict) else "context-window-fork",
+        "agentIdRole": (context_pack_v2.get("executionTemplate") or {}).get("agentIdRole") if isinstance(context_pack_v2.get("executionTemplate"), dict) else "execution-template",
+        "contextGoal": context_pack_v2.get("contextGoal"),
+        "contextBudget": context_pack_v2.get("contextBudget"),
+        "instructionBudget": context_pack_v2.get("instructionBudget"),
+        "phaseInputs": context_pack_v2.get("phaseInputs"),
+        "sourceBudget": context_pack_v2.get("sourceBudget"),
+        "sourceRefs": context_pack_v2.get("sourceRefs"),
+        "retrievalProvenance": context_pack_v2.get("retrievalProvenance"),
+        "omissionPolicy": context_pack_v2.get("omissionPolicy"),
+        "returnContract": context_pack_v2.get("returnContract"),
+        "verticalSlicePolicy": context_pack_v2.get("verticalSlicePolicy"),
+        "backtrackPolicy": context_pack_v2.get("backtrackPolicy"),
+        "reviewPolicy": context_pack_v2.get("reviewPolicy"),
+        "handoffDigest": context_pack_v2.get("handoffDigest"),
+        "contextMode": {
+            "package": context_mode.get("package"),
+            "facade": context_mode.get("facade"),
+            "savedTokenEstimate": context_mode.get("savedTokenEstimate"),
+            "purgeHandle": context_mode.get("purgeHandle"),
+            "events": context_mode.get("events"),
+        },
+    }
 
 
 def _render_dynamic_specialist_catalog(catalog: list[dict[str, Any]]) -> str:
@@ -2689,6 +3905,9 @@ def _dynamic_result_status(slot_status: str, assignment: AgentAssignment) -> Age
 
 def _dynamic_assignment_evidence(assignment: AgentAssignment) -> list[dict[str, Any] | str]:
     evidence: list[dict[str, Any] | str] = []
+    container_tool_evidence = getattr(assignment, "_container_tool_evidence", None)
+    if isinstance(container_tool_evidence, list):
+        evidence.extend(item for item in container_tool_evidence if isinstance(item, dict))
     for phase in assignment.phases[-5:]:
         evidence.append(
             {
@@ -2711,10 +3930,15 @@ def _dynamic_assignment_evidence(assignment: AgentAssignment) -> list[dict[str, 
 
 
 def _extract_dynamic_followups(assignment: AgentAssignment) -> list[FollowupTask]:
+    # The DYNAMIC_RESULT block routinely spans dozens of lines (full JSON of
+    # follow-up tasks). Earlier we sliced phase.details[-5:], which silently
+    # truncated the block and made the regex fail. Take ALL detail/decision
+    # text from the recent phases instead so the structured delegation block
+    # the generalist emits is always parseable end-to-end.
     text_parts = [assignment.current_step or ""]
     for phase in assignment.phases[-5:]:
-        text_parts.extend(phase.details[-5:])
-        text_parts.extend(decision.summary for decision in phase.decisions[-3:])
+        text_parts.extend(phase.details)
+        text_parts.extend(decision.summary for decision in phase.decisions)
     text = "\n".join(part for part in text_parts if part)
     payloads = [
         match.group(1)
@@ -2743,7 +3967,7 @@ def _extract_dynamic_followups(assignment: AgentAssignment) -> list[FollowupTask
             continue
         for raw_task in raw_tasks:
             try:
-                followups.append(FollowupTask.model_validate(raw_task))
+                followups.append(FollowupTask.model_validate(_sanitize_dynamic_followup_task(raw_task)))
             except Exception:
                 logger.debug(
                     "Ignoring invalid dynamic follow-up task: %r",
@@ -2752,6 +3976,26 @@ def _extract_dynamic_followups(assignment: AgentAssignment) -> list[FollowupTask
                     extra=_log_extra("trace"),
                 )
     return followups
+
+
+def _sanitize_dynamic_followup_task(raw_task: Any) -> Any:
+    if not isinstance(raw_task, dict):
+        return raw_task
+    sanitized = dict(raw_task)
+    for key, limit in (
+        ("title", 240),
+        ("objective", 4_000),
+        ("delegationReason", 1_000),
+        ("delegation_reason", 1_000),
+        ("contextSummary", 2_000),
+        ("context_summary", 2_000),
+        ("parallelismNotes", 1_000),
+        ("parallelism_notes", 1_000),
+    ):
+        value = sanitized.get(key)
+        if isinstance(value, str):
+            sanitized[key] = bounded_text(value, max_chars=limit)
+    return sanitized
 
 
 def _assignment_failure_text(assignment: AgentAssignment) -> str:
@@ -2809,6 +4053,8 @@ def _required_creation_tool_for_goal(goal: str) -> str | None:
 
 def _required_creation_tools_for_goal(goal: str) -> tuple[str, ...]:
     goal_lower = goal.lower()
+    if _is_verification_only_goal(goal):
+        return ()
     if (
         "fabric_create_workspace_inventory_solution" in goal_lower
         or (
@@ -2899,6 +4145,105 @@ _CREATION_OWNER_HINTS = frozenset({
     "worker",
 })
 
+_MISSION_TOOL_PRIORITY = (
+    "fabric_create_workspace_inventory_solution",
+    "fabric_verify_workspace_inventory_solution",
+    "browser_verify_visual_render",
+    "fabric_diagnose_workspace_artifacts",
+    "fabric_list_workspaces",
+    "fabric_list_items",
+    "fabric_list_folders",
+    "fabric_get_item_definition",
+    "fabric_get_item",
+    "fabric_create_folder",
+    "fabric_create_item",
+    "fabric_write_file",
+    "database_operations",
+    "model_operations",
+    "table_operations",
+    "column_operations",
+    "measure_operations",
+    "relationship_operations",
+    "dax_query_operations",
+    "sl_clone_report",
+    "sl_rebind_report",
+    "sl_get_report_definition",
+    "sl_create_report_from_reportjson",
+    "get_knowledge",
+    "microsoft_docs_search",
+    "microsoft_docs_fetch",
+    "microsoft_code_sample_search",
+    "sequentialthinking",
+    "get_current_time",
+)
+
+_AZURE_TOOL_PRIORITY = (
+    "get_azure_bestpractices_get",
+    "get_azure_bestpractices_ai_app",
+    "azure_diagnose_resource",
+    "azure_get_resource_health",
+    "azure_get_activity_log",
+    "azure_query_metrics",
+)
+
+
+def _tool_schema_name(tool_schema: dict[str, Any]) -> str:
+    function = tool_schema.get("function")
+    if not isinstance(function, dict):
+        return ""
+    name = function.get("name")
+    return name if isinstance(name, str) else ""
+
+
+def _limit_tools_for_model(
+    tools: list[dict[str, Any]],
+    *,
+    goal: str,
+    required_tool_names: tuple[str, ...] = (),
+    limit: int = MODEL_TOOL_SCHEMA_LIMIT,
+) -> list[dict[str, Any]]:
+    if limit <= 0:
+        return []
+    effective_limit = min(limit, OPENAI_COMPAT_TOOL_SCHEMA_HARD_LIMIT)
+    by_name = {
+        _tool_schema_name(tool_schema): tool_schema
+        for tool_schema in tools
+        if _tool_schema_name(tool_schema)
+    }
+    selected: list[dict[str, Any]] = []
+    selected_names: set[str] = set()
+
+    def add_name(tool_name: str) -> None:
+        if len(selected) >= effective_limit or not tool_name or tool_name in selected_names:
+            return
+        tool_schema = by_name.get(tool_name)
+        if tool_schema is None:
+            return
+        selected.append(tool_schema)
+        selected_names.add(tool_name)
+
+    for required_tool_name in required_tool_names:
+        add_name(required_tool_name)
+
+    goal_lower = goal.lower()
+    if any(term in goal_lower for term in ("fabric", "workspace", "item", "inventory", "report", "semantic model")):
+        for priority_name in _MISSION_TOOL_PRIORITY:
+            add_name(priority_name)
+
+    if any(term in goal_lower for term in ("azure", "foundry", "cloud", "deploy", "deployment", "rbac", "entra")):
+        for priority_name in _AZURE_TOOL_PRIORITY:
+            add_name(priority_name)
+
+    for tool_schema in tools:
+        if len(selected) >= effective_limit:
+            break
+        tool_name = _tool_schema_name(tool_schema)
+        if tool_name and tool_name not in selected_names:
+            selected.append(tool_schema)
+            selected_names.add(tool_name)
+
+    return selected
+
 
 def _limit_creation_tools_for_goal(
     goal: str,
@@ -2906,6 +4251,9 @@ def _limit_creation_tools_for_goal(
     required_creation_tools: tuple[str, ...],
 ) -> set[str]:
     limited = set(allowed_tools)
+    if _is_verification_only_goal(goal):
+        limited.difference_update(_CREATION_WRITE_TOOLS)
+        return limited
     if not _has_named_creation_ownership(goal):
         limited.update(required_creation_tools)
         return limited
@@ -2913,6 +4261,30 @@ def _limit_creation_tools_for_goal(
     limited.difference_update(_CREATION_WRITE_TOOLS)
     limited.update(required_creation_tools)
     return limited
+
+
+def _is_verification_only_goal(goal: str) -> bool:
+    # IMPORTANT: this check must look at the AGENT'S OWN role / objective,
+    # never at peripheral text such as the SPECIALIST CATALOG. Earlier the
+    # mere catalog mention of "FabricVerifier" or "browser_verify_visual_render"
+    # was enough to flip a producer goal into "verifier-only" mode, which
+    # then disabled the required-creation gate and let producers ship a
+    # text-only ACTION marker as if they had really called the build tool.
+    goal_lower = goal.lower()
+    role_lines: list[str] = []
+    for line in goal_lower.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(("title:", "objective:", "your role:", "task:")):
+            role_lines.append(stripped)
+    if not role_lines:
+        return False
+    role_text = "\n".join(role_lines)
+    return (
+        "verify user-facing fabric deliverables" in role_text
+        or "independently verify the produced" in role_text
+        or "fabricverifier" in role_text
+        or re.search(r"^\s*(?:title|objective|your role):\s*verif", role_text, re.MULTILINE) is not None
+    )
 
 
 def _has_named_creation_ownership(goal: str) -> bool:
@@ -3167,6 +4539,8 @@ def _detect_action_from_tool(tool_name: str, tool_args: dict, result: str) -> Ag
     """Infer an action from a tool call."""
     if tool_name == "fabric_create_workspace_inventory_solution":
         return _detect_inventory_solution_action(tool_args, result)
+    if tool_name == "browser_verify_visual_render":
+        return _detect_browser_visual_action(tool_args, result)
 
     result_lower = result.lower()
     is_existing_conflict = _is_existing_create_conflict(result_lower)
@@ -3283,6 +4657,37 @@ def _detect_inventory_solution_action(tool_args: dict, result: str) -> AgentActi
     )
 
 
+def _detect_browser_visual_action(tool_args: dict, result: str) -> AgentAction:
+    parsed = _parsed_tool_result_dict(result)
+    details = parsed if parsed else {"raw": result[:1200]}
+    final_url = details.get("finalUrl") or tool_args.get("url")
+    status = str(details.get("status") or "").lower()
+    ok = bool(details.get("ok")) or status == "passed"
+    return AgentAction(
+        id=str(uuid.uuid4()),
+        action_type="Verified" if ok else "Failed",
+        entity_name=str(final_url or tool_args.get("url") or "browser visual render"),
+        entity_type="browser_visual_render",
+        web_url=str(final_url) if final_url else tool_args.get("url"),
+        details=json.dumps(details, sort_keys=True, default=str),
+    )
+
+
+def _should_emit_artifact_for_action(action: AgentAction) -> bool:
+    entity_type = str(action.entity_type or "").strip().lower().replace(" ", "_")
+    return entity_type not in {"browser_visual_render", "browser_visual", "browser_screenshot"}
+
+
+def _action_details_dict(action: AgentAction | None) -> dict[str, Any]:
+    if action is None or not action.details:
+        return {}
+    try:
+        parsed = json.loads(action.details)
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
 def _compact_inventory_solution_details(parsed: dict[str, Any]) -> dict[str, Any]:
     summary_keys = (
         "status",
@@ -3292,6 +4697,7 @@ def _compact_inventory_solution_details(parsed: dict[str, Any]) -> dict[str, Any
         "sourceItemCount",
         "sourceWorkspaceCount",
         "dataSource",
+        "semanticModelStorageMode",
         "notebookWritesEnabled",
         "persistentDataWritten",
         "persistentDataStore",
@@ -3300,6 +4706,7 @@ def _compact_inventory_solution_details(parsed: dict[str, Any]) -> dict[str, Any
         "reportId",
         "semanticModelDataValidation",
         "reportRenderValidation",
+        "qualityValidation",
         "createdItems",
         "errors",
         "warnings",
@@ -3310,12 +4717,64 @@ def _compact_inventory_solution_details(parsed: dict[str, Any]) -> dict[str, Any
 def _inventory_solution_verified(parsed: dict[str, Any]) -> bool:
     if not parsed:
         return False
-    status = str(parsed.get("status") or "").lower()
+    if str(parsed.get("status") or "").lower() != "created":
+        return False
+
     errors = parsed.get("errors")
-    has_blocking_errors = bool(errors) if isinstance(errors, list) else bool(errors)
-    model_validation = parsed.get("semanticModelDataValidation")
-    report_validation = parsed.get("reportRenderValidation")
-    return status == "created" and not has_blocking_errors and bool(model_validation) and bool(report_validation)
+    if isinstance(errors, list) and any(str(error).strip() for error in errors):
+        return False
+    if isinstance(errors, str) and errors.strip():
+        return False
+
+    if "dataSource" in parsed and parsed.get("dataSource") != "lakehouse_delta_tables":
+        return False
+    if "semanticModelStorageMode" in parsed and parsed.get("semanticModelStorageMode") != "DirectLake":
+        return False
+    if "notebookWritesEnabled" in parsed and parsed.get("notebookWritesEnabled") is not True:
+        return False
+    if "persistentDataWritten" in parsed and parsed.get("persistentDataWritten") is not True:
+        return False
+
+    store = parsed.get("persistentDataStore")
+    if store is not None:
+        if not isinstance(store, dict):
+            return False
+        if str(store.get("type") or "").lower() != "lakehouse":
+            return False
+        if "written" in store and store.get("written") is not True:
+            return False
+
+    semantic_validation = parsed.get("semanticModelDataValidation")
+    if semantic_validation is not None:
+        if not isinstance(semantic_validation, dict):
+            return False
+        if str(semantic_validation.get("status") or "").lower() != "queryable":
+            return False
+        row_count = semantic_validation.get("rowCount")
+        if row_count is not None and (not isinstance(row_count, int) or row_count <= 0):
+            return False
+
+    render_validation = parsed.get("reportRenderValidation")
+    if render_validation is not None:
+        if not isinstance(render_validation, dict):
+            return False
+        if str(render_validation.get("status") or "").lower() != "rendered":
+            return False
+
+    quality_validation = parsed.get("qualityValidation")
+    if quality_validation is not None:
+        if not isinstance(quality_validation, dict):
+            return False
+        if str(quality_validation.get("status") or "").lower() != "passed":
+            return False
+
+    created_items = parsed.get("createdItems")
+    if isinstance(created_items, list):
+        for item in created_items:
+            if isinstance(item, dict) and str(item.get("type") or "").lower() == "warehouse":
+                return False
+
+    return True
 
 
 _READ_ONLY_TOOL_VERBS = frozenset({
@@ -3353,6 +4812,12 @@ def _change_record_from_tool(
 
     change_kind = _change_kind(tool_name, action)
     target_type, target_name, target_scope = _change_target(tool_name, tool_args, action)
+    action_details = _action_details_dict(action)
+    parsed_result = _parsed_tool_result_dict(result)
+    if action and action.entity_type == "WorkspaceInventorySolution":
+        target_type = "Folder"
+        target_name = str(action_details.get("folderName") or action.entity_name)
+        target_scope = "folder"
     record_id = action.id if action else str(uuid.uuid4())
     summary = _change_summary(change_kind, target_type, target_name, tool_name)
 
@@ -3370,6 +4835,26 @@ def _change_record_from_tool(
         record["targetId"] = action.fabric_item_id
     if action and action.web_url:
         record["webUrl"] = action.web_url
+    folder_id = (
+        action_details.get("folderId")
+        or parsed_result.get("folderId")
+        or tool_args.get("folder_id")
+        or tool_args.get("folderId")
+    )
+    if isinstance(folder_id, str) and folder_id.strip():
+        if target_scope == "folder" and "targetId" not in record:
+            record["targetId"] = folder_id.strip()
+        elif target_scope != "folder":
+            record["folderId"] = folder_id.strip()
+    folder_name = action_details.get("folderName") or parsed_result.get("folderName") or tool_args.get("folder_name") or tool_args.get("folderName")
+    if isinstance(folder_name, str) and folder_name.strip():
+        record["folderName"] = folder_name.strip()
+    parent_folder_id = parsed_result.get("parentFolderId") or tool_args.get("parent_folder_id") or tool_args.get("parentFolderId")
+    if isinstance(parent_folder_id, str) and parent_folder_id.strip():
+        record["parentFolderId"] = parent_folder_id.strip()
+    created_items = action_details.get("createdItems")
+    if isinstance(created_items, list):
+        record["createdItems"] = [item for item in created_items if isinstance(item, dict)]
     return record
 
 
@@ -3396,7 +4881,27 @@ def _tool_tokens(tool_name: str) -> list[str]:
 
 
 def _tool_result_has_error(result: str) -> bool:
-    result_lower = result.lower()
+    parsed = _parsed_tool_result_dict(result)
+    if parsed:
+        errors = parsed.get("errors")
+        if isinstance(errors, list) and any(str(error).strip() for error in errors):
+            return True
+        if isinstance(errors, str) and errors.strip():
+            return True
+        status = str(parsed.get("status") or parsed.get("state") or "").lower()
+        if status in {"created", "ok", "success", "succeeded", "verified", "passed", "rendered", "queryable"}:
+            return False
+        if parsed.get("ok") is True:
+            return False
+        if status in {"error", "failed", "failure", "blocked", "partial"}:
+            return True
+
+    if parsed and "errors" in parsed:
+        sanitized = dict(parsed)
+        sanitized.pop("errors", None)
+        result_lower = json.dumps(sanitized, sort_keys=True, default=str).lower()
+    else:
+        result_lower = result.lower()
     return any(marker in result_lower for marker in (
         "error", "failed", "unauthorized", "forbidden", "not found",
         "featurenotavailable", "badrequest", "capacitynotactive",

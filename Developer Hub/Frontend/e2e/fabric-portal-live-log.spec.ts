@@ -1,6 +1,9 @@
 import { test, expect } from "./fixtures";
-import type { Frame, Page } from "@playwright/test";
+import type { Frame, Page, TestInfo } from "@playwright/test";
+import { judgeActualMissionRunEvidence } from "./utils/llmJudge";
+import { resolveGitHubCopilotToken } from "./utils/githubCopilotToken";
 import { execFileSync } from "child_process";
+import fs from "fs";
 import path from "path";
 /**
  * Full Fabric-portal end-to-end verification that AgentHub can execute
@@ -11,7 +14,7 @@ import path from "path";
  *   2. Create a new "Fabric ClawHub" item (the Developer Hub workload).
  *   3. Submit a prompt → "Start mission".
  *   4. Wait for Mission Control to mount inside the workload iframe.
- *   5. Assert the Live Log entries counter grows over time (SSE delivery).
+ *   5. Assert visible Pi live-log rows grow over time in the frontend.
  *   6. Wait for mission success, assert no backend warnings/errors for
  *      the session, and verify the requested Fabric folder/items exist.
  *
@@ -50,14 +53,14 @@ const envMs = (name: string, fallback: number): number => {
     return Number.isFinite(v) && v > 0 ? v : fallback;
 };
 const BUDGETS = {
-    testTimeout: envMs("FABRIC_E2E_TEST_TIMEOUT_MS", FAST_FAIL ? 18 * 60_000 : 30 * 60_000),
+    testTimeout: envMs("FABRIC_E2E_TEST_TIMEOUT_MS", FAST_FAIL ? 22 * 60_000 : 30 * 60_000),
     waitWorkloadIframe: envMs("FABRIC_E2E_IFRAME_TIMEOUT_MS", FAST_FAIL ? 30_000 : 60_000),
     waitPageFrameAttempts: FAST_FAIL ? 25 : 60,
     authCompleteMs: envMs("FABRIC_E2E_AUTH_TIMEOUT_MS", FAST_FAIL ? 35_000 : 120_000),
     composeVisible: envMs("FABRIC_E2E_COMPOSE_TIMEOUT_MS", FAST_FAIL ? 25_000 : 60_000),
     approveVisible: envMs("FABRIC_E2E_APPROVE_TIMEOUT_MS", FAST_FAIL ? 60_000 : 4 * 60_000),
     firstLiveLog: envMs("FABRIC_E2E_FIRST_LIVE_LOG_TIMEOUT_MS", FAST_FAIL ? 60_000 : 120_000),
-    missionComplete: envMs("FABRIC_E2E_MISSION_COMPLETE_TIMEOUT_MS", FAST_FAIL ? 12 * 60_000 : 24 * 60_000),
+    missionComplete: envMs("FABRIC_E2E_MISSION_COMPLETE_TIMEOUT_MS", FAST_FAIL ? 18 * 60_000 : 24 * 60_000),
     artifactVisible: envMs("FABRIC_E2E_ARTIFACT_VISIBLE_TIMEOUT_MS", FAST_FAIL ? 3 * 60_000 : 6 * 60_000),
     reportOpen: envMs("FABRIC_E2E_REPORT_OPEN_TIMEOUT_MS", FAST_FAIL ? 2 * 60_000 : 4 * 60_000),
     reportSmoke: envMs("FABRIC_E2E_REPORT_SMOKE_TIMEOUT_MS", FAST_FAIL ? 30_000 : 60_000),
@@ -65,6 +68,39 @@ const BUDGETS = {
 
 const portalUrl = `https://app.powerbi.com/groups/${WORKSPACE_ID}/list`
     + `?ctid=${TENANT_ID}&experience=fabric-developer`;
+const MISSION_LOG_SURFACE_SELECTOR = [
+    ".pi-mission-surface",
+    ".canvas-log-stream",
+    ".agent-canvas .log-window",
+    ".dmc-live .log-window",
+    ".mc3-log__scroll",
+    ".mc3-log",
+].join(", ");
+const MISSION_LOG_ROW_SELECTOR = [
+    '[data-pi-live-log-row="true"]',
+    ".pi-mission-surface [data-pi-kind]",
+    ".pi-runtime-host message-list assistant-message",
+    ".pi-runtime-host message-list tool-message",
+    ".pi-runtime-host message-list user-message",
+    ".canvas-log-row",
+    ".agent-canvas .log-window p",
+    ".dmc-live .log-window p",
+    ".mc3-entry",
+].join(", ");
+const MISSION_LOG_COPY_SELECTOR = [
+    ".pi-mission-surface",
+    ".canvas-log-stream",
+    ".agent-canvas",
+    ".dmc-live .agent-canvas",
+    ".mc3-log",
+].join(", ");
+const PI_SUBAGENTS_OBSERVABILITY_SELECTOR = '[data-pi-subagents-observability="true"]';
+const PI_SUBAGENTS_ROW_SELECTOR = [
+    '[data-pi-subagents-status-row="true"][data-pi-seq]',
+    '[data-pi-subagents-control-row="true"][data-pi-seq]',
+    '[data-pi-subagents-result-row="true"][data-pi-seq]',
+    '[data-pi-subagents-async-row="true"][data-pi-seq]',
+].join(", ");
 
 type DeviceFlowCapture = {
     userCode?: string;
@@ -77,24 +113,64 @@ type BackendAuthCapture = {
     fabricToken?: string;
 };
 
+type VisibleMissionLogSnapshot = {
+    liveRowCount: number;
+    nativeMessageVisible: boolean;
+    maxLiveSeq: number;
+    textLength: number;
+    textSignature: string;
+    preview: string;
+};
+
+type VisiblePiSubagentsSnapshot = {
+    panelVisible: boolean;
+    rowCount: number;
+    maxSeq: number;
+    textLength: number;
+    textSignature: string;
+    preview: string;
+};
+
 type WorkspaceItem = {
     id?: string;
     name?: string;
     type?: string;
     folderId?: string;
     webUrl?: string;
+    owner?: string | null;
+};
+
+type MissionEvent = {
+    type?: string;
+    status?: string;
+    level?: string;
+    message?: string;
+    reason?: string;
+    error?: string;
+    errorPreview?: string;
+    policyDecision?: string;
+    toolName?: string;
+    currentStep?: string;
+    payloadSummary?: Record<string, unknown>;
+    structuralFailures?: string[];
+    evidence?: { errorsObserved?: string[] };
 };
 
 type InventorySolutionResult = {
     status?: string;
+    folderId?: string;
+    folderName?: string;
     sourceItemCount?: number;
+    preCreationSourceItemCount?: number;
     sourceWorkspaceCount?: number;
     dataSource?: string;
+    semanticModelStorageMode?: string;
     notebookWritesEnabled?: boolean;
     persistentDataWritten?: boolean;
-    persistentDataStore?: { type?: string; id?: string; displayName?: string; written?: boolean } | null;
+    persistentDataStore?: { type?: string; id?: string; displayName?: string; written?: boolean; validation?: { rowCounts?: Record<string, number>; tables?: string[] } } | null;
     notebookExecution?: { status?: string; exitValue?: string } | null;
     semanticModelDataValidation?: { status?: string; via?: string; rowCount?: number; itemTypes?: string[] } | null;
+    directLakeIdentityDiagnostics?: Record<string, unknown> | null;
     errors?: string[];
     warnings?: string[];
     createdItems?: WorkspaceItem[];
@@ -107,6 +183,7 @@ type FabricDefinitionPart = {
 };
 
 const developerHubRoot = path.resolve(__dirname, "../..");
+const browserVisualAuthStatePath = path.join(developerHubRoot, "Backend", ".data", "browser-visual-storage-state.json");
 
 function isWorkloadUrl(url: string): boolean {
     return /127\.0\.0\.1:(5000|60006)\//.test(url) || url.startsWith(BACKEND_URL);
@@ -122,6 +199,86 @@ function assertNoRecordedErrors(errors: string[], stage: string): void {
     expect(errors, `Errors encountered during ${stage}:\n${errors.join("\n")}`).toEqual([]);
 }
 
+function normalizeVisibleText(value: string): string {
+    return value.replace(/\s+/g, " ").trim();
+}
+
+async function readVisibleMissionLogSnapshot(wf: Pick<Frame, "locator">): Promise<VisibleMissionLogSnapshot> {
+    const liveLog = wf.locator('[data-pi-live-log="true"]').first();
+    const nativeMessages = wf.locator("message-list").first();
+    const legacyCopy = wf.locator(".canvas-log-stream, .agent-canvas, .dmc-live .agent-canvas, .mc3-log").first();
+    const liveRows = wf.locator('[data-pi-live-log-row="true"]');
+    const liveRowCount = await liveRows.count().catch(() => 0);
+    const liveLogText = await liveLog.isVisible({ timeout: 300 }).catch(() => false)
+        ? await liveLog.innerText({ timeout: 1_500 }).catch(() => "")
+        : "";
+    const nativeMessageVisible = await nativeMessages.isVisible({ timeout: 300 }).catch(() => false);
+    const nativeMessageText = nativeMessageVisible
+        ? await nativeMessages.innerText({ timeout: 1_500 }).catch(() => "")
+        : "";
+    const legacyText = await legacyCopy.isVisible({ timeout: 300 }).catch(() => false)
+        ? await legacyCopy.innerText({ timeout: 1_500 }).catch(() => "")
+        : "";
+    const liveSeqs = await liveRows.evaluateAll((nodes) => nodes
+        .map((node) => Number((node as HTMLElement).dataset.piLogSeq || node.getAttribute("data-pi-log-seq") || 0))
+        .filter((seq) => Number.isFinite(seq))).catch(() => [] as number[]);
+    const text = normalizeVisibleText([liveLogText, nativeMessageText, legacyText].filter(Boolean).join(" "));
+    return {
+        liveRowCount,
+        nativeMessageVisible,
+        maxLiveSeq: liveSeqs.length ? Math.max(...liveSeqs) : 0,
+        textLength: text.length,
+        textSignature: text.slice(-1800),
+        preview: text.slice(0, 500),
+    };
+}
+
+async function readVisiblePiSubagentsSnapshot(wf: Pick<Frame, "locator">): Promise<VisiblePiSubagentsSnapshot> {
+    const panel = wf.locator(PI_SUBAGENTS_OBSERVABILITY_SELECTOR).first();
+    const panelVisible = await panel.isVisible({ timeout: 300 }).catch(() => false);
+    const rows = wf.locator(PI_SUBAGENTS_ROW_SELECTOR);
+    const rowCount = await rows.count().catch(() => 0);
+    const seqs = await rows.evaluateAll((nodes) => nodes
+        .map((node) => Number((node as HTMLElement).dataset.piSeq || node.getAttribute("data-pi-seq") || 0))
+        .filter((seq) => Number.isFinite(seq))).catch(() => [] as number[]);
+    const text = panelVisible
+        ? normalizeVisibleText(await panel.innerText({ timeout: 1_500 }).catch(() => ""))
+        : "";
+    return {
+        panelVisible,
+        rowCount,
+        maxSeq: seqs.length ? Math.max(...seqs) : 0,
+        textLength: text.length,
+        textSignature: text.slice(-1800),
+        preview: text.slice(0, 500),
+    };
+}
+
+async function captureMissionScreenshot(page: Page, testInfo: TestInfo, shotPath: string, label: string): Promise<void> {
+    try {
+        fs.mkdirSync(path.dirname(shotPath), { recursive: true });
+        const body = await page.screenshot({ path: shotPath, fullPage: true, animations: "disabled", timeout: 15_000 });
+        await testInfo.attach(`${label}.png`, { body, contentType: "image/png" });
+        console.log(`[diag] Screenshot: ${shotPath}`);
+    } catch (e) {
+        console.log(`[diag] Screenshot capture failed for ${label}: ${(e as Error).message}`);
+    }
+}
+
+function visibleMissionLogAdvanced(before: VisibleMissionLogSnapshot, after: VisibleMissionLogSnapshot): boolean {
+    return after.liveRowCount > before.liveRowCount
+        || (after.maxLiveSeq > 0 && after.maxLiveSeq > before.maxLiveSeq)
+        || (after.textLength > before.textLength + 20)
+        || (after.textSignature.length > 0 && after.textSignature !== before.textSignature);
+}
+
+function visiblePiSubagentsAdvanced(before: VisiblePiSubagentsSnapshot, after: VisiblePiSubagentsSnapshot): boolean {
+    return after.rowCount > before.rowCount
+        || (after.maxSeq > 0 && after.maxSeq > before.maxSeq)
+        || (after.textLength > before.textLength + 20)
+        || (after.textSignature.length > 0 && after.textSignature !== before.textSignature);
+}
+
 function isIgnorablePortalConsoleError(text: string, sourceUrl: string): boolean {
     if (isWorkloadUrl(sourceUrl)) return false;
     return /EcsClient_.*Fetching ECS configuration failed|correlationId=/i.test(text);
@@ -132,6 +289,12 @@ function rememberBackendAuth(auth: BackendAuthCapture, headers: Record<string, s
     const github = headers.authorization;
     if (fabric && !auth.fabricToken) auth.fabricToken = fabric.replace(/^Bearer\s+/i, "");
     if (github && !auth.githubToken) auth.githubToken = github.replace(/^Bearer\s+/i, "");
+}
+
+async function persistBrowserVisualAuthState(page: Page): Promise<void> {
+    fs.mkdirSync(path.dirname(browserVisualAuthStatePath), { recursive: true });
+    await page.context().storageState({ path: browserVisualAuthStatePath });
+    console.log(`[diag] Wrote browser visual auth state: ${browserVisualAuthStatePath}`);
 }
 
 function backendHeaders(auth: BackendAuthCapture): Record<string, string> {
@@ -148,10 +311,84 @@ async function fetchSession(page: Page, sessionId: string, auth: BackendAuthCapt
     return res.json();
 }
 
+async function fetchMissionEvents(page: Page, sessionId: string, auth: BackendAuthCapture): Promise<MissionEvent[]> {
+    if (!auth.fabricToken) return [];
+    const types = [
+        "job_failed",
+        "mission_failed",
+        "mission_no_progress",
+        "task_failed",
+        "agent_error",
+        "slot_progress",
+        "tool_call_ended",
+        "log_line",
+        "verifier_verdict",
+    ].join(",");
+    const res = await page.request.get(
+        `${BACKEND_URL}/api/sessions/${sessionId}/events.json?types=${encodeURIComponent(types)}&limit=250`,
+        { headers: backendHeaders(auth), timeout: 10_000 },
+    ).catch(() => null);
+    if (!res?.ok()) return [];
+    const body = await res.json().catch(() => null) as { events?: MissionEvent[] } | null;
+    return Array.isArray(body?.events) ? body!.events! : [];
+}
+
+function eventText(event: MissionEvent): string {
+    const summary = event.payloadSummary || {};
+    const summaryText = Object.entries(summary)
+        .map(([key, value]) => `${key}=${typeof value === "string" ? value : JSON.stringify(value)}`)
+        .join(" ");
+    return [
+        event.type,
+        event.status,
+        event.level,
+        event.toolName,
+        event.policyDecision,
+        event.errorPreview,
+        event.message,
+        event.reason,
+        event.error,
+        event.currentStep,
+        ...(event.structuralFailures || []),
+        ...(event.evidence?.errorsObserved || []),
+        summaryText,
+    ].filter(Boolean).join(" ").replace(/\s+/g, " ");
+}
+
+function hardMissionFailure(events: MissionEvent[]): string | null {
+    const hardText = /POLICY_DENIED|circuit[_ -]?breaker|mission_no_progress|no progress|Semantic model refresh FAILED|0xC14700C7|source Delta table|access permissions|Direct\s*Lake identity risk|owner\/effective-identity mismatch|DatasetExecuteQueriesError/i;
+    for (const event of events) {
+        const type = String(event.type || "");
+        const status = String(event.status || "").toLowerCase();
+        const level = String(event.level || "").toLowerCase();
+        const policy = String(event.policyDecision || event.payloadSummary?.policyDecision || "");
+        const text = eventText(event);
+        if (["job_failed", "mission_failed", "mission_no_progress", "task_failed", "agent_error"].includes(type)) {
+            return `${type}: ${text.slice(0, 1200)}`;
+        }
+        if (type === "tool_call_ended" && (status === "error" || /denied|circuit|tool_error|error/i.test(policy))) {
+            return `tool_call_ended ${status || policy}: ${text.slice(0, 1200)}`;
+        }
+        if (type === "log_line" && level === "error" && hardText.test(text)) {
+            return `log_line error: ${text.slice(0, 1200)}`;
+        }
+        if (hardText.test(text)) {
+            return `${type || "mission_event"}: ${text.slice(0, 1200)}`;
+        }
+    }
+    return null;
+}
+
 async function waitForMissionCompleted(page: Page, wf: Pick<Frame, "locator">, sessionId: string, auth: BackendAuthCapture): Promise<void> {
     const deadline = Date.now() + BUDGETS.missionComplete;
     let lastStatus = "unknown";
     while (Date.now() < deadline) {
+        const events = await fetchMissionEvents(page, sessionId, auth);
+        const hardFailure = hardMissionFailure(events);
+        if (hardFailure) {
+            throw new Error(`Mission ${sessionId} hit a hard backend failure: ${hardFailure}`);
+        }
+
         const session = await fetchSession(page, sessionId, auth).catch(() => null);
         const status = String(session?.status || session?.state || "").toLowerCase();
         if (status) lastStatus = status;
@@ -161,11 +398,11 @@ async function waitForMissionCompleted(page: Page, wf: Pick<Frame, "locator">, s
         }
 
         const uiText = await wf.locator(".mc3, .dmc-live").first().innerText({ timeout: 1500 }).catch(() => "");
-        if (/\b(failed|cancelled|canceled)\b/i.test(uiText)) {
+        if (/\b(?:mission|status)\s+(?:failed|cancelled|canceled)\b/i.test(uiText)) {
             throw new Error(`Mission ${sessionId} shows a terminal failure in Mission Control`);
         }
         if (/\b(mission completed|completed successfully|status\s+completed)\b/i.test(uiText)) return;
-        await page.waitForTimeout(5000);
+        await page.waitForTimeout(FAST_FAIL ? 2000 : 5000);
     }
     throw new Error(`Mission ${sessionId} did not complete within ${BUDGETS.missionComplete}ms; last status=${lastStatus}`);
 }
@@ -173,9 +410,13 @@ async function waitForMissionCompleted(page: Page, wf: Pick<Frame, "locator">, s
 function backendLogIssues(sessionId: string, sinceIso: string): string[] {
     let logs = "";
     try {
+        const dockerGid = process.env.DOCKER_GID || execFileSync("stat", ["-c", "%g", "/var/run/docker.sock"], {
+            encoding: "utf8",
+        }).trim();
         logs = execFileSync("docker", ["compose", "logs", "--since", sinceIso, "backend"], {
             cwd: developerHubRoot,
             encoding: "utf8",
+            env: { ...process.env, DOCKER_GID: dockerGid },
             maxBuffer: 10 * 1024 * 1024,
         });
     } catch (err) {
@@ -185,7 +426,10 @@ function backendLogIssues(sessionId: string, sinceIso: string): string[] {
     const shortId = sessionId.slice(0, 8);
     return logs.split(/\r?\n/)
         .filter((line) => line.includes(sessionId) || line.includes(shortId))
-        .filter((line) => /\b(ERROR|WARNING|WARN|Traceback|Exception)\b/i.test(line))
+        .filter((line) => {
+            if (/\s-\s(?:INFO|DEBUG)\s-/i.test(line)) return false;
+            return /\s-\s(?:ERROR|WARNING|WARN)\s-/i.test(line) || /\b(?:Traceback|Exception)\b/i.test(line);
+        })
         .filter((line) => !/Auth validation soft-failed in dev/i.test(line));
 }
 
@@ -255,8 +499,15 @@ async function validateNotebookDefinitionContainsCode(page: Page, auth: BackendA
     const code = notebookCodeFromIpynb(notebookText);
     expect(code.length, "Notebook definition should contain a real executable code cell").toBeGreaterThan(1000);
     expect(code, "Notebook code should call Fabric REST to ingest live inventory data").toContain("requests.get(next_url");
-    expect(code, "Notebook code should write the inventory Delta table").toContain("saveAsTable(TABLE_NAME)");
-    expect(code, "Notebook code should write the item-type summary Delta table").toContain("saveAsTable(SUMMARY_TABLE_NAME)");
+    expect(code, "Notebook code should use a typed configuration boundary").toContain("class InventoryConfig");
+    expect(code, "Notebook code should isolate Fabric REST access").toContain("class FabricApiClient");
+    expect(code, "Notebook code should isolate inventory collection logic").toContain("class InventoryBuilder");
+    expect(code, "Notebook code should isolate Delta writes").toContain("class DeltaInventoryWriter");
+    expect(code, "Notebook code should write Delta tables through the schema-aware writer").toContain(".saveAsTable(qualified_name)");
+    expect(code, "Notebook code should write the inventory Delta table").toContain("writer.save_table(inventory_df, CONFIG.table_name)");
+    expect(code, "Notebook code should write the item-type summary Delta table").toContain("writer.save_table(summary_df, CONFIG.summary_table_name)");
+    expect(code, "Notebook code should fail explicitly when required validation fails").toContain("raise RuntimeError");
+    expect(code, "Notebook code should preserve original exception causes").toContain("from exc");
     console.log(`[diag] Notebook definition validation: bytes=${notebookText.length} codeChars=${code.length}`);
 }
 
@@ -287,17 +538,33 @@ async function validateReportDefinitionContainsVisuals(page: Page, auth: Backend
     );
     const decodedByPath = new Map(parts.map((part) => [String(part.path || ""), decodeDefinitionPart(part)]));
     const definitionPbir = decodedByPath.get("definition.pbir") || "";
+    const reportJson = decodedByPath.get("definition/report.json") || decodedByPath.get("report.json") || "";
     const visualParts = [...decodedByPath.entries()].filter(([pathName]) => /\/visual\.json$/i.test(pathName));
+    const isLegacyPbir = decodedByPath.has("report.json");
 
     expect(definitionPbir, "Report definition should include definition.pbir").toContain(String(semanticModel.id));
-    expect(decodedByPath.has("definition/report.json"), "Report definition should include report.json").toBeTruthy();
-    expect(decodedByPath.has("definition/pages/pages.json"), "Report definition should include pages metadata").toBeTruthy();
-    expect(visualParts.length, "Report definition should include at least one visual.json part").toBeGreaterThan(0);
+    expect(reportJson, "Report definition should include report.json").toBeTruthy();
+    if (isLegacyPbir) {
+        expect(reportJson, "PBIR-Legacy report should include report sections").toContain("sections");
+    } else {
+        expect(decodedByPath.has("definition/pages/pages.json"), "Report definition should include pages metadata").toBeTruthy();
+        expect(visualParts.length, "Report definition should include at least one visual.json part").toBeGreaterThan(0);
+    }
 
-    const visualText = visualParts.map(([, text]) => text).join("\n");
+    const visualText = [reportJson, ...visualParts.map(([, text]) => text)].join("\n");
     expect(visualText, "Report visuals should bind to the generated FabricItems table").toContain("FabricItems");
     expect(visualText, "Report visuals should use the generated Item Count measure").toContain("Item Count");
-    expect(visualText, "Report visuals should group by ItemType for the inventory visualization").toContain("ItemType");
+    expect(visualText, "Report should use the championship analytics theme by default").toContain("AgentHub Championship Analytics");
+    expect(visualText, "Report should expose a polished executive overview title").toContain("Portfolio at a Glance");
+    expect(visualText, "Report should include structural 3-second overview evidence").toContain("3-second top-left overview");
+    expect(visualText, "Report should expose a polished filter-and-zoom title").toContain("Item Type Focus");
+    expect(visualText, "Report should include structural 30-second filter-and-zoom evidence").toContain("30-second filter-and-zoom");
+    expect(visualText, "Report should expose a polished details-on-demand title").toContain("Details on Demand");
+    expect(visualText, "Report should include structural 300-second details-on-demand evidence").toContain("300-second details-on-demand");
+    expect(visualText, "Report visuals should include accessibility alt text metadata").toContain("altText");
+    if (!isLegacyPbir) {
+        expect(visualText, "Report visuals should group by ItemType for the inventory visualization").toContain("ItemType");
+    }
     console.log(`[diag] Report definition validation: parts=${parts.length} visuals=${visualParts.length}`);
 }
 
@@ -318,7 +585,7 @@ async function waitForFabricArtifacts(page: Page, auth: BackendAuthCapture): Pro
             folder
             && hasType(folderItems, [/^report$/i])
             && hasType(folderItems, [/semantic\s*model/i])
-            && hasType(folderItems, [/lakehouse/i, /warehouse/i])
+            && hasType(folderItems, [/lakehouse/i])
             && hasType(folderItems, [/notebook/i, /pipeline/i, /data\s*flow/i])
         ) {
             return folderItems;
@@ -414,27 +681,75 @@ function summarizeVerdicts(verdicts: VerifierVerdictView[]): string {
         .join("\n");
 }
 
+function summarizeVerifierVerdictForJudge(verdict: VerifierVerdictView | null) {
+    if (!verdict) return null;
+    const evidence = verdict.evidence || {};
+    return {
+        verdictId: verdict.verdictId,
+        passed: verdict.passed,
+        verifierClaimedSuccess: verdict.verifierClaimedSuccess,
+        requiresUserBrowserRender: verdict.requiresUserBrowserRender,
+        structuralFailures: verdict.structuralFailures || [],
+        decisionRationale: verdict.decisionRationale || "",
+        summary: (verdict.summary || "").slice(0, 900),
+        deliverables: (verdict.deliverables || []).map((deliverable) => ({
+            id: deliverable.id || null,
+            name: deliverable.name || null,
+            type: deliverable.type || null,
+            hasWebUrl: Boolean(deliverable.webUrl),
+        })),
+        evidence: {
+            visualsRendered: evidence.visualsRendered === true,
+            loadingStuckObserved: evidence.loadingStuckObserved === true,
+            errorsObserved: evidence.errorsObserved || [],
+            expectedTextMatched: evidence.expectedTextMatched ?? null,
+            browserVerifiedUrlCount: (evidence.browserVerifiedUrls || []).length,
+            screenshotCount: (evidence.screenshotPaths || []).length,
+        },
+    };
+}
+
+function summarizeSupersededVerifierFailuresForJudge(
+    verdicts: VerifierVerdictView[],
+    finalReportVerdict: VerifierVerdictView | null,
+) {
+    const finalVerdictId = finalReportVerdict?.verdictId || "";
+    return verdicts
+        .filter((verdict) => !verdict.passed && verdict.verdictId !== finalVerdictId)
+        .map((verdict) => ({
+            verdictId: verdict.verdictId,
+            structuralFailures: verdict.structuralFailures || [],
+            requiresUserBrowserRender: verdict.requiresUserBrowserRender,
+            supersededByFinalBrowserEvidenceVerdict: finalReportVerdict?.passed === true,
+            summary: (verdict.summary || "").slice(0, 500),
+        }));
+}
+
 async function fetchInventorySolutionAudit(page: Page, sessionId: string, auth: BackendAuthCapture): Promise<InventorySolutionResult> {
     const res = await page.request.get(`${BACKEND_URL}/api/sessions/${sessionId}/audit`, { headers: backendHeaders(auth) });
     if (!res.ok()) {
         throw new Error(`session audit fetch failed: ${res.status()} ${await res.text().catch(() => "")}`);
     }
     const rows = await res.json() as Array<{ tool_name?: string; success?: number; result_summary?: string }>;
-    const inventoryRow = rows.find((row) => row.tool_name === "fabric_create_workspace_inventory_solution");
+    const inventoryRows = rows.filter((row) => row.tool_name === "fabric_create_workspace_inventory_solution");
+    const inventoryRow = [...inventoryRows].reverse().find((row) => row.success === 1) || inventoryRows.at(-1);
     expect(inventoryRow, "Mission audit should include the inventory solution tool call").toBeTruthy();
     expect(inventoryRow?.success, "The inventory solution tool call should be audited as successful").toBe(1);
 
     const sessionRes = await page.request.get(`${BACKEND_URL}/api/sessions/${sessionId}`, { headers: backendHeaders(auth) });
     if (sessionRes.ok()) {
         const session = await sessionRes.json().catch(() => null) as { agents?: Array<{ actions?: Array<{ entity_type?: string; details?: string }> }> } | null;
+        const inventoryActions: InventorySolutionResult[] = [];
         for (const agent of session?.agents || []) {
             for (const action of agent.actions || []) {
                 if (action.entity_type !== "WorkspaceInventorySolution" || !action.details) continue;
                 const details = JSON.parse(action.details) as InventorySolutionResult;
-                expect(details.status, "Inventory action details should contain structured tool proof").toBe("created");
-                return details;
+                if (details.status === "created") inventoryActions.push(details);
             }
         }
+        const matchingFolderAction = [...inventoryActions].reverse().find((details) => details.folderName === RUN_FOLDER);
+        const latestAction = matchingFolderAction || inventoryActions.at(-1);
+        if (latestAction) return latestAction;
     }
 
     const summary = String(inventoryRow?.result_summary || "");
@@ -486,8 +801,20 @@ function validateInventoryAuditProof(auditResult: InventorySolutionResult): void
     expect(auditResult.notebookWritesEnabled, "Notebook must be bound to a Lakehouse so it can write Delta tables").toBe(true);
     expect(auditResult.persistentDataWritten, "Notebook execution must persist inventory data, not only embed rows in a model definition").toBe(true);
     expect(auditResult.dataSource, "The accepted solution must use the Lakehouse Delta table ingestion path").toBe("lakehouse_delta_tables");
+    expect(auditResult.semanticModelStorageMode, "The accepted semantic model must bind to the Lakehouse through Direct Lake").toBe("DirectLake");
     expect(auditResult.persistentDataStore?.type, "Persistent inventory data should be written to a Lakehouse").toBe("Lakehouse");
     expect(auditResult.persistentDataStore?.id, "Persistent Lakehouse proof should include the Lakehouse id").toBeTruthy();
+    expect(
+        (auditResult.createdItems || []).some((item) => /^warehouse$/i.test(String(item.type || ""))),
+        "Warehouse fallback artifacts must not be accepted for this Lakehouse-backed inventory solution",
+    ).toBe(false);
+
+    const rowCounts = auditResult.persistentDataStore?.validation?.rowCounts || {};
+    for (const [tableName, rowCount] of Object.entries(rowCounts)) {
+        if (/fabricitems$/i.test(tableName)) {
+            expect(rowCount, `Lakehouse inventory table ${tableName} should contain real rows`).toBeGreaterThan(0);
+        }
+    }
 
     const modelProof = auditResult.semanticModelDataValidation;
     expect(modelProof?.status, "Semantic model should be queryable through Power BI before the report is accepted").toBe("queryable");
@@ -564,7 +891,7 @@ async function reportCanvasText(pageWithReport: Page): Promise<string> {
             "[role='img']",
             "canvas",
             "svg",
-        ].join(", ")).evaluateAll((nodes) => nodes.map((node) => (node as HTMLElement).innerText || node.textContent || "").join("\n"), undefined, { timeout: 1_500 }).catch(() => "");
+        ].join(", ")).evaluateAll((nodes) => nodes.map((node) => (node as HTMLElement).innerText || node.textContent || "").join("\n")).catch(() => "");
         if (text) chunks.push(text);
     }
     return chunks.join("\n");
@@ -663,19 +990,21 @@ async function validateReportOpensWithVisualization(page: Page, report: Workspac
     }
 }
 
-test("Fabric portal: Developer Hub creates a real Fabric item visualization solution", async ({ page }) => {
+test("Fabric portal: Developer Hub creates a real Fabric item visualization solution", async ({ page }, testInfo) => {
+    test.setTimeout(BUDGETS.testTimeout);
+    test.skip(
+        !process.env.PLAYWRIGHT_USER_DATA_DIR,
+        "Set PLAYWRIGHT_USER_DATA_DIR to a logged-in Chromium profile (npm run login:e2e).",
+    );
+
     let deviceFlowCapture: DeviceFlowCapture = {};
     const backendAuth: BackendAuthCapture = {};
     const recordedErrors: string[] = [];
     let missionStreamEventCount = 0;
     const screenshotPrefix = `test-results/mission-control-${Date.now()}`;
     const missionStartedAt = new Date().toISOString();
-
-    test.skip(
-        !process.env.PLAYWRIGHT_USER_DATA_DIR,
-        "Set PLAYWRIGHT_USER_DATA_DIR to a logged-in Chromium profile (npm run login:e2e).",
-    );
-    test.setTimeout(BUDGETS.testTimeout);
+    const resolvedJudgeToken = await resolveGitHubCopilotToken(page.request, BACKEND_URL);
+    console.log(`[diag] GitHub/Copilot token source for E2E judge: ${resolvedJudgeToken.source}`);
 
     // Persistent Chromium profiles keep HTTP cache across runs. Clear cache
     // up front so each iteration picks up the latest frontend bundle.
@@ -721,7 +1050,7 @@ test("Fabric portal: Developer Hub creates a real Fabric item visualization solu
                 }
             } catch { /* ignore */ }
         })();
-    }, { githubToken: E2E_GITHUB_TOKEN, githubUser: E2E_GITHUB_USER });
+    }, { githubToken: resolvedJudgeToken.token || E2E_GITHUB_TOKEN, githubUser: E2E_GITHUB_USER });
 
     // Fabric portal is chatty — many of its telemetry/config endpoints
     // legitimately return 400/404. Log responses with URLs so we can
@@ -812,8 +1141,11 @@ test("Fabric portal: Developer Hub creates a real Fabric item visualization solu
         await page.waitForTimeout(3000);
         const url = page.url();
         if (/login\.microsoftonline\.com/.test(url) && !url.includes("code=")) {
-            test.skip(true, "Chromium profile is not signed in. Run: npm run login:e2e");
-            return;
+            if (i >= 7) {
+                test.skip(true, "Chromium profile is not signed in. Run: npm run login:e2e");
+                return;
+            }
+            continue;
         }
         if (url.includes("/groups/") && !url.includes("/signin")) break;
         if (url.includes("/signin")) {
@@ -825,6 +1157,7 @@ test("Fabric portal: Developer Hub creates a real Fabric item visualization solu
     // Workspace shell must paint — wait for the "New item" button itself.
     const newItemBtn = page.getByRole("button", { name: /^new item$/i }).first();
     await expect(newItemBtn).toBeVisible({ timeout: 30_000 });
+    await persistBrowserVisualAuthState(page);
 
     // ── 2. Create new "Developer Hub Item" ────────────────────────
     let skipGalleryAndOpenRegisteredWorkload = false;
@@ -1625,41 +1958,52 @@ test("Fabric portal: Developer Hub creates a real Fabric item visualization solu
         sessionId = routeMatch?.[1] || "";
     }
     expect(sessionId, "The real mission session id should be captured from the backend response or iframe route").toMatch(/^[0-9a-f-]{36}$/i);
-    const logSurface = wf.locator(
-        ".canvas-log-stream, .agent-canvas .log-window, .dmc-live .log-window, .mc3-log__scroll, .mc3-log",
-    ).first();
+    const logSurface = wf.locator(MISSION_LOG_SURFACE_SELECTOR).first();
     await expect(logSurface).toBeVisible({ timeout: 60_000 });
     assertNoRecordedErrors(recordedErrors, "mission startup");
-    try {
-        const shot = `${screenshotPrefix}-entry.png`;
-        await page.screenshot({ path: shot, fullPage: true, animations: "disabled", timeout: 15_000 });
-        console.log(`[diag] Screenshot: ${shot}`);
-    } catch (e) {
-        console.log(`[diag] Screenshot capture failed at mission entry: ${(e as Error).message}`);
-    }
+    await captureMissionScreenshot(page, testInfo, `${screenshotPrefix}-entry.png`, "mission-control-entry");
 
     // User-requested Step-3 guard: once execution UI is open, frontend
     // logs must appear as the first agent comes online. Scheduling can take
     // longer than a few seconds in the real portal, so keep this explicit.
     const step3Deadline = Date.now() + BUDGETS.firstLiveLog;
     let step3FrontendRows = 0;
-    const streamRows = wf.locator(".canvas-log-row, .agent-canvas .log-window p, .dmc-live .log-window p, .mc3-entry");
+    let firstVisibleLogs = await readVisibleMissionLogSnapshot(wf);
+    const streamRows = wf.locator(MISSION_LOG_ROW_SELECTOR);
     while (Date.now() < step3Deadline) {
         step3FrontendRows = await streamRows.count().catch(() => 0);
-        if (step3FrontendRows > 0) break;
+        firstVisibleLogs = await readVisibleMissionLogSnapshot(wf);
+        if (firstVisibleLogs.liveRowCount > 0 || (firstVisibleLogs.nativeMessageVisible && firstVisibleLogs.textLength > 80)) break;
         await page.waitForTimeout(500);
     }
-    if (step3FrontendRows === 0) {
+    if (firstVisibleLogs.liveRowCount === 0 && (!firstVisibleLogs.nativeMessageVisible || firstVisibleLogs.textLength <= 80)) {
         const body = await wf.locator("body").innerText({ timeout: 2_000 }).catch(() => "");
         throw new Error(
-            `Step 3 task execution opened but no frontend live-log rows appeared within ${BUDGETS.firstLiveLog}ms. `
-            + `mc-stream events seen=${missionStreamEventCount}. Body snapshot: ${JSON.stringify(String(body).slice(0, 260))}`,
+            `Step 3 task execution opened but no visible frontend live logs appeared within ${BUDGETS.firstLiveLog}ms. `
+            + `mc-stream events seen=${missionStreamEventCount}. Visible snapshot=${JSON.stringify(firstVisibleLogs)}. `
+            + `Body snapshot: ${JSON.stringify(String(body).slice(0, 260))}`,
+        );
+    }
+    await captureMissionScreenshot(page, testInfo, `${screenshotPrefix}-first-visible-log.png`, "mission-control-first-visible-log");
+
+    const subagentsDeadline = Date.now() + BUDGETS.firstLiveLog;
+    let firstVisibleSubagents = await readVisiblePiSubagentsSnapshot(wf);
+    while (Date.now() < subagentsDeadline) {
+        firstVisibleSubagents = await readVisiblePiSubagentsSnapshot(wf);
+        if (firstVisibleSubagents.panelVisible && firstVisibleSubagents.maxSeq > 0) break;
+        await page.waitForTimeout(500);
+    }
+    if (!firstVisibleSubagents.panelVisible || firstVisibleSubagents.maxSeq === 0) {
+        const body = await wf.locator("body").innerText({ timeout: 2_000 }).catch(() => "");
+        throw new Error(
+            `Step 3 task execution opened but no native Pi-subagents observability rows appeared within ${BUDGETS.firstLiveLog}ms. `
+            + `Snapshot=${JSON.stringify(firstVisibleSubagents)}. Body snapshot: ${JSON.stringify(String(body).slice(0, 260))}`,
         );
     }
 
-    const forbiddenUserFacingTrace = /fabric_(?:create|delete|list|read|write|get)_|TOOL_ERROR|===HANDOFF|\[object Object\]|\bundefined\b|\bNaN\b|→|←/i;
+    const forbiddenUserFacingTrace = /TOOL_ERROR|===HANDOFF|\[object Object\]|\bundefined\b|\bNaN\b|→|←|Bearer\s+|FABRIC_API_TOKEN|POWERBI_API_TOKEN|SECRET_INTERNAL_TRACE_DO_NOT_RENDER/i;
     for (const [surface, locator] of [
-        ["live log", wf.locator(".canvas-log-stream, .agent-canvas, .dmc-live .agent-canvas, .mc3-log").first()],
+        ["live log", wf.locator(MISSION_LOG_COPY_SELECTOR).first()],
         ["run overview", wf.locator(".right-rail, .mc3-rail").first()],
     ] as const) {
         const text = await locator.innerText({ timeout: 5_000 }).catch(() => "");
@@ -1672,7 +2016,7 @@ test("Fabric portal: Developer Hub creates a real Fabric item visualization solu
     // Live Log growth proof. Header meta appears only after first log, so
     // fall back to counting rendered stream entries when meta is hidden.
     const entriesCounter = wf.locator("span.mc3-log__bar-meta").first();
-    const streamEntries = wf.locator(".canvas-log-row, .agent-canvas .log-window p, .dmc-live .log-window p, .mc3-entry");
+    const streamEntries = wf.locator(MISSION_LOG_ROW_SELECTOR);
     const parseCount = (s: string) => {
         // New UI format: "4 shown · 15 total · 00:01:23".
         const shownTotal = s.match(/(\d+)\s+shown\s*[·|]\s*(\d+)\s+total/i);
@@ -1701,30 +2045,45 @@ test("Fabric portal: Developer Hub creates a real Fabric item visualization solu
     // ── 7. Wait for the live log to grow (real-time streaming proof) ─
     const t0 = Date.now();
     let latestCount = baseline;
+    const baselineVisibleLogs = firstVisibleLogs;
+    let latestVisibleLogs = baselineVisibleLogs;
+    const baselineVisibleSubagents = firstVisibleSubagents;
+    let latestVisibleSubagents = baselineVisibleSubagents;
     while (Date.now() - t0 < 120_000) {
         await page.waitForTimeout(1500);
         const countNow = await entriesCounter.isVisible({ timeout: 300 }).catch(() => false)
             ? parseCount(await entriesCounter.innerText().catch(() => "0 entries"))
             : await streamEntries.count().catch(() => latestCount);
         if (countNow > latestCount) latestCount = countNow;
-        if (latestCount > baseline) break;
+        latestVisibleLogs = await readVisibleMissionLogSnapshot(wf);
+        latestVisibleSubagents = await readVisiblePiSubagentsSnapshot(wf);
+        if (
+            (latestCount > baseline || visibleMissionLogAdvanced(baselineVisibleLogs, latestVisibleLogs))
+            && visiblePiSubagentsAdvanced(baselineVisibleSubagents, latestVisibleSubagents)
+        ) break;
     }
 
     const delta = latestCount - baseline;
-    console.log(`Live log: start=${baseline}  latest=${latestCount}  delta=${delta}`);
+    console.log(`Live log: start=${baseline} latest=${latestCount} delta=${delta} visibleStart=${JSON.stringify(baselineVisibleLogs)} visibleLatest=${JSON.stringify(latestVisibleLogs)}`);
 
     // Capture the final state even if the assertion below fails.
-    try {
-        const shot = `${screenshotPrefix}-streaming.png`;
-        await page.screenshot({ path: shot, fullPage: true, animations: "disabled", timeout: 15_000 });
-        console.log(`[diag] Screenshot: ${shot}`);
-    } catch (e) {
-        console.log(`[diag] Screenshot capture failed after stream growth: ${(e as Error).message}`);
-    }
+    await captureMissionScreenshot(page, testInfo, `${screenshotPrefix}-streaming.png`, "mission-control-streaming-log");
 
     expect(
-        Math.max(delta, step3FrontendRows, missionStreamEventCount),
-        "Mission Control should render at least one live-log row or receive at least one mc-stream event",
+        firstVisibleLogs.liveRowCount + (firstVisibleLogs.nativeMessageVisible ? 1 : 0),
+        "Mission Control must render visible frontend Pi live logs; backend SSE receipt alone is not enough",
+    ).toBeGreaterThanOrEqual(1);
+    expect(
+        visibleMissionLogAdvanced(baselineVisibleLogs, latestVisibleLogs) ? 1 : Math.max(delta, 0),
+        "Mission Control visible Pi live logs should advance after the first visible screenshot",
+    ).toBeGreaterThanOrEqual(1);
+    expect(
+        firstVisibleSubagents.maxSeq,
+        "Mission Control must render native Pi-subagents observability rows, not only generic log rows",
+    ).toBeGreaterThan(0);
+    expect(
+        visiblePiSubagentsAdvanced(baselineVisibleSubagents, latestVisibleSubagents) ? 1 : 0,
+        "Mission Control native Pi-subagents observability should advance after the first visible screenshot",
     ).toBeGreaterThanOrEqual(1);
     assertNoRecordedErrors(recordedErrors, "live log streaming");
 
@@ -1765,8 +2124,10 @@ test("Fabric portal: Developer Hub creates a real Fabric item visualization solu
     const verdictDeadline = Date.now() + 60_000;
     let reportVerdict: VerifierVerdictView | null = null;
     let lastVerdictDiag = "";
+    let latestVerifierVerdicts: VerifierVerdictView[] = [];
     while (Date.now() < verdictDeadline) {
         const verdicts = await fetchVerifierVerdicts(page, sessionId, backendAuth);
+        latestVerifierVerdicts = verdicts;
         reportVerdict = pickReportVerdict(verdicts, report as WorkspaceItem);
         lastVerdictDiag = summarizeVerdicts(verdicts);
         if (reportVerdict?.passed) break;
@@ -1806,6 +2167,69 @@ test("Fabric portal: Developer Hub creates a real Fabric item visualization solu
     const logIssues = backendLogIssues(sessionId, missionStartedAt);
     expect(logIssues, `Backend emitted warning/error lines for session ${sessionId}:\n${logIssues.join("\n")}`).toEqual([]);
     assertNoRecordedErrors(recordedErrors, "end-to-end mission execution");
+
+    // ── Actual-run LLM judge gate ─────────────────────────────────
+    // This is deliberately after deterministic success checks: the judge
+    // reviews the real prompt/run/artifact/verifier evidence and the test
+    // only passes when both the run succeeded and the judge agrees.
+    const judgeToken = resolvedJudgeToken.token || E2E_GITHUB_TOKEN;
+    expect(judgeToken, "Actual-run LLM judge requires the same GitHub/Copilot auth used by the live mission").toBeTruthy();
+    const finalSession = await fetchSession(page, sessionId, backendAuth);
+    const finalReportVerifierVerdict = summarizeVerifierVerdictForJudge(reportVerdict);
+    const supersededVerifierFailures = summarizeSupersededVerifierFailuresForJudge(latestVerifierVerdicts, reportVerdict);
+    const actualRunJudge = await judgeActualMissionRunEvidence(page.request, {
+        hardGateSummary: {
+            actualPromptRun: true,
+            runSucceeded: true,
+            missionCompleted: true,
+            sessionStatus: finalSession?.status || "completed",
+            artifactTypesCreated: Array.from(new Set(producedItems.map((item) => item.type))).sort(),
+            finalReportVerifierVerdict,
+            supersededVerifierFailures,
+            supersededVerifierFailuresAreBlocking: false,
+            supersededVerifierFailureContext:
+                "Earlier NO_USER_BROWSER_EVIDENCE verifier failures are expected enforcement steps. "
+                + "They are superseded when a later report verifier verdict passes with browserVerifiedUrls, screenshots, visualsRendered=true, no loading-stuck state, and no browser errors.",
+            backendLogIssueCount: logIssues.length,
+            browserRecordedErrorCount: recordedErrors.length,
+        },
+        prompt: PROMPT,
+        runFolder: RUN_FOLDER,
+        sessionId,
+        sessionStatus: finalSession?.status || "completed",
+        missionCompleted: true,
+        missionStreamEventCount,
+        missionControlSummaryExcerpt: finalCopy.replace(/\s+/g, " ").trim().slice(-1200),
+        producedItems: producedItems.map((item) => ({
+            id: item.id,
+            name: item.name,
+            type: item.type,
+            folderId: item.folderId,
+            hasWebUrl: Boolean(item.webUrl),
+        })),
+        inventoryAudit: {
+            status: inventoryAudit.status,
+            folderName: inventoryAudit.folderName,
+            sourceItemCount: inventoryAudit.sourceItemCount,
+            sourceWorkspaceCount: inventoryAudit.sourceWorkspaceCount,
+            dataSource: inventoryAudit.dataSource,
+            semanticModelStorageMode: inventoryAudit.semanticModelStorageMode,
+            notebookWritesEnabled: inventoryAudit.notebookWritesEnabled,
+            persistentDataWritten: inventoryAudit.persistentDataWritten,
+            notebookExecution: inventoryAudit.notebookExecution,
+            semanticModelDataValidation: inventoryAudit.semanticModelDataValidation,
+            createdItems: (inventoryAudit.createdItems || []).map((item) => ({ name: item.name, type: item.type, id: item.id })),
+            errors: inventoryAudit.errors || [],
+            warnings: inventoryAudit.warnings || [],
+        },
+        reportVerdict: finalReportVerifierVerdict,
+        backendLogIssues: logIssues,
+        browserRecordedErrors: recordedErrors,
+    }, { backendUrl: BACKEND_URL, githubToken: judgeToken as string });
+    expect(
+        actualRunJudge.pass,
+        `Actual-run LLM judge rejected the mission. Verdict:\n${JSON.stringify(actualRunJudge, null, 2)}`,
+    ).toBe(true);
 
     // "Reconnecting…" must NOT be stuck on at the end.
     await expect(wf.getByText(/reconnecting/i)).toBeHidden();

@@ -18,7 +18,7 @@ interface ItemContextValue {
     workspaceObjectId: string | null;
     settings: AgentHubSettings | null;
     itemLoading: boolean;
-    createItem: (name: string, description?: string) => Promise<string>;
+    createItem: (name: string, description?: string, workspaceObjectIdOverride?: string) => Promise<string>;
     saveSettings: (settings: AgentHubSettings) => Promise<void>;
     loadItem: (objectId: string) => Promise<void>;
 }
@@ -39,6 +39,7 @@ export function useItemContext() {
 
 const ITEM_TYPE = (process.env.WORKLOAD_NAME || "Org.AgentHub") + ".AgentHubItem";
 const STORAGE_KEY_ITEM_ID = "agenthub_item_id";
+const STORAGE_KEY_WORKSPACE_ID = "agenthub_workspace_id";
 
 interface ItemProviderProps {
     workloadClient: WorkloadClientAPI;
@@ -50,6 +51,13 @@ interface ItemProviderProps {
 export function ItemProvider({ workloadClient, workspaceObjectId, routeItemObjectId, children }: ItemProviderProps) {
     const [itemObjectId, setItemObjectId] = useState<string | null>(
         routeItemObjectId || sessionStorage.getItem(STORAGE_KEY_ITEM_ID)
+    );
+    // v1.11: track effective workspace id. Prop value (from ?ws= URL
+    // param) is null when AgentHub is launched from the generic
+    // launcher; in that case we remember the workspace the user picked
+    // in the Save dialog so the Close button can navigate back to it.
+    const [effectiveWorkspaceId, setEffectiveWorkspaceId] = useState<string | null>(
+        workspaceObjectId || sessionStorage.getItem(STORAGE_KEY_WORKSPACE_ID)
     );
     const [settings, setSettings] = useState<AgentHubSettings | null>(null);
     const [itemLoading, setItemLoading] = useState(false);
@@ -69,6 +77,13 @@ export function ItemProvider({ workloadClient, workspaceObjectId, routeItemObjec
             }
             setItemObjectId(objectId);
             sessionStorage.setItem(STORAGE_KEY_ITEM_ID, objectId);
+            // v1.11: persist the item's workspace id so the Close
+            // button can navigate back to it even when the iframe
+            // wasn't bootstrapped with ?ws=.
+            if (item.workspaceId) {
+                setEffectiveWorkspaceId(item.workspaceId);
+                sessionStorage.setItem(STORAGE_KEY_WORKSPACE_ID, item.workspaceId);
+            }
         } catch (err) {
             console.error("Failed to load item:", err);
         } finally {
@@ -83,8 +98,13 @@ export function ItemProvider({ workloadClient, workspaceObjectId, routeItemObjec
         }
     }, [itemObjectId]);
 
-    const createItem = useCallback(async (name: string, description?: string): Promise<string> => {
-        if (!workspaceObjectId) {
+    const createItem = useCallback(async (name: string, description?: string, workspaceObjectIdOverride?: string): Promise<string> => {
+        // v0.36: when AgentHub is opened from the generic launcher (no
+        // ?ws= URL param), the URL-derived ``workspaceObjectId`` is
+        // null. The Save dialog then asks the user to pick a workspace
+        // and passes it through here as ``workspaceObjectIdOverride``.
+        const targetWorkspaceId = workspaceObjectIdOverride || workspaceObjectId;
+        if (!targetWorkspaceId) {
             throw new Error("No workspace context — cannot create item.");
         }
         const defaultPayload: AgentHubPayload = {
@@ -96,7 +116,7 @@ export function ItemProvider({ workloadClient, workspaceObjectId, routeItemObjec
             },
         };
         const created = await callItemCreate(
-            workspaceObjectId,
+            targetWorkspaceId,
             ITEM_TYPE,
             name,
             description || "",
@@ -106,6 +126,8 @@ export function ItemProvider({ workloadClient, workspaceObjectId, routeItemObjec
         const newId = created.id;
         setItemObjectId(newId);
         sessionStorage.setItem(STORAGE_KEY_ITEM_ID, newId);
+        setEffectiveWorkspaceId(targetWorkspaceId);
+        sessionStorage.setItem(STORAGE_KEY_WORKSPACE_ID, targetWorkspaceId);
         setSettings(defaultPayload["agenthub-metadata"]);
         return newId;
     }, [workspaceObjectId, workloadClient]);
@@ -134,7 +156,7 @@ export function ItemProvider({ workloadClient, workspaceObjectId, routeItemObjec
     return (
         <ItemContext.Provider value={{
             itemObjectId,
-            workspaceObjectId,
+            workspaceObjectId: effectiveWorkspaceId,
             settings,
             itemLoading,
             createItem,

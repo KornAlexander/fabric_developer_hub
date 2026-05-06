@@ -23,6 +23,10 @@ def test_register_all_loads_declared_policies() -> None:
         assert get_policy("fabric_verify_report_renderable").auto_allowed is True
         assert get_policy("fabric_verify_workspace_inventory_solution").sensitivity is ToolSensitivity.READ_SENSITIVE
         assert get_policy("fabric_verify_workspace_inventory_solution").auto_allowed is True
+        assert get_policy("fabric_get_semantic_model_refresh_history").sensitivity is ToolSensitivity.READ_SENSITIVE
+        assert get_policy("fabric_get_semantic_model_refresh_history").auto_allowed is True
+        assert get_policy("fabric_diagnose_workspace_artifacts").sensitivity is ToolSensitivity.READ_SENSITIVE
+        assert get_policy("fabric_diagnose_workspace_artifacts").auto_allowed is True
         assert get_policy("browser_verify_visual_render").sensitivity is ToolSensitivity.READ_SENSITIVE
         assert get_policy("browser_verify_visual_render").auto_allowed is True
         assert get_policy("fabric_definition_checkout").sensitivity is ToolSensitivity.READ_SENSITIVE

@@ -64,9 +64,9 @@ POST /api/sessions (user prompt + attachments)
 ┌───────────────────────────────┐    one per slot
 │ ContainerSlotRunner.run_slot  │    drivers/container_runner.py
 │   ├─ ContainerPool.acquire()  │    semaphore, default max 8
-│   ├─ DockerBackend.create()   │    agenthub-agent:latest image
-│   ├─ DockerBackend.start()    │
-│   └─ DockerBackend.wait()     │    15-min hard timeout
+│   ├─ DockerBackend.acquire    │    instant warm sandbox checkout
+│   │  _warm_container()        │    falls back to cold create/start
+│   └─ DockerBackend.wait/exec  │    15-min hard timeout
 └───────────────┬───────────────┘
                 │ HTTP callbacks (tool schemas + tool calls)
                 ▼
@@ -92,6 +92,7 @@ POST /api/sessions (user prompt + attachments)
 |---|---|
 | The agent lineup is decided **once, upfront**, in a single LLM call — not spawned dynamically mid-mission. | [compose_service.py](./compose_service.py) produces an immutable `Composition`; `orchestrator_engine.py` docstring: *"no plan artifact, no pre-materialised step list, no prerequisite verification"*. |
 | Each slot runs in **its own ephemeral Docker container**. | [drivers/container_runner.py](./drivers/container_runner.py) + [drivers/container_backend.py](./drivers/container_backend.py). Image built from [Dockerfile.agent](../../../Dockerfile.agent). |
+| Agent startup is warmed ahead of time. | [drivers/container_backend.py](./drivers/container_backend.py) keeps `AGENT_CONTAINER_WARM_POOL_SIZE` single-use idle sandboxes ready; slots run the existing agent entrypoint through `docker exec`, then the sandbox is removed and replenished. |
 | Agents have **no tool runtime inside** the container — they proxy every tool call back to the orchestrator over HTTP. | [agent/__main__.py](./agent/__main__.py) `_proxy_tool_call` → `orchestrator_endpoint`/`api/internal/tools/...`. |
 | Topologies are **fixed shapes** chosen by the composer, not emergent. | [drivers/__init__.py](./drivers/__init__.py) registers `solo`, `sequential`, `supervisor`, `hierarchical`, `reflection`, `mixed`. |
 | Concurrency is bounded by a semaphore (default 8). | [drivers/container_pool.py](./drivers/container_pool.py). |
@@ -117,7 +118,7 @@ POST /api/sessions (user prompt + attachments)
 | No mid-flight replan / dynamic agent spawning. If the composer gets it wrong, the mission can't recover without a new session. | Brittle on ambiguous prompts. |
 | Six custom drivers (~2000 LOC combined) reinvent patterns that open-source frameworks ship built-in. | Maintenance cost; slow to add new topologies (e.g. group-chat, debate-with-judge, magentic). |
 | Handoff extraction is regex-based on free-text LLM output. | Fragile; silent data loss when the LLM phrases its handoff differently. |
-| Container spawn cost (~1–3 s per slot) is amortised poorly for small slots. | Latency tax on short missions; `ContainerPool` helps but doesn't eliminate it. |
+| Warm pool exhaustion still falls back to a cold Docker start. | Bursts above `AGENT_CONTAINER_WARM_POOL_SIZE` can pay the cold-start tax; tune warm size to expected parallel slot count. |
 | Agent loop talks only to GitHub Copilot (`api.githubcopilot.com`). No model abstraction. | Hard to A/B models, hard to plug Azure OpenAI or Foundry endpoints. |
 | Event protocol + replay buffer + SSE is hand-rolled. | Works, but re-implements what workflow engines give for free. |
 
@@ -295,7 +296,7 @@ same pass as §3.1 rather than a second milestone:
 
 | Risk | Mitigation |
 |---|---|
-| MAF's per-node execution assumes cheap in-process calls; our container-per-slot adds 1–3 s of latency. | Reuse `ContainerPool`; consider warm-pool of pre-started agent containers for common slot profiles. |
+| MAF's per-node execution assumes cheap in-process calls; our container-per-slot can be slower during bursts. | ✅ Warm pool implemented: pre-started single-use Docker sandboxes make normal slot checkout near-instant; `ContainerPool` still caps concurrency. |
 | MAF event vocabulary doesn't match our existing SSE event types 1:1. | Adapter layer in [event_adapter.py](./drivers/maf/event_adapter.py) maps MAF events → our types. Frontend stays unchanged. |
 | MAF is still evolving; API surface may change. | Pin a version floor (`agent-framework>=0.1`); MAF imports are isolated behind [drivers/maf/workflow_builder.py](./drivers/maf/workflow_builder.py) so a future swap is a single-file change. |
 | Regression in topology behaviour vs. the hand-rolled drivers. | The legacy drivers have been deleted; any regression is fixed forward in the MAF builders. MAF event tests + the 769-test unit suite gate every change. |

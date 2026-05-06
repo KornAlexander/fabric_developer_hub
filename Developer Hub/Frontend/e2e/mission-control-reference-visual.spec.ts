@@ -8,67 +8,61 @@ const SCREENSHOT_DIR = path.resolve(__dirname, "../../docs/screenshots/mission-c
 test.use({ viewport: { width: 2048, height: 1200 } });
 
 test.describe("Mission Control reference visual", () => {
-    test("matches the dynamic mission canvas and change-ledger style", async ({ page }, testInfo) => {
+    test("matches the full-bleed mission execution reference style", async ({ page }, testInfo) => {
         await seedAuth(page);
         await mockMissionApis(page);
         await page.goto(`/agent-hub/session/${SESSION_ID}?agenthubE2E=1`, { waitUntil: "domcontentloaded" });
         await disableAnimations(page);
 
         await expect(page.locator(".mc3")).toBeVisible({ timeout: 30_000 });
-        await expect(page.getByRole("region", { name: "Agent mission canvas" })).toBeVisible();
-        await expect(page.locator(".agent-node").first()).toBeVisible();
-        await expect(page.locator(".change-ledger")).toBeVisible();
-        await expect(page.locator(".ledger-section", { hasText: /updated/i })).toBeVisible();
-        await expect(page.getByRole("heading", { name: "Generalist" })).toBeVisible();
-
-        await activateTab(page, /Detailed/i);
-        await expect(page.locator(".log-window", { hasText: /completed in|refreshing|casting/i }).first()).toBeVisible();
-        await screenshot(page, page.getByRole("region", { name: "Agent mission canvas" }), testInfo, "live-canvas-reference.png");
-        await screenshot(page, page.locator(".change-ledger"), testInfo, "change-ledger-reference.png");
+        const executionSurface = page.getByRole("region", { name: "Mission execution" });
+        const missionLogs = page.getByRole("region", { name: "Mission logs" });
+        await expect(executionSurface).toBeVisible();
+        await expect(page.locator(".mc3-terminal-window-dots")).toHaveCount(0);
+        await expect(executionSurface).not.toContainText("AgentHub-Code");
+        await expect(page.getByText(/Sales Operations · Normalize regional sales data/i)).toBeVisible();
+        await expect(page.getByLabel("Active agent execution")).toContainText("FabricDataEngineer");
+        await expect(page.getByLabel("Active agent execution")).toContainText("SalesReporter");
+        const schemaRow = missionLogs.locator(".mc3-transcript-row", { hasText: "Completed substep with 3 activity updates" }).first();
+        await expect(schemaRow).toBeVisible();
+        await schemaRow.getByRole("button", { name: /Show details/ }).click({ force: true });
+        await expect(schemaRow.getByText(/currency column type conflict/i)).toBeVisible();
+        const reporterRow = missionLogs.locator(".mc3-transcript-row", { hasText: "Completed substep with 2 activity updates" }).first();
+        await expect(reporterRow).toBeVisible();
+        await reporterRow.getByRole("button", { name: /Show details/ }).click({ force: true });
+        await expect(reporterRow.getByText(/Refreshing Sales Weekly semantic model/i)).toBeVisible();
+        await expect(page.getByLabel("Mission intelligence")).toContainText(/Latest update|Attention|Needs approval/i);
+        await expect(page.getByRole("tablist", { name: "Log category" })).toHaveCount(0);
+        await screenshot(page, executionSurface, testInfo, "mission-execution-surface-reference.png");
         await screenshot(page, page.locator(".mc3"), testInfo, "mission-control-reference.png");
 
-        await page.getByRole("button", { name: "Show agent log stream" }).click();
-        await expect(page.locator(".canvas-log-stream")).toBeVisible();
-        await expect(page.locator(".canvas-log-row__agent", { hasText: /Generalist|FabricDataEngineer|FabricAdmin|SalesReporter/ }).first()).toBeVisible();
-        await screenshot(page, page.getByRole("region", { name: "Agent mission canvas" }), testInfo, "live-canvas-log-stream-reference.png");
-        await page.getByRole("button", { name: "Show agent cards" }).click();
-        await expect(page.locator(".agent-node").first()).toBeVisible();
-
-        await expect(page.getByRole("button", { name: "Reset agent layout" })).toBeVisible();
-        await expect(page.locator(".agent-card-resize").first()).toBeVisible();
-        await assertAgentNodesDoNotOverlap(page);
-
         await page.setViewportSize({ width: 1789, height: 768 });
-        await page.locator(".mc3-dmc-canvas").evaluate((element: HTMLElement) => { element.scrollTop = 0; element.scrollLeft = 0; });
-        await expect(page.locator(".mc3-dmc-grid")).toBeVisible();
-        await assertAgentNodesDoNotOverlap(page);
-        await screenshot(page, page.getByRole("region", { name: "Agent mission canvas" }), testInfo, "live-canvas-fabric-shell-reference.png");
+        await expect(executionSurface).toBeVisible();
+        await expect(page.getByRole("log", { name: "Mission log stream" })).toBeVisible();
         await screenshot(page, page.locator(".mc3"), testInfo, "mission-control-fabric-shell-reference.png");
 
         await page.setViewportSize({ width: 1366, height: 720 });
-        await page.locator(".mc3-dmc-canvas").evaluate((element: HTMLElement) => { element.scrollTop = 0; element.scrollLeft = 0; });
-        await expect(page.locator(".canvas-log-stream")).toBeVisible();
-        await expect(page.locator(".canvas-log-stream--auto")).toBeVisible();
-        await expect(page.getByRole("button", { name: "Show agent cards" })).toBeDisabled();
-        await screenshot(page, page.getByRole("region", { name: "Agent mission canvas" }), testInfo, "live-canvas-resized-log-stream-reference.png");
+        await expect(page.getByRole("log", { name: "Mission log stream" })).toBeVisible();
         await screenshot(page, page.locator(".mc3"), testInfo, "mission-control-resized-reference.png");
 
-        const metrics = await page.locator(".mc3-dmc-live").evaluate((el) => {
-            const canvas = el.querySelector<HTMLElement>(".agent-canvas");
-            const first = el.querySelector<HTMLElement>(".agent-node") || el.querySelector<HTMLElement>(".canvas-log-row");
-            const terminal = el.querySelector<HTMLElement>(".log-window") || el.querySelector<HTMLElement>(".canvas-log-stream");
-            const ledger = el.querySelector<HTMLElement>(".right-rail .change-ledger");
+        const metrics = await page.locator(".mc3").evaluate((el) => {
+            const first = el.querySelector<HTMLElement>(".mc3-transcript-row") || el.querySelector<HTMLElement>(".mc3-exec-row");
+            const terminalSurface = el.querySelector<HTMLElement>(".mc3-terminal-shell") || el.querySelector<HTMLElement>(".mc3-log");
+            const intelligence = el.querySelector<HTMLElement>(".mc3-intel");
+            const terminalStyle = terminalSurface ? getComputedStyle(terminalSurface) : null;
             return {
-                background: getComputedStyle(canvas || el as HTMLElement).backgroundColor,
+                background: getComputedStyle(el as HTMLElement).backgroundColor,
                 firstRadius: first ? getComputedStyle(first).borderRadius : "",
-                terminalBg: terminal ? getComputedStyle(terminal).backgroundColor : "",
-                terminalRadius: terminal ? getComputedStyle(terminal).borderRadius : "",
-                ledgerBg: ledger ? getComputedStyle(ledger).backgroundColor : "",
+                terminalBg: terminalStyle?.backgroundColor ?? "",
+                terminalRadius: terminalStyle?.borderRadius ?? "",
+                terminalShadow: terminalStyle?.boxShadow ?? "",
+                intelligenceBg: intelligence ? getComputedStyle(intelligence).backgroundColor : "",
             };
         });
         expect(metrics.firstRadius).toBeTruthy();
-        expect(metrics.terminalRadius).toBeTruthy();
-        expect(metrics.ledgerBg).toBeTruthy();
+        expect(metrics.terminalRadius).toBe("8px");
+        expect(metrics.terminalShadow).not.toBe("none");
+        expect(metrics.intelligenceBg).toBeTruthy();
     });
 
     test("stops polling when a persisted session has no active event stream", async ({ page }) => {
@@ -78,11 +72,100 @@ test.describe("Mission Control reference visual", () => {
         await disableAnimations(page);
 
         await expect(page.locator(".mc3")).toBeVisible({ timeout: 30_000 });
-        await expect(page.getByText(/No live event stream is available/i)).toBeVisible({ timeout: 10_000 });
+        await expect(page.getByText(/No live event stream is available/i).last()).toBeVisible({ timeout: 10_000 });
         await page.waitForTimeout(6_500);
 
         expect(requestCounts.events, "SSE events endpoint should not reconnect forever after 404").toBeLessThanOrEqual(1);
         expect(requestCounts.session, "full-session recovery reads should stop after stream 404 is classified").toBeLessThanOrEqual(3);
+    });
+
+    test("keeps snapshot progress visible while an empty running stream reconnects", async ({ page }) => {
+        await seedAuth(page);
+        const requestCounts = await mockEmptyReplaySessionApis(page);
+        await page.goto(`/agent-hub/session/${SESSION_ID}?agenthubE2E=1`, { waitUntil: "domcontentloaded" });
+        await disableAnimations(page);
+
+        await expect(page.locator(".mc3")).toBeVisible({ timeout: 30_000 });
+        await expect(page.locator(".mc3-agent-lanes__status", { hasText: /Live event stream is attaching/i })).toBeVisible({ timeout: 10_000 });
+        await expect(page.locator(".mc3-exec-row--live")).toHaveCount(2);
+        await page.waitForTimeout(2_500);
+
+        expect(requestCounts.events, "empty non-terminal streams should keep retrying while snapshot progress is visible").toBeGreaterThanOrEqual(1);
+        expect(requestCounts.eventsJson, "event ledger catch-up should remain bounded during the short retry window").toBeLessThanOrEqual(8);
+        expect(requestCounts.session, "full-session recovery reads should remain bounded during the short retry window").toBeLessThanOrEqual(8);
+    });
+
+    test("catches up live backend logs without frontend category filtering", async ({ page }, testInfo) => {
+        test.setTimeout(90_000);
+        await seedAuth(page);
+        const liveEvents: any[] = [];
+        await mockLiveCatchupApis(page, liveEvents);
+        await page.goto(`/agent-hub/session/${SESSION_ID}?agenthubE2E=1`, { waitUntil: "domcontentloaded" });
+        await disableAnimations(page);
+
+        const executionSurface = page.getByRole("region", { name: "Mission execution" });
+        await expect(executionSurface).toBeVisible({ timeout: 30_000 });
+        const liveLog = page.getByRole("log", { name: "Mission log stream" });
+        await expect(liveLog).toBeVisible({ timeout: 10_000 });
+
+        liveEvents.push(catchupEvent(2, "mission_seeded", "high_level", {
+            taskCount: 3,
+        }));
+        await expect(liveLog.getByText(/Generalist created the mission plan: 3 tasks queued/i).last()).toBeVisible({ timeout: 8_000 });
+        await screenshot(page, executionSurface, testInfo, "live-log-streaming-01-high.png");
+
+        liveEvents.push(catchupEvent(3, "generalist_context_pack", "detailed", {
+            runId: "run-fde",
+            taskId: "task-inventory",
+            agentId: "FabricDataEngineer",
+            agentName: "FabricDataEngineer",
+            taskTitle: "Build workspace inventory tables",
+            objectivePreview: "Read accessible Fabric items, normalize metadata, and persist inventory rows for reporting.",
+            toolScopeCount: 4,
+            upstreamResultCount: 1,
+            acceptanceCriteriaCount: 3,
+            contextDigest: "ctx-fde-001",
+        }));
+        await expect(liveLog.getByText(/Generalist delegated structured context to FabricDataEngineer/i).last()).toBeVisible({ timeout: 8_000 });
+        await screenshot(page, executionSurface, testInfo, "live-log-streaming-02-detailed.png");
+
+        liveEvents.push(catchupEvent(4, "log_line", "diagnostic", {
+            agentId: "run-fde",
+            agentName: "FabricDataEngineer",
+            level: "info",
+            message: "Read workspace inventory returned 42 Fabric items across 6 item types; continuing semantic model validation.",
+        }));
+        await expect(liveLog.getByText(/42 Fabric items across 6 item types/i).last()).toBeVisible({ timeout: 8_000 });
+
+        // Verify backend tool_progress lines (the rich step-by-step progress
+        // emitted from inside long-running MCP tools) reach the UI as
+        // diagnostic log entries with elapsed-time context.
+        liveEvents.push(catchupEvent(5, "tool_progress", "diagnostic", {
+            agentId: "run-fde",
+            agentName: "FabricDataEngineer",
+            toolName: "fabric_create_workspace_inventory_solution",
+            step: "lakehouse_table_validation",
+            status: "started",
+            elapsedMs: 147466,
+        }));
+        liveEvents.push(catchupEvent(6, "tool_progress", "diagnostic", {
+            agentId: "run-fde",
+            agentName: "FabricDataEngineer",
+            toolName: "fabric_create_workspace_inventory_solution",
+            step: "report_render_validation",
+            status: "failed",
+            elapsedMs: 240015,
+            error: "Power BI ExportTo accepted the request but did not return an export id.",
+        }));
+        await expect(liveLog.getByText(/lakehouse table validation started · 147s elapsed/i).last()).toBeVisible({ timeout: 8_000 });
+        await expect(liveLog.getByText(/report render validation failed · 240s elapsed/i).last()).toBeVisible({ timeout: 8_000 });
+        await screenshot(page, executionSurface, testInfo, "live-log-streaming-03-diagnostic.png");
+
+        await expect(liveLog.getByText(/Generalist created the mission plan/i).last()).toBeVisible();
+        await expect(liveLog.getByText(/delegated structured context/i).last()).toBeVisible();
+        await expect(liveLog.getByText(/42 Fabric items/i).last()).toBeVisible();
+        await expect(page.getByRole("tablist", { name: "Log category" })).toHaveCount(0);
+        await screenshot(page, executionSurface, testInfo, "live-log-streaming-04-all-visible.png");
     });
 });
 
@@ -147,6 +230,118 @@ async function mockOrphanedSessionApis(page: Page) {
         await route.fulfill({ status: 200, json: {} });
     });
     return counts;
+}
+
+async function mockEmptyReplaySessionApis(page: Page) {
+    const counts = { events: 0, eventsJson: 0, session: 0 };
+    await page.route("**/api/**", async (route) => {
+        const request = route.request();
+        const url = new URL(request.url());
+        const method = request.method();
+        const pathName = url.pathname;
+
+        if (method === "GET" && pathName.endsWith(`/api/sessions/${SESSION_ID}/events.json`)) {
+            counts.eventsJson += 1;
+            await route.fulfill({
+                status: 200,
+                contentType: "application/json",
+                json: {
+                    sessionId: SESSION_ID,
+                    source: "persisted",
+                    liveExecution: false,
+                    sessionStatus: "running",
+                    persistedTotal: 0,
+                    count: 0,
+                    events: [],
+                },
+            });
+            return;
+        }
+
+        if (method === "GET" && pathName.endsWith(`/api/sessions/${SESSION_ID}/events`)) {
+            counts.events += 1;
+            await route.fulfill({
+                status: 200,
+                contentType: "text/event-stream",
+                headers: { "Cache-Control": "no-cache" },
+                body: "",
+            });
+            return;
+        }
+
+        if (method === "GET" && pathName.endsWith(`/api/sessions/${SESSION_ID}`)) {
+            counts.session += 1;
+            await route.fulfill({ status: 200, json: makeSessionRecord("running") });
+            return;
+        }
+
+        await route.fulfill({ status: 200, json: {} });
+    });
+    return counts;
+}
+
+async function mockLiveCatchupApis(page: Page, liveEvents: any[]) {
+    await page.route("**/api/**", async (route) => {
+        const request = route.request();
+        const url = new URL(request.url());
+        const method = request.method();
+        const pathName = url.pathname;
+
+        if (method === "GET" && pathName.endsWith(`/api/sessions/${SESSION_ID}/events.json`)) {
+            await route.fulfill({
+                status: 200,
+                contentType: "application/json",
+                json: {
+                    sessionId: SESSION_ID,
+                    source: "persisted",
+                    count: liveEvents.length,
+                    events: liveEvents,
+                },
+            });
+            return;
+        }
+
+        if (method === "GET" && pathName.endsWith(`/api/sessions/${SESSION_ID}/events`)) {
+            await route.fulfill({
+                status: 200,
+                contentType: "text/event-stream",
+                headers: { "Cache-Control": "no-cache" },
+                body: `data: ${JSON.stringify({
+                    type: "run_overview",
+                    seq: 1,
+                    sessionId: SESSION_ID,
+                    ts: "2026-04-26T09:00:01.000Z",
+                    job: { id: SESSION_ID, status: "running", startedAt: "2026-04-26T09:00:01.000Z", completedAt: null },
+                    composition: missionComposition(),
+                    activeAgentId: null,
+                    artifacts: [],
+                    changes: [],
+                    slotProgress: [],
+                })}\n\n`,
+            });
+            return;
+        }
+
+        if (method === "GET" && pathName.endsWith(`/api/sessions/${SESSION_ID}`)) {
+            await route.fulfill({ status: 200, json: makeSessionRecord("running") });
+            return;
+        }
+
+        await route.fulfill({ status: 200, json: {} });
+    });
+}
+
+function catchupEvent(seq: number, type: string, logCategory: string, extra: Record<string, unknown>) {
+    return {
+        type,
+        seq,
+        sessionId: SESSION_ID,
+        ts: `2026-04-26T09:00:0${seq}.000Z`,
+        logCategory,
+        eventId: `${SESSION_ID}:${seq}`,
+        payloadDigest: `digest-${seq}`,
+        ...extra,
+    };
 }
 
 function makeSessionRecord(status: "running" | "completed" = "completed") {
@@ -350,44 +545,6 @@ async function disableAnimations(page: Page) {
             }
         `,
     });
-}
-
-async function activateTab(page: Page, name: RegExp) {
-    const tabList = page.getByRole("tablist", { name: "Log category" });
-    const tab = tabList.getByRole("tab", { name });
-    await expect(tab).toBeVisible();
-    await tab.evaluate((element: HTMLElement) => element.click());
-    await expect(tab).toHaveAttribute("aria-selected", "true");
-}
-
-async function assertAgentNodesDoNotOverlap(page: Page) {
-    const overlaps = await page.locator(".mc3-dmc-canvas .agent-node").evaluateAll((nodes) => {
-        const boxes = nodes.map((node) => {
-            const rect = (node as HTMLElement).getBoundingClientRect();
-            return {
-                label: (node as HTMLElement).innerText.split("\n")[0] || (node as HTMLElement).dataset.agentNodeId || "node",
-                left: rect.left,
-                top: rect.top,
-                right: rect.right,
-                bottom: rect.bottom,
-                area: rect.width * rect.height,
-            };
-        });
-        const found: string[] = [];
-        for (let i = 0; i < boxes.length; i += 1) {
-            for (let j = i + 1; j < boxes.length; j += 1) {
-                const a = boxes[i];
-                const b = boxes[j];
-                const width = Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left));
-                const height = Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
-                const overlap = width * height;
-                const ratio = overlap / Math.max(1, Math.min(a.area, b.area));
-                if (ratio > 0.08) found.push(`${a.label} overlaps ${b.label} by ${Math.round(ratio * 100)}%`);
-            }
-        }
-        return found;
-    });
-    expect(overlaps).toEqual([]);
 }
 
 async function screenshot(page: Page, locator: ReturnType<Page["locator"]>, testInfo: TestInfo, name: string) {

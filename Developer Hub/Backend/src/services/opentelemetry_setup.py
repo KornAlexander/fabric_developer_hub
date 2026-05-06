@@ -57,7 +57,7 @@ def configure_local_opentelemetry(app: Any, *, service_name: str, service_versio
                 SERVICE_NAME: os.environ.get("OTEL_SERVICE_NAME", service_name),
                 SERVICE_VERSION: service_version or os.environ.get("OTEL_SERVICE_VERSION", "dev"),
                 DEPLOYMENT_ENVIRONMENT: os.environ.get("PYTHON_ENVIRONMENT", "Development"),
-                "service.namespace": "fabric-clawhub",
+                "service.namespace": "developer-hub",
             }
         )
         provider = TracerProvider(resource=resource, sampler=sampler)

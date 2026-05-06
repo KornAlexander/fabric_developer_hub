@@ -113,7 +113,8 @@ async def test_simple_list_tool(
     method, url, kwargs = fake.calls[0]
     assert method == "GET"
     assert url_must_contain in url, f"expected {url_must_contain!r} in {url!r}"
-    assert kwargs["headers"]["Authorization"] == "Bearer fake-fabric-token"
+    expected_token = "fake-powerbi-token" if url.startswith(semantic_link.PBI_API) else "fake-fabric-token"
+    assert kwargs["headers"]["Authorization"] == f"Bearer {expected_token}"
 
 
 @pytest.mark.parametrize(

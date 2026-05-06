@@ -155,6 +155,7 @@ async def test_fabric_verify_report_renderable_returns_render_proof(
         responses_by_method={
             "GET": [
                 make_response(200, json_body={"id": "report-1", "datasetId": "model-1"}, text="{}"),
+                make_response(200, json_body={"value": [{"name": "ReportSection1", "displayName": "Page 1"}]}, text="{}"),
             ],
             "POST": [
                 make_response(202, json_body={"id": "export-1", "status": "Succeeded"}, text="{}"),
@@ -170,7 +171,8 @@ async def test_fabric_verify_report_renderable_returns_render_proof(
     assert parsed["via"] == "powerbi_exportTo_pdf"
     assert parsed["exportId"] == "export-1"
     assert fake.calls[0][1].endswith("/groups/ws-1/reports/report-1")
-    assert fake.calls[1][1].endswith("/groups/ws-1/reports/report-1/ExportTo")
+    assert fake.calls[1][1].endswith("/groups/ws-1/reports/report-1/pages")
+    assert fake.calls[2][1].endswith("/groups/ws-1/reports/report-1/ExportTo")
 
 
 @pytest.mark.asyncio
@@ -185,6 +187,7 @@ async def test_fabric_verify_report_renderable_polls_accepted_export_status(
         responses_by_method={
             "GET": [
                 make_response(200, json_body={"id": "report-1", "datasetId": "model-1"}, text="{}"),
+                make_response(200, json_body={"value": [{"name": "ReportSection1", "displayName": "Page 1"}]}, text="{}"),
                 make_response(
                     202,
                     json_body={"id": "export-1", "status": "Running"},
@@ -206,7 +209,7 @@ async def test_fabric_verify_report_renderable_polls_accepted_export_status(
     assert parsed["status"] == "rendered"
     assert parsed["via"] == "powerbi_exportTo_pdf"
     assert parsed["exportId"] == "export-1"
-    assert fake.calls[2][1].endswith("/groups/ws-1/reports/report-1/exports/export-1")
+    assert fake.calls[3][1].endswith("/groups/ws-1/reports/report-1/exports/export-1")
 
 
 # ── _get_item_route_segment ─────────────────────────────────────────

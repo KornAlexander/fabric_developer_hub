@@ -8,6 +8,7 @@ Coverage focuses on:
 from __future__ import annotations
 
 import json
+import base64
 
 import pytest
 
@@ -61,6 +62,44 @@ async def test_sl_evaluate_dax_error(
     install_fake_client(monkeypatch, semantic_link, fake)
     result = await semantic_link.sl_evaluate_dax("ws-1", "ds-1", "EVALUATE 1")
     assert result.startswith("Error: 400")
+
+
+@pytest.mark.asyncio
+async def test_sl_get_semantic_model_tables_falls_back_to_model_definition(
+    monkeypatch: pytest.MonkeyPatch, fabric_token_env: None
+) -> None:
+    model_bim = {
+        "model": {
+            "tables": [{
+                "name": "FabricItems",
+                "columns": [{"name": "ItemId", "dataType": "string", "sourceColumn": "ItemId"}],
+                "measures": [{"name": "Item Count", "expression": "COUNTROWS(FabricItems)"}],
+            }],
+            "relationships": [],
+        },
+    }
+    encoded_bim = base64.b64encode(json.dumps(model_bim).encode("utf-8")).decode("ascii")
+    fake = FakeAsyncClient(responses_by_method={
+        "POST": [
+            make_response(400, text="INFO.VIEW metadata unavailable"),
+            make_response(400, text="INFO.TABLES metadata unavailable"),
+            make_response(200, json_body={"definition": {"parts": [{
+                "path": "model.bim",
+                "payload": encoded_bim,
+                "payloadType": "InlineBase64",
+            }]}}),
+        ],
+    })
+    install_fake_client(monkeypatch, semantic_link, fake)
+
+    result = await semantic_link.sl_get_semantic_model_tables("ws-1", "ds-1")
+    parsed = json.loads(result)
+
+    assert parsed["status"] == "ok"
+    assert parsed["via"] == "fabric_getDefinition_model_bim"
+    assert parsed["tables"] == [{"name": "FabricItems", "description": None}]
+    assert parsed["columns"][0]["name"] == "ItemId"
+    assert parsed["measures"][0]["name"] == "Item Count"
 
 
 # ── sl_list_semantic_models / sl_list_reports / sl_list_lakehouses ─

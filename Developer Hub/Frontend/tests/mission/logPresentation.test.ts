@@ -27,4 +27,11 @@ describe("mission log presentation", () => {
         expect(formatVisibleRuntimeText("TOOL_ERROR while calling fabric_list_items → undefined"))
             .toBe("Tool issue while calling read workspace inventory to details unavailable");
     });
+
+    it("hides model and accounting details from visible runtime text", () => {
+        expect(formatVisibleRuntimeText("Requesting gpt-4o-mini response for Plan inventory repair"))
+            .toBe("Preparing Plan inventory repair");
+        expect(formatVisibleRuntimeText("Prepared repair evidence. (1 tool call · 980 chars) (+4 detail events)"))
+            .toBe("Prepared repair evidence.");
+    });
 });

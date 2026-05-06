@@ -32,7 +32,17 @@ class ItemMetadataStore:
         await asyncio.to_thread(os.makedirs, path, exist_ok=True)
 
     def get_base_directory_path(self, workload_name: str) -> Path:
-        """Get the application data directory for the workload."""
+        """Get the application data directory for the workload.
+
+        If ``AGENTHUB_DATA_DIR`` is set in the environment, it overrides
+        the default user-local path. This is the production path: in
+        Docker we mount a host bind / named volume at ``/app/data`` and
+        set ``AGENTHUB_DATA_DIR=/app/data`` so item metadata survives
+        container rebuilds (WL-1 / C2).
+        """
+        override = os.environ.get('AGENTHUB_DATA_DIR')
+        if override:
+            return Path(override) / workload_name
         if os.name == 'nt':
             # On Windows, use APPDATA environment variable (Roaming)
             appdata = os.environ.get('APPDATA')

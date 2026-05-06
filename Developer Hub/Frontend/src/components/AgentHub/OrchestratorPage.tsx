@@ -57,6 +57,7 @@ import {
     RichComposer, plainTextToTokens,
     type RichComposerHandle, type RichComposerValue, type RichTrigger,
 } from "./RichComposer";
+import { buildPiSessionOrchestrationContext } from "./mission/pi/piExtensionPackages";
 
 const BE = process.env.WORKLOAD_BE_URL || "http://127.0.0.1:5000";
 const ALLOWED_TEXT_ATTACHMENT_EXTENSIONS = new Set([
@@ -270,6 +271,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
     const planningAbortRef = useRef<AbortController | null>(null);
     // When non-null, we render Mission Control instead of the composer.
     const [runningSessionId, setRunningSessionId] = useState<string | null>(null);
+    const [runningSessionJob, setRunningSessionJob] = useState<any | null>(null);
     // Token captured at the exact start moment and forwarded to
     // Mission Control so SSE can connect immediately without waiting for a
     // second token acquisition round-trip.
@@ -1123,7 +1125,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
             const fabricToken = await getFabricToken();
             const resp = await api.listWorkspaceItems(
                 workspaceId,
-                { githubToken, fabricToken, refresh: opts.refresh },
+                { githubToken, fabricToken, refresh: opts.refresh, agentHubSessionId: runningSessionId || undefined },
             );
             setPreviewWsItems(resp.items);
             setPreviewWsCapturedAt(resp.capturedAt);
@@ -1153,7 +1155,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                 const fabricToken = await getFabricToken();
                 const resp = await api.listWorkspaceItems(
                     previewWorkspace.id,
-                    { githubToken, fabricToken },
+                    { githubToken, fabricToken, agentHubSessionId: runningSessionId || undefined },
                 );
                 if (cancelled) return;
                 setPreviewWsItems(resp.items);
@@ -1491,6 +1493,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                 taskText, selectedWorkspace,
                 {
                     workspace_name: wsName,
+                    ...buildPiSessionOrchestrationContext(),
                     destination_workspace: destinationWorkspace,
                     branch_out: branchOut,
                     branch_name: branchOut ? branchName : undefined,
@@ -1546,6 +1549,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                 title: `Session ${job.id.slice(0, 8)}`,
                 subtitle: job.id,
             });
+            setRunningSessionJob(job);
             setRunningSessionId(job.id);
             void api.runSession(job.id, { githubToken, fabricToken }).catch((runError: any) => {
                 if (ctrl.signal.aborted) return;
@@ -1626,7 +1630,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
             const result = await Promise.race<
                 { items: api.WorkspaceItem[] } | { timeout: true }
             >([
-                api.listWorkspaceItems(wsId, { githubToken, fabricToken })
+                api.listWorkspaceItems(wsId, { githubToken, fabricToken, agentHubSessionId: runningSessionId || undefined })
                     .then(r => ({ items: r.items || [] })),
                 new Promise(resolve =>
                     setTimeout(() => resolve({ timeout: true } as const), PER_FETCH_TIMEOUT_MS),
@@ -1647,7 +1651,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
         } finally {
             mentionFetchInFlight.current.delete(wsId);
         }
-    }, []);
+    }, [runningSessionId]);
 
     // Prefetch the selected workspace eagerly — it's the most likely
     // source of mentions and was already doing this historically.
@@ -1960,7 +1964,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
             try {
                 const githubToken = sessionStorage.getItem("github_token") || "";
                 const fabricToken = await getFabricToken();
-                api.warmWorkspaceItems(ws.id, { githubToken, fabricToken });
+                api.warmWorkspaceItems(ws.id, { githubToken, fabricToken, agentHubSessionId: runningSessionId || undefined });
             } catch { /* ignore — best effort */ }
         })();
     }
@@ -2115,12 +2119,14 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                     githubToken={githubToken}
                     initialFabricToken={runningFabricToken}
                     initialJob={{
-                        task_description: taskText,
-                        workspace_id: selectedWorkspace || undefined,
-                        workspace_name: workspaces.find(w => w.id === selectedWorkspace)?.name || null,
+                        task_description: runningSessionJob?.task_description ?? taskText,
+                        workspace_id: (runningSessionJob?.workspace_id ?? selectedWorkspace) || undefined,
+                        workspace_name: (runningSessionJob?.context?.workspace_name ?? workspaces.find(w => w.id === selectedWorkspace)?.name) || null,
+                        runtime: runningSessionJob?.runtime ?? runningSessionJob?.context?.runtime ?? null,
                         started_at: new Date().toISOString(),
                         status: "running",
-                        context: { context_items: contextItems },
+                        context: runningSessionJob?.context ?? { context_items: contextItems },
+                        composition: runningSessionJob?.composition ?? null,
                     }}
                 />
             ) : null}

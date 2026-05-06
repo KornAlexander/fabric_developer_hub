@@ -89,12 +89,40 @@ export function formatToolEndMessage(toolName: string, status: "ok" | "error", d
     return `${prefix}: ${label}${duration ? ` · ${duration}` : ""}`;
 }
 
+export function formatLatencyBreakdownMs(breakdown?: Record<string, number>): string {
+    if (!breakdown) return "";
+    const parts = [
+        ["policy", breakdown.backendPolicyMs],
+        ["sidecar", breakdown.sidecarHttpMs],
+        ["startup", breakdown.mcpProcessStartupMs],
+        ["tool", breakdown.mcpToolExecutionMs],
+    ]
+        .filter((entry): entry is [string, number] => typeof entry[1] === "number" && Number.isFinite(entry[1]))
+        .map(([label, value]) => `${label} ${formatDurationMs(value)}`);
+    return parts.join(" · ");
+}
+
 function replaceRawToolNames(value: string): string {
     return value.replace(/\bfabric_[a-z0-9_]+\b/gi, (toolName) => formatToolName(toolName).toLowerCase());
 }
 
 function normalizeTraceTokens(value: string): string {
     return replaceRawToolNames(value)
+        .replace(/\bRequesting\s+(?:model|assistant|[a-z0-9][a-z0-9._:-]*)\s+response\s+for\s+/gi, "Preparing ")
+        .replace(/\s*\(\s*\d+\s+tool\s+calls?\s*(?:[·,]\s*\d+\s+chars?)?\s*\)/gi, "")
+        .replace(/\s*\(\s*\d+\s+chars?\s*\)/gi, "")
+        .replace(/\s*\(\s*\+\d+\s+detail\s+events?\s*\)/gi, "")
+        .replace(/@fabric-clawhub\/pi-log-compactor/gi, "automatic log summary")
+        .replace(/@fabric-clawhub\/pi-agentic-engineering/gi, "mission guidance")
+        .replace(/@fabric-clawhub\/pi-mission-ui/gi, "mission UI")
+        .replace(/@mariozechner\/pi-web-ui/gi, "mission UI")
+        .replace(/@mariozechner\/pi-agent-core/gi, "agent runtime")
+        .replace(/@mariozechner\/pi-[a-z0-9-]+/gi, "mission runtime")
+        .replace(/\bpi-subagents\b/gi, "delegated agents")
+        .replace(/\bpi\s+subagents\b/gi, "delegated agents")
+        .replace(/\bPi\s+Web\s+UI\b/g, "Mission UI")
+        .replace(/\bPi\s+runtime\b/gi, "mission runtime")
+        .replace(/\bPi\s+agents?\b/gi, "delegated agents")
         .replace(/\bTOOL_ERROR\b/g, "Tool issue")
         .replace(/===HANDOFF/g, "handoff")
         .replace(/\[object Object\]/g, "details unavailable")

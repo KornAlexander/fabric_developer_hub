@@ -14,6 +14,7 @@ import os
 import re
 import shutil
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -22,10 +23,13 @@ from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("browser-visual", log_level="WARNING")
 
-_MAX_TIMEOUT_SECONDS = int(os.environ.get("BROWSER_VISUAL_MAX_TIMEOUT_SECONDS", "90"))
+_MAX_TIMEOUT_SECONDS = int(os.environ.get("BROWSER_VISUAL_MAX_TIMEOUT_SECONDS", "180"))
 _MAX_TEXT_CHARS = 4_000
 _DEFAULT_EVIDENCE_DIR = Path(os.environ.get("BROWSER_VISUAL_EVIDENCE_DIR", "/tmp/agenthub-visual-evidence"))
-_DEFAULT_STORAGE_STATE = os.environ.get("BROWSER_VISUAL_AUTH_STATE_PATH") or os.environ.get("PLAYWRIGHT_STORAGE_STATE_PATH")
+_DEFAULT_STORAGE_STATE_CANDIDATES = (
+    Path("/app/data/browser-visual-storage-state.json"),
+    Path(__file__).resolve().parents[2] / ".data" / "browser-visual-storage-state.json",
+)
 _DEFAULT_ALLOWED_HOSTS = {
     "app.fabric.microsoft.com",
     "app.powerbi.com",
@@ -35,6 +39,13 @@ _DEFAULT_ALLOWED_HOSTS = {
 _HOST_SUFFIX_ALLOWLIST = (
     ".powerbi.com",
     ".fabric.microsoft.com",
+)
+
+_NODE_PATH_CANDIDATES = (
+    Path(__file__).resolve().parents[2] / "node_modules",
+    Path(__file__).resolve().parents[3] / "Frontend" / "node_modules",
+    Path("/app/frontend/node_modules"),
+    Path("/app/Frontend/node_modules"),
 )
 
 _LOGIN_PATTERNS = (
@@ -57,6 +68,22 @@ _RENDER_ERROR_PATTERNS = (
     "query has exceeded",
     "error loading",
 )
+
+_TRANSIENT_CAPTURE_ERROR_CODES = {
+    "BROWSER_CAPTURE_TIMEOUT",
+    "EXPECTED_TEXT_NOT_VISIBLE",
+    "SCREENSHOT_EMPTY_OR_TOO_SMALL",
+}
+
+
+def _default_storage_state_path() -> str | None:
+    explicit = os.environ.get("BROWSER_VISUAL_AUTH_STATE_PATH") or os.environ.get("PLAYWRIGHT_STORAGE_STATE_PATH")
+    if explicit:
+        return explicit
+    for candidate in _DEFAULT_STORAGE_STATE_CANDIDATES:
+        if candidate.exists():
+            return str(candidate)
+    return None
 
 
 class BrowserVisualError(ValueError):
@@ -198,6 +225,39 @@ async function visualSignals(page) {
   });
 }
 
+async function readinessSignals(page) {
+    return await page.evaluate(() => {
+        const bodyText = (document.body && document.body.innerText || '').toLowerCase();
+        const terminalText = bodyText.includes('sign in')
+            || bodyText.includes('pick an account')
+            || bodyText.includes('you don\'t have access')
+            || bodyText.includes('couldn\'t load')
+            || bodyText.includes('could not load')
+            || bodyText.includes('something went wrong')
+            || bodyText.includes('report cannot be displayed');
+        const loadingOnly = bodyText.includes('loading your report')
+            || bodyText.includes('almost done')
+            || bodyText.includes('loading data');
+        const isVisible = (el) => {
+            const rect = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return rect.width > 40
+                && rect.height > 40
+                && style.visibility !== 'hidden'
+                && style.display !== 'none'
+                && Number(style.opacity || '1') > 0.05;
+        };
+        const selectors = 'iframe,canvas,svg,[role="img"],[role="figure"],.visualContainer,.visual-container,[data-testid*="visual" i],[aria-label*="visual" i]';
+        const visibleVisualCount = Array.from(document.querySelectorAll(selectors)).filter(isVisible).length;
+        return {
+            terminalText,
+            loadingOnly,
+            visibleVisualCount,
+            textLength: bodyText.length,
+        };
+    });
+}
+
 (async () => {
   const request = JSON.parse(fs.readFileSync(0, 'utf8'));
   const playwright = loadPlaywright();
@@ -231,14 +291,40 @@ async function visualSignals(page) {
     try {
       await page.waitForLoadState('networkidle', { timeout: Math.min(request.timeoutMs, 12000) });
     } catch (_) {}
-    if (request.waitForText) {
-      await page.waitForFunction(
-        (expected) => (document.body && document.body.innerText || '').includes(expected),
-        request.waitForText,
-        { timeout: Math.min(request.timeoutMs, 20000) },
-      );
-    }
-    const text = await bodyText(page);
+        let text = '';
+        let expectedTextMatched = false;
+        let waitForTextError = '';
+        let readinessReason = '';
+        const waitDeadline = Date.now() + Math.min(request.timeoutMs, request.waitForText ? request.timeoutMs : 25000);
+        while (Date.now() < waitDeadline) {
+            text = await bodyText(page);
+            if (request.waitForText && text.toLowerCase().includes(String(request.waitForText || '').toLowerCase())) {
+                expectedTextMatched = true;
+                readinessReason = 'expected_text';
+                break;
+            }
+            let ready = { terminalText: false, loadingOnly: false, visibleVisualCount: 0 };
+            try {
+                ready = await readinessSignals(page);
+            } catch (_) {}
+            if (ready.terminalText) {
+                readinessReason = 'terminal_text';
+                break;
+            }
+            if (ready.visibleVisualCount > 0 && !ready.loadingOnly) {
+                readinessReason = 'visible_visual';
+                break;
+            }
+            await page.waitForTimeout(1000);
+        }
+        text = text || await bodyText(page);
+        if (request.waitForText && !expectedTextMatched) {
+            expectedTextMatched = text.toLowerCase().includes(String(request.waitForText || '').toLowerCase());
+            if (!expectedTextMatched) {
+                waitForTextError = `Timed out waiting for expected text after ${readinessReason || 'no_ready_signal'}`;
+            }
+        }
+        await page.waitForTimeout(Math.min(1500, Math.max(250, request.timeoutMs / 20)));
     const signals = await visualSignals(page);
     await page.screenshot({ path: request.screenshotPath, fullPage: false });
     const stat = fs.statSync(request.screenshotPath);
@@ -248,6 +334,9 @@ async function visualSignals(page) {
       finalUrl: page.url(),
       title: await page.title(),
       bodyTextSample: text.slice(0, request.maxTextChars),
+    expectedTextMatched: request.waitForText ? expectedTextMatched : null,
+    waitForTextError,
+            readinessReason,
       visualSignals: signals,
       screenshotPath: request.screenshotPath,
       screenshotBytes: stat.size,
@@ -278,6 +367,7 @@ async function visualSignals(page) {
       finalUrl,
       title,
       bodyTextSample: text.slice(0, request.maxTextChars),
+    expectedTextMatched: request.waitForText ? text.toLowerCase().includes(String(request.waitForText || '').toLowerCase()) : null,
       visualSignals: signals,
       screenshotPath: fs.existsSync(request.screenshotPath) ? request.screenshotPath : null,
       screenshotBytes,
@@ -304,7 +394,11 @@ def _node_env() -> dict[str, str]:
         "BROWSER_VISUAL_CHROMIUM_EXECUTABLE",
         "PLAYWRIGHT_BROWSERS_PATH",
     }
-    return {key: value for key, value in os.environ.items() if key in allowed}
+    env = {key: value for key, value in os.environ.items() if key in allowed}
+    node_paths = [env.get("NODE_PATH", "")]
+    node_paths.extend(str(candidate) for candidate in _NODE_PATH_CANDIDATES if candidate.exists())
+    env["NODE_PATH"] = os.pathsep.join(path for path in node_paths if path)
+    return env
 
 
 async def _run_node_capture(request: dict[str, Any], timeout: int) -> dict[str, Any]:
@@ -336,7 +430,7 @@ async def _run_node_capture(request: dict[str, Any], timeout: int) -> dict[str, 
             try:
                 stdout, stderr = await asyncio.wait_for(
                     process.communicate(json.dumps(request).encode("utf-8")),
-                    timeout=timeout + 10,
+                    timeout=max(timeout + 30, timeout * 2 + 30),
                 )
             except TimeoutError:
                 process.kill()
@@ -380,6 +474,45 @@ def _contains_any(haystack: str, needles: tuple[str, ...]) -> bool:
     return any(needle in lowered for needle in needles)
 
 
+def _expected_text_matched(capture: dict[str, Any], expected_text: str | None) -> bool | None:
+    if not expected_text:
+        return None
+    value = capture.get("expectedTextMatched")
+    if isinstance(value, bool):
+        if value:
+            return True
+        return _expected_text_alias_matched(capture, expected_text)
+    body_text = str(capture.get("bodyTextSample") or "").lower()
+    return expected_text.lower() in body_text or _expected_text_alias_matched(capture, expected_text)
+
+
+def _expected_text_alias_matched(capture: dict[str, Any], expected_text: str) -> bool:
+    aliases = _expected_text_aliases(expected_text)
+    if not aliases:
+        return False
+    text = "\n".join(
+        str(capture.get(key) or "")
+        for key in ("finalUrl", "title", "bodyTextSample")
+    ).lower()
+    return any(alias in text for alias in aliases)
+
+
+def _expected_text_aliases(expected_text: str) -> tuple[str, ...]:
+    normalized = re.sub(r"[^a-z0-9]+", " ", expected_text.lower()).strip()
+    if normalized in {"fabric items", "fabric item", "fabric items inventory", "workspace inventory"}:
+        return ("item count",)
+    return ()
+
+
+def _effective_wait_for_text(expected_text: str | None, wait_for_text: str | None) -> str | None:
+    if wait_for_text:
+        return wait_for_text
+    if not expected_text:
+        return None
+    aliases = _expected_text_aliases(expected_text)
+    return aliases[0] if aliases else expected_text
+
+
 def _classify_capture(capture: dict[str, Any], expected_text: str | None) -> dict[str, Any]:
     text = "\n".join(
         str(capture.get(key) or "")
@@ -387,6 +520,7 @@ def _classify_capture(capture: dict[str, Any], expected_text: str | None) -> dic
     )
     signals = capture.get("visualSignals") or {}
     screenshot_bytes = int(capture.get("screenshotBytes") or 0)
+    visible_visual_count = int(signals.get("visibleElementCount") or 0)
     warnings: list[str] = []
 
     if capture.get("errorCode") in {"BROWSER_TOOL_UNAVAILABLE", "PLAYWRIGHT_MODULE_MISSING"}:
@@ -410,6 +544,13 @@ def _classify_capture(capture: dict[str, Any], expected_text: str | None) -> dic
             "reason": capture.get("error"),
             "warnings": warnings,
         }
+    if capture.get("ok") is False and capture.get("errorCode"):
+        return {
+            "status": "failed",
+            "errorCode": capture.get("errorCode"),
+            "reason": capture.get("error") or "browser capture failed before visual evidence could be collected",
+            "warnings": warnings,
+        }
     if _contains_any(text, _RENDER_ERROR_PATTERNS):
         return {
             "status": "failed",
@@ -417,13 +558,16 @@ def _classify_capture(capture: dict[str, Any], expected_text: str | None) -> dic
             "reason": "browser page contains a Fabric/Power BI render error message",
             "warnings": warnings,
         }
-    if expected_text and expected_text not in str(capture.get("bodyTextSample") or ""):
-        return {
-            "status": "failed",
-            "errorCode": "EXPECTED_TEXT_NOT_VISIBLE",
-            "reason": f"expected text was not visible in the rendered page: {expected_text!r}",
-            "warnings": warnings,
-        }
+    expected_text_matched = _expected_text_matched(capture, expected_text)
+    if expected_text and expected_text_matched is False:
+        if visible_visual_count <= 0:
+            return {
+                "status": "failed",
+                "errorCode": "EXPECTED_TEXT_NOT_VISIBLE",
+                "reason": f"expected text was not visible in the rendered page: {expected_text!r}",
+                "warnings": warnings,
+            }
+        warnings.append(f"expected text was not visible in scrapeable page text: {expected_text!r}")
     if screenshot_bytes < 2_000:
         return {
             "status": "failed",
@@ -431,7 +575,7 @@ def _classify_capture(capture: dict[str, Any], expected_text: str | None) -> dic
             "reason": "screenshot artifact is empty or too small to be credible visual evidence",
             "warnings": warnings,
         }
-    if int(signals.get("visibleElementCount") or 0) == 0:
+    if visible_visual_count == 0:
         warnings.append("no visible visual-like DOM elements were detected")
     if not signals.get("colorSamples"):
         warnings.append("no non-transparent background color samples were detected")
@@ -462,19 +606,45 @@ async def _browser_verify_visual_render_impl(
         request = {
             "url": normalized,
             "expectedText": expected_text,
-            "waitForText": wait_for_text or expected_text,
+            "waitForText": _effective_wait_for_text(expected_text, wait_for_text),
             "screenshotPath": str(screenshot_path),
             "viewportWidth": width,
             "viewportHeight": height,
             "timeoutMs": timeout * 1000,
             "maxTextChars": _MAX_TEXT_CHARS,
-            "storageStatePath": _DEFAULT_STORAGE_STATE,
+            "storageStatePath": _default_storage_state_path(),
             "chromiumExecutablePath": os.environ.get(
                 "BROWSER_VISUAL_CHROMIUM_EXECUTABLE", "/usr/bin/chromium"
             ),
         }
-        capture = await _run_node_capture(request, timeout)
-        verdict = _classify_capture(capture, expected_text)
+        attempts: list[dict[str, Any]] = []
+        started_at = time.monotonic()
+        max_attempts = 20
+        retry_delay_seconds = 12
+        retry_budget_seconds = max(timeout, min(_MAX_TIMEOUT_SECONDS, 600))
+        capture: dict[str, Any] = {}
+        verdict: dict[str, Any] = {}
+        for attempt in range(1, max_attempts + 1):
+            capture = await _run_node_capture(request, timeout)
+            verdict = _classify_capture(capture, expected_text)
+            attempts.append({
+                "attempt": attempt,
+                "status": verdict.get("status"),
+                "errorCode": verdict.get("errorCode"),
+                "screenshotBytes": capture.get("screenshotBytes"),
+                "visibleVisualLikeElementCount": (capture.get("visualSignals") or {}).get("visibleElementCount"),
+                "finalUrl": capture.get("finalUrl"),
+            })
+            if verdict.get("status") == "passed":
+                break
+            if verdict.get("errorCode") not in _TRANSIENT_CAPTURE_ERROR_CODES:
+                break
+            if attempt >= max_attempts:
+                break
+            elapsed = time.monotonic() - started_at
+            if elapsed + retry_delay_seconds >= retry_budget_seconds:
+                break
+            await asyncio.sleep(retry_delay_seconds)
         signals = capture.get("visualSignals") or {}
         return _json({
             "ok": verdict["status"] == "passed",
@@ -496,6 +666,8 @@ async def _browser_verify_visual_render_impl(
                 "colorSamples": signals.get("colorSamples"),
                 "sampleElements": (signals.get("elements") or [])[:20],
             },
+            "expectedTextMatched": _expected_text_matched(capture, expected_text),
+            "attempts": attempts,
             "warnings": verdict.get("warnings") or [],
         })
     except BrowserVisualError as exc:

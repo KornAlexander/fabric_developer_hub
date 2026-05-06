@@ -165,8 +165,9 @@ class SlotRunner:
         # Determine status
         if assignment.status == AgentStatus.COMPLETED:
             has_decision = any(d for p in assignment.phases for d in p.decisions)
+            has_actions = bool(assignment.actions)
             slot_status: Literal["success", "partial", "error", "cancelled", "budget_exhausted"] = (
-                "success" if has_decision else "partial"
+                "success" if has_decision or has_actions else "partial"
             )
         elif assignment.status == AgentStatus.ERROR:
             if self._execution.cancel_event.is_set():

@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
@@ -25,11 +25,14 @@ from domain.models.agent_models import (
     Job,
     JobStatus,
 )
+from domain.models.composition import AgentSlot, Composition
+from domain.models.dynamic_orchestration import MissionBrief, MissionState, MissionStatus, SubagentRun, TaskNode
 from services.agenthub import orchestrator_engine as oe
 from services.agenthub.orchestrator_engine import (
     OrchestratorEngine,
     _apply_single_created_folder_id,
     _detect_action_from_tool,
+    _extract_dynamic_followups,
     _get_blocking_issue,
     _has_successful_required_creation,
     _infer_single_created_folder_id,
@@ -40,6 +43,7 @@ from services.agenthub.orchestrator_engine import (
     _parse_agent_output,
     _required_creation_tool_for_goal,
     _required_creation_tools_for_goal,
+    _tool_result_major_issue_level,
 )
 
 
@@ -57,6 +61,81 @@ def test_engine_init_and_configure() -> None:
     assert engine.mcp_manager is mcp
     assert engine.copilot_token_fn is cop
     assert engine.acquire_mcp_tokens_fn is obo
+
+
+@pytest.mark.asyncio
+async def test_attach_mission_mcp_runtime_uses_global_manager_when_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AGENTHUB_MCP_RUNTIME", "off")
+    global_manager = MagicMock()
+    engine = OrchestratorEngine(mcp_manager=global_manager)
+    execution = _JobExecution(_make_job(), copilot_token="t", mcp_tokens=None)
+
+    await engine._attach_mission_mcp_runtime(execution)
+
+    assert execution.mcp_manager is global_manager
+    assert execution.mcp_runtime is None
+
+
+@pytest.mark.asyncio
+async def test_attach_mission_mcp_runtime_starts_session_container(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services.mcp import mission_runtime_manager
+
+    monkeypatch.setenv("AGENTHUB_MCP_RUNTIME", "container")
+    source_manager = MagicMock()
+    runtime = SimpleNamespace(close=AsyncMock())
+    calls: list[tuple[str, object]] = []
+
+    async def fake_start(session_id: str, manager: object) -> object:
+        calls.append((session_id, manager))
+        return runtime
+
+    monkeypatch.setattr(mission_runtime_manager, "start_mission_mcp_runtime", fake_start)
+    engine = OrchestratorEngine(mcp_manager=source_manager)
+    execution = _JobExecution(_make_job("mission-1"), copilot_token="t", mcp_tokens=None)
+
+    await engine._attach_mission_mcp_runtime(execution)
+
+    assert calls == [("mission-1", source_manager)]
+    assert execution.mcp_manager is runtime
+    assert execution.mcp_runtime is runtime
+
+
+@pytest.mark.asyncio
+async def test_attach_mission_mcp_runtime_hard_fails_when_container_start_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services.mcp import mission_runtime_manager
+
+    monkeypatch.setenv("AGENTHUB_MCP_RUNTIME", "container")
+
+    async def fake_start(session_id: str, manager: object) -> object:
+        raise RuntimeError("mission MCP runtime refused to start")
+
+    monkeypatch.setattr(mission_runtime_manager, "start_mission_mcp_runtime", fake_start)
+    engine = OrchestratorEngine(mcp_manager=MagicMock())
+    execution = _JobExecution(_make_job("mission-fail"), copilot_token="t", mcp_tokens=None)
+
+    with pytest.raises(RuntimeError, match="refused to start"):
+        await engine._attach_mission_mcp_runtime(execution)
+
+    assert execution.mcp_manager is None
+    assert execution.mcp_runtime is None
+
+
+@pytest.mark.asyncio
+async def test_job_execution_closes_mission_mcp_runtime() -> None:
+    execution = _JobExecution(_make_job("mission-cleanup"), copilot_token="t", mcp_tokens=None)
+    runtime = SimpleNamespace(close=AsyncMock())
+    execution.mcp_runtime = runtime
+
+    await execution.close_mcp_runtime()
+
+    runtime.close.assert_awaited_once()
+    assert execution.mcp_runtime is None
 
 
 def test_event_payload_summary_keeps_generalist_context_and_agent_receipt_details() -> None:
@@ -143,6 +222,151 @@ def _make_job(job_id: str = "j-1") -> Job:
     )
 
 
+def _make_composition(session_id: str) -> Composition:
+    return Composition(
+        sessionId=session_id,
+        task="Inspect workspace inventory",
+        architecture="dynamic",
+        rationale="Use the mission controller.",
+        headline="Workspace inventory",
+        subtitle="Inspect and summarize items.",
+        entrypointSlotId="generalist",
+        slots=[AgentSlot(id="generalist", agentId="generalist", role="Mission controller")],
+        handoffs=[],
+    )
+
+
+def test_pi_subagents_projection_emits_native_status_control_and_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AGENTHUB_PI_OBSERVABILITY", "pi-subagents")
+    job = _make_job("session-pi")
+    job.agents.append(
+        AgentAssignment(
+            agent_id="fabric-data-engineer",
+            session_id="assignment-1",
+            role="FabricDataEngineer",
+            goal="Create workspace inventory solution",
+        )
+    )
+    execution = _JobExecution(job, copilot_token="tok", mcp_tokens=None)
+    mission = MissionState(
+        brief=MissionBrief(session_id=job.id, goal="Create workspace inventory solution", workspace_id="ws-1"),
+    )
+    mission.tasks["task-1"] = TaskNode(
+        id="task-1",
+        title="Create inventory solution",
+        objective="Build a Fabric workspace inventory solution.",
+    )
+    mission.subagent_runs["run-1"] = SubagentRun(
+        id="run-1",
+        task_id="task-1",
+        agent_id="fabric-data-engineer",
+        agent_session_id="assignment-1",
+    )
+    execution.dynamic_mission_state = mission
+
+    started = execution.emit(
+        "tool_call_started",
+        agentId="assignment-1",
+        agentName="FabricDataEngineer",
+        callId="call-1",
+        toolName="fabric_create_workspace_inventory_solution",
+    )
+    execution.emit(
+        "slot_progress",
+        slotId="assignment-1",
+        agentId="assignment-1",
+        agentName="FabricDataEngineer",
+        status="done",
+        reason="verified",
+    )
+
+    projected = [event for event in execution._ring if event["type"].startswith("pi.subagents.")]
+    assert [event["type"] for event in projected] == [
+        "pi.subagents.status",
+        "pi.subagents.control",
+        "pi.subagents.status",
+        "pi.subagents.result",
+    ]
+    assert all(event["runId"] == "run-1" for event in projected)
+    assert all(event["taskId"] == "task-1" for event in projected)
+    assert projected[0]["currentTool"] == "fabric_create_workspace_inventory_solution"
+    assert projected[0]["sourceEventSeq"] == started["seq"]
+    assert projected[1]["controlType"] == "active_long_running"
+    assert projected[-1]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_dynamic_job_emits_startup_events_before_runtime_attach_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services.mcp import mission_runtime_manager
+
+    monkeypatch.setenv("AGENTHUB_MCP_RUNTIME", "container")
+    monkeypatch.setattr(oe, "update_session", lambda _job: None)
+
+    async def fake_start(session_id: str, manager: object) -> object:
+        raise RuntimeError("mission MCP runtime exited with code 137")
+
+    monkeypatch.setattr(mission_runtime_manager, "start_mission_mcp_runtime", fake_start)
+    emitted: list[dict] = []
+    original_emit = oe._JobExecution.emit
+
+    def recording_emit(self: oe._JobExecution, event_type: str, **kwargs):
+        emitted.append({"type": event_type, **kwargs})
+        return original_emit(self, event_type, **kwargs)
+
+    monkeypatch.setattr(oe._JobExecution, "emit", recording_emit)
+
+    job = _make_job("runtime-start-fail")
+    job.composition = _make_composition(job.id)
+    engine = OrchestratorEngine(mcp_manager=MagicMock())
+
+    result = await engine._start_dynamic_job(job, copilot_token="t", mcp_tokens=None)
+
+    assert result == job.id
+    assert job.status == JobStatus.FAILED
+    assert job.id not in engine._active_jobs
+    event_types = [event["type"] for event in emitted]
+    assert event_types[:4] == ["composition_ready", "run_overview", "slot_progress", "log_line"]
+    assert any(event["type"] == "log_line" and "Preparing the isolated tool runtime" in event["message"] for event in emitted)
+    assert any(event["type"] == "agent_error" and "not a problem with your prompt" in event["error"] for event in emitted)
+    failed_event = next(event for event in emitted if event["type"] == "job_failed")
+    assert failed_event["status"] == "failed"
+    assert "runtime/startup error" in failed_event["reason"]
+
+
+@pytest.mark.asyncio
+async def test_dynamic_monitor_completes_after_recovered_assignment_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Recovered dynamic missions should not finish as job_failed because of stale slot errors."""
+    job = _make_job("dynamic-recovered")
+    job.agents.append(
+        AgentAssignment(
+            agent_id="fabric-verifier",
+            session_id="failed-verifier-slot",
+            role="Verify user-facing Fabric deliverables",
+            goal="verify",
+            status=AgentStatus.ERROR,
+            current_step="Container exited with code 255",
+        )
+    )
+    execution = _JobExecution(job, copilot_token="t", mcp_tokens=None)
+    execution.dynamic_mission_state = MissionState(
+        brief=MissionBrief(session_id=job.id, goal="g", workspace_id=job.workspace_id),
+        status=MissionStatus.COMPLETED,
+    )
+    emitted: list[str] = []
+    monkeypatch.setattr(execution, "emit", lambda event_type, **_: emitted.append(event_type))
+    monkeypatch.setattr(execution, "close_mcp_runtime", AsyncMock())
+    engine = OrchestratorEngine()
+    engine._active_jobs[job.id] = execution
+
+    await engine._monitor_job(execution)
+
+    assert job.status == JobStatus.COMPLETED
+    assert emitted[-1] == "job_complete"
+    assert job.id not in engine._active_jobs
+
+
 def test_cancel_job_unknown_returns_false() -> None:
     engine = OrchestratorEngine()
     assert engine.cancel_job("missing") is False
@@ -163,7 +387,7 @@ def test_cancel_job_known_marks_cancelled_and_cancels_tasks() -> None:
 
 def test_inject_message_unknown_job_returns_false() -> None:
     engine = OrchestratorEngine()
-    assert engine.inject_message("missing", "hi") is False
+    assert engine.inject_message("missing", "hi") is None
 
 
 @pytest.mark.asyncio
@@ -176,8 +400,15 @@ async def test_inject_message_routes_to_specific_session() -> None:
     exe.user_message_queues["agent-session-1"] = q
     engine._active_jobs[job.id] = exe
 
-    assert engine.inject_message(job.id, "hello", "agent-session-1") is True
-    assert q.get_nowait() == "hello"
+    result = engine.inject_message(job.id, "hello", "agent-session-1")
+    assert result is not None
+    assert result["status"] == "queued"
+    assert result["targetMode"] == "agent"
+    queued = q.get_nowait()
+    assert queued.message == "hello"
+    assert queued.target_agent_session_id == "agent-session-1"
+    assert exe._ring[-1]["type"] == "user_message_queued"
+    assert exe._ring[-1]["messagePreview"] == "hello"
 
 
 @pytest.mark.asyncio
@@ -192,9 +423,33 @@ async def test_inject_message_broadcasts_when_no_target() -> None:
     exe.user_message_queues["b"] = q2
     engine._active_jobs[job.id] = exe
 
-    assert engine.inject_message(job.id, "broadcast") is True
-    assert q1.get_nowait() == "broadcast"
-    assert q2.get_nowait() == "broadcast"
+    result = engine.inject_message(job.id, "broadcast")
+    assert result is not None
+    assert result["targetMode"] == "broadcast"
+    assert q1.get_nowait().message == "broadcast"
+    assert q2.get_nowait().message == "broadcast"
+    assert [event["type"] for event in exe._ring[-2:]] == ["user_message_queued", "user_message_broadcast"]
+
+
+@pytest.mark.asyncio
+async def test_inject_message_interrupt_is_deferred_to_safe_boundary() -> None:
+
+    engine = OrchestratorEngine()
+    job = _make_job()
+    exe = _JobExecution(job, copilot_token="t", mcp_tokens=None)
+    q = asyncio.Queue()
+    exe.user_message_queues["agent-session-1"] = q
+    engine._active_jobs[job.id] = exe
+
+    result = engine.inject_message(job.id, "stop and use the existing lakehouse", "agent-session-1", mode="interrupt")
+    assert result is not None
+    assert result["mode"] == "interrupt"
+    assert q.get_nowait().mode == "interrupt"
+    assert [event["type"] for event in exe._ring[:3]] == [
+        "turn_interrupt_requested",
+        "turn_interrupt_deferred",
+        "user_message_queued",
+    ]
 
 
 def test_get_job_execution() -> None:
@@ -249,7 +504,9 @@ def test_specialist_wildcard_resolves_to_catalog_tools_not_full_mcp_fleet() -> N
 
     resolved = oe._resolve_wildcard_tool_scope("fabric-data-engineer", _SchemaMcpManager(tool_names))
 
-    assert resolved == catalog_tools
+    assert len(resolved) <= oe.MODEL_TOOL_SCHEMA_LIMIT
+    assert resolved <= catalog_tools
+    assert set(template.available_tools[:oe.MODEL_TOOL_SCHEMA_LIMIT]) <= resolved
     assert "extra_tool_1" not in resolved
 
 
@@ -666,6 +923,147 @@ def test_creation_ownership_after_hard_requirements_limits_write_tools() -> None
     }
 
 
+def test_mandatory_verifier_goal_does_not_force_inventory_creation_tool() -> None:
+    goal = (
+        "Title: Verify user-facing Fabric deliverables\n"
+        "Objective: Independently verify the produced user-facing Fabric/Power BI deliverables before the mission can finish. "
+        "Call browser_verify_visual_render against every Report/Dashboard webUrl below.\n"
+        "Original goal:\n"
+        "Create an end to end solution (ingestion, transformation, semantic modelling and a report) which shows all Fabric items "
+        "I have access to in a nice appropriate visualization."
+    )
+
+    required = _required_creation_tools_for_goal(goal)
+
+    assert required == ()
+    assert _limit_creation_tools_for_goal(
+        goal,
+        {"fabric_create_workspace_inventory_solution", "fabric_list_items", "browser_verify_visual_render"},
+        required,
+    ) == {"fabric_list_items", "browser_verify_visual_render"}
+
+
+def test_required_inventory_creation_ignores_verifier_tool_catalog_mentions() -> None:
+    goal = (
+        "MISSION GOAL: Create an end to end solution with ingestion, transformation, semantic modelling "
+        "and a report which shows all Fabric items I have access to in a visualization. "
+        "Work in folder tmp_20260428103231.\n"
+        "DYNAMIC TASK: use fabric_create_workspace_inventory_solution directly as the single "
+        "purpose-built implementation tool.\n"
+        "Available specialist catalog includes browser_verify_visual_render for later verifier tasks."
+    )
+
+    assert _required_creation_tools_for_goal(goal) == ("fabric_create_workspace_inventory_solution",)
+
+
+def test_limit_tools_for_model_caps_and_keeps_required_tool_first() -> None:
+    required_tool = "fabric_create_workspace_inventory_solution"
+    tools = [
+        {"type": "function", "function": {"name": f"generic_tool_{index}", "parameters": {}}}
+        for index in range(20)
+    ] + [{"type": "function", "function": {"name": required_tool, "parameters": {}}}]
+
+    selected = oe._limit_tools_for_model(
+        tools,
+        goal="Create a Fabric item inventory semantic model and report visualization.",
+        required_tool_names=(required_tool,),
+        limit=5,
+    )
+
+    assert len(selected) == 5
+    assert selected[0]["function"]["name"] == required_tool
+
+
+def test_specialist_goal_with_verifier_in_catalog_still_requires_creation_tool() -> None:
+    """Regression: a producer goal that merely lists FabricVerifier in its
+    SPECIALIST CATALOG must NOT be treated as verifier-only. Otherwise the
+    required-creation gate is silently skipped and the producer can ship a
+    text-only ACTION marker without ever calling the build tool."""
+    goal = (
+        "MISSION GOAL:\n"
+        "Create an end to end solution (ingestion, transformation, semantic modelling and a report) "
+        "which shows all Fabric items I have access to in a nice appropriate visualization.\n"
+        "DYNAMIC TASK:\n"
+        "Title: Create end-to-end solution for Fabric item visualization\n"
+        "Objective: Design and implement an end-to-end solution to visualize all Fabric items "
+        "the user has access to. This includes ingestion, transformation, semantic modeling, and a report.\n"
+        "SPECIALIST CATALOG:\n"
+        "- fabric-verifier (FabricVerifier): Fabric acceptance verifier - checks created items, "
+        "data, semantic models, and report visuals against the original task.\n"
+        "- fabric-data-engineer (FabricDataEngineer): Fabric builder - creates items, etc.\n"
+    )
+
+    from services.agenthub.orchestrator_engine import _is_verification_only_goal
+
+    assert _is_verification_only_goal(goal) is False
+    assert _required_creation_tools_for_goal(goal) == ("fabric_create_workspace_inventory_solution",)
+
+
+def test_extract_dynamic_followups_handles_long_block_split_across_phase_details() -> None:
+    """Regression: previously phase.details[-5:] truncated the JSON and the
+    parser missed the entire DYNAMIC_RESULT block, so the generalist's
+    delegation never produced specialist tasks."""
+    from domain.models.agent_models import AgentAssignment, AgentStatus, ReasoningPhase
+
+    raw = (
+        "PHASE_START: 1 | Delegate Fabric Inventory Solution Creation\n"
+        "ACTION: Delegating to specialist.\n"
+        "DYNAMIC_RESULT_START\n"
+        "{\n"
+        '  "followupTasks": [\n'
+        "    {\n"
+        '      "title": "Create Fabric Inventory Solution",\n'
+        '      "objective": "End-to-end ingestion, transformation, semantic model and report.",\n'
+        '      "candidateAgentIds": ["fabric-data-engineer"],\n'
+        '      "delegationReason": "Owns inventory tool.",\n'
+        '      "parallelismSafe": false\n'
+        "    }\n"
+        "  ]\n"
+        "}\n"
+        "DYNAMIC_RESULT_END\n"
+        "DECISION: Handing off to fabric-data-engineer."
+    )
+    phase = ReasoningPhase(phase_number=1, title="Round 1", description="")
+    phase.details = [line.strip() for line in raw.splitlines() if line.strip()]
+    assignment = AgentAssignment(
+        session_id="s-1", agent_id="generalist", role="generalist", goal="g",
+        status=AgentStatus.RUNNING,
+    )
+    assignment.phases.append(phase)
+
+    followups = _extract_dynamic_followups(assignment)
+
+    assert len(followups) == 1
+    assert followups[0].candidate_agent_ids == ["fabric-data-engineer"]
+    assert followups[0].title == "Create Fabric Inventory Solution"
+
+
+def test_extract_dynamic_followups_clips_overlong_objective() -> None:
+    from domain.models.agent_models import AgentAssignment, AgentStatus, ReasoningPhase
+
+    raw = {
+        "followupTasks": [
+            {
+                "title": "Verify",
+                "objective": "x" * 5000,
+                "candidateAgentIds": ["fabric-verifier"],
+            }
+        ]
+    }
+    phase = ReasoningPhase(phase_number=1, title="Round 1", description="")
+    phase.details = ["DYNAMIC_RESULT_START", json.dumps(raw), "DYNAMIC_RESULT_END"]
+    assignment = AgentAssignment(
+        session_id="s-1", agent_id="generalist", role="generalist", goal="g",
+        status=AgentStatus.RUNNING,
+    )
+    assignment.phases.append(phase)
+
+    followups = _extract_dynamic_followups(assignment)
+
+    assert len(followups) == 1
+    assert len(followups[0].objective) <= 4000
+
+
 def test_creation_ownership_with_network_handoffs_limits_write_tools() -> None:
     task = (
         "Task: Within only workspace ws-1, run a bounded peer-network review with no top-level supervisor.\n\n"
@@ -915,6 +1313,96 @@ def test_major_issue_level_detects_capacity_warning_signals(text: str) -> None:
     assert _major_issue_level(text) == "warn"
 
 
+def test_tool_result_major_issue_level_ignores_successful_structured_diagnostics() -> None:
+        tool_result = """
+<<<UNTRUSTED_TOOL_OUTPUT_BEGIN>>>
+tool=fabric_diagnose_workspace_artifacts
+{
+    "status": "ok",
+    "workspaceId": "workspace-1",
+    "refreshHistory": [
+        {"status": "Failed", "message": "source Delta table does not exist from a prior attempt"}
+    ]
+}
+<<<UNTRUSTED_TOOL_OUTPUT_END>>>
+"""
+
+        assert _tool_result_major_issue_level(tool_result) is None
+
+
+def test_tool_result_major_issue_level_detects_unstructured_blocker() -> None:
+        assert _tool_result_major_issue_level("Semantic model refresh failed: 0xC14700C7") == "error"
+
+
+def test_tool_result_requires_diagnostics_for_partial_refresh_failure() -> None:
+    rt_result = SimpleNamespace(ok=True, policy_decision="allowed")
+    tool_result = json.dumps({
+        "status": "partial",
+        "workspaceId": "workspace-1",
+        "semanticModelId": "model-1",
+        "errors": ["Semantic model refresh FAILED: 0xC14700C7 access permissions"],
+    })
+
+    needs_diagnostics, reason = oe._tool_result_requires_diagnostics(rt_result, tool_result)
+
+    assert needs_diagnostics is True
+    assert reason == "structured_status:partial"
+
+
+def test_tool_result_does_not_require_diagnostics_for_transient_browser_capture_miss() -> None:
+    rt_result = SimpleNamespace(ok=True, policy_decision="allowed")
+    tool_result = json.dumps({
+        "status": "failed",
+        "errorCode": "EXPECTED_TEXT_NOT_VISIBLE",
+        "reason": "expected text was not visible in the rendered page: 'Fabric Items'",
+        "finalUrl": "https://app.powerbi.com/groups/workspace-1/reports/report-1",
+        "bodyTextSample": "Power BI Report",
+        "screenshotBytes": 1534,
+    })
+
+    needs_diagnostics, reason = oe._tool_result_requires_diagnostics(rt_result, tool_result)
+
+    assert needs_diagnostics is False
+    assert reason == ""
+
+
+def test_tool_result_still_requires_diagnostics_for_browser_access_error() -> None:
+    rt_result = SimpleNamespace(ok=True, policy_decision="allowed")
+    tool_result = json.dumps({
+        "status": "failed",
+        "errorCode": "EXPECTED_TEXT_NOT_VISIBLE",
+        "reason": "expected text was not visible because you don't have access to this report",
+        "finalUrl": "https://app.powerbi.com/groups/workspace-1/reports/report-1",
+    })
+
+    needs_diagnostics, reason = oe._tool_result_requires_diagnostics(rt_result, tool_result)
+
+    assert needs_diagnostics is True
+    assert reason == "structured_status:failed"
+
+
+def test_diagnostic_directive_uses_workspace_folder_and_item_context() -> None:
+    directive = oe._diagnostic_directive(
+        "fabric_create_workspace_inventory_solution",
+        {"workspace_id": "workspace-1"},
+        json.dumps({
+            "status": "partial",
+            "workspaceId": "workspace-1",
+            "folderId": "folder-1",
+            "semanticModelId": "model-1",
+            "lakehouseId": "lakehouse-1",
+            "errors": ["Direct Lake identity risk: owner mismatch"],
+        }),
+        "structured_status:partial",
+    )
+
+    assert "DIAGNOSTIC CHECKPOINT REQUIRED BEFORE RETRY" in directive
+    assert "fabric_diagnose_workspace_artifacts" in directive
+    assert '"workspace_id": "workspace-1"' in directive
+    assert '"folder_id": "folder-1"' in directive
+    assert "owner/permission" in directive
+
+
 @pytest.mark.parametrize("exc", [
     httpx.ReadTimeout("slow"),
     httpx.ConnectError("dns failed"),
@@ -1003,7 +1491,7 @@ def test_has_successful_required_creation_matches_inventory_solution() -> None:
     assert _has_successful_required_creation(assignment, "fabric_create_workspace_inventory_solution") is True
 
 
-def test_has_successful_required_creation_rejects_unverified_inventory_solution() -> None:
+def test_has_successful_required_creation_trusts_created_inventory_status() -> None:
     assignment = AgentAssignment(
         agent_id="generalist",
         session_id="agent-create",
@@ -1020,7 +1508,7 @@ def test_has_successful_required_creation_rejects_unverified_inventory_solution(
         )
     )
 
-    assert _has_successful_required_creation(assignment, "fabric_create_workspace_inventory_solution") is False
+    assert _has_successful_required_creation(assignment, "fabric_create_workspace_inventory_solution") is True
 
 
 def test_detect_action_from_inventory_solution_response() -> None:
@@ -1115,7 +1603,7 @@ def test_detect_action_from_inventory_solution_keeps_compact_valid_details() -> 
     ) is True
 
 
-def test_detect_action_from_inventory_solution_rejects_missing_report_verification() -> None:
+def test_detect_action_from_inventory_solution_trusts_created_status_without_nested_blocks() -> None:
     action = _detect_action_from_tool(
         "fabric_create_workspace_inventory_solution",
         {"folder_name": "tmp_20260426193000"},
@@ -1126,7 +1614,7 @@ def test_detect_action_from_inventory_solution_rejects_missing_report_verificati
     )
 
     assert action is not None
-    assert action.action_type == "Failed"
+    assert action.action_type == "Created"
     assert action.entity_type == "WorkspaceInventorySolution"
 
 
@@ -1387,6 +1875,120 @@ async def test_run_agent_completes_creation_role_after_required_tool_success(
         ev.get("type") == "slot_progress" and ev.get("status") == "done"
         for ev in exe._ring
     )
+
+
+@pytest.mark.asyncio
+async def test_run_agent_caps_model_tool_schema_body_and_preserves_required_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    required_tool = "fabric_create_workspace_inventory_solution"
+    tool_names = [f"generic_tool_{index}" for index in range(245)] + [required_tool]
+    engine = OrchestratorEngine()
+    engine.mcp_manager = SimpleNamespace(
+        get_openai_tools_schema=lambda: [
+            {"type": "function", "function": {"name": tool_name, "parameters": {}}}
+            for tool_name in tool_names
+        ]
+    )
+    monkeypatch.setattr(oe, "update_session", lambda _job: None)
+
+    post_bodies = []
+
+    class _FakeResponse:
+        status_code = 200
+        text = ""
+
+        def __init__(self, call_number: int):
+            self.call_number = call_number
+
+        def json(self):
+            if self.call_number == 1:
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "",
+                                "tool_calls": [
+                                    {
+                                        "id": "call-inventory",
+                                        "function": {
+                                            "name": required_tool,
+                                            "arguments": '{"workspace_id":"ws-1","folder_name":"tmp_schema_cap"}',
+                                        },
+                                    }
+                                ],
+                            }
+                        }
+                    ]
+                }
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "DECISION: Inventory solution created and verified.",
+                            "tool_calls": [],
+                        }
+                    }
+                ]
+            }
+
+    class _FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            del args, kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            del exc_type, exc, tb
+            return False
+
+        async def post(self, *args, **kwargs):
+            del args
+            post_bodies.append(kwargs["json"])
+            return _FakeResponse(len(post_bodies))
+
+    async def _fake_execute(**kwargs):
+        assert kwargs["tool_name"] == required_tool
+        return SimpleNamespace(
+            output=json.dumps({"status": "created", "folderId": "folder-1", "folderName": "tmp_schema_cap"}),
+            policy_decision="allowed",
+            ok=True,
+        )
+
+    monkeypatch.setattr(oe.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr("services.agenthub.tool_runtime.execute", _fake_execute)
+
+    job = _make_job("j-schema-cap")
+    assignment = AgentAssignment(
+        agent_id="fabric-data-engineer",
+        session_id="agent-schema-cap",
+        role="Create Fabric inventory visualization solution",
+        goal=(
+            "Create an end to end solution (ingestion, transformation, semantic modelling and a report) "
+            "which shows all Fabric items I have access to in a nice appropriate visualization. "
+            "Work in folder tmp_schema_cap."
+        ),
+    )
+    job.agents.append(assignment)
+    exe = _JobExecution(job, copilot_token="tok", mcp_tokens=None)
+    template = SimpleNamespace(
+        name="FabricDataEngineer",
+        display_name="FabricDataEngineer",
+        system_prompt="You are a Fabric data engineer.",
+        available_tools=tool_names,
+    )
+
+    await engine._run_agent(exe, assignment, template, asyncio.Queue(), allowed_tools=set(tool_names))
+
+    assert len(post_bodies[0]["tools"]) == 1
+    assert post_bodies[0]["tools"][0]["function"]["name"] == required_tool
+    assert post_bodies[0]["tool_choice"] == {
+        "type": "function",
+        "function": {"name": required_tool},
+    }
+    assert assignment.status == AgentStatus.COMPLETED
+    assert assignment.actions[0].entity_type == "WorkspaceInventorySolution"
 
 
 @pytest.mark.asyncio

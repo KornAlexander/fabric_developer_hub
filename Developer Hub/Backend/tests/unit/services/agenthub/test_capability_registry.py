@@ -49,9 +49,8 @@ def test_validate_skill_references_aggregates_per_skill() -> None:
     assert "gone3" in issues[0].detail
 
 
-def test_validate_skill_references_downgrades_to_warning_when_servers_unavailable() -> None:
-    """When at least one server failed/was pruned, missing tools are an
-    ops issue (WARNING), not a catalog bug (ERROR)."""
+def test_validate_skill_references_stays_error_when_servers_unavailable() -> None:
+    """Unavailable servers still produce hard errors: partial MCP is fatal."""
     skills = {
         "docs": Skill(id="docs", name="d", description="d", tools=["docs_foo"]),
     }
@@ -60,8 +59,24 @@ def test_validate_skill_references_downgrades_to_warning_when_servers_unavailabl
         unavailable_servers={"fabric-docs": "npx not found"},
     )
     assert len(issues) == 1
-    assert issues[0].severity == IssueSeverity.WARNING
+    assert issues[0].severity == IssueSeverity.ERROR
     assert "fabric-docs" in issues[0].detail
+
+
+def test_raise_for_issues_raises() -> None:
+    issue = CapabilityIssue(
+        severity=IssueSeverity.ERROR,
+        kind="skill_tool_missing",
+        subject_id="sk",
+        detail="missing",
+    )
+    try:
+        capability_registry.raise_for_issues([issue])
+    except RuntimeError as exc:
+        assert "Capability catalog validation failed" in str(exc)
+        assert "skill_tool_missing" in str(exc)
+    else:
+        raise AssertionError("raise_for_issues should have raised")
 
 
 def test_validate_skill_references_empty_tools_list_is_ok() -> None:
@@ -78,6 +93,35 @@ def test_validate_agent_skill_references_flags_unknown_skill() -> None:
     assert issues[0].kind == "agent_skill_missing"
     assert issues[0].subject_id == "agent-a"
     assert "ghost" in issues[0].detail
+
+
+def test_validate_discovered_tools_bound_to_agents_flags_unbound_tool() -> None:
+    skills = {
+        "reachable": Skill(id="reachable", name="r", description="d", tools=["tool_a"]),
+        "orphan": Skill(id="orphan", name="o", description="d", tools=["tool_b"]),
+    }
+    issues = capability_registry.validate_discovered_tools_bound_to_agents(
+        skills,
+        {"agent-a": ["reachable"]},
+        ["tool_a", "tool_b", "tool_c"],
+    )
+    assert len(issues) == 1
+    assert issues[0].severity == IssueSeverity.ERROR
+    assert issues[0].kind == "discovered_tool_unbound"
+    assert "tool_b" in issues[0].detail
+    assert "tool_c" in issues[0].detail
+
+
+def test_validate_discovered_tools_bound_to_agents_accepts_agent_bound_tools() -> None:
+    skills = {
+        "reachable": Skill(id="reachable", name="r", description="d", tools=["tool_a", "tool_b"]),
+    }
+    issues = capability_registry.validate_discovered_tools_bound_to_agents(
+        skills,
+        {"agent-a": ["reachable"]},
+        ["tool_a", "tool_b"],
+    )
+    assert issues == []
 
 
 def test_validate_catalog_skips_tool_checks_when_no_manager() -> None:

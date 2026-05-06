@@ -116,6 +116,71 @@ def test_trace_events_do_not_enter_audit(monkeypatch: pytest.MonkeyPatch) -> Non
     assert audit_calls == []
 
 
+def test_trust_and_diagnostic_events_are_categorized_and_summarized() -> None:
+    exe = _exe()
+
+    exe.emit(
+        "diagnostic_baseline_captured",
+        agentId="engineer",
+        toolName="fabric_write_file",
+        baselineCount=2,
+        summary="Captured report diagnostics before write.",
+    )
+    exe.emit(
+        "diagnostic_new_issues",
+        agentId="engineer",
+        toolName="fabric_write_file",
+        newIssueCount=1,
+        summary="Post-write validation found a new issue.",
+        issues=[{"severity": "error", "code": "SchemaViolation", "message": "Missing visual position."}],
+    )
+    exe.emit(
+        "mcp_server_approval_required",
+        serverId="workspace-powerbi-tools",
+        source="workspace",
+        toolsPreview=["read_model", "publish_model", "delete_model"],
+        risk="Workspace MCP tools can modify Fabric items.",
+    )
+    exe.emit(
+        "runtime_config_refreshed",
+        configVersion="cfg-2026-04-30",
+        summary="Runtime policy cache refreshed.",
+    )
+
+    assert [event["logCategory"] for event in exe._ring] == [
+        "diagnostic",
+        "high_level",
+        "high_level",
+        "diagnostic",
+    ]
+    baseline, new_issue, approval, runtime_refresh = exe._ring
+    assert baseline["payloadSummary"]["baselineCount"] == 2
+    assert new_issue["payloadSummary"]["newIssueCount"] == 1
+    assert new_issue["payloadSummary"]["issuePreview"] == ["Missing visual position."]
+    assert approval["payloadSummary"]["serverId"] == "workspace-powerbi-tools"
+    assert approval["payloadSummary"]["toolsPreview"] == ["read_model", "publish_model", "delete_model"]
+    assert approval["payloadSummary"]["risk"] == "Workspace MCP tools can modify Fabric items."
+    assert runtime_refresh["payloadSummary"]["configVersion"] == "cfg-2026-04-30"
+    assert runtime_refresh["payloadSummary"]["summary"] == "Runtime policy cache refreshed."
+
+
+def test_emit_persists_public_trust_events_but_not_trace(monkeypatch: pytest.MonkeyPatch) -> None:
+    exe = _exe()
+    persisted: list[dict] = []
+    monkeypatch.setattr(oe.session_event_store, "append_event", lambda _session_id, payload: persisted.append(payload))
+
+    exe.emit(
+        "mcp_server_approval_required",
+        serverId="workspace-powerbi-tools",
+        risk="Workspace MCP tools can modify Fabric items.",
+    )
+    exe.emit("resource_lock_acquired", key="workspace:1", mode="write", runId="r1")
+
+    assert [event["type"] for event in persisted] == ["mcp_server_approval_required"]
+    assert persisted[0]["logCategory"] == "high_level"
+    assert exe._trace_ring[-1]["type"] == "resource_lock_acquired"
+
+
 def test_ring_buffer_bounded_at_max() -> None:
     exe = _exe()
     for i in range(_JobExecution.EVENT_BUFFER_MAX + 20):

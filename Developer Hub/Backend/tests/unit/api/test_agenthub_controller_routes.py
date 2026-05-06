@@ -5,7 +5,7 @@ orchestrator/copilot.
 from __future__ import annotations
 
 import logging
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi import FastAPI
@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 from api import agenthub_controller, github_chat_controller
 from domain.models.authentication_models import AuthorizationContext
 from domain.models.composition import AgentSlot, Budget, Composition, Handoff
-from services.agenthub import _db, session_store
+from services.agenthub import _db, orchestrator_engine as oe, session_event_store, session_store, tool_policies
 
 
 @pytest.fixture(autouse=True)
@@ -22,9 +22,13 @@ def _isolated_agenthub_db(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     db = tmp_path / "agenthub.db"
     monkeypatch.setenv("AGENTHUB_DB_PATH", str(db))
     monkeypatch.setattr(_db, "_DB_PATH", None)
+    session_event_store.reset_init_for_tests()
+    agenthub_controller._mission_status_log_cache.clear()
     session_store.init_db()
+    session_event_store.init_schema()
     yield
     monkeypatch.setattr(_db, "_DB_PATH", None)
+    session_event_store.reset_init_for_tests()
 
 
 @pytest.fixture
@@ -94,6 +98,60 @@ def test_get_agent_template_not_found(client: TestClient) -> None:
 def test_get_internal_orchestrator_template_not_found(client: TestClient) -> None:
     r = client.get("/api/agents/orchestrator")
     assert r.status_code == 404
+
+
+def test_workspace_items_preview_degrades_to_empty_on_transient_item_failure(
+    app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _override_user(app, _make_ctx())
+    agenthub_controller._workspace_items_cache.clear()
+
+    async def _fake_acquire(_token: str) -> dict:
+        return {"FABRIC_API_TOKEN": "fab-tok"}
+
+    async def _call_tool(name: str, *_args, **_kwargs) -> str:
+        if name == "fabric_list_items":
+            return "HTTP 503: transient Fabric item listing failure"
+        if name == "fabric_list_folders":
+            return "[]"
+        raise AssertionError(name)
+
+    fake_manager = AsyncMock()
+    fake_manager.call_tool.side_effect = _call_tool
+    monkeypatch.setattr(github_chat_controller, "_acquire_mcp_tokens", _fake_acquire)
+    monkeypatch.setattr(github_chat_controller, "_mcp_manager", fake_manager, raising=False)
+
+    r = client.get("/api/workspaces/ws-1/items", headers={"X-Fabric-Token": "Bearer test"})
+
+    assert r.status_code == 200
+    assert r.json()["items"] == []
+
+
+def test_workspace_items_manual_refresh_keeps_item_failure_strict(
+    app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _override_user(app, _make_ctx())
+    agenthub_controller._workspace_items_cache.clear()
+
+    async def _fake_acquire(_token: str) -> dict:
+        return {"FABRIC_API_TOKEN": "fab-tok"}
+
+    async def _call_tool(name: str, *_args, **_kwargs) -> str:
+        if name == "fabric_list_items":
+            return "HTTP 503: transient Fabric item listing failure"
+        if name == "fabric_list_folders":
+            return "[]"
+        raise AssertionError(name)
+
+    fake_manager = AsyncMock()
+    fake_manager.call_tool.side_effect = _call_tool
+    monkeypatch.setattr(github_chat_controller, "_acquire_mcp_tokens", _fake_acquire)
+    monkeypatch.setattr(github_chat_controller, "_mcp_manager", fake_manager, raising=False)
+
+    r = client.get("/api/workspaces/ws-1/items?refresh=1", headers={"X-Fabric-Token": "Bearer test"})
+
+    assert r.status_code == 502
+    assert "transient Fabric item listing failure" in r.json()["detail"]
 
 
 def test_plan_view_filters_legacy_internal_orchestrator_slot() -> None:
@@ -247,6 +305,41 @@ def test_sse_snapshot_seq_does_not_skip_initial_replay() -> None:
     assert agenthub_controller._sse_snapshot_seq(7) == 7
 
 
+def test_empty_replay_sse_logs_actionable_mission_status(
+    app: FastAPI,
+    client: TestClient,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _override_user(app, _make_ctx())
+    created = client.post(
+        "/api/sessions",
+        json={
+            "task_description": "Build the workspace inventory report",
+            "workspace_id": "11111111-1111-4111-8111-111111111111",
+        },
+    )
+    assert created.status_code == 200
+    session_id = created.json()["id"]
+
+    caplog.clear()
+    caplog.set_level(logging.INFO, logger="api.agenthub_controller")
+    for _ in range(2):
+        with client.stream("GET", f"/api/sessions/{session_id}/events") as response:
+            assert response.status_code == 200
+            assert "".join(response.iter_text()) == ""
+
+    mission_status = [
+        record.getMessage()
+        for record in caplog.records
+        if "[MISSION_STATUS:" in record.getMessage()
+    ]
+    assert len(mission_status) == 1
+    assert "process=no" in mission_status[0]
+    assert "persisted_events=0" in mission_status[0]
+    assert "waiting_for=session is planned/approved and waiting for the run request to attach execution" in mission_status[0]
+    assert "next_action=classify as no-active-execution; do not reconnect every 2s" in mission_status[0]
+
+
 # ─────────────────────────────────────────────────────────────
 # _user_key_from_context — unit tests for the helper directly.
 # ─────────────────────────────────────────────────────────────
@@ -377,3 +470,75 @@ def test_create_session_seeds_dynamic_composition_without_composer(
             "status": "planned",
         }
     ]
+
+
+def test_e2e_create_run_events_prove_backend_pi_harness_has_tools(
+    app: FastAPI,
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _override_user(app, _make_ctx())
+    tool_policies.register_all()
+
+    class _PiHarnessEngine:
+        def __init__(self) -> None:
+            self._real = oe.OrchestratorEngine()
+            self._execution: oe._JobExecution | None = None
+
+        async def start_job(self, job, copilot_token, mcp_tokens):
+            execution = oe._JobExecution(job, copilot_token=copilot_token, mcp_tokens=mcp_tokens)
+            self._execution = execution
+            job.status = agenthub_controller.JobStatus.RUNNING
+            session_store.update_session(job)
+            self._real._emit_startup_snapshot(execution)
+
+        def get_job_execution(self, session_id: str):
+            if self._execution and self._execution.job.id == session_id:
+                return self._execution
+            return None
+
+    engine = _PiHarnessEngine()
+
+    async def _fake_copilot_token(_request) -> str:
+        return "copilot-token"
+
+    monkeypatch.setattr(agenthub_controller, "_copilot_token", _fake_copilot_token)
+    monkeypatch.setattr(agenthub_controller, "get_orchestrator_engine", lambda: engine)
+
+    created = client.post(
+        "/api/sessions",
+        json={
+            "task_description": "Verify backend Pi orchestration harness",
+            "workspace_id": "11111111-1111-4111-8111-111111111111",
+            "context": {"require_approvals": False},
+        },
+    )
+    assert created.status_code == 200
+    session_id = created.json()["id"]
+    created_context = created.json()["context"]
+    assert created_context["runtime"] == "pi"
+    assert created_context["orchestration_runtime"] == "pi"
+    assert created_context["pi_orchestration"]["orchestrationHarness"] == "pi-agent-core"
+    assert created_context["pi_orchestration"]["toolCount"] > 0
+    assert any(tool["name"] == "fabric_list_workspaces" for tool in created_context["pi_orchestration"]["tools"])
+
+    run = client.post(f"/api/sessions/{session_id}/run")
+    assert run.status_code == 200
+
+    events = client.get(f"/api/sessions/{session_id}/events.json?types=pi.orchestration.start")
+    assert events.status_code == 200
+    body = events.json()
+    assert body["liveExecution"] is True
+    assert body["count"] == 1
+    start_event = body["events"][0]
+    assert start_event["runtime"] == "pi"
+    assert start_event["runtimePackage"] == "@mariozechner/pi-agent-core"
+    assert start_event["orchestrationHarness"] == "pi-agent-core"
+    assert start_event["harnessPackage"] == "npm:@mariozechner/pi-agent-core@0.71.1"
+    assert start_event["toolRegistry"] == "agenthub-tool-runtime"
+    assert start_event["toolExecutionBridge"] == "agenthub-tool-runtime-proxy"
+    assert start_event["toolCount"] > 0
+    assert start_event["emittedToolCount"] > 0
+    assert start_event["toolPolicySummary"]["readSafe"] > 0
+    assert start_event["toolPolicySummary"]["autoAllowed"] > 0
+    assert any(tool["name"] == "fabric_list_workspaces" for tool in start_event["tools"])

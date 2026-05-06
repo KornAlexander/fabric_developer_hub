@@ -126,8 +126,8 @@ async def test_start_job_uses_dynamic_runtime_by_default(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_dynamic_runtime_preserves_sequential_dependencies(monkeypatch):
-    """Composition handoffs become dynamic task dependencies."""
+async def test_dynamic_runtime_seeds_generalist_for_sequential_composition(monkeypatch):
+    """Dynamic runtime starts with the generalist even for sequential compositions."""
     monkeypatch.setattr(oe.httpx, "AsyncClient", _MockHttpClient)
     monkeypatch.setattr(oe, "update_session", lambda *a, **k: None)
     monkeypatch.setattr(oe, "log_audit", lambda *a, **k: None)
@@ -153,9 +153,11 @@ async def test_dynamic_runtime_preserves_sequential_dependencies(monkeypatch):
     if exe:
         await asyncio.gather(*exe.tasks, return_exceptions=True)
 
-    assert len(job.agents) == 2
     assert exe.dynamic_mission_state is not None
-    assert exe.dynamic_mission_state.tasks["b"].dependencies == ["a"]
+    assert list(exe.dynamic_mission_state.tasks) == ["generalist"]
+    assert exe.dynamic_mission_state.tasks["generalist"].dependencies == []
+    assert len(job.agents) == 1
+    assert job.agents[0].agent_id == "generalist"
 
 
 @pytest.mark.asyncio
@@ -198,8 +200,8 @@ async def test_cancel_propagates_through_driver(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_dynamic_supervisor_seed_runs_lead_then_workers(monkeypatch):
-    """End-to-end: supervisor composition is executed by dynamic tasks."""
+async def test_dynamic_supervisor_seed_runs_generalist_controller(monkeypatch):
+    """End-to-end: supervisor composition is routed through the dynamic generalist."""
     monkeypatch.setattr(oe.httpx, "AsyncClient", _MockHttpClient)
     monkeypatch.setattr(oe, "update_session", lambda *a, **k: None)
     monkeypatch.setattr(oe, "log_audit", lambda *a, **k: None)
@@ -226,7 +228,11 @@ async def test_dynamic_supervisor_seed_runs_lead_then_workers(monkeypatch):
     if exe:
         await asyncio.gather(*exe.tasks, return_exceptions=True)
 
-    assert len(job.agents) == 3
+    assert exe is not None
+    assert exe.dynamic_mission_state is not None
+    assert list(exe.dynamic_mission_state.tasks) == ["generalist"]
+    assert len(job.agents) == 1
+    assert job.agents[0].agent_id == "generalist"
 
 
 @pytest.mark.asyncio

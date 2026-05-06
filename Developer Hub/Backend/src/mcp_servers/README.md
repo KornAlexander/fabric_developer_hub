@@ -8,6 +8,7 @@ spawned by `MCPClientManager` (see `src/services/mcp/`).
 |---|---|
 | `fabric.py` | Fabric REST + OneLake tools exposed to the orchestrator LLM. |
 | `semantic_link.py` | Semantic-link / dataset tools. |
+| `stdio_jsonrpc_filter.py` | Wrapper for third-party stdio MCP servers that print non-protocol banners to stdout. |
 
 Configuration lives in [`../mcp_servers.json`](../mcp_servers.json); the
 manager reads it at startup and launches each entry as a subprocess.
@@ -25,3 +26,5 @@ stdio. It:
 
 - Import anything from `services.*` or `api.*` — these run in separate
   processes and must stay self-contained. Share code via `domain/` if needed.
+- Write logs or banners to stdout from a stdio MCP process. stdout is reserved
+  for JSON-RPC frames; diagnostics belong on stderr.

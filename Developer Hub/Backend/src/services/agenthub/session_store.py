@@ -47,6 +47,17 @@ _SENSITIVE_AUDIT_KEY_RE = re.compile(
 )
 _MAX_AUDIT_STRING_LEN = 500
 
+# Columns projected by ``list_sessions`` — excludes ``context`` because
+# that blob averages 300 KB / row (max 1.3 MB) and is never rendered in
+# the list view. Keep this in sync with ``_row_to_session(include_context=False)``.
+_LIST_COLUMNS = (
+    "id, user_id, user_upn, workspace_id, task_description, status, "
+    "composition, created_at, started_at, completed_at, "
+    "cancelled_at, cancelled_by_user_id, cancelled_by_upn, agents"
+)
+_LIST_TASK_DESCRIPTION_MAX_LEN = 500
+_LIST_AGENT_TEXT_MAX_LEN = 240
+
 
 def _sanitize_audit_value(value: Any) -> Any:
     if isinstance(value, dict):
@@ -100,6 +111,16 @@ def init_db() -> None:
 
             CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
             CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
+            -- Covers the hot ``WHERE user_id=? ORDER BY created_at DESC``
+            -- list query; without it SQLite materialises a TEMP B-TREE
+            -- for the sort even though only 50 rows are returned.
+            CREATE INDEX IF NOT EXISTS idx_sessions_user_created
+                ON sessions(user_id, created_at DESC);
+            -- Covers ``summarize_sessions`` (GROUP BY status WHERE user_id=?)
+            -- as a covering index so it never has to touch the (large)
+            -- session rows themselves.
+            CREATE INDEX IF NOT EXISTS idx_sessions_user_status
+                ON sessions(user_id, status);
 
             CREATE TABLE IF NOT EXISTS user_agent_configs (
                 id                  TEXT PRIMARY KEY,
@@ -292,25 +313,174 @@ def list_sessions(
     ``offset`` enables keyset-less pagination for the Recent-prompts UI,
     which lazy-loads older sessions as the user scrolls. Negative values are
     clamped to 0 to match SQLite semantics on other backends.
+
+    The ``context`` column (per-session attachment metadata, can be >1 MB)
+    is intentionally **not** projected here: the list view only renders
+    summary fields, so loading multi-MB context blobs for 50 rows just to
+    discard them turned a sub-millisecond SQL query into a 250–300 ms
+    Python JSON-decode hot path. ``get_session`` still loads the full row.
     """
+    limit = max(1, min(int(limit), 200))
     offset = max(0, int(offset))
     conn = _connect()
     try:
         if status:
             rows = conn.execute(
-                "SELECT * FROM sessions WHERE user_id = ? AND status = ? "
+                f"SELECT {_LIST_COLUMNS} FROM sessions "
+                "WHERE user_id = ? AND status = ? "
                 "ORDER BY created_at DESC LIMIT ? OFFSET ?",
                 (user_id, status, limit, offset),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT * FROM sessions WHERE user_id = ? "
+                f"SELECT {_LIST_COLUMNS} FROM sessions WHERE user_id = ? "
                 "ORDER BY created_at DESC LIMIT ? OFFSET ?",
                 (user_id, limit, offset),
             ).fetchall()
-        return [_row_to_session(r) for r in rows]
+        return [_row_to_session(r, include_context=False) for r in rows]
     finally:
         conn.close()
+
+
+def list_session_summaries(
+    user_id: str,
+    status: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    """Return compact wire rows for the Sessions dashboard.
+
+    This intentionally avoids hydrating full ``Job``/``Composition`` models.
+    The list page renders task/status/date/agent summary fields only, while
+    ``GET /api/sessions/{id}`` remains the full-fidelity path for details and
+    attachment bytes.
+    """
+    limit = max(1, min(int(limit), 200))
+    offset = max(0, int(offset))
+    conn = _connect()
+    try:
+        if status:
+            rows = conn.execute(
+                f"SELECT {_LIST_COLUMNS} FROM sessions "
+                "WHERE user_id = ? AND status = ? "
+                "ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                (user_id, status, limit, offset),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                f"SELECT {_LIST_COLUMNS} FROM sessions WHERE user_id = ? "
+                "ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                (user_id, limit, offset),
+            ).fetchall()
+        return [_row_to_session_summary(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def _safe_json_loads(raw: str | None, default: Any) -> Any:
+    if not raw:
+        return default
+    try:
+        return json.loads(raw)
+    except Exception:
+        return default
+
+
+def _compact_text(value: Any, max_len: int) -> str | None:
+    if value is None:
+        return None
+    text = str(value).replace("\r", " ").replace("\n", " ").strip()
+    if len(text) <= max_len:
+        return text
+    if max_len <= 3:
+        return text[:max_len]
+    return text[: max_len - 3].rstrip() + "..."
+
+
+def _compact_agent(raw: Any) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    return {
+        "agent_id": raw.get("agent_id"),
+        "session_id": raw.get("session_id"),
+        "role": raw.get("role"),
+        "status": raw.get("status"),
+        "goal": _compact_text(raw.get("goal"), _LIST_AGENT_TEXT_MAX_LEN),
+        "current_step": _compact_text(raw.get("current_step"), _LIST_AGENT_TEXT_MAX_LEN),
+        "phase_count": len(raw.get("phases") or []),
+        "action_count": len(raw.get("actions") or []),
+    }
+
+
+def _compact_plan_from_composition(raw: Any, session_id: str) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    slots = raw.get("slots") if isinstance(raw.get("slots"), list) else []
+    internal_agent_ids = {"orchestrator", "generalist"}
+    visible_slots = [
+        slot for slot in slots
+        if isinstance(slot, dict)
+        and slot.get("agentId") not in internal_agent_ids
+        and slot.get("id") not in internal_agent_ids
+    ]
+    steps = [
+        {
+            "id": str(slot.get("id") or f"slot-{idx + 1}"),
+            "title": str(slot.get("role") or "Agent"),
+            "description": str(slot.get("role") or "Agent"),
+        }
+        for idx, slot in enumerate(visible_slots)
+    ]
+    headline = str(raw.get("headline") or "Dynamic mission")
+    return {
+        "jobId": session_id,
+        "summary": headline,
+        "title": headline,
+        "subtitle": raw.get("subtitle"),
+        "steps": steps,
+        "footer": {
+            "agentCount": len(visible_slots),
+            "stepCount": len(visible_slots),
+        },
+    }
+
+
+def _row_to_session_summary(row: sqlite3.Row) -> dict[str, Any]:
+    agents_raw = _safe_json_loads(row["agents"], [])
+    compact_agents = [
+        item for item in (_compact_agent(agent) for agent in agents_raw)
+        if item is not None
+    ]
+    composition_raw = _safe_json_loads(row["composition"], None)
+    composition = None
+    if isinstance(composition_raw, dict):
+        composition = {
+            "sessionId": composition_raw.get("sessionId"),
+            "architecture": composition_raw.get("architecture"),
+            "headline": composition_raw.get("headline"),
+            "subtitle": composition_raw.get("subtitle"),
+            "entrypointSlotId": composition_raw.get("entrypointSlotId"),
+            "slotCount": len(composition_raw.get("slots") or []),
+        }
+    row_keys = set(row.keys())
+    return {
+        "id": row["id"],
+        "user_id": row["user_id"],
+        "user_upn": row["user_upn"] if "user_upn" in row_keys else None,
+        "workspace_id": row["workspace_id"],
+        "task_description": _compact_text(row["task_description"], _LIST_TASK_DESCRIPTION_MAX_LEN),
+        "context": None,
+        "status": row["status"],
+        "composition": composition,
+        "plan": _compact_plan_from_composition(composition_raw, row["id"]),
+        "created_at": row["created_at"],
+        "started_at": row["started_at"],
+        "completed_at": row["completed_at"],
+        "cancelled_at": row["cancelled_at"] if "cancelled_at" in row_keys else None,
+        "cancelled_by_user_id": row["cancelled_by_user_id"] if "cancelled_by_user_id" in row_keys else None,
+        "cancelled_by_upn": row["cancelled_by_upn"] if "cancelled_by_upn" in row_keys else None,
+        "agents": compact_agents,
+    }
 
 
 def summarize_sessions(user_id: str) -> dict[str, Any]:
@@ -405,7 +575,7 @@ def delete_session(session_id: str) -> bool:
         conn.close()
 
 
-def _row_to_session(row: sqlite3.Row) -> Job:
+def _row_to_session(row: sqlite3.Row, *, include_context: bool = True) -> Job:
     agents_raw = json.loads(row["agents"]) if row["agents"] else []
     agents = []
     for a in agents_raw:
@@ -434,13 +604,17 @@ def _row_to_session(row: sqlite3.Row) -> Job:
 
     row_keys = set(row.keys())
     cancelled_at_raw = row["cancelled_at"] if "cancelled_at" in row_keys else None
+    context_value: Any = None
+    if include_context and "context" in row_keys:
+        raw_ctx = row["context"]
+        context_value = json.loads(raw_ctx) if raw_ctx else None
     return Job(
         id=row["id"],
         user_id=row["user_id"],
         user_upn=row["user_upn"] if "user_upn" in row_keys else None,
         workspace_id=row["workspace_id"],
         task_description=row["task_description"],
-        context=json.loads(row["context"]) if row["context"] else None,
+        context=context_value,
         status=JobStatus(row["status"]),
         composition=composition,
         created_at=datetime.fromisoformat(row["created_at"]),

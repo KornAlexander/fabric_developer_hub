@@ -33,6 +33,14 @@ dependencies = [
     "aiofiles>=23",
     # Agent tooling
     "mcp>=1.0",
+    "docker>=7.1",
+    # Runtime dependencies for the vendored Power BI Design MCP server
+    # (tmdaidevs/powerbi-creator-skill/mcp-server), hosted by the backend
+    # MCP runtime container/process.
+    "fastmcp>=0.2.0",
+    "pydantic-settings>=2.2.1",
+    "structlog>=24.1.0",
+    "tenacity>=8.2.3",
     "cachetools>=5",
     # Declarative capability catalog (skills + agent → skill mapping)
     "pyyaml>=6",

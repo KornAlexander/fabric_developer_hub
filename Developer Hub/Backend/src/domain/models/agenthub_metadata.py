@@ -13,6 +13,10 @@ class ConfiguredAgent(BaseModel):
 
 
 class AgentHubMetadata(BaseModel):
+    # Forward-compatibility marker. Bump when introducing a non-additive
+    # change so loaders can branch on the version. Defaults to 1 so
+    # already-persisted payloads (which lack the field) load cleanly.
+    schema_version: int = Field(default=1, alias="schemaVersion")
     default_model: str = Field(default="gpt-4o", alias="defaultModel")
     max_rounds: int = Field(default=15, alias="maxRounds")
     verbose_default: bool = Field(default=True, alias="verboseDefault")

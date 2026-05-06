@@ -251,7 +251,7 @@ export function buildModelTree(
       );
 
       for (const hn of Object.keys(t.hierarchies).sort()) {
-        const lvlStr = t.hierarchies[hn].levels.join(" \u2192 ");
+        const lvlStr = (t.hierarchies[hn].levels ?? []).join(" \u2192 ");
         items.push({
           indent: 2,
           icon: "hierarchy",

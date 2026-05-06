@@ -24,26 +24,87 @@
         "azure_list_role_definitions",
         "azure_get_activity_log",
         "azure_get_resource_health",
+        "azure_list_diagnostic_settings",
+        "azure_list_metric_definitions",
+        "azure_query_metrics",
+        "azure_network_inventory",
+        "azure_diagnose_resource",
         "azure_list_fabric_capacities",
         "azure_get_fabric_capacity",
-        "azure_resume_fabric_capacity"
+        "azure_resume_fabric_capacity",
+        "entra_token_diagnostics",
+        "entra_get_signed_in_user",
+        "entra_get_user",
+        "entra_get_service_principal",
+        "entra_diagnose_principal_access",
+        "entra_list_group_memberships",
+        "entra_list_app_role_assignments"
+      ]
+    },
+    "azure-mcp-guidance": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@azure/mcp@latest",
+        "server",
+        "start",
+        "--tool",
+        "get_azure_bestpractices_get",
+        "--tool",
+        "get_azure_bestpractices_ai_app",
+        "--read-only"
+      ],
+      "requires_auth": false,
+      "skip_startup_discovery": true,
+      "allow_static_discovery_fallback": true,
+      "tool_allowlist": [
+        "get_azure_bestpractices_get",
+        "get_azure_bestpractices_ai_app"
+      ],
+      "static_tools": [
+        {"name": "get_azure_bestpractices_get", "description": "Azure MCP Server: get current Azure best-practice guidance for a resource and action."},
+        {"name": "get_azure_bestpractices_ai_app", "description": "Azure MCP Server: get current best-practice guidance for Azure AI application and agent development."}
       ]
     },
     "pbi-fixer": {
       "command": "${PYTHON}",
-      "args": ["${REPO_DIR}/mcp/pbi_fixer/server.py"],
+      "args": ["${WORKSPACE_ROOT}/mcp/pbi_fixer/server.py"],
       "requires_auth": false
     },
     "pbir-tools": {
       "command": "${PYTHON}",
-      "args": ["${REPO_DIR}/mcp/pbir_tools/server.py"],
+      "args": ["${WORKSPACE_ROOT}/mcp/pbir_tools/server.py"],
       "requires_auth": false
     },
     "fabric-docs": {
       "command": "npx",
       "args": ["-y", "@microsoft/fabric-mcp", "server", "start"],
       "requires_auth": false,
-      "tool_allowlist": ["docs"]
+      "skip_startup_discovery": true,
+      "allow_static_discovery_fallback": true,
+      "tool_allowlist": ["docs"],
+      "static_tools": [
+        {"name": "docs", "description": "Microsoft Fabric local MCP: search and retrieve Fabric documentation."}
+      ]
+    },
+    "microsoft-docs": {
+      "transport": "streamable_http",
+      "url": "https://learn.microsoft.com/api/mcp",
+      "requires_auth": false,
+      "timeout_seconds": 30,
+      "sse_read_timeout_seconds": 120,
+      "skip_startup_discovery": true,
+      "allow_static_discovery_fallback": true,
+      "tool_allowlist": [
+        "microsoft_docs_search",
+        "microsoft_docs_fetch",
+        "microsoft_code_sample_search"
+      ],
+      "static_tools": [
+        {"name": "microsoft_docs_search", "description": "Microsoft Learn Docs MCP: search official Microsoft documentation."},
+        {"name": "microsoft_docs_fetch", "description": "Microsoft Learn Docs MCP: fetch complete official Microsoft documentation pages."},
+        {"name": "microsoft_code_sample_search", "description": "Microsoft Learn Docs MCP: search official Microsoft code samples."}
+      ]
     },
     "fabric-remote-core": {
       "transport": "streamable_http",
@@ -138,6 +199,7 @@
       "tool_allowlist": ["browser_verify_visual_render"],
       "env": {
         "NODE_PATH": "/usr/local/lib/node_modules",
+        "BROWSER_VISUAL_MAX_TIMEOUT_SECONDS": "600",
         "BROWSER_VISUAL_CHROMIUM_EXECUTABLE": "/usr/bin/chromium"
       }
     },
@@ -159,16 +221,154 @@
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
       "requires_auth": false,
-      "tool_allowlist": ["sequential_thinking"],
+      "tool_allowlist": ["sequentialthinking"],
       "env": {
         "DISABLE_THOUGHT_LOGGING": "true"
       }
+    },
+    "powerbi-modeling-mcp": {
+      "command": "${PYTHON}",
+      "args": [
+        "${SRC_DIR}/mcp_servers/stdio_jsonrpc_filter.py",
+        "--",
+        "npx",
+        "-y",
+        "@microsoft/powerbi-modeling-mcp@latest",
+        "--start",
+        "--skipconfirmation"
+      ],
+      "requires_auth": true,
+      "auth_token_env": "POWERBI_API_TOKEN",
+      "discovery_timeout_seconds": 25,
+      "skip_startup_discovery": true,
+      "allow_static_discovery_fallback": true,
+      "static_tools": [
+        {"name": "database_operations", "description": "Power BI modeling MCP: database-level semantic model operations.", "inputSchema": {"type": "object", "properties": {}, "additionalProperties": true, "required": []}},
+        {"name": "model_operations", "description": "Power BI modeling MCP: model metadata and compatibility operations.", "inputSchema": {"type": "object", "properties": {}, "additionalProperties": true, "required": []}},
+        {"name": "table_operations", "description": "Power BI modeling MCP: create, update, inspect, and delete model tables.", "inputSchema": {"type": "object", "properties": {}, "additionalProperties": true, "required": []}},
+        {"name": "column_operations", "description": "Power BI modeling MCP: create, update, inspect, and delete table columns.", "inputSchema": {"type": "object", "properties": {}, "additionalProperties": true, "required": []}},
+        {"name": "measure_operations", "description": "Power BI modeling MCP: create, update, inspect, and delete DAX measures.", "inputSchema": {"type": "object", "properties": {}, "additionalProperties": true, "required": []}},
+        {"name": "named_expression_operations", "description": "Power BI modeling MCP: manage named expressions in a semantic model.", "inputSchema": {"type": "object", "properties": {}, "additionalProperties": true, "required": []}},
+        {"name": "function_operations", "description": "Power BI modeling MCP: manage model functions.", "inputSchema": {"type": "object", "properties": {}, "additionalProperties": true, "required": []}},
+        {"name": "object_translation_operations", "description": "Power BI modeling MCP: manage model object translations.", "inputSchema": {"type": "object", "properties": {}, "additionalProperties": true, "required": []}},
+        {"name": "relationship_operations", "description": "Power BI modeling MCP: create, update, inspect, and delete table relationships.", "inputSchema": {"type": "object", "properties": {}, "additionalProperties": true, "required": []}},
+        {"name": "dax_query_operations", "description": "Power BI modeling MCP: execute and validate DAX queries against semantic models.", "inputSchema": {"type": "object", "properties": {}, "additionalProperties": true, "required": []}},
+        {"name": "partition_operations", "description": "Power BI modeling MCP: manage semantic model table partitions.", "inputSchema": {"type": "object", "properties": {}, "additionalProperties": true, "required": []}},
+        {"name": "calculation_group_operations", "description": "Power BI modeling MCP: manage calculation groups and calculation items.", "inputSchema": {"type": "object", "properties": {}, "additionalProperties": true, "required": []}},
+        {"name": "security_role_operations", "description": "Power BI modeling MCP: manage row-level security roles.", "inputSchema": {"type": "object", "properties": {}, "additionalProperties": true, "required": []}},
+        {"name": "calendar_operations", "description": "Power BI modeling MCP: manage model calendars.", "inputSchema": {"type": "object", "properties": {}, "additionalProperties": true, "required": []}},
+        {"name": "query_group_operations", "description": "Power BI modeling MCP: manage query groups.", "inputSchema": {"type": "object", "properties": {}, "additionalProperties": true, "required": []}},
+        {"name": "user_hierarchy_operations", "description": "Power BI modeling MCP: manage user hierarchies.", "inputSchema": {"type": "object", "properties": {}, "additionalProperties": true, "required": []}},
+        {"name": "culture_operations", "description": "Power BI modeling MCP: manage model cultures and localization metadata.", "inputSchema": {"type": "object", "properties": {}, "additionalProperties": true, "required": []}},
+        {"name": "perspective_operations", "description": "Power BI modeling MCP: manage model perspectives.", "inputSchema": {"type": "object", "properties": {}, "additionalProperties": true, "required": []}},
+        {"name": "connection_operations", "description": "Power BI modeling MCP: manage semantic model connections.", "inputSchema": {"type": "object", "properties": {}, "additionalProperties": true, "required": []}},
+        {"name": "transaction_operations", "description": "Power BI modeling MCP: manage transactional modeling operations.", "inputSchema": {"type": "object", "properties": {}, "additionalProperties": true, "required": []}},
+        {"name": "trace_operations", "description": "Power BI modeling MCP: inspect and manage modeling traces.", "inputSchema": {"type": "object", "properties": {}, "additionalProperties": true, "required": []}}
+      ],
+      "env": {
+        "PBI_MODELING_MCP_ACCESS_TOKEN": "${POWERBI_API_TOKEN}"
+      }
+    },
+    "powerbi-design": {
+      "command": "${PYTHON}",
+      "args": ["-m", "src.server.mcp_server"],
+      "cwd": "${WORKSPACE_ROOT}/external/powerbi-creator-skill/mcp-server",
+      "requires_auth": true,
+      "auth_token_env": "POWERBI_API_TOKEN",
+      "skip_startup_discovery": true,
+      "allow_static_discovery_fallback": true,
+      "tool_allowlist": [
+        "analyze_report_structure",
+        "get_report_assets",
+        "apply_style_guide",
+        "patch_report_properties",
+        "patch_page_properties",
+        "patch_visual_properties",
+        "replace_theme_resource",
+        "validate_report_definition",
+        "preview_changes",
+        "diff_report_definition",
+        "update_report_definition",
+        "backup_report_definition",
+        "score_modernization_readiness",
+        "bulk_apply_style_guide",
+        "extract_style_guide_from_report",
+        "add_visual_to_page",
+        "rearrange_page_visuals",
+        "add_image_visual",
+        "build_page",
+        "get_default_style_guide",
+        "set_default_style_guide",
+        "get_audit_log",
+        "list_backups",
+        "restore_report_definition",
+        "apply_full_style",
+        "add_page",
+        "reorder_pages",
+        "full_modernization",
+        "inject_custom_theme",
+        "apply_conditional_format",
+        "remove_visual",
+        "remove_page",
+        "rename_visual",
+        "get_semantic_model_schema",
+        "suggest_visuals",
+        "auto_layout",
+        "compare_reports",
+        "export_report_summary"
+      ],
+      "static_tools": [
+        "analyze_report_structure",
+        "get_report_assets",
+        "apply_style_guide",
+        "patch_report_properties",
+        "patch_page_properties",
+        "patch_visual_properties",
+        "replace_theme_resource",
+        "validate_report_definition",
+        "preview_changes",
+        "diff_report_definition",
+        "update_report_definition",
+        "backup_report_definition",
+        "score_modernization_readiness",
+        "bulk_apply_style_guide",
+        "extract_style_guide_from_report",
+        "add_visual_to_page",
+        "rearrange_page_visuals",
+        "add_image_visual",
+        "build_page",
+        "get_default_style_guide",
+        "set_default_style_guide",
+        "get_audit_log",
+        "list_backups",
+        "restore_report_definition",
+        "apply_full_style",
+        "add_page",
+        "reorder_pages",
+        "full_modernization",
+        "inject_custom_theme",
+        "apply_conditional_format",
+        "remove_visual",
+        "remove_page",
+        "rename_visual",
+        "get_semantic_model_schema",
+        "suggest_visuals",
+        "auto_layout",
+        "compare_reports",
+        "export_report_summary"
+      ]
     },
     "time": {
       "command": "uvx",
       "args": ["mcp-server-time"],
       "requires_auth": false,
-      "tool_allowlist": ["get_current_time", "convert_time"]
+      "skip_startup_discovery": true,
+      "allow_static_discovery_fallback": true,
+      "tool_allowlist": ["get_current_time", "convert_time"],
+      "static_tools": [
+        {"name": "get_current_time", "description": "Time MCP: get the current time for a timezone."},
+        {"name": "convert_time", "description": "Time MCP: convert a time from one timezone to another."}
+      ]
     }
   }
 }

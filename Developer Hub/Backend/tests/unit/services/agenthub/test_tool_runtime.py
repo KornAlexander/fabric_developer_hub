@@ -196,6 +196,36 @@ def test_write_tool_with_auto_allowed_dispatches():
     mgr.call_tool.assert_awaited()
 
 
+def test_tool_runtime_merges_latency_breakdown_from_manager():
+    register_tool(ToolPolicy("safe_read", ToolSensitivity.READ_SAFE, auto_allowed=True))
+    mgr = AsyncMock()
+    mgr.call_tool_with_metrics = AsyncMock(return_value=type("CallResult", (), {
+        "output": "ok",
+        "latency_breakdown_ms": {
+            "sidecarHttpMs": 8,
+            "mcpProcessStartupMs": 13,
+            "mcpToolExecutionMs": 21,
+        },
+    })())
+
+    r = asyncio.run(tool_runtime.execute(
+        tool_name="safe_read",
+        arguments={},
+        ctx=_ctx(),
+        mcp_manager=mgr,
+        mcp_tokens=None,
+    ))
+
+    assert r.ok is True
+    assert r.latency_ms is not None
+    assert r.latency_breakdown_ms is not None
+    assert r.latency_breakdown_ms["backendPolicyMs"] >= 0
+    assert r.latency_breakdown_ms["sidecarHttpMs"] == 8
+    assert r.latency_breakdown_ms["mcpProcessStartupMs"] == 13
+    assert r.latency_breakdown_ms["mcpToolExecutionMs"] == 21
+    assert r.latency_breakdown_ms["backendTotalMs"] == r.latency_ms
+
+
 def test_canonical_mcp_error_output_marks_tool_failed():
     register_tool(ToolPolicy("safe_write", ToolSensitivity.WRITE, auto_allowed=True))
     mgr = _mock_mgr(return_value='Error creating item: 400 - {"errorCode":"InvalidItemType"}')
@@ -223,6 +253,25 @@ def test_existing_create_conflict_remains_idempotent_success():
     ))
     assert r.ok is True
     assert r.policy_decision == "allowed"
+
+
+def test_inventory_partial_error_is_failed_even_with_existing_text():
+    register_tool(ToolPolicy("safe_write", ToolSensitivity.WRITE, auto_allowed=True))
+    mgr = _mock_mgr(return_value=(
+        'Error creating inventory solution: {'
+        '"status":"partial",'
+        '"errors":["Existing Lakehouse table is empty; already exists is not success"]'
+        '}'
+    ))
+    r = asyncio.run(tool_runtime.execute(
+        tool_name="safe_write",
+        arguments={"folder_name": "tmp_run"},
+        ctx=_ctx(),
+        mcp_manager=mgr,
+        mcp_tokens=None,
+    ))
+    assert r.ok is False
+    assert r.policy_decision == "tool_error"
 
 
 def test_destructive_tool_with_auto_allowed_dispatches():
@@ -303,6 +352,32 @@ def test_circuit_breaker_trips_after_threshold_identical_calls():
     # At least one of the later calls must be circuit_broken.
     assert "circuit_broken" in decisions, decisions
     reset_circuit_breaker("cb-test")
+
+
+def test_replayable_inventory_tool_reuses_cached_success_after_threshold():
+    tool_name = "fabric_create_workspace_inventory_solution"
+    register_tool(ToolPolicy(tool_name, ToolSensitivity.WRITE, auto_allowed=True))
+    mgr = _mock_mgr(return_value='{"status":"verified","id":"solution-1"}')
+    ctx = _ctx(session_id="cb-replay")
+    reset_circuit_breaker("cb-replay")
+
+    decisions = []
+    for _ in range(tool_runtime.CIRCUIT_BREAKER_THRESHOLD + 2):
+        r = asyncio.run(tool_runtime.execute(
+            tool_name=tool_name,
+            arguments={"workspace_id": "ws-1", "folder_name": "tmp_1"},
+            ctx=ctx,
+            mcp_manager=mgr,
+            mcp_tokens=None,
+        ))
+        assert r.ok is True
+        decisions.append(r.policy_decision)
+
+    assert "allowed" in decisions
+    assert "replayed_cached_result" in decisions
+    # Only the pre-threshold calls dispatch; later identical calls replay.
+    assert mgr.call_tool.await_count == tool_runtime.CIRCUIT_BREAKER_THRESHOLD - 1
+    reset_circuit_breaker("cb-replay")
 
 
 # ── Output wrapping ─────────────────────────────────────────────────

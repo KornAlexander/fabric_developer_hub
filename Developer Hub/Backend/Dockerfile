@@ -71,3 +71,16 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
 EXPOSE 5000
 
 CMD ["python3", "src/main.py"]
+
+
+# ── MCP runtime: per-mission sidecar HTTP service ───────────────────
+# Built separately so dynamically spawned MCP sidecars are not named as
+# backend containers. The dependency base is intentionally shared in dev:
+# MCP servers need the same Python package, uvx, Node/npm, and Chromium
+# helpers that the backend validates at startup.
+FROM production AS mcp-runtime
+
+HEALTHCHECK NONE
+EXPOSE 8765
+
+CMD ["python3", "-m", "services.mcp.mission_runtime_service"]

@@ -144,6 +144,12 @@ module.exports = {
     ],
     resolve: {
         modules: [__dirname, "src", "node_modules"],
+        alias: {
+            fonts: path.resolve(__dirname, '../node_modules/katex/dist/fonts'),
+        },
+        fallback: {
+            process: require.resolve('process/browser'),
+        },
         extensions: ["*", ".js", ".jsx", ".tsx", ".ts"],
     },
     module: {
@@ -173,6 +179,10 @@ module.exports = {
                 test: /\.(png|jpg|jpeg|svg)$/i, // this is for loading assests
                 type: '/asset/resource'
             },
+            {
+                test: /\.(woff2?|ttf|otf|eot)$/i,
+                type: 'asset/resource',
+            },
         ],
     },
     // Don't re-walk node_modules on every change — massively reduces CPU
@@ -185,6 +195,12 @@ module.exports = {
     infrastructureLogging: isDevServer
         ? { level: 'info', console: webpackConsole }
         : { level: 'info' },
+    ignoreWarnings: [
+        {
+            module: /node_modules\/(@mariozechner\/pi-ai)\/dist\//,
+            message: /Critical dependency: the request of a dependency is an expression/,
+        },
+    ],
     devServer: {
         port: 60006,
         open: false,
@@ -198,6 +214,8 @@ module.exports = {
             // 'warn' keeps genuine build errors visible.
             logging: 'warn',
             overlay: {
+                warnings: false,
+                errors: true,
                 runtimeErrors: (error) => {
                     if (error?.message?.includes('ResizeObserver')) return false;
                     return true;

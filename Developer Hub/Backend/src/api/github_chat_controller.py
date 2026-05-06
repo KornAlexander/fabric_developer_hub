@@ -428,11 +428,13 @@ _POWERBI_API_SCOPES = [
     "https://analysis.windows.net/powerbi/api/Report.ReadWrite.All",
 ]
 _ONELAKE_SCOPES = ["https://storage.azure.com/.default"]
-# Azure Management is intentionally not acquired in the default MCP token bundle.
-# Fabric inventory/report missions need Fabric, Power BI, and OneLake tokens only;
-# eagerly requesting ARM often triggers tenant consent/Conditional Access warnings
-# that look like mission failures even though the Fabric path can proceed.
+# Azure Management and Microsoft Graph are acquired best-effort so diagnostic
+# agents can triage capacity, RBAC, Entra identity, and surrounding Azure
+# resources. Failures remain non-fatal; Fabric-only missions can proceed with
+# the Fabric / Power BI / OneLake tokens.
 _AZURE_MANAGEMENT_SCOPES = ["https://management.azure.com/.default"]
+_PBI_SCOPES = ["https://analysis.windows.net/powerbi/api/.default"]
+_GRAPH_API_SCOPES = ["https://graph.microsoft.com/.default"]
 
 # Model to fall back to for tool-calling when the primary model doesn't support it
 TOOL_CALLING_FALLBACK_MODEL = "gpt-4o"
@@ -561,6 +563,9 @@ async def _do_acquire_mcp_tokens(fabric_token: str) -> dict[str, str] | None:
         _obo(_FABRIC_API_SCOPES, "Fabric API"),
         _obo(_POWERBI_API_SCOPES, "Power BI API"),
         _obo(_ONELAKE_SCOPES, "OneLake"),
+        _obo(_PBI_SCOPES, "Power BI"),
+        _obo(_AZURE_MANAGEMENT_SCOPES, "Azure Management"),
+        _obo(_GRAPH_API_SCOPES, "Microsoft Graph"),
     )
     tokens: dict[str, str] = {}
     label_to_key = {
@@ -568,6 +573,8 @@ async def _do_acquire_mcp_tokens(fabric_token: str) -> dict[str, str] | None:
         "Power BI API": "POWERBI_API_TOKEN",
         "OneLake": "ONELAKE_TOKEN",
         "Azure Management": "AZURE_MANAGEMENT_TOKEN",
+        "Power BI": "PBI_API_TOKEN",
+        "Microsoft Graph": "GRAPH_API_TOKEN",
     }
     for label, tok in results:
         if tok:

@@ -16,12 +16,6 @@ const MAJOR_WARNING_PATTERNS: RegExp[] = [
     /quota\s+exceeded/i,
 ];
 
-const LOG_CATEGORY_DEPTH: Record<PublicLogCategory, number> = {
-    high_level: 0,
-    detailed: 1,
-    diagnostic: 2,
-};
-
 export function inferIssueSeverity(message: string): "error" | "warn" | null {
     if (!message) return null;
     if (MAJOR_ERROR_PATTERNS.some((re) => re.test(message))) return "error";
@@ -42,14 +36,15 @@ export function isHighSignalLog(entry: LogEntry): boolean {
     if (entry.logCategory === "high_level") return true;
     if (level === "error" || level === "warn" || entry.kind === "error") return true;
     if (entry.kind === "action" || entry.kind === "decision") return true;
+    if (entry.kind === "rollup" || entry.kind === "steering") return true;
     if (entry.kind === "phase" && /complete|failed|approval|start/i.test(entry.message)) return true;
     return false;
 }
 
-export function logCategoryIncludedInView(entryCategory: PublicLogCategory, selectedCategory: PublicLogCategory): boolean {
-    return LOG_CATEGORY_DEPTH[entryCategory] <= LOG_CATEGORY_DEPTH[selectedCategory];
+export function logCategoryIncludedInView(_entryCategory: PublicLogCategory, _selectedCategory: PublicLogCategory): boolean {
+    return true;
 }
 
-export function logVisibleInCategory(entry: LogEntry, selectedCategory: PublicLogCategory): boolean {
-    return logCategoryIncludedInView(entry.logCategory, selectedCategory);
+export function logVisibleInCategory(_entry: LogEntry, _selectedCategory: PublicLogCategory): boolean {
+    return true;
 }
