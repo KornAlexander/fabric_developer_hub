@@ -310,6 +310,41 @@ Tracker:
 - [x] T8 dashboard item from workspace folder — likely fixed transitively by T1 (host dialog was blocking the item editor mount); needs Playwright re-verify
 - [x] T9 dashboard item icon — `Product.json` createExperience card icon swapped from `dial.png` to `developerHub.png`
 
+### WS-U — Kill the SLL Python sidecar (NEW, planned)
+
+**Goal.** Remove the entire `Developer Hub/SllSidecar/` Python service. Its only reason to exist is `sempy_labs`, which pulls in pythonnet → AMO/ADOMD .NET assemblies → x86_64-only DLLs → QEMU segfaults on aarch64 hosts. Neither BPA nor the Memory / Vertipaq Analyzer fundamentally needs Python or .NET — both can run inside the existing FastAPI backend (or even the TS workload backend) using the same APIs every Tabular Editor / DAX Studio user already hits.
+
+**Why now.**
+- WS-T verified that `--platform=linux/amd64` makes the container *report* x86_64 but the .NET 8 runtime segfaults under QEMU on this aarch64 dev host. The fix in WS-T is correct for x86_64 dev hosts but leaves ARM users (Apple Silicon, ARM Windows, ARM Linux) permanently broken for SLL endpoints.
+- The remote-sidecar workaround (`SLL_SIDECAR_URL` pointing at an x86_64 box / ACI) costs money + adds an ops dependency every customer would inherit.
+- The TS Model BPA already works without the sidecar by evaluating rules against TMDL JSON — proof that the BPA half doesn't need a live connection or AMO at all.
+
+**Scope.**
+1. **U1. Move BPA off `sempy_labs`.** Port the BPA rules engine to either:
+   - **(a) Pure TS in the workload backend** — same file tree as the existing TS Model BPA. Add Report BPA rules. Drop the `Backend/src/api/sll_*` proxy endpoints. Memory Analyzer keeps using XMLA via a small Python helper (see U2). (Recommended: smallest surface, ARM-clean.)
+   - **(b) Python rules engine inside the existing `Developer Hub/Backend/`** — load the Tabular Editor BPA rules JSON, walk a TMDL-derived dict, evaluate predicates. Same outcome, lives next to the rest of the API. Useful only if we want one rules engine shared with notebook / CLI consumers.
+   - Either way: the rule set is the open-source [Microsoft Analysis Services BPA rules](https://github.com/microsoft/Analysis-Services/tree/master/BestPracticeRules) (MIT). Pin a copy into `Backend/data/bpa-rules/` so the build is reproducible.
+2. **U2. Memory / Vertipaq Analyzer via XMLA-over-HTTPS.** Drop `sempy_labs.vertipaq_analyzer` and issue `Discover` / `Execute` SOAP envelopes directly to `https://api.powerbi.com/v1.0/myorg/<workspace>/<dataset>` with the user's Fabric bearer token. The DMVs we need are well-documented and stable: `DISCOVER_STORAGE_TABLES`, `DISCOVER_STORAGE_TABLE_COLUMNS`, `DISCOVER_STORAGE_TABLE_COLUMN_SEGMENTS`, `DISCOVER_STORAGE_TABLE_USER_HIERARCHIES`, `DISCOVER_STORAGE_TABLE_RELATIONSHIPS`, `MDSCHEMA_MEASURES`. Implementation: ~150-200 lines of `httpx` + `defusedxml` (or `lxml`) in `Backend/src/services/xmla_client.py`. Reuse the existing OBO token flow.
+3. **U3. Report BPA in TS native.** Same engine as U1(a), rule subset that operates on PBIR JSON we already extract. Closes WS-T's T6 without ever needing `sempy_labs.report.run_report_bpa`.
+4. **U4. Delete the sidecar.** Remove `Developer Hub/SllSidecar/`, the `sll-sidecar` service from `docker-compose.yaml`, the `SLL_*` env vars from `.env.example`, the `Backend/src/api/sll_*` proxy module, and the `developerhub-sll-sidecar` build target. Update README + CHANGELOG.
+
+**Acceptance.**
+- `docker compose --profile prod up` starts only `backend` + `frontend` + `dev-gateway`. No more `sll-sidecar`.
+- Model BPA, Report BPA, and Memory Analyzer all run end-to-end on aarch64 + x86_64 hosts using the same code path.
+- No `pythonnet`, `clr_loader`, or `Microsoft.AnalysisServices.*` references anywhere in the repo.
+- Test set: same 3 demo scenarios used today (small / medium / large semantic model).
+
+**Sequencing.**
+- U2 first (smallest, unblocks Memory Analyzer for ARM users immediately) → U1 (BPA TS engine) → U3 (Report BPA flip, closes WS-T T6) → U4 (delete the sidecar). Each step ships independently.
+
+**Non-goals.**
+- Spark / `sempy.fabric` notebook integration. If we ever want richer DAX-eval features that XMLA doesn't expose, that's a separate WS using a Fabric Spark session, not pythonnet.
+- Reimplementing every `sempy_labs` helper. Only the BPA + Vertipaq paths actually used by PBI Fixer.
+
+**Open questions.**
+- Are any rules in the existing TE BPA set actually impossible without TOM (e.g. ones that need `IsActiveRelationship` resolution at query time)? Audit before U1.
+- Do we want to ship the BPA rules JSON inside the workload bundle (faster, offline-capable) or fetch it from GitHub at build time (always fresh)?
+
 ### WS-S — Multi-Model & Multi-Report editing (NEW, planned)
 
 **Goal.** Lift the single-`(workspace, dataset|report)` invariant currently enforced by `PbiFixerPage` so the user can have several models / reports loaded side by side, scan all of them in one go, and apply fixers across the set.
