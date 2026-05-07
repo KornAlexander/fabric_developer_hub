@@ -98,7 +98,32 @@ Six P2 semantic-model fixers ported from `pbi_fixer/src/`. All are property-muta
 
 Frontend adds six `backendFixer({...})` entries; backend `pbi_fixer_handlers.py` adds six handlers + registry rows. No new API endpoints.
 
+### v0.86 — WS-D · Report BPA parity with sempy_labs.report.report_bpa_rules() (May 7 2026)
+
+Brings the client-side Report BPA in `services/reportBpaApi.ts` into full parity with the official `sempy_labs.report._report_bpa_rules.report_bpa_rules()` rule set (see `c:\Users\alkorn\repos\PBI-Fixer\semantic-link-labs\src\sempy_labs\report\_report_bpa_rules.py`). Previous engine had 10 mostly home-grown rules and missed all but one of the official rules. New engine keeps every existing custom rule (Pie/Donut, EmptyPage, OffCanvas, Hidden, Overlap, Title, Size, etc.) and **adds 8 new rules** mirroring sempy:
+
+- **Performance · Visual** — `Report.VisualTooManyObjects` (>5 query projections per visual) — sempy "Reduce the number of objects within visuals".
+- **Performance · Visual** — `Report.ShowItemsWithNoData` — projection has `showAll: true`. Wires the existing `FixDisableShowItemsNoData` fixer.
+- **Performance · Page** — `Report.PageTallScrolling` — page height >720px. Reuses `FixPageSize`.
+- **Performance · Page** — `Report.TooManyVisuals` reworded + counts only **visible** visuals (matches sempy "Visible Visual Count").
+- **Performance · Filter** — `Report.FilterOnMeasure` — page-level and visual-level filter whose `field` is a `Measure`/`Aggregation`.
+- **Performance · Filter** — `Report.TopNFilter` — filters with `type: "TopN"` / `"VisualTopN"`.
+- **Performance · Custom Visual** — `Report.UnusedCustomVisual` (declared but no visual uses the `visualType`) → wires the existing `FixRemoveUnusedCustomVisuals` fixer; plus `Report.AnyCustomVisual` (Info, lists every custom visual).
+- **Maintenance · Report Level Measure** — `Report.ReportLevelMeasure` — every measure in `reportExtensions.json`. Wires the existing `FixMigrateReportLevelMeasures` fixer.
+
+Skipped: `Report.InvalidSemanticModelObject` (Error Prevention) — needs a live cross-check against the connected semantic model and will land with the backend bridge.
+
+Supporting changes:
+- `types/report.ts`: new `CustomVisualInfo` + `ReportLevelMeasureInfo` types; `ReportData` gains `customVisuals?` and `reportLevelMeasures?`.
+- `services/fabricApi.ts` `parseReportDefinition`: now also parses `definition/report.json` (`publicCustomVisuals` + `resourcePackages` of type `CustomVisual`) and `definition/reportExtensions.json` (`entities[].measures[]`). Custom visuals are flagged `usedInReport` by intersecting against the set of `visual.visualType` values found while walking visual.json files.
+- `services/reportBpaApi.ts`: widened `BpaObjectType` to include `Custom Visual` / `Report/Page/Visual Filter` / `Report Level Measure`; added narrow PBIR helpers (`getFilters`, `isMeasureField`, `isTopNFilter`, `describeFilterField`, `countVisualObjects`, `visualHasShowItemsWithNoData`, `visualFilters`).
+
+Net effect: scanning a report now produces the same Performance/Maintenance findings the sempy notebook path produces, so the eventual swap to a backend `run_report_bpa` bridge stays zero-touch on the page UI.
+
+Also re-finishes WS-U: `Frontend/src/components/PbiFixer/services/sllApi.ts`, `Developer Hub/SllSidecar/app.py` and `Developer Hub/SllSidecar/external/` had reappeared as untracked files (regression from a botched merge). Deleted again — `modelBpaApi.ts` no longer imports `sllApi`, and `docker-compose.yaml` has not referenced the sidecar since v0.82, so nothing else references them.
+
 ### v0.82 — WS-U done: SLL Python sidecar deleted (May 2026)
+
 The standalone `sll-sidecar` Python container is gone for good. Memory Analyzer keeps using its DAX `INFO.VIEW.*` path via `memoryApi.ts`; Model BPA keeps using the TS rule engine in `modelBpaApi.ts` — both already worked without the sidecar. The "compare with semantic-link-labs" inline panels on `MemoryPage.tsx` (HTML capture of `vertipaq_analyzer()`) and `ModelBpaPage.tsx` (raw `run_model_bpa` rows) were the last consumers and were removed. With no callers left, this bump deletes:
 
 - `Developer Hub/SllSidecar/` (whole dir: `app.py`, `Dockerfile`, `requirements.txt`)
