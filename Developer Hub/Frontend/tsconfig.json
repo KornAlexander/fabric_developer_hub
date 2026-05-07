@@ -4,13 +4,11 @@
         "allowSyntheticDefaultImports": true,
         "allowUnreachableCode": false,
         "allowUnusedLabels": false,
-        "downlevelIteration": true,
         "forceConsistentCasingInFileNames": true,
         "importHelpers": true,
         "inlineSources": true,
         "jsx": "react",
         "module": "esnext",
-        "moduleResolution": "node",
         "noFallthroughCasesInSwitch": true,
         "noImplicitReturns": true,
         "noUnusedLocals": true,
@@ -22,6 +20,9 @@
         "strictNullChecks": false,
         "stripInternal": true,
         "target": "ES2017",
+        "types": [
+            "node"
+        ],
         "useUnknownInCatchVariables": false,
         "lib": [
             "ES2017",

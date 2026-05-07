@@ -144,6 +144,12 @@ module.exports = {
     ],
     resolve: {
         modules: [__dirname, "src", "node_modules"],
+        alias: {
+            fonts: path.resolve(__dirname, '../node_modules/katex/dist/fonts'),
+        },
+        fallback: {
+            process: require.resolve('process/browser'),
+        },
         extensions: ["*", ".js", ".jsx", ".tsx", ".ts"],
     },
     module: {
@@ -173,6 +179,10 @@ module.exports = {
                 test: /\.(png|jpg|jpeg|svg)$/i, // this is for loading assests
                 type: '/asset/resource'
             },
+            {
+                test: /\.(woff2?|ttf|otf|eot)$/i,
+                type: 'asset/resource',
+            },
         ],
     },
     // Don't re-walk node_modules on every change — massively reduces CPU
@@ -185,6 +195,12 @@ module.exports = {
     infrastructureLogging: isDevServer
         ? { level: 'info', console: webpackConsole }
         : { level: 'info' },
+    ignoreWarnings: [
+        {
+            module: /node_modules\/(@mariozechner\/pi-ai)\/dist\//,
+            message: /Critical dependency: the request of a dependency is an expression/,
+        },
+    ],
     devServer: {
         port: 60006,
         open: false,
@@ -198,6 +214,8 @@ module.exports = {
             // 'warn' keeps genuine build errors visible.
             logging: 'warn',
             overlay: {
+                warnings: false,
+                errors: true,
                 runtimeErrors: (error) => {
                     if (error?.message?.includes('ResizeObserver')) return false;
                     return true;
@@ -207,7 +225,14 @@ module.exports = {
         headers: {
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Methods": "GET,OPTIONS",
-            "Access-Control-Allow-Headers": "*"
+            "Access-Control-Allow-Headers": "*",
+            // Chrome Private Network Access (PNA): permits app.powerbi.com
+            // (a public/secure origin) to fetch from our loopback dev server.
+            // Without this header, Chrome blocks /manifests* preflights with
+            // "Permission was denied for this request to access the `loopback`
+            // address space" and the Developer Hub tile never appears in the
+            // New-item gallery.
+            "Access-Control-Allow-Private-Network": "true"
         },
         setupMiddlewares
             : function (middlewares, devServer) {
@@ -219,7 +244,8 @@ module.exports = {
                         'Content-Type': 'application/json',
                         'Access-Control-Allow-Origin': '*',
                         'Access-Control-Allow-Methods': 'GET',
-                        'Access-Control-Allow-Headers': 'Content-Type, Authorization'
+                        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+                        'Access-Control-Allow-Private-Network': 'true'
                     });
                 
                     const devParameters = {
@@ -251,7 +277,8 @@ module.exports = {
                             'Content-Disposition': `attachment; filename="ManifestPackage.1.0.0.nupkg"`,
                             'Access-Control-Allow-Origin': '*',
                             'Access-Control-Allow-Methods': 'GET',
-                            'Access-Control-Allow-Headers': 'Content-Type, Authorization'
+                            'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+                            'Access-Control-Allow-Private-Network': 'true'
                         });
                         
                         res.sendFile(filePath);

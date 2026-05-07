@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from typing import Any
 
 import msal
@@ -8,6 +9,7 @@ from jose import jwt
 from jose.exceptions import ExpiredSignatureError, JWTClaimsError, JWTError
 from msal.exceptions import MsalServiceError
 from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from app.core.service_registry import get_service_registry
 from domain.constants.environment_constants import EnvironmentConstants
@@ -39,6 +41,14 @@ logger = logging.getLogger(__name__)
 # cover the per-request OBO + UserImpersonation + OneLake triple plus
 # parallel compose sessions.
 _MSAL_POOL_SIZE = 50
+_MSAL_HTTP_TIMEOUT_SECONDS = float(os.environ.get("MSAL_HTTP_TIMEOUT_SECONDS", "15"))
+_MSAL_HTTP_MAX_RETRIES = int(os.environ.get("MSAL_HTTP_MAX_RETRIES", "2"))
+
+
+class _TimeoutSession(requests.Session):
+    def request(self, method, url, **kwargs):  # type: ignore[override]
+        kwargs.setdefault("timeout", _MSAL_HTTP_TIMEOUT_SECONDS)
+        return super().request(method, url, **kwargs)
 
 
 def _build_msal_http_session() -> requests.Session:
@@ -48,11 +58,22 @@ def _build_msal_http_session() -> requests.Session:
     tenant-specific apps don't each allocate their own 10-socket pool
     to the same login endpoint.
     """
-    session = requests.Session()
+    session = _TimeoutSession()
+    retry = Retry(
+        total=_MSAL_HTTP_MAX_RETRIES,
+        connect=_MSAL_HTTP_MAX_RETRIES,
+        read=_MSAL_HTTP_MAX_RETRIES,
+        status=_MSAL_HTTP_MAX_RETRIES,
+        backoff_factor=0.4,
+        status_forcelist=(408, 429, 500, 502, 503, 504),
+        allowed_methods=frozenset({"GET", "POST"}),
+        raise_on_status=False,
+    )
     adapter = HTTPAdapter(
         pool_connections=_MSAL_POOL_SIZE,
         pool_maxsize=_MSAL_POOL_SIZE,
         pool_block=False,
+        max_retries=retry,
     )
     session.mount("https://", adapter)
     session.mount("http://", adapter)
@@ -82,13 +103,19 @@ class AuthenticationService:
         default_authority = f"{EnvironmentConstants.AAD_INSTANCE_URL}/organizations"
         self.app = None
         if self.client_id and self.client_secret and self.publisher_tenant_id:
-            self._msal_apps[default_authority] = msal.ConfidentialClientApplication(
-                client_id=self.client_id,
-                client_credential=self.client_secret,
-                authority=default_authority,
-                http_client=self._msal_http_session,
-            )
-            self.logger.info("MSAL Confidential Client Application initialized")
+            try:
+                self._msal_apps[default_authority] = msal.ConfidentialClientApplication(
+                    client_id=self.client_id,
+                    client_credential=self.client_secret,
+                    authority=default_authority,
+                    http_client=self._msal_http_session,
+                )
+                self.logger.info("MSAL Confidential Client Application initialized")
+            except Exception:
+                self.logger.warning(
+                    "MSAL default client initialization failed; tenant clients will be created on demand",
+                    exc_info=True,
+                )
         else:
             self.logger.warning("Missing ClientId or ClientSecret in configuration. MSAL client not initialized.")
 

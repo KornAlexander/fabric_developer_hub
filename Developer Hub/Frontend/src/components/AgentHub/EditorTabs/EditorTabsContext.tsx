@@ -61,7 +61,7 @@ export interface TabDescriptor {
     duplicable?: boolean;
 }
 
-interface Group {
+export interface Group {
     id: string;
     tabs: TabDescriptor[];
     activeTabId: string | null;
@@ -76,7 +76,7 @@ interface Group {
     column: string;
 }
 
-interface TabsState {
+export interface TabsState {
     groups: Group[];
     activeGroupId: string;
     /** Left→right ordering of column ids. Exactly one entry per
@@ -87,12 +87,12 @@ interface TabsState {
     columnSizes: Record<string, number>;
 }
 
-type Action =
+export type Action =
     | { type: "open"; tab: TabDescriptor; groupId?: string; activate?: boolean }
     | { type: "close"; tabId: string; groupId?: string }
     | { type: "activate"; tabId: string; groupId?: string }
     | { type: "move"; tabId: string; fromGroupId: string; toGroupId: string; toIndex: number }
-    | { type: "split"; tabId: string; fromGroupId: string; side: "left" | "right" | "top" | "bottom" }
+    | { type: "split"; tabId: string; fromGroupId: string; side: "left" | "right" | "top" | "bottom"; targetGroupId?: string }
     | { type: "open-in-new-group"; tab: TabDescriptor; side: "left" | "right" | "top" | "bottom"; fromGroupId?: string }
     | { type: "replace-active"; tab: TabDescriptor; groupId?: string }
     | { type: "close-group"; groupId: string }
@@ -102,9 +102,9 @@ type Action =
     | { type: "update-title"; tabId: string; title: string; subtitle?: string }
     | { type: "restore"; state: TabsState };
 
-const INITIAL_GROUP_ID = "g0";
-const INITIAL_COLUMN_ID = "c0";
-const INITIAL_STATE: TabsState = {
+export const INITIAL_GROUP_ID = "g0";
+export const INITIAL_COLUMN_ID = "c0";
+export const INITIAL_STATE: TabsState = {
     groups: [{ id: INITIAL_GROUP_ID, tabs: [], activeTabId: null, size: 1, column: INITIAL_COLUMN_ID }],
     activeGroupId: INITIAL_GROUP_ID,
     columnOrder: [INITIAL_COLUMN_ID],
@@ -130,7 +130,7 @@ function pruneColumns(state: TabsState): TabsState {
     return { ...state, columnOrder: order, columnSizes: sizes };
 }
 
-function reducer(state: TabsState, action: Action): TabsState {
+export function reducer(state: TabsState, action: Action): TabsState {
     switch (action.type) {
         case "open": {
             // Duplicable tabs (``New Session`` drafts) skip the dedup
@@ -233,6 +233,18 @@ function reducer(state: TabsState, action: Action): TabsState {
             if (!from || !tab) return state;
             const vertical = action.side === "top" || action.side === "bottom";
 
+            // The *anchor* group determines WHERE the new group spawns
+            // (which column, which array position). When a tab is
+            // dragged across groups, the anchor is the DROP TARGET
+            // (``targetGroupId``), not the drag source — this ensures
+            // the split preview shown on the target group matches the
+            // actual result. When splitting from a tab context menu
+            // (no cross-group drag), source and target are the same.
+            const anchor = (action.targetGroupId
+                ? state.groups.find((g) => g.id === action.targetGroupId)
+                : from) ?? from;
+            const anchorArrIdx = state.groups.findIndex((g) => g.id === anchor.id);
+
             // If the source only has this one tab, splitting by *moving*
             // it would leave the source group empty — the cleanup pass
             // would then drop the source group and ``pruneColumns``
@@ -242,11 +254,17 @@ function reducer(state: TabsState, action: Action): TabsState {
             // in the new group so both halves stay populated; we do
             // the same, generating a fresh id so the duplicate has its
             // own tab identity.
-            const duplicateInsteadOfMove = from.tabs.length === 1;
+            //
+            // Exception: cross-group drag-and-drop (``targetGroupId``
+            // differs from ``fromGroupId``). Here the user's intent is
+            // to MOVE the tab, not clone it. The empty source group
+            // gets cleaned up by the ``cleaned`` filter below and
+            // ``pruneColumns`` removes its column — which is correct.
+            const isCrossGroupDrag = !!action.targetGroupId && action.targetGroupId !== action.fromGroupId;
+            const duplicateInsteadOfMove = from.tabs.length === 1 && !isCrossGroupDrag;
 
-            const srcArrIdx = state.groups.findIndex((g) => g.id === action.fromGroupId);
             const newGid = newGroupId();
-            const newColId = vertical ? from.column : newColumnId();
+            const newColId = vertical ? anchor.column : newColumnId();
             const newTab = duplicateInsteadOfMove
                 ? { ...tab, id: `${tab.id}-split-${Date.now().toString(36)}` }
                 : tab;
@@ -271,13 +289,13 @@ function reducer(state: TabsState, action: Action): TabsState {
                         : g,
                 );
             // For vertical splits we want the new group inserted
-            // adjacent to the source within the same column — the
+            // adjacent to the anchor within the same column — the
             // array position is what determines top/bottom ordering.
             // For horizontal splits the column order drives layout,
             // so we just append to the array (column placement comes
             // from ``columnOrder`` below).
             const insertAt = vertical
-                ? (action.side === "top" ? srcArrIdx : srcArrIdx + 1)
+                ? (action.side === "top" ? anchorArrIdx : anchorArrIdx + 1)
                 : groupsA.length;
             const groupsB = [...groupsA];
             groupsB.splice(insertAt, 0, newGroup);
@@ -286,7 +304,7 @@ function reducer(state: TabsState, action: Action): TabsState {
             let columnOrder = state.columnOrder;
             const columnSizes = { ...state.columnSizes };
             if (!vertical) {
-                const srcColIdx = columnOrder.indexOf(from.column);
+                const srcColIdx = columnOrder.indexOf(anchor.column);
                 const colInsertAt = action.side === "left" ? srcColIdx : srcColIdx + 1;
                 columnOrder = [...columnOrder];
                 columnOrder.splice(colInsertAt, 0, newColId);
@@ -403,14 +421,14 @@ export interface EditorTabsApi {
     /** Open a tab (or activate it if the id already exists). Navigates to its path. */
     openTab: (tab: TabDescriptor) => void;
     /** Open a tab in a brand-new group adjacent to the active group. */
-    openTabInNewGroup: (tab: TabDescriptor, side?: "left" | "right" | "top" | "bottom") => void;
+    openTabInNewGroup: (tab: TabDescriptor, side?: "left" | "right" | "top" | "bottom", fromGroupId?: string) => void;
     /** Replace the active tab of the active (or given) group with a new
      *  descriptor. Content swaps in place; no new tab is created. */
     replaceActiveTab: (tab: TabDescriptor, groupId?: string) => void;
     closeTab: (tabId: string, groupId?: string) => void;
     activateTab: (tabId: string, groupId?: string) => void;
     moveTab: (tabId: string, fromGroupId: string, toGroupId: string, toIndex: number) => void;
-    splitGroup: (tabId: string, fromGroupId: string, side: "left" | "right" | "top" | "bottom") => void;
+    splitGroup: (tabId: string, fromGroupId: string, side: "left" | "right" | "top" | "bottom", targetGroupId?: string) => void;
     closeGroup: (groupId: string) => void;
     focusGroup: (groupId: string) => void;
     resizeGroup: (groupId: string, size: number) => void;
@@ -463,11 +481,8 @@ export function descriptorFromPath(path: string, search?: string): TabDescriptor
     // Strip any base prefix (e.g. /agent-hub) — we store the path as
     // given and navigate to it verbatim.
     const clean = path.replace(/\/+$/, "");
-    const draftId = (() => {
-        if (!search) return null;
-        const sp = new URLSearchParams(search);
-        return sp.get("draft");
-    })();
+    const params = search ? new URLSearchParams(search) : new URLSearchParams();
+    const draftId = params.get("draft");
     const sessionMatch = clean.match(/\/session\/([^/?#]+)/);
     if (sessionMatch) {
         const id = sessionMatch[1];
@@ -495,9 +510,29 @@ export function descriptorFromPath(path: string, search?: string): TabDescriptor
         return { id: "new", kind: "new", path, title: "New Session" };
     }
     if (/\/home(?:\b|$)/.test(clean)) {
+        const tabId = params.get("tab");
+        if (tabId) {
+            return {
+                id: `home:${tabId}`,
+                kind: "home",
+                path: path + (search ?? ""),
+                title: "Sessions",
+                duplicable: false,
+            };
+        }
         return { id: "home", kind: "home", path, title: "Sessions" };
     }
     if (/\/agents(?:\b|$)/.test(clean)) {
+        const tabId = params.get("tab");
+        if (tabId) {
+            return {
+                id: `agents:${tabId}`,
+                kind: "agents",
+                path: path + (search ?? ""),
+                title: "Agents",
+                duplicable: false,
+            };
+        }
         return { id: "agents", kind: "agents", path, title: "Agents" };
     }
     if (/\/pbifixer(?:\b|$)/.test(clean)) {
@@ -555,6 +590,30 @@ export function makeNewSessionDescriptor(basePath: string = "/agent-hub/orchestr
         path: `${basePath}?draft=${draftId}`,
         title: "New Session",
         duplicable: false,  // unique id already; do not re-flag
+    };
+}
+
+/** Build a fresh Sessions tab descriptor with a unique nonce. */
+export function makeSessionsDescriptor(basePath: string = "/agent-hub/home"): TabDescriptor {
+    const tabId = Math.random().toString(36).slice(2, 10);
+    return {
+        id: `home:${tabId}`,
+        kind: "home",
+        path: `${basePath}?tab=${tabId}`,
+        title: "Sessions",
+        duplicable: false,
+    };
+}
+
+/** Build a fresh Agents tab descriptor with a unique nonce. */
+export function makeAgentsDescriptor(basePath: string = "/agent-hub/agents"): TabDescriptor {
+    const tabId = Math.random().toString(36).slice(2, 10);
+    return {
+        id: `agents:${tabId}`,
+        kind: "agents",
+        path: `${basePath}?tab=${tabId}`,
+        title: "Agents",
+        duplicable: false,
     };
 }
 
@@ -676,14 +735,14 @@ export function EditorTabsProvider({ children }: { children: React.ReactNode }) 
 
         dispatch({ type: "close", tabId, groupId });
         if (!wasActive) return;
-        // After close, navigate to whatever the neighbour is (or home
-        // if we just closed the last tab of the only group).
+        // After close, navigate to whatever the neighbour is (or a
+        // fresh "New Session" if we just closed the last tab of the only group).
         const idx = g.tabs.findIndex((t) => t.id === tabId);
         const next = g.tabs[idx + 1] ?? g.tabs[idx - 1] ?? null;
         if (next) {
             history.push(next.path);
         } else {
-            history.push("/agent-hub/home");
+            history.push(makeNewSessionDescriptor().path);
         }
     }, [history, location.pathname, location.search, state.activeGroupId, state.groups]);
 
@@ -691,12 +750,12 @@ export function EditorTabsProvider({ children }: { children: React.ReactNode }) 
         dispatch({ type: "move", tabId, fromGroupId, toGroupId, toIndex });
     }, []);
 
-    const splitGroup = useCallback((tabId: string, fromGroupId: string, side: "left" | "right" | "top" | "bottom") => {
-        dispatch({ type: "split", tabId, fromGroupId, side });
+    const splitGroup = useCallback((tabId: string, fromGroupId: string, side: "left" | "right" | "top" | "bottom", targetGroupId?: string) => {
+        dispatch({ type: "split", tabId, fromGroupId, side, targetGroupId });
     }, []);
 
-    const openTabInNewGroup = useCallback((tab: TabDescriptor, side: "left" | "right" | "top" | "bottom" = "right") => {
-        dispatch({ type: "open-in-new-group", tab, side });
+    const openTabInNewGroup = useCallback((tab: TabDescriptor, side: "left" | "right" | "top" | "bottom" = "right", fromGroupId?: string) => {
+        dispatch({ type: "open-in-new-group", tab, side, fromGroupId });
         if (location.pathname + location.search !== tab.path) {
             history.push(tab.path);
         }

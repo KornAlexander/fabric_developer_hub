@@ -35,6 +35,42 @@ function printFormattedAADErrorMessage(hashMessage: string): void {
  */
 const redirectUriPath = '/close';
 const url = new URL(window.location.href);
+const bootstrapSearchStorageKey = "agenthub.fabricBootstrapSearch";
+const bootstrapParamKeys = [
+    "__iframeId",
+    "__iframeType",
+    "__environmentName",
+    "__extensionName",
+    "__extensionHostOrigin",
+    "__bootstrapPath",
+    "__unmin",
+    "__useCDN",
+    "__cdnFallbackTime",
+    "__parallelLoadingEnabled",
+    "__eh",
+    "__el",
+];
+
+if (url.searchParams.get("__iframeId")) {
+    sessionStorage.setItem(bootstrapSearchStorageKey, url.search);
+} else if (!url.searchParams.get("agenthubE2E")) {
+    const storedSearch = sessionStorage.getItem(bootstrapSearchStorageKey);
+    if (storedSearch) {
+        const storedParams = new URLSearchParams(storedSearch);
+        let changed = false;
+        for (const key of bootstrapParamKeys) {
+            const value = storedParams.get(key);
+            if (value != null && !url.searchParams.has(key)) {
+                url.searchParams.set(key, value);
+                changed = true;
+            }
+        }
+        if (changed) {
+            window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+        }
+    }
+}
+
 if (url.pathname?.startsWith(redirectUriPath)) {
     // Handle errors, Please refer to https://learn.microsoft.com/en-us/entra/identity-platform/reference-error-codes
     if (url?.hash?.includes("error")) {
@@ -54,9 +90,13 @@ if (url.pathname?.startsWith(redirectUriPath)) {
     }
 }
 
-bootstrap({
-    initializeWorker: (params) =>
-        import('./index.worker').then(({ initialize }) => initialize(params)),
-    initializeUI: (params) =>
-        import('./index.ui').then(({ initialize }) => initialize(params)),
-});
+if (url.searchParams.get("agenthubE2E") === "1") {
+    import('./index.ui').then(({ initializeStandaloneForE2E }) => initializeStandaloneForE2E());
+} else {
+    bootstrap({
+        initializeWorker: (params) =>
+            import('./index.worker').then(({ initialize }) => initialize(params)),
+        initializeUI: (params) =>
+            import('./index.ui').then(({ initialize }) => initialize(params)),
+    });
+}

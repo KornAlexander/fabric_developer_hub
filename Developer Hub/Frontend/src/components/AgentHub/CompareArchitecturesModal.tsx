@@ -1,8 +1,8 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Dismiss20Regular, ErrorCircle20Regular } from "@fluentui/react-icons";
+import { Dismiss20Regular, ErrorCircle20Regular, ArrowLeft20Regular } from "@fluentui/react-icons";
 import { listArchitectures, ArchitectureEntry } from "../../controller/AgentHubApi";
-import { OrchCanvas } from "./team/OrchCanvas";
+import { OrchCanvas, naturalCanvasSize } from "./team/OrchCanvas";
 import type { Team } from "./plan/types";
 
 /**
@@ -32,94 +32,60 @@ const SAMPLE_TEAMS: Record<string, SampleTeamBuilder> = {
     solo: () => ({
         pattern: "solo",
         nodes: [
-            { id: "a1", agent: "Xi — Data Engineer", role: "Specialist", status: "planned" },
+            { id: "a1", agent: "FabricDataEngineer", role: "Specialist", status: "planned" },
         ],
         edges: [],
     }),
     supervisor: () => ({
         pattern: "supervisor",
         nodes: [
-            { id: "orchestrator", agent: "Claire — Coordinator", role: "Supervisor", status: "planned" },
-            { id: "a1", agent: "Xi — Data Engineer", role: "Worker", status: "planned" },
-            { id: "a2", agent: "Jay — Validation Lead", role: "Worker", status: "planned" },
-            { id: "a3", agent: "Dash — Power BI Expert", role: "Worker", status: "planned" },
+            { id: "lead", agent: "Architect", role: "Planning lead", status: "planned" },
+            { id: "a1", agent: "FabricDataEngineer", role: "Data engineer", status: "planned" },
+            { id: "a2", agent: "FabricAdmin", role: "Governance", status: "planned" },
+            { id: "a3", agent: "Modeler", role: "Reporting", status: "planned" },
         ],
         edges: [
-            { from: "orchestrator", to: "a1", kind: "delegate" },
-            { from: "orchestrator", to: "a2", kind: "delegate" },
-            { from: "orchestrator", to: "a3", kind: "delegate" },
+            { from: "lead", to: "a1", kind: "delegate" },
+            { from: "lead", to: "a2", kind: "delegate" },
+            { from: "lead", to: "a3", kind: "delegate" },
         ],
     }),
     sequential: () => ({
         pattern: "sequential",
         nodes: [
-            { id: "a1", agent: "Bronze ingest", role: "Stage 1", status: "planned" },
-            { id: "a2", agent: "Silver transform", role: "Stage 2", status: "planned" },
-            { id: "a3", agent: "Gold model", role: "Stage 3", status: "planned" },
-            { id: "a4", agent: "Publish report", role: "Stage 4", status: "planned" },
+            { id: "a1", agent: "FabricDataEngineer", role: "Bronze ingest", status: "planned" },
+            { id: "a2", agent: "FabricDataEngineer", role: "Silver transform", status: "planned" },
+            { id: "a3", agent: "Modeler", role: "Gold model", status: "planned" },
+            { id: "a4", agent: "Creator", role: "Publish", status: "planned" },
         ],
         edges: [
-            { from: "a1", to: "a2", kind: "delegate" },
-            { from: "a2", to: "a3", kind: "delegate" },
-            { from: "a3", to: "a4", kind: "delegate" },
-        ],
-    }),
-    parallel: () => ({
-        // OrchCanvas renders "parallel" as a supervisor (hub-and-spoke)
-        // layout — which matches the map-reduce story visually.
-        pattern: "supervisor",
-        nodes: [
-            { id: "orchestrator", agent: "Claire — Coordinator", role: "Fan-out / reduce", status: "planned" },
-            { id: "a1", agent: "Atlas — Worker 1", role: "Audit WS-A", status: "planned" },
-            { id: "a2", agent: "Atlas — Worker 2", role: "Audit WS-B", status: "planned" },
-            { id: "a3", agent: "Atlas — Worker 3", role: "Audit WS-C", status: "planned" },
-        ],
-        edges: [
-            { from: "orchestrator", to: "a1", kind: "delegate" },
-            { from: "orchestrator", to: "a2", kind: "delegate" },
-            { from: "orchestrator", to: "a3", kind: "delegate" },
-            { from: "a1", to: "orchestrator", kind: "report" },
-            { from: "a2", to: "orchestrator", kind: "report" },
-            { from: "a3", to: "orchestrator", kind: "report" },
-        ],
-    }),
-    router: () => ({
-        pattern: "supervisor",
-        nodes: [
-            { id: "orchestrator", agent: "Claire — Triage", role: "Router", status: "planned" },
-            { id: "a1", agent: "Xi — Data Engineer", role: "Data track", status: "planned" },
-            { id: "a2", agent: "Dash — Power BI Expert", role: "Reporting track", status: "planned" },
-            { id: "a3", agent: "Sentinel — Security", role: "Governance track", status: "planned" },
-        ],
-        edges: [
-            { from: "orchestrator", to: "a1", kind: "peer" },
-            { from: "orchestrator", to: "a2", kind: "peer" },
-            { from: "orchestrator", to: "a3", kind: "peer" },
+            { from: "a1", to: "a2", kind: "report" },
+            { from: "a2", to: "a3", kind: "report" },
+            { from: "a3", to: "a4", kind: "report" },
         ],
     }),
     hierarchical: () => ({
         pattern: "hierarchical",
         nodes: [
-            { id: "orchestrator", agent: "Program lead", role: "Top lead", status: "planned" },
-            { id: "sl1", agent: "Ingestion lead", role: "Sub-lead", status: "planned" },
-            { id: "sl2", agent: "Reporting lead", role: "Sub-lead", status: "planned" },
-            { id: "w1", agent: "Xi — Data Engineer", role: "Worker", status: "planned" },
-            { id: "w2", agent: "Jay — Validation Lead", role: "Worker", status: "planned" },
-            { id: "w3", agent: "Dash — Power BI Expert", role: "Worker", status: "planned" },
+            { id: "lead", agent: "Architect", role: "Program lead", status: "planned" },
+            { id: "sl1", agent: "FabricDataEngineer", role: "Data sub-lead", status: "planned" },
+            { id: "sl2", agent: "FabricAdmin", role: "Governance sub-lead", status: "planned" },
+            { id: "sl3", agent: "Modeler", role: "Reporting sub-lead", status: "planned" },
         ],
         edges: [
-            { from: "orchestrator", to: "sl1", kind: "delegate" },
-            { from: "orchestrator", to: "sl2", kind: "delegate" },
-            { from: "sl1", to: "w1", kind: "delegate" },
-            { from: "sl1", to: "w2", kind: "delegate" },
-            { from: "sl2", to: "w3", kind: "delegate" },
+            { from: "lead", to: "sl1", kind: "delegate" },
+            { from: "lead", to: "sl2", kind: "delegate" },
+            { from: "lead", to: "sl3", kind: "delegate" },
+            { from: "sl1", to: "lead", kind: "report" },
+            { from: "sl2", to: "lead", kind: "report" },
+            { from: "sl3", to: "lead", kind: "report" },
         ],
     }),
     reflection: () => ({
         pattern: "network",
         nodes: [
-            { id: "actor", agent: "Atlas — Actor", role: "Drafts", status: "planned" },
-            { id: "critic", agent: "Jay — Critic", role: "Reviews", status: "planned" },
+            { id: "actor", agent: "FabricDataEngineer", role: "Actor — drafts", status: "planned" },
+            { id: "critic", agent: "FabricDataEngineer", role: "Critic — reviews", status: "planned" },
         ],
         edges: [
             { from: "actor", to: "critic", kind: "peer" },
@@ -129,24 +95,24 @@ const SAMPLE_TEAMS: Record<string, SampleTeamBuilder> = {
     mixed: () => ({
         pattern: "mixed",
         nodes: [
-            { id: "orchestrator", agent: "Claire — Coordinator", role: "Supervisor", status: "planned" },
-            { id: "a1", agent: "Diagnostics team", role: "Parallel sub-team", status: "planned" },
-            { id: "a2", agent: "Remediation pipeline", role: "Sequential sub-team", status: "planned" },
-            { id: "a3", agent: "Dash — Power BI Expert", role: "Reporter", status: "planned" },
+            { id: "lead", agent: "Architect", role: "Planning lead", status: "planned" },
+            { id: "a1", agent: "FabricAdmin", role: "Diagnostics sub-team", status: "planned" },
+            { id: "a2", agent: "FabricDataEngineer", role: "Remediation pipeline", status: "planned" },
+            { id: "a3", agent: "Modeler", role: "Reporter", status: "planned" },
         ],
         edges: [
-            { from: "orchestrator", to: "a1", kind: "delegate" },
-            { from: "orchestrator", to: "a2", kind: "delegate" },
+            { from: "lead", to: "a1", kind: "delegate" },
+            { from: "lead", to: "a2", kind: "delegate" },
             { from: "a2", to: "a3", kind: "delegate" },
         ],
     }),
     network: () => ({
         pattern: "network",
         nodes: [
-            { id: "a1", agent: "Xi — Data Engineer", role: "Peer", status: "planned" },
-            { id: "a2", agent: "Dash — Power BI Expert", role: "Peer", status: "planned" },
-            { id: "a3", agent: "Sentinel — Security", role: "Peer", status: "planned" },
-            { id: "a4", agent: "Atlas — Analyst", role: "Peer", status: "planned" },
+            { id: "a1", agent: "FabricDataEngineer", role: "Peer", status: "planned" },
+            { id: "a2", agent: "Modeler", role: "Peer", status: "planned" },
+            { id: "a3", agent: "FabricAdmin", role: "Peer", status: "planned" },
+            { id: "a4", agent: "Architect", role: "Peer", status: "planned" },
         ],
         edges: [
             { from: "a1", to: "a2", kind: "peer" },
@@ -155,37 +121,6 @@ const SAMPLE_TEAMS: Record<string, SampleTeamBuilder> = {
             { from: "a4", to: "a1", kind: "peer" },
             { from: "a1", to: "a3", kind: "peer" },
             { from: "a2", to: "a4", kind: "peer" },
-        ],
-    }),
-    debate: () => ({
-        pattern: "network",
-        nodes: [
-            { id: "pro", agent: "Advocate", role: "Pro position", status: "planned" },
-            { id: "con", agent: "Skeptic", role: "Con position", status: "planned" },
-            { id: "judge", agent: "Judge", role: "Decides", status: "planned" },
-        ],
-        edges: [
-            { from: "pro", to: "con", kind: "peer" },
-            { from: "con", to: "pro", kind: "peer" },
-            { from: "pro", to: "judge", kind: "report" },
-            { from: "con", to: "judge", kind: "report" },
-        ],
-    }),
-    magentic: () => ({
-        pattern: "hierarchical",
-        nodes: [
-            { id: "orchestrator", agent: "Manager — Ledger", role: "Picks next agent", status: "planned" },
-            { id: "a1", agent: "Xi — Data Engineer", role: "Worker", status: "planned" },
-            { id: "a2", agent: "Sentinel — Security", role: "Worker", status: "planned" },
-            { id: "a3", agent: "Atlas — Analyst", role: "Worker", status: "planned" },
-        ],
-        edges: [
-            { from: "orchestrator", to: "a1", kind: "delegate" },
-            { from: "orchestrator", to: "a2", kind: "delegate" },
-            { from: "orchestrator", to: "a3", kind: "delegate" },
-            { from: "a1", to: "orchestrator", kind: "report" },
-            { from: "a2", to: "orchestrator", kind: "report" },
-            { from: "a3", to: "orchestrator", kind: "report" },
         ],
     }),
 };
@@ -219,6 +154,11 @@ export function CompareArchitecturesModal({
     const { t } = useTranslation();
     const [entries, setEntries] = useState<ArchitectureEntry[] | null>(null);
     const [error, setError] = useState<string | null>(null);
+    /** When set, shows a full-view detail panel for this architecture. */
+    const [expandedId, setExpandedId] = useState<string | null>(null);
+
+    const onExpand = useCallback((id: string) => setExpandedId(id), []);
+    const onCollapse = useCallback(() => setExpandedId(null), []);
 
     useEffect(() => {
         if (!open) return undefined;
@@ -241,11 +181,14 @@ export function CompareArchitecturesModal({
     useEffect(() => {
         if (!open) return undefined;
         const onKey = (e: KeyboardEvent) => {
-            if (e.key === "Escape") onClose();
+            if (e.key === "Escape") {
+                if (expandedId) setExpandedId(null);
+                else onClose();
+            }
         };
         window.addEventListener("keydown", onKey);
         return () => window.removeEventListener("keydown", onKey);
-    }, [open, onClose]);
+    }, [open, onClose, expandedId]);
 
     // Lock body scroll while the modal is open.
     useEffect(() => {
@@ -280,17 +223,17 @@ export function CompareArchitecturesModal({
                 <header className="mc-compare-header">
                     <div>
                         <h2 id="mc-compare-title" className="mc-compare-title">
-                            {t("Compare_Title") || "Compare architectures"}
+                            {t("Compare_Title", "Compare architectures")}
                         </h2>
                         <p className="mc-compare-subtitle">
-                            {t("Compare_Subtitle") || "The composer picks the architecture that best fits your task. Here's the full catalogue it chooses from."}
+                            {t("Compare_Subtitle", "The composer picks the architecture that best fits your task. Here\u2019s the full catalogue it chooses from.")}
                         </p>
                     </div>
                     <button
                         type="button"
                         className="mc-compare-close"
                         onClick={onClose}
-                        aria-label={t("Compare_Close") || "Close"}
+                        aria-label={t("Compare_Close", "Close")}
                     >
                         <Dismiss20Regular />
                     </button>
@@ -305,19 +248,38 @@ export function CompareArchitecturesModal({
 
                 {!sorted && !error && (
                     <div className="mc-compare-loading">
-                        {t("Compare_Loading") || "Loading architectures…"}
+                        {t("Compare_Loading", "Loading architectures…")}
                     </div>
                 )}
 
-                {sorted && (
+                {sorted && !expandedId && (
                     <div className="mc-compare-grid">
                         {sorted.map((arch) => {
                             const team = sampleTeamFor(arch.id);
                             const isCurrent = currentArchitecture === arch.id;
+                            const nat = naturalCanvasSize(team);
+                            // All cards use the same canvas area height
+                            // for visual consistency. Each graph scales
+                            // to fill the card width; the uniform height
+                            // prevents some cards from looking tiny.
+                            const CARD_INNER_W = 330;
+                            const CANVAS_H = 200;
+                            const fitScale = Math.min(
+                                CARD_INNER_W / nat.width,
+                                CANVAS_H / nat.height,
+                                0.55,
+                            );
+                            const scaledW = Math.ceil(nat.width * fitScale);
+                            const scaledH = Math.ceil(nat.height * fitScale);
                             return (
                                 <article
                                     key={arch.id}
                                     className={`mc-compare-card${isCurrent ? " is-current" : ""}${arch.hasDriver ? "" : " is-reserved"}`}
+                                    onClick={() => onExpand(arch.id)}
+                                    style={{ cursor: "pointer" }}
+                                    role="button"
+                                    tabIndex={0}
+                                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onExpand(arch.id); } }}
                                 >
                                     <header className="mc-compare-card__head">
                                         <div className="mc-compare-card__titles">
@@ -327,37 +289,49 @@ export function CompareArchitecturesModal({
                                         <div className="mc-compare-card__badges">
                                             {isCurrent && (
                                                 <span className="mc-compare-badge mc-compare-badge--current">
-                                                    {t("Compare_Current") || "Current"}
+                                                    {t("Compare_Current", "Current")}
                                                 </span>
                                             )}
                                             {!arch.hasDriver && (
                                                 <span
                                                     className="mc-compare-badge mc-compare-badge--reserved"
-                                                    title={t("Compare_ReservedTitle") || "Reserved pattern — runs on the supervisor driver until a dedicated driver ships"}
+                                                    title={t("Compare_ReservedTitle", "Reserved pattern — runs on the supervisor driver until a dedicated driver ships")}
                                                 >
-                                                    {t("Compare_Reserved") || "Preview"}
+                                                    {t("Compare_Reserved", "Preview")}
                                                 </span>
                                             )}
                                         </div>
                                     </header>
 
-                                    <div className="mc-compare-card__canvas">
-                                        <OrchCanvas team={team} compact showLegend={false} />
+                                    <div className="mc-compare-card__canvas"
+                                        style={{ height: CANVAS_H }}
+                                    >
+                                        <div
+                                            className="mc-compare-card__canvas-sizer"
+                                            style={{ width: scaledW, height: scaledH }}
+                                        >
+                                            <div style={{
+                                                transform: `scale(${fitScale})`,
+                                                transformOrigin: "0 0",
+                                                width: nat.width,
+                                                height: nat.height,
+                                            }}>
+                                                <OrchCanvas team={team} showLegend={false} canvasWidth={nat.width} />
+                                            </div>
+                                        </div>
                                     </div>
 
                                     <p className="mc-compare-card__desc">{arch.description}</p>
 
                                     <dl className="mc-compare-card__meta">
-                                        <dt>{t("Compare_PickWhen") || "Pick when"}</dt>
+                                        <dt>{t("Compare_PickWhen", "When to use")}</dt>
                                         <dd>{arch.pickWhen}</dd>
-                                        <dt>{t("Compare_WatchFor") || "Watch for"}</dt>
-                                        <dd>{arch.watchFor}</dd>
                                     </dl>
 
                                     {arch.fabricUseCases.length > 0 && (
                                         <div className="mc-compare-card__usecases">
                                             <div className="mc-compare-card__usecases-label">
-                                                {t("Compare_UseCases") || "Example Fabric tasks"}
+                                                {t("Compare_UseCases", "Example Fabric tasks")}
                                             </div>
                                             <ul>
                                                 {arch.fabricUseCases.map((u) => (
@@ -372,9 +346,9 @@ export function CompareArchitecturesModal({
                                             <button
                                                 type="button"
                                                 className="mc-compare-card__pick"
-                                                onClick={() => { onPick(arch.id); onClose(); }}
+                                                onClick={(e) => { e.stopPropagation(); onPick(arch.id); onClose(); }}
                                             >
-                                                {t("Compare_UseThis") || "Use this architecture"}
+                                                {t("Compare_UseThis", "Use this architecture")}
                                             </button>
                                         </div>
                                     )}
@@ -383,6 +357,91 @@ export function CompareArchitecturesModal({
                         })}
                     </div>
                 )}
+
+                {/* ── Expanded detail view ──────────────────────── */}
+                {sorted && expandedId && (() => {
+                    const arch = sorted.find((a) => a.id === expandedId);
+                    if (!arch) return null;
+                    const team = sampleTeamFor(arch.id);
+                    const nat = naturalCanvasSize(team);
+                    // Scale to fit the full dialog width (~1230 px minus padding)
+                    const DETAIL_W = 1180;
+                    const DETAIL_H = 480;
+                    const detailScale = Math.min(
+                        DETAIL_W / nat.width,
+                        DETAIL_H / nat.height,
+                        0.85,
+                    );
+                    const dw = Math.ceil(nat.width * detailScale);
+                    const dh = Math.ceil(nat.height * detailScale);
+                    const isCurrent = currentArchitecture === arch.id;
+                    return (
+                        <div className="mc-compare-detail">
+                            <div className="mc-compare-detail__toolbar">
+                                <button
+                                    type="button"
+                                    className="mc-compare-detail__back"
+                                    onClick={onCollapse}
+                                >
+                                    <ArrowLeft20Regular />
+                                    {t("Compare_BackToGrid", "All architectures")}
+                                </button>
+                                {onPick && arch.hasDriver && !isCurrent && (
+                                    <button
+                                        type="button"
+                                        className="mc-compare-card__pick"
+                                        onClick={() => { onPick(arch.id); onClose(); }}
+                                    >
+                                        {t("Compare_UseThis", "Use this architecture")}
+                                    </button>
+                                )}
+                            </div>
+
+                            <div className="mc-compare-detail__head">
+                                <h3 className="mc-compare-detail__name">{arch.name}</h3>
+                                <p className="mc-compare-detail__headline">{arch.headline}</p>
+                            </div>
+
+                            <div className="mc-compare-detail__canvas">
+                                <div
+                                    className="mc-compare-card__canvas-sizer"
+                                    style={{ width: dw, height: dh }}
+                                >
+                                    <div style={{
+                                        transform: `scale(${detailScale})`,
+                                        transformOrigin: "0 0",
+                                        width: nat.width,
+                                        height: nat.height,
+                                    }}>
+                                        <OrchCanvas team={team} showLegend={false} canvasWidth={nat.width} />
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="mc-compare-detail__info">
+                                <p className="mc-compare-detail__desc">{arch.description}</p>
+
+                                <dl className="mc-compare-detail__meta">
+                                    <dt>{t("Compare_PickWhen", "When to use")}</dt>
+                                    <dd>{arch.pickWhen}</dd>
+                                </dl>
+
+                                {arch.fabricUseCases.length > 0 && (
+                                    <div className="mc-compare-detail__usecases">
+                                        <div className="mc-compare-card__usecases-label">
+                                            {t("Compare_UseCases", "Example Fabric tasks")}
+                                        </div>
+                                        <ul>
+                                            {arch.fabricUseCases.map((u) => (
+                                                <li key={u}>{u}</li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    );
+                })()}
             </div>
         </div>
     );

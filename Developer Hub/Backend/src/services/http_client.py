@@ -1,11 +1,14 @@
 import asyncio
 import logging
+import time
 from typing import Any
 
 import httpx
 
 from app.core.service_registry import get_service_registry
 from services.correlation import get_request_id
+from services.logging_categories import log_extra
+from services.observability import safe_url
 
 
 class HttpClientService:
@@ -43,24 +46,40 @@ class HttpClientService:
                 request.headers["X-Request-ID"] = rid
 
     async def _log_request(self, request: httpx.Request) -> None:
-        self.logger.debug("Request: %s %s", request.method, request.url)
+        request.extensions["agenthub_started_at"] = time.monotonic()
+        self.logger.info(
+            "[HTTP-OUT] start %s %s content_length=%s",
+            request.method,
+            safe_url(request.url),
+            request.headers.get("content-length", "0"),
+            extra=log_extra("diagnostic"),
+        )
 
     async def _log_response(self, response: httpx.Response) -> None:
         request = response.request
         try:
-            elapsed_time = 0.0
-            if hasattr(response, '_elapsed') and response._elapsed:
-                elapsed_time = response._elapsed.total_seconds()
+            elapsed_time = None
+            started = request.extensions.get("agenthub_started_at")
+            if isinstance(started, (int, float)):
+                elapsed_time = time.monotonic() - started
 
-            self.logger.debug(
-                "Response: %s %s - Status: %s - Time: %.2fs",
-                request.method, request.url, response.status_code, elapsed_time,
+            self.logger.info(
+                "[HTTP-OUT] end %s %s status=%s elapsed=%.3fs response_length=%s",
+                request.method,
+                safe_url(request.url),
+                response.status_code,
+                elapsed_time if elapsed_time is not None else -1,
+                response.headers.get("content-length", "unknown"),
+                extra=log_extra("diagnostic" if response.status_code < 500 else "high_level"),
             )
         except Exception:
             # If we can't get timing, just log without it
-            self.logger.debug(
-                "Response: %s %s - Status: %s",
-                request.method, request.url, response.status_code,
+            self.logger.info(
+                "[HTTP-OUT] end %s %s status=%s",
+                request.method,
+                safe_url(request.url),
+                response.status_code,
+                extra=log_extra("diagnostic"),
             )
 
     async def __aenter__(self):
@@ -125,11 +144,29 @@ class HttpClientService:
         max_retries = 3
         last_exc: Exception | None = None
         for attempt in range(max_retries):
+            attempt_start = time.monotonic()
             try:
+                self.logger.info(
+                    "[HTTP-CLIENT] attempt %d/%d %s %s",
+                    attempt + 1,
+                    max_retries,
+                    method.upper(),
+                    safe_url(url),
+                    extra=log_extra("diagnostic"),
+                )
                 response = await getattr(self._client, method)(
                     url, headers=headers, **kwargs
                 )
                 response.raise_for_status()
+                self.logger.info(
+                    "[HTTP-CLIENT] success %s %s status=%s attempt=%d elapsed=%.3fs",
+                    method.upper(),
+                    safe_url(url),
+                    response.status_code,
+                    attempt + 1,
+                    time.monotonic() - attempt_start,
+                    extra=log_extra("diagnostic"),
+                )
                 return response
             except httpx.HTTPStatusError as e:
                 last_exc = e
@@ -138,9 +175,20 @@ class HttpClientService:
                     self.logger.warning(
                         "Request failed with %s, retrying in %ss (attempt %d/%d)",
                         e.response.status_code, wait_time, attempt + 1, max_retries,
+                        extra=log_extra("high_level"),
                     )
                     await asyncio.sleep(wait_time)
                     continue
+                self.logger.warning(
+                    "[HTTP-CLIENT] failed %s %s status=%s attempt=%d elapsed=%.3fs body=%.300s",
+                    method.upper(),
+                    safe_url(url),
+                    e.response.status_code,
+                    attempt + 1,
+                    time.monotonic() - attempt_start,
+                    e.response.text,
+                    extra=log_extra("high_level"),
+                )
                 raise
             except httpx.RequestError as e:
                 last_exc = e
@@ -149,9 +197,19 @@ class HttpClientService:
                     self.logger.warning(
                         "Request error: %s, retrying in %ss (attempt %d/%d)",
                         e, wait_time, attempt + 1, max_retries,
+                        extra=log_extra("high_level"),
                     )
                     await asyncio.sleep(wait_time)
                     continue
+                self.logger.warning(
+                    "[HTTP-CLIENT] request error %s %s attempt=%d elapsed=%.3fs error=%s",
+                    method.upper(),
+                    safe_url(url),
+                    attempt + 1,
+                    time.monotonic() - attempt_start,
+                    e,
+                    extra=log_extra("high_level"),
+                )
                 raise
         # Unreachable — every code path in the loop either returns or raises —
         # but mypy needs an explicit terminator to type ``_make_request`` as

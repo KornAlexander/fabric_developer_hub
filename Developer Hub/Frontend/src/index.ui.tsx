@@ -73,3 +73,31 @@ export async function initialize(params: InitParams) {
         </FluentProvider>
     );
 }
+
+export async function initializeStandaloneForE2E() {
+    const history = createBrowserHistory();
+    const workloadClient = {
+        navigation: {
+            onNavigate: () => undefined,
+            open: async () => undefined,
+        },
+        action: {
+            onAction: () => undefined,
+        },
+        auth: {
+            acquireAccessToken: async () => ({
+                token: "e2e-fabric-token",
+                expiresOnTimestamp: Date.now() + 60 * 60 * 1000,
+            }),
+        },
+        datahub: {
+            open: async () => undefined,
+        },
+    } as unknown as ReturnType<typeof createWorkloadClient>;
+    const root = createRoot(document.getElementById('root'));
+    root.render(
+        <FluentProvider theme={fabricLightTheme}>
+            <App history={history} workloadClient={workloadClient} />
+        </FluentProvider>
+    );
+}

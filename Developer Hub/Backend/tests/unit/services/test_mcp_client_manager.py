@@ -10,19 +10,85 @@ Subprocess-spawning code is hard to test end-to-end, but we can exercise:
 """
 from __future__ import annotations
 
+import asyncio
+import base64
 import json
+import logging
 import sys
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
 from services.mcp.mcp_client_manager import MCPClientManager
 
 
-def test_load_config_missing_file_returns_empty(tmp_path) -> None:
-    """REGRESSION: missing config file must NOT raise; manager starts empty."""
-    mgr = MCPClientManager(str(tmp_path / "nonexistent.json"))
-    assert mgr.config == {"servers": {}}
-    assert mgr.has_tools() is False
+def _empty_config(tmp_path) -> str:
+    cfg_path = tmp_path / "mcp_servers.json"
+    cfg_path.write_text(json.dumps({"servers": {}}))
+    return str(cfg_path)
+
+
+def _fake_jwt(claims: dict) -> str:
+    header = {"alg": "none", "typ": "JWT"}
+
+    def encode(value: dict) -> str:
+        return base64.urlsafe_b64encode(json.dumps(value).encode("utf-8")).decode("ascii").rstrip("=")
+
+    return f"{encode(header)}.{encode(claims)}.sig"
+
+
+def test_powerbi_design_uses_static_startup_discovery() -> None:
+    """Third-party Power BI design MCP startup is too slow for mission health.
+
+    Mission-scoped MCP sidecars must not spawn this FastMCP server while the
+    user waits for the run to start; the known allowlisted tools are registered
+    statically and real server startup happens only if a tool is actually used.
+    """
+    backend_root = Path(__file__).resolve().parents[3]
+    config_path = backend_root / "src" / "mcp_servers.json"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    server = config["servers"]["powerbi-design"]
+
+    assert server["skip_startup_discovery"] is True
+    assert server["allow_static_discovery_fallback"] is True
+    assert set(server["static_tools"]) == set(server["tool_allowlist"])
+    assert "update_report_definition" in server["static_tools"]
+
+
+def test_package_backed_servers_use_static_startup_discovery() -> None:
+    """Package-backed MCP servers must not gate mission sidecar health.
+
+    These servers install or hydrate packages on first run, which can exceed
+    the sidecar health deadline. The tool catalog is stable, so AgentHub can
+    expose it statically and start the real MCP process only on tool use.
+    """
+    backend_root = Path(__file__).resolve().parents[3]
+    config_path = backend_root / "src" / "mcp_servers.json"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+
+    for server_name in ("azure-mcp-guidance", "fabric-docs", "microsoft-docs", "time"):
+        server = config["servers"][server_name]
+        static_names = [tool["name"] for tool in server["static_tools"]]
+
+        assert server["skip_startup_discovery"] is True
+        assert server["allow_static_discovery_fallback"] is True
+        assert static_names == server["tool_allowlist"]
+
+    assert config["servers"]["microsoft-docs"]["transport"] == "streamable_http"
+    assert config["servers"]["microsoft-docs"]["url"] == "https://learn.microsoft.com/api/mcp"
+    azure_args = config["servers"]["azure-mcp-guidance"]["args"]
+    assert azure_args.count("--tool") == 2
+    assert "get_azure_bestpractices_get" in azure_args
+    assert "get_azure_bestpractices_ai_app" in azure_args
+    assert "--read-only" in azure_args
+
+
+def test_load_config_missing_file_raises(tmp_path) -> None:
+    """Missing MCP config is fatal — AgentHub must not run tool-less."""
+    with pytest.raises(FileNotFoundError, match="MCP config not found"):
+        MCPClientManager(str(tmp_path / "nonexistent.json"))
 
 
 def test_load_config_resolves_variables(tmp_path) -> None:
@@ -65,6 +131,7 @@ def test_load_config_resolves_variables_on_shallow_path(tmp_path, monkeypatch) -
 
     shallow = tmp_path / "src"
     shallow.mkdir()
+    (shallow / "script.py").write_text("# stub")
     cfg_path = shallow / "mcp_servers.json"
     cfg_path.write_text(json.dumps({
         "servers": {
@@ -74,8 +141,6 @@ def test_load_config_resolves_variables_on_shallow_path(tmp_path, monkeypatch) -
 
     # Should not raise.
     mgr = MCPClientManager(str(cfg_path))
-    # Server is pruned because the resolved script doesn't exist on disk —
-    # but config load itself must not crash.
     assert "${REPO_DIR}" not in str(mgr.config)
 
 
@@ -98,10 +163,8 @@ def test_resolve_repo_dir_finds_pyproject_marker(tmp_path, monkeypatch) -> None:
     assert MCPClientManager._resolve_repo_dir(str(cfg)) == str(repo.resolve())
 
 
-def test_prune_missing_servers_drops_nonexistent_scripts(tmp_path, monkeypatch) -> None:
-    """REGRESSION: a server whose script doesn't exist (e.g. host-only path
-    referenced by ${REPO_DIR}/... but absent inside a container) must be
-    silently dropped, not retained as a poisoned entry."""
+def test_validate_local_server_paths_rejects_nonexistent_scripts(tmp_path, monkeypatch) -> None:
+    """A configured server whose script doesn't exist is a fatal deploy bug."""
     monkeypatch.delenv("MCP_REPO_DIR", raising=False)
     real_script = tmp_path / "real.py"
     real_script.write_text("# hi")
@@ -114,20 +177,32 @@ def test_prune_missing_servers_drops_nonexistent_scripts(tmp_path, monkeypatch) 
         },
     }))
 
-    mgr = MCPClientManager(str(cfg_path))
-    assert "real" in mgr.config["servers"]
-    assert "missing" not in mgr.config["servers"]
-    # Pruned server is recorded so the capability validator can classify
-    # missing-tool findings as ops issues (WARNING) rather than catalog
-    # bugs (ERROR).
-    assert "missing" in mgr.pruned_servers
-    assert "/does/not/exist.py" in mgr.pruned_servers["missing"]
+    with pytest.raises(RuntimeError, match="MCP server path validation failed") as exc:
+        MCPClientManager(str(cfg_path))
+    assert "missing" in str(exc.value)
+    assert "/does/not/exist.py" in str(exc.value)
+
+
+def test_validate_local_server_paths_rejects_nonexistent_cwd(tmp_path) -> None:
+    cfg_path = tmp_path / "cfg.json"
+    cfg_path.write_text(json.dumps({
+        "servers": {
+            "powerbi-design": {
+                "command": sys.executable,
+                "args": ["-m", "src.server.mcp_server"],
+                "cwd": str(tmp_path / "missing"),
+            },
+        },
+    }))
+
+    with pytest.raises(RuntimeError, match="cwd .* not found"):
+        MCPClientManager(str(cfg_path))
 
 
 def test_unavailable_servers_merges_pruned_and_failed(tmp_path) -> None:
     """``unavailable_servers()`` exposes the combined set of MCP servers
     that can't serve tools this deploy, used by the capability validator."""
-    mgr = MCPClientManager(str(tmp_path / "nonexistent.json"))
+    mgr = MCPClientManager(_empty_config(tmp_path))
     mgr.pruned_servers["pbi-fixer"] = "script missing"
     mgr.failed_servers["fabric-docs"] = "npx not found"
     unavailable = mgr.unavailable_servers()
@@ -184,7 +259,7 @@ def test_clean_schema_preserves_required() -> None:
 def test_get_openai_tools_schema_format(tmp_path) -> None:
     """The OpenAI function-calling format must wrap each tool as
     ``{type: function, function: {name, description, parameters}}``."""
-    mgr = MCPClientManager(str(tmp_path / "missing.json"))
+    mgr = MCPClientManager(_empty_config(tmp_path))
     mgr.tools = {
         "fabric_list_workspaces": {
             "name": "fabric_list_workspaces",
@@ -204,16 +279,49 @@ def test_get_openai_tools_schema_format(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_call_tool_unknown_raises(tmp_path) -> None:
-    mgr = MCPClientManager(str(tmp_path / "missing.json"))
+    mgr = MCPClientManager(_empty_config(tmp_path))
     with pytest.raises(ValueError, match="Unknown tool"):
         await mgr.call_tool("does_not_exist", {})
+
+
+@pytest.mark.asyncio
+async def test_call_tool_with_metrics_breaks_out_startup_and_execution(tmp_path) -> None:
+    class FakeStack:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    fake_stack = FakeStack()
+    fake_session = SimpleNamespace(
+        call_tool=AsyncMock(return_value=SimpleNamespace(content=[SimpleNamespace(text="hello")]))
+    )
+    mgr = _mgr_with_fake_tool(tmp_path, "fabric_list_items")
+    mgr._start_server = AsyncMock(return_value=(fake_session, fake_stack))  # type: ignore[method-assign]
+
+    result = await mgr.call_tool_with_metrics(
+        "fabric_list_items",
+        {"workspace_id": "ws-1"},
+        allowed_tools={"fabric_list_items"},
+        workspace_id="ws-1",
+    )
+
+    assert result.output == "hello"
+    assert set(result.latency_breakdown_ms) >= {
+        "mcpProcessStartupMs",
+        "mcpToolExecutionMs",
+        "mcpDispatchTotalMs",
+    }
+    assert all(value >= 0 for value in result.latency_breakdown_ms.values())
+    assert fake_stack.closed is True
 
 
 @pytest.mark.asyncio
 async def test_start_server_rejects_unknown_transport(tmp_path) -> None:
     """Unknown ``transport`` values must fail fast with a clear error
     rather than silently falling back to stdio."""
-    mgr = MCPClientManager(str(tmp_path / "missing.json"))
+    mgr = MCPClientManager(_empty_config(tmp_path))
     with pytest.raises(ValueError, match="Unsupported MCP transport"):
         await mgr._start_server(
             {"transport": "ftp", "command": "x"},
@@ -224,7 +332,7 @@ async def test_start_server_rejects_unknown_transport(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_start_http_server_requires_url(tmp_path) -> None:
     """Streamable-HTTP server config must declare a ``url``."""
-    mgr = MCPClientManager(str(tmp_path / "missing.json"))
+    mgr = MCPClientManager(_empty_config(tmp_path))
     with pytest.raises(ValueError, match="missing required 'url'"):
         await mgr._start_server(
             {"transport": "streamable_http"},
@@ -233,29 +341,175 @@ async def test_start_http_server_requires_url(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_start_http_server_is_scaffold_only(tmp_path) -> None:
-    """HTTP transport is scaffolded but not wired. Attempting to use
-    it must raise NotImplementedError with a pointer to the next step
-    (upstream SP auth)."""
-    mgr = MCPClientManager(str(tmp_path / "missing.json"))
-    with pytest.raises(NotImplementedError, match="Service Principal auth"):
+async def test_start_http_server_requires_auth_token(tmp_path) -> None:
+    """Authenticated HTTP transport should fail before connecting when
+    no per-request Fabric token is available."""
+    mgr = MCPClientManager(_empty_config(tmp_path))
+    with pytest.raises(RuntimeError, match="requires auth token"):
         await mgr._start_server(
-            {"transport": "streamable_http", "url": "https://example.invalid/mcp"},
+            {
+                "transport": "streamable_http",
+                "url": "https://example.invalid/mcp",
+                "requires_auth": True,
+            },
             env_override={},
         )
+
+
+def test_http_headers_include_bearer_token_and_correlation() -> None:
+    headers = MCPClientManager._http_headers_for_server(
+        {
+            "transport": "streamable_http",
+            "url": "https://example.invalid/mcp",
+            "requires_auth": True,
+            "auth_token_env": "FABRIC_API_TOKEN",
+            "headers": {"X-Static": "yes"},
+        },
+        {
+            "FABRIC_API_TOKEN": "token-123",
+            "AGENTHUB_REQUEST_ID": "req-1",
+            "AGENTHUB_SESSION_ID": "sess-1",
+        },
+    )
+
+    assert headers["Authorization"] == "Bearer token-123"
+    assert headers["X-Static"] == "yes"
+    assert headers["X-AgentHub-Request-ID"] == "req-1"
+    assert headers["X-AgentHub-Session-ID"] == "sess-1"
+
+
+def test_register_static_tools_adds_http_fallback_schema(tmp_path) -> None:
+    mgr = MCPClientManager(_empty_config(tmp_path))
+
+    added = mgr._register_static_tools(
+        "fabric-remote-core",
+        {
+            "tool_allowlist": ["list_workspaces"],
+            "static_tools": [
+                {"name": "list_workspaces", "description": "List workspaces"},
+                {"name": "delete_workspace", "description": "Delete workspace"},
+            ],
+        },
+    )
+
+    assert added == 1
+    assert mgr.tool_server_map["list_workspaces"] == "fabric-remote-core"
+    assert mgr.tools["list_workspaces"]["inputSchema"]["additionalProperties"] is True
+
+
+@pytest.mark.asyncio
+async def test_discover_tools_uses_static_tools_after_http_auth_failure(tmp_path, caplog) -> None:
+    cfg_path = tmp_path / "mcp_servers.json"
+    cfg_path.write_text(json.dumps({
+        "servers": {
+            "fabric-remote-core": {
+                "transport": "streamable_http",
+                "url": "https://example.invalid/mcp",
+                "requires_auth": True,
+                "static_tools": [
+                    {"name": "list_workspaces", "description": "List workspaces"},
+                ],
+            },
+        },
+    }))
+    mgr = MCPClientManager(str(cfg_path))
+
+    caplog.set_level(logging.WARNING)
+    await mgr.discover_tools()
+
+    assert "fabric-remote-core" not in mgr.failed_servers
+    assert mgr.tool_server_map["list_workspaces"] == "fabric-remote-core"
+    assert "auth token unavailable during startup discovery" in caplog.text
+    assert not any(record.levelno >= logging.ERROR for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_discover_tools_uses_static_tools_after_opted_in_timeout(tmp_path, caplog) -> None:
+    cfg_path = tmp_path / "mcp_servers.json"
+    cfg_path.write_text(json.dumps({
+        "servers": {
+            "slow-stdio": {
+                "command": "fake-command",
+                "discovery_timeout_seconds": 0.01,
+                "allow_static_discovery_fallback": True,
+                "static_tools": [
+                    {"name": "slow_tool", "description": "Known tool"},
+                ],
+            },
+        },
+    }))
+    mgr = MCPClientManager(str(cfg_path))
+
+    async def never_finishes(*_args, **_kwargs):
+        await asyncio.sleep(60)
+
+    mgr._start_server = AsyncMock(side_effect=never_finishes)  # type: ignore[method-assign]
+
+    caplog.set_level(logging.WARNING)
+    await mgr.discover_tools()
+
+    assert "slow-stdio" not in mgr.failed_servers
+    assert mgr.tool_server_map["slow_tool"] == "slow-stdio"
+    assert "discovery timed out after 0.01s" in caplog.text
+    assert not any(record.levelno >= logging.ERROR for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_discover_tools_can_use_static_tools_without_startup_spawn(tmp_path, caplog) -> None:
+    cfg_path = tmp_path / "mcp_servers.json"
+    cfg_path.write_text(json.dumps({
+        "servers": {
+            "static-stdio": {
+                "command": "fake-command",
+                "skip_startup_discovery": True,
+                "static_tools": [
+                    {"name": "static_tool", "description": "Known startup tool"},
+                ],
+            },
+        },
+    }))
+    mgr = MCPClientManager(str(cfg_path))
+    mgr._start_server = AsyncMock()  # type: ignore[method-assign]
+
+    caplog.set_level(logging.WARNING)
+    await mgr.discover_tools()
+
+    mgr._start_server.assert_not_called()  # type: ignore[attr-defined]
+    assert "static-stdio" not in mgr.failed_servers
+    assert mgr.tool_server_map["static_tool"] == "static-stdio"
+    assert "startup discovery skipped by config" in caplog.text
+    assert not any(record.levelno >= logging.ERROR for record in caplog.records)
 
 
 def test_qualified_name_for_known_tool(tmp_path) -> None:
     """``qualified_name`` renders ``server::tool`` for discovered tools
     so logs and error messages stay unambiguous."""
-    mgr = MCPClientManager(str(tmp_path / "missing.json"))
+    mgr = MCPClientManager(_empty_config(tmp_path))
     mgr.tool_server_map = {"t1": "server-a"}
     assert mgr.qualified_name("t1") == "server-a::t1"
 
 
 def test_qualified_name_for_undiscovered_tool(tmp_path) -> None:
-    mgr = MCPClientManager(str(tmp_path / "missing.json"))
+    mgr = MCPClientManager(_empty_config(tmp_path))
     assert mgr.qualified_name("nope") == "<undiscovered>::nope"
+
+
+def test_timeout_for_tool_uses_long_window_for_known_long_running_tools(monkeypatch) -> None:
+    from services.mcp import mcp_client_manager as mod
+
+    monkeypatch.setattr(mod, "TOOL_CALL_TIMEOUT", 30)
+    monkeypatch.setattr(mod, "LONG_RUNNING_TOOL_CALL_TIMEOUT", 120)
+    monkeypatch.setattr(mod, "_TOOL_TIMEOUT_OVERRIDES", {
+        "fabric_create_workspace_inventory_solution": 120,
+        "fabric_verify_report_renderable": 120,
+        "fabric_verify_workspace_inventory_solution": 120,
+    })
+
+    assert mod._timeout_for_tool("fabric_list_items") == 30
+    assert mod._timeout_for_tool("fabric_create_workspace_inventory_solution") == 120
+    assert mod._timeout_for_tool("fabric_verify_report_renderable") == 120
+    assert mod._timeout_for_tool("fabric_verify_workspace_inventory_solution") == 120
+    assert mod._timeout_for_tool("run_shell_command") == 120
 
 
 # ── Security: tool policy enforcement ───────────────────────────────
@@ -266,7 +520,7 @@ def test_qualified_name_for_undiscovered_tool(tmp_path) -> None:
 
 
 def _mgr_with_fake_tool(tmp_path, tool_name: str = "fabric_write_file"):
-    mgr = MCPClientManager(str(tmp_path / "missing.json"))
+    mgr = MCPClientManager(_empty_config(tmp_path))
     mgr.tool_server_map[tool_name] = "fabric"
     mgr.config["servers"] = {"fabric": {"command": "x", "args": []}}
     return mgr
@@ -345,6 +599,77 @@ async def test_call_tool_rejects_oversized_argument(tmp_path) -> None:
         )
 
 
+@pytest.mark.asyncio
+async def test_call_tool_rejects_app_only_token_for_fabric_mutation(tmp_path) -> None:
+    from services.mcp.mcp_client_manager import ToolPolicyViolation
+
+    mgr = _mgr_with_fake_tool(tmp_path, "create_item")
+    mgr.config["servers"] = {"fabric": {"command": "x", "args": [], "requires_auth": True}}
+
+    with pytest.raises(ToolPolicyViolation, match="application/service-principal token"):
+        await mgr.call_tool(
+            "create_item",
+            {"workspace_id": "workspace-1", "displayName": "Model", "type": "SemanticModel"},
+            tokens={
+                "FABRIC_API_TOKEN": _fake_jwt({
+                    "idtyp": "app",
+                    "roles": ["Item.ReadWrite.All"],
+                    "appid": "app-1",
+                    "app_displayname": "Fabric ClawHub",
+                })
+            },
+            allowed_tools={"create_item"},
+        )
+
+
+def test_mutation_token_guard_allows_delegated_user_token() -> None:
+    from services.mcp.mcp_client_manager import _validate_delegated_token_for_mutation
+
+    _validate_delegated_token_for_mutation(
+        "create_item",
+        {"requires_auth": True, "auth_token_env": "FABRIC_API_TOKEN"},
+        {
+            "FABRIC_API_TOKEN": _fake_jwt({
+                "scp": "Item.ReadWrite.All Dataset.ReadWrite.All",
+                "name": "Lukasz Obst",
+                "oid": "user-1",
+            })
+        },
+    )
+
+
+def test_mutation_token_guard_covers_definition_publish() -> None:
+    from services.mcp.mcp_client_manager import ToolPolicyViolation, _validate_delegated_token_for_mutation
+
+    with pytest.raises(ToolPolicyViolation, match="fabric_definition_publish"):
+        _validate_delegated_token_for_mutation(
+            "fabric_definition_publish",
+            {"requires_auth": True, "auth_token_env": "FABRIC_API_TOKEN"},
+            {
+                "FABRIC_API_TOKEN": _fake_jwt({
+                    "idtyp": "app",
+                    "roles": ["Item.ReadWrite.All"],
+                    "appid": "app-1",
+                    "app_displayname": "Fabric ClawHub",
+                })
+            },
+        )
+
+
+def test_mutation_token_guard_checks_onelake_token_for_file_writes() -> None:
+    from services.mcp.mcp_client_manager import ToolPolicyViolation, _validate_delegated_token_for_mutation
+
+    with pytest.raises(ToolPolicyViolation, match="ONELAKE_TOKEN"):
+        _validate_delegated_token_for_mutation(
+            "fabric_write_file",
+            {"requires_auth": True},
+            {
+                "FABRIC_API_TOKEN": _fake_jwt({"scp": "Item.ReadWrite.All", "oid": "user-1"}),
+                "ONELAKE_TOKEN": _fake_jwt({"idtyp": "app", "roles": ["Storage.BlobDataContributor"], "appid": "app-1"}),
+            },
+        )
+
+
 def test_env_allowlist_excludes_secrets(monkeypatch) -> None:
     """The MCP subprocess env must NOT inherit arbitrary backend env vars
     like ClientSecret — only the explicit allow-list + server-declared env
@@ -364,4 +689,31 @@ def test_env_allowlist_excludes_secrets(monkeypatch) -> None:
     # Sanity: the allow-list does include the essentials.
     for name in ("PATH", "HOME", "SSL_CERT_FILE"):
         assert name in _BASE_ENV_ALLOWLIST
+
+
+def test_execution_context_env_maps_actor_metadata() -> None:
+    from services.mcp.mcp_client_manager import _execution_context_env
+
+    env = _execution_context_env({
+        "actor_role": "subagent",
+        "agent_id": "fabric-builder",
+        "agent_name": "Fabric Builder\nInjected line",
+        "agent_session_id": "agent-session-1",
+        "run_id": "run-1",
+        "task_id": "task-1",
+        "task_title": "Build inventory solution",
+        "tool_call_id": "call-1",
+        "ignored": "value",
+    })
+
+    assert env == {
+        "AGENTHUB_ACTOR_ROLE": "subagent",
+        "AGENTHUB_AGENT_ID": "fabric-builder",
+        "AGENTHUB_AGENT_NAME": "Fabric Builder Injected line",
+        "AGENTHUB_AGENT_SESSION_ID": "agent-session-1",
+        "AGENTHUB_RUN_ID": "run-1",
+        "AGENTHUB_TASK_ID": "task-1",
+        "AGENTHUB_TASK_TITLE": "Build inventory solution",
+        "AGENTHUB_TOOL_CALL_ID": "call-1",
+    }
 

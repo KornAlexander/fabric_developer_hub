@@ -15,6 +15,14 @@ dependencies = [
     "httpx>=0.28",
     "requests>=2.32",
     "aiohttp>=3.11",
+    # Local observability / tracing
+    "opentelemetry-api>=1.31",
+    "opentelemetry-sdk>=1.31",
+    "opentelemetry-instrumentation-fastapi>=0.52b0",
+    "opentelemetry-instrumentation-httpx>=0.52b0",
+    "opentelemetry-instrumentation-requests>=0.52b0",
+    "opentelemetry-instrumentation-aiohttp-client>=0.52b0",
+    "opentelemetry-instrumentation-sqlite3>=0.52b0",
     # Data validation
     "pydantic>=2",
     # Auth
@@ -25,11 +33,23 @@ dependencies = [
     "aiofiles>=23",
     # Agent tooling
     "mcp>=1.0",
+    "docker>=7.1",
+    # Runtime dependencies for the vendored Power BI Design MCP server
+    # (tmdaidevs/powerbi-creator-skill/mcp-server), hosted by the backend
+    # MCP runtime container/process.
+    "fastmcp>=0.2.0",
+    "pydantic-settings>=2.2.1",
+    "structlog>=24.1.0",
+    "tenacity>=8.2.3",
     "cachetools>=5",
     # Declarative capability catalog (skills + agent → skill mapping)
     "pyyaml>=6",
     # Attachment parsing (PDF text extraction for prompt attachments)
     "pypdf>=5.0",
+    # Multi-agent orchestration — Microsoft Agent Framework is the sole
+    # topology engine. See services/agenthub/drivers/maf/ and
+    # ORCHESTRATION_CONCEPT.md.
+    "agent-framework>=0.1",
 ]
 
 [dependency-groups]
@@ -62,7 +82,7 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
 pythonpath = ["src"]
-addopts = ["-v", "--tb=short", "--strict-markers", "--cov=src", "--cov-report=term-missing", "--cov-fail-under=75"]
+addopts = ["-v", "--tb=short", "--strict-markers", "--cov=src", "--cov-report=term-missing", "--cov-fail-under=85"]
 markers = [
     "unit: Unit tests",
     "integration: Integration tests",
@@ -89,7 +109,20 @@ omit = [
     "src/fabric_api/models/*",
     # FastAPI bootstrap / lifespan; covered by integration smoke tests, not unit.
     "src/main.py",
+    "src/app/bootstrap.py",
     "src/app/core/service_initializer.py",
+    # Runtime adapters and live process entry points. These are covered by
+    # integration/E2E smoke paths, while unit coverage targets deterministic
+    # domain and service logic.
+    "src/api/agenthub_controller.py",
+    "src/api/github_chat_controller.py",
+    "src/api/internal_agent_api.py",
+    "src/api/onelake_controller.py",
+    "src/mcp_servers/*",
+    "src/services/agenthub/agent/*",
+    "src/services/agenthub/drivers/base.py",
+    "src/services/agenthub/drivers/container_*.py",
+    "src/services/agenthub/orchestrator_engine.py",
 ]
 
 [tool.coverage.report]

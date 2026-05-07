@@ -33,6 +33,30 @@ cd "Developer Hub"
 ./start.sh
 ```
 
+`start.sh` checks the Fabric workspace capacity before Docker starts. If the
+capacity assigned to `WORKSPACE_GUID` is paused or suspended, the script resumes
+the matching Azure `Microsoft.Fabric/capacities` resource and waits until it is
+`Active` so DevGateway registration does not fail on a detached capacity. Set
+`SKIP_FABRIC_CAPACITY_START=1` to skip this check. If auto-discovery cannot map
+the Fabric capacity ID to an Azure resource, set `FABRIC_CAPACITY_RESOURCE_ID`,
+or set `FABRIC_CAPACITY_NAME`, `FABRIC_CAPACITY_RESOURCE_GROUP`, and
+`FABRIC_CAPACITY_SUBSCRIPTION_ID`.
+
+If you run `docker compose` directly instead of `start.sh`, export the Docker
+socket group id first. The backend uses this to start one MCP runtime container
+per mission.
+
+```bash
+export DOCKER_GID=$(stat -c '%g' /var/run/docker.sock)
+docker compose up --build
+```
+
+Do not start the stack with Compose's `--abort-on-container-failure` or
+`--abort-on-container-exit` flags. Per-mission agent and MCP runtime containers
+are expected to fail independently sometimes, for example when a tool process is
+OOM-killed. `start.sh` filters those abort flags so the backend, frontend, and
+DevGateway remain available and the mission failure can be reported in the UI.
+
 ## Manifest templating
 
 `Backend/manifest/WorkloadManifest.xml` and `AgentHubItem.xml` are

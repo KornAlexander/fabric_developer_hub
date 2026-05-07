@@ -12,42 +12,57 @@ import uuid
 from datetime import UTC, datetime
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
+import httpx
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query, Request
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from api import github_chat_controller
+from domain.catalogs.architectures import ARCHITECTURES
 from domain.constants.workload_scopes import WorkloadScopes
 from domain.exceptions.exceptions import AuthenticationException
 from domain.models.agent_models import (
+    AddAgentRequest,
+    AgentAssignment,
     AgentConfigRequest,
+    AgentStatus,
     ApprovePlanRequest,
     ComposeRequest,
     CreateJobRequest,
     Job,
     JobStatus,
-    RunSessionRequest,
     SendMessageRequest,
     UserAgentConfig,
 )
 from domain.models.authentication_models import AuthorizationContext
-from domain.models.composition import CompositionError
-from domain.catalogs.architectures import ARCHITECTURES
-from services.agenthub import session_store, workspaces_cache
+from domain.models.composition import AgentSlot, Budget, Composition, CompositionError
+from services.agenthub import session_store, workspaces_cache, session_event_store
 from services.agenthub.agent_registry import get_template, list_templates
 from services.agenthub.attachments import classify_attachments
 from services.agenthub.compose_models import rank_compose_models
 from services.agenthub.download_tokens import consume_token, issue_token
 from services.agenthub.orchestrator_engine import get_orchestrator_engine
+from services.agenthub.pi_backend_harness import build_pi_session_context
 from services.agenthub.rate_limit import RateLimitExceeded
 from services.agenthub.rate_limit import acquire as rate_limit_acquire
 from services.auth.authentication import get_authentication_service
 from services.configuration_service import get_configuration_service
 from services.correlation import set_session_id, set_user_id
+from services.logging_categories import log_extra
+from services.observability import bounded_text, collection_counts, stable_digest
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["AgentHub"])
+
+
+def _default_max_wallclock_seconds() -> int:
+    raw = os.environ.get("AGENTHUB_DEFAULT_MAX_WALLCLOCK_SECONDS", "600")
+    try:
+        seconds = int(raw)
+    except (TypeError, ValueError):
+        seconds = 600
+    return max(10, min(7200, seconds))
 
 
 # Per-(user, workspace_id) cache of the workspace-preview payload.
@@ -59,6 +74,21 @@ router = APIRouter(prefix="/api", tags=["AgentHub"])
 # historical consumer (session snapshot) can show "as-of HH:MM:SS".
 _WORKSPACE_ITEMS_TTL_SEC = 60
 _workspace_items_cache: dict[tuple[str, str], tuple[float, str, list[dict]]] = {}
+
+
+class _WorkspacePreviewUnavailable(Exception):
+    def __init__(self, status_code: int, detail: str) -> None:
+        super().__init__(detail)
+        self.status_code = status_code
+        self.detail = detail
+_FABRIC_API_BASE = "https://api.fabric.microsoft.com/v1"
+_FABRIC_DEFINITION_COLLECTIONS = {
+    "notebook": "notebooks",
+    "report": "reports",
+    "semanticmodel": "semanticModels",
+}
+_MISSION_STATUS_LOG_TTL_SEC = 30.0
+_mission_status_log_cache: dict[str, tuple[float, str]] = {}
 
 
 # ── Auth helpers ─────────────────────────────────────────────────────
@@ -103,6 +133,30 @@ def _user_upn_from_context(ctx: AuthorizationContext | None) -> str | None:
     return None
 
 
+def _public_token_error_reason(exc: Exception) -> str:
+    """Return a user-safe auth failure reason.
+
+    Keeps details actionable for the UI while avoiding raw stack traces.
+    """
+    raw = " ".join(str(exc).split())
+    if not raw:
+        return "token validation failed"
+    lower = raw.lower()
+    if "decoding token headers" in lower:
+        return "token format is invalid (cannot decode JWT headers)"
+    if "expired" in lower:
+        return "token has expired"
+    if "invalid audience" in lower or "audience" in lower:
+        return "token audience is invalid"
+    if "invalid issuer" in lower or "issuer" in lower:
+        return "token issuer is invalid"
+    if "missing claim" in lower:
+        return "token is missing required claims"
+    if len(raw) > 180:
+        return raw[:179] + "…"
+    return raw
+
+
 async def require_user(request: Request) -> AuthorizationContext | None:
     """Authenticate the caller via the Fabric bearer token.
 
@@ -121,12 +175,19 @@ async def require_user(request: Request) -> AuthorizationContext | None:
     if not fabric_token:
         fabric_header = request.headers.get("Authorization", "")
         fabric_token = fabric_header.removeprefix("Bearer ").strip()
+    # EventSource (SSE) cannot set custom headers, so allow the Fabric
+    # token to be supplied as a query parameter as well.
+    if not fabric_token:
+        fabric_token = (request.query_params.get("token") or "").strip()
 
     config = get_configuration_service()
 
     if not fabric_token:
         if config.is_production():
             raise HTTPException(401, "Missing Fabric bearer token")
+        return None
+
+    if not config.is_production() and fabric_token == "e2e-fabric-token":
         return None
 
     try:
@@ -149,8 +210,15 @@ async def require_user(request: Request) -> AuthorizationContext | None:
             ],
         )
     except AuthenticationException as exc:
+        reason = _public_token_error_reason(exc)
+        # In dev/test mode, soft-fail malformed tokens so the
+        # standalone-for-E2E bootstrap (which uses synthetic tokens
+        # not issued by Entra ID) can still drive Mission Control.
+        if not config.is_production():
+            logger.debug("Auth validation soft-failed in dev (malformed token): %s", reason)
+            return None
         logger.warning("Rejected invalid Fabric token: %s", exc)
-        raise HTTPException(401, "Invalid Fabric token") from exc
+        raise HTTPException(401, f"Invalid Fabric token: {reason}") from exc
     except Exception as exc:
         if config.is_production():
             logger.exception("Auth validation error")
@@ -400,7 +468,10 @@ async def list_workspaces(
 
     # Cached and not asked to refresh → serve cache without doing OBO.
     if cached and cache_fresh and not refresh:
-        logger.debug("workspaces cache hit user=%s count=%d", user_id, len(cached))
+        logger.info(
+            "[WORKSPACES] cache hit: user=%s count=%d",
+            user_id[:12], len(cached),
+        )
         # Kick off a background git-status probe for any workspaces that
         # are unprobed or whose git status has aged out. Only do this when
         # a Fabric token is already attached (no OBO latency on cache hit).
@@ -612,7 +683,145 @@ async def list_workspace_items(
     items, captured_at = await _fetch_workspace_snapshot(
         user_id, workspace_id, mcp_tokens, use_cache=not refresh,
     )
+    logger.info(
+        "[WORKSPACE-ITEMS] workspace=%s items=%d cached=%s",
+        workspace_id[:8], len(items), "no" if refresh else "maybe",
+    )
     return {"items": items, "captured_at": captured_at}
+
+
+def _definition_collection_for(item_type: str) -> str:
+    collection = _FABRIC_DEFINITION_COLLECTIONS.get(item_type.replace(" ", "").lower())
+    if not collection:
+        raise HTTPException(400, f"Unsupported Fabric definition item type: {item_type}")
+    return collection
+
+
+@router.post("/workspaces/{workspace_id}/items/{item_type}/{item_id}/definition")
+async def get_workspace_item_definition(
+    workspace_id: str,
+    item_type: str,
+    item_id: str,
+    request: Request,
+    format: str | None = None,
+    ctx: AuthorizationContext | None = Depends(require_user),
+):
+    """Return a Fabric item definition using the backend OBO token path."""
+    user_id = _user_key_from_context(ctx)
+    _rate_limit(user_id, "list_workspace_items")
+
+    mcp_tokens = await _mcp_tokens(request)
+    fabric_api_token = (mcp_tokens or {}).get("FABRIC_API_TOKEN")
+    if not fabric_api_token:
+        raise HTTPException(400, "Fabric API token required")
+
+    collection = _definition_collection_for(item_type)
+    url = f"{_FABRIC_API_BASE}/workspaces/{workspace_id}/{collection}/{item_id}/getDefinition"
+    if format:
+        url = f"{url}?format={format}"
+    headers = {"Authorization": f"Bearer {fabric_api_token}", "Content-Type": "application/json"}
+
+    async with httpx.AsyncClient(timeout=httpx.Timeout(180.0, connect=20.0)) as client:
+        try:
+            response = await client.post(url, headers=headers)
+        except httpx.HTTPError as exc:
+            raise HTTPException(502, f"Failed to request Fabric definition: {exc}") from exc
+
+        if response.status_code == 200:
+            return response.json()
+        if response.status_code != 202:
+            raise HTTPException(
+                response.status_code if 400 <= response.status_code < 500 else 502,
+                response.text or "Fabric definition request failed",
+            )
+
+        location = response.headers.get("Location")
+        if not location:
+            raise HTTPException(502, "Fabric returned 202 for getDefinition without a Location header")
+
+        delay_sec = max(int(response.headers.get("Retry-After", "3") or "3"), 1)
+        for _ in range(60):
+            await asyncio.sleep(delay_sec)
+            try:
+                state_response = await client.get(location, headers=headers)
+            except httpx.HTTPError as exc:
+                raise HTTPException(502, f"Failed to poll Fabric definition operation: {exc}") from exc
+            if state_response.status_code not in {200, 202, 204}:
+                raise HTTPException(
+                    state_response.status_code if 400 <= state_response.status_code < 500 else 502,
+                    state_response.text or "Fabric definition operation poll failed",
+                )
+            state = state_response.json() if state_response.status_code == 200 and state_response.text else {}
+            status = str(state.get("status") or "").lower()
+            if status in {"succeeded", "completed"}:
+                result_response = await client.get(location.rstrip("/") + "/result", headers=headers)
+                if result_response.status_code != 200:
+                    raise HTTPException(
+                        result_response.status_code if 400 <= result_response.status_code < 500 else 502,
+                        result_response.text or "Fabric definition operation result failed",
+                    )
+                return result_response.json()
+            if status in {"failed", "cancelled", "canceled"}:
+                raise HTTPException(502, f"Fabric definition operation failed: {json.dumps(state)[:500]}")
+            delay_sec = min(int(delay_sec * 1.5), 15)
+
+    raise HTTPException(504, "Fabric definition operation timed out")
+
+
+_POWERBI_API_BASE = "https://api.powerbi.com/v1.0/myorg"
+
+
+@router.post("/workspaces/{workspace_id}/semantic-models/{semantic_model_id}/query")
+async def query_workspace_semantic_model(
+    workspace_id: str,
+    semantic_model_id: str,
+    request: Request,
+    payload: dict | None = Body(default=None),
+    ctx: AuthorizationContext | None = Depends(require_user),
+):
+    """Run a DAX query against a Power BI semantic model using the backend OBO Power BI token."""
+    user_id = _user_key_from_context(ctx)
+    _rate_limit(user_id, "list_workspace_items")
+
+    query_text = (payload or {}).get("query")
+    if not isinstance(query_text, str) or not query_text.strip():
+        raise HTTPException(400, "DAX query text required in body.query")
+
+    mcp_tokens = await _mcp_tokens(request)
+    powerbi_token = (mcp_tokens or {}).get("POWERBI_API_TOKEN")
+    if not powerbi_token:
+        raise HTTPException(400, "Power BI API token required")
+
+    url = (
+        f"{_POWERBI_API_BASE}/groups/{workspace_id}"
+        f"/datasets/{semantic_model_id}/executeQueries"
+    )
+    headers = {"Authorization": f"Bearer {powerbi_token}", "Content-Type": "application/json"}
+    body = {"queries": [{"query": query_text}], "serializerSettings": {"includeNulls": True}}
+
+    async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=20.0)) as client:
+        try:
+            response = await client.post(url, headers=headers, json=body)
+        except httpx.HTTPError as exc:
+            raise HTTPException(502, f"Failed to call Power BI executeQueries: {exc}") from exc
+
+        if response.status_code != 200:
+            raise HTTPException(
+                response.status_code if 400 <= response.status_code < 500 else 502,
+                response.text or "Power BI executeQueries failed",
+            )
+
+        data = response.json() if response.text else {}
+        rows: list[dict] = []
+        try:
+            results = data.get("results") or []
+            if results:
+                tables = results[0].get("tables") or []
+                if tables:
+                    rows = tables[0].get("rows") or []
+        except Exception:  # pragma: no cover - defensive
+            rows = []
+        return {"source": "powerbi_executeQueries", "rows": rows}
 
 
 # ── PBI Fixer proxy ──────────────────────────────────────────────────
@@ -672,6 +881,7 @@ async def pbi_fixer_proxy(
     url = f"{root}{payload.path}"
 
     import httpx
+    location: str | None = None
     async with httpx.AsyncClient(timeout=60.0, follow_redirects=False) as client:
         try:
             resp = await client.request(
@@ -1820,8 +2030,8 @@ async def _fetch_workspace_snapshot(
     """
     cache_key = (user_id, workspace_id)
     now = time.time()
+    cached = _workspace_items_cache.get(cache_key)
     if use_cache:
-        cached = _workspace_items_cache.get(cache_key)
         if cached and (now - cached[0]) < _WORKSPACE_ITEMS_TTL_SEC:
             return cached[2], cached[1]
 
@@ -1831,20 +2041,24 @@ async def _fetch_workspace_snapshot(
     mgr = github_chat_controller._mcp_manager
 
     async def _call_items() -> list[dict]:
-        raw = await mgr.call_tool(
-            "fabric_list_items",
-            {"workspace_id": workspace_id},
-            mcp_tokens,
-            allowed_tools={"fabric_list_items"},
-            workspace_id=workspace_id,
-        )
+        try:
+            raw = await mgr.call_tool(
+                "fabric_list_items",
+                {"workspace_id": workspace_id},
+                mcp_tokens,
+                allowed_tools={"fabric_list_items"},
+                workspace_id=workspace_id,
+            )
+        except Exception as exc:
+            detail = str(exc) or "Failed to list items"
+            raise _WorkspacePreviewUnavailable(502, detail) from exc
         body = str(raw)
         try:
             data = json.loads(body)
         except Exception:
-            if "HTTP 40" in body:
-                raise HTTPException(400, body) from None
-            raise HTTPException(502, body or "Failed to list items") from None
+            status_code = 400 if "HTTP 40" in body else 502
+            detail = body or "Failed to list items"
+            raise _WorkspacePreviewUnavailable(status_code, detail) from None
         return data if isinstance(data, list) else []
 
     async def _call_folders() -> list[dict]:
@@ -1868,6 +2082,26 @@ async def _fetch_workspace_snapshot(
 
     try:
         items_raw, folders_raw = await asyncio.gather(_call_items(), _call_folders())
+    except _WorkspacePreviewUnavailable as exc:
+        if not use_cache:
+            raise HTTPException(exc.status_code, exc.detail) from exc
+        if cached:
+            logger.warning(
+                "fabric workspace-preview using stale cache workspace=%s status=%s detail=%s",
+                workspace_id,
+                exc.status_code,
+                exc.detail[:300],
+            )
+            return cached[2], cached[1]
+        captured_at = datetime.now(UTC).isoformat()
+        _workspace_items_cache[cache_key] = (now, captured_at, [])
+        logger.warning(
+            "fabric workspace-preview degraded to empty snapshot workspace=%s status=%s detail=%s",
+            workspace_id,
+            exc.status_code,
+            exc.detail[:300],
+        )
+        return [], captured_at
     except HTTPException:
         raise
     except Exception as exc:
@@ -2007,19 +2241,22 @@ def _composition_to_plan_view(comp) -> dict:
     # Map Composition architecture → legacy TeamPattern. Non-driver values
     # fall back to supervisor (which the canvas renders as a hub-and-spoke).
     _PATTERN_MAP = {
+        "dynamic": "solo",
         "solo": "solo",
         "supervisor": "supervisor",
         "sequential": "sequential",
-        "parallel": "supervisor",
-        "router": "supervisor",
         "hierarchical": "hierarchical",
         "reflection": "supervisor",
         "mixed": "mixed",
         "network": "network",
-        "debate": "network",
-        "magentic": "hierarchical",
     }
     pattern = _PATTERN_MAP.get(comp.architecture, "supervisor")
+    internal_agent_ids = {"orchestrator", "generalist"}
+    visible_slots = [
+        slot for slot in comp.slots
+        if slot.agent_id not in internal_agent_ids and slot.id not in internal_agent_ids
+    ]
+    visible_slot_ids = {slot.id for slot in visible_slots}
 
     def _agent_label(agent_id: str) -> str:
         """Render a human-friendly name for a slot's agent.
@@ -2072,7 +2309,7 @@ def _composition_to_plan_view(comp) -> dict:
                 {s.id for s in slot.skills},
             ),
         }
-        for slot in comp.slots
+        for slot in visible_slots
     ]
     _KIND_MAP = {"delegate": "delegate", "peer": "peer", "report": "report",
                  "handoff": "peer", "critique": "report"}
@@ -2083,6 +2320,7 @@ def _composition_to_plan_view(comp) -> dict:
             "kind": _KIND_MAP.get(h.kind, "peer"),
         }
         for h in comp.handoffs
+        if h.from_ in visible_slot_ids and h.to in visible_slot_ids
     ]
 
     steps = [
@@ -2106,7 +2344,7 @@ def _composition_to_plan_view(comp) -> dict:
             "risk": "low",
             "reversible": True,
         }
-        for idx, slot in enumerate(comp.slots)
+        for idx, slot in enumerate(visible_slots)
     ]
 
     return {
@@ -2122,8 +2360,8 @@ def _composition_to_plan_view(comp) -> dict:
         "conflicts": [],
         "clarificationsNeeded": [],
         "footer": {
-            "agentCount": len(comp.slots),
-            "stepCount": len(comp.slots),
+            "agentCount": len(visible_slots),
+            "stepCount": len(visible_slots),
             "approvalPoints": 0,
             "executionBlocked": False,
         },
@@ -2152,45 +2390,246 @@ def _serialize_job(job: Job) -> dict:
     return data
 
 
+def _job_observability_summary(job: Job) -> dict:
+    """Compact support summary for session list/load/status logs."""
+    status = job.status.value if hasattr(job.status, "value") else str(job.status)
+    composition = job.composition
+    agent_statuses = [
+        a.status.value if hasattr(a.status, "value") else str(a.status)
+        for a in (job.agents or [])
+    ]
+    phase_count = sum(len(a.phases or []) for a in (job.agents or []))
+    action_count = sum(len(a.actions or []) for a in (job.agents or []))
+    return {
+        "id": job.id,
+        "status": status,
+        "workspaceId": job.workspace_id,
+        "architecture": composition.architecture if composition else None,
+        "slotCount": len(composition.slots) if composition else 0,
+        "agentCount": len(job.agents or []),
+        "agentStatuses": dict(sorted({value: agent_statuses.count(value) for value in set(agent_statuses)}.items())),
+        "phaseCount": phase_count,
+        "actionCount": action_count,
+        "createdAt": job.created_at.isoformat() if job.created_at else None,
+        "startedAt": job.started_at.isoformat() if job.started_at else None,
+        "completedAt": job.completed_at.isoformat() if job.completed_at else None,
+    }
+
+
+def _job_observability_digest(job: Job) -> str:
+    composition = job.composition
+    return stable_digest({
+        "id": job.id,
+        "status": job.status.value if hasattr(job.status, "value") else str(job.status),
+        "workspaceId": job.workspace_id,
+        "task": bounded_text(job.task_description, max_chars=120),
+        "composition": {
+            "architecture": composition.architecture if composition else None,
+            "slots": [
+                {"id": slot.id, "agentId": slot.agent_id, "role": slot.role}
+                for slot in (composition.slots if composition else [])
+            ],
+        },
+        "agents": [
+            {
+                "agentId": agent.agent_id,
+                "sessionId": agent.session_id,
+                "role": agent.role,
+                "status": agent.status.value if hasattr(agent.status, "value") else str(agent.status),
+                "phaseCount": len(agent.phases or []),
+                "actionCount": len(agent.actions or []),
+            }
+            for agent in (job.agents or [])
+        ],
+        "startedAt": job.started_at.isoformat() if job.started_at else None,
+        "completedAt": job.completed_at.isoformat() if job.completed_at else None,
+    })
+
+
+def _job_status_value(job: Job) -> str:
+    return job.status.value if hasattr(job.status, "value") else str(job.status)
+
+
+def _agent_status_value(agent) -> str:
+    status = getattr(agent, "status", "unknown")
+    return status.value if hasattr(status, "value") else str(status)
+
+
+def _agent_label(agent) -> str:
+    agent_id = getattr(agent, "agent_id", None) or getattr(agent, "session_id", None) or "agent"
+    role = getattr(agent, "role", None)
+    status = _agent_status_value(agent)
+    if role:
+        return f"{role}/{agent_id}:{status}"
+    return f"{agent_id}:{status}"
+
+
+def _mission_waiting_for(job: Job, *, live_execution: bool, persisted_total: int) -> str:
+    status = _job_status_value(job)
+    if live_execution:
+        running_agents = [agent for agent in (job.agents or []) if _agent_status_value(agent) in {"running", "waiting"}]
+        if running_agents:
+            return "live orchestrator/subagent activity"
+        return "live orchestrator heartbeat or next mission event"
+    if status in {"planned", "approved"}:
+        return "session is planned/approved and waiting for the run request to attach execution"
+    if status in {"completed", "failed", "cancelled", "canceled", "success", "error"}:
+        return "mission is terminal; only persisted replay is available"
+    if persisted_total > 0:
+        return "persisted mission replay; no live process is attached to this backend"
+    return "no live process and no persisted mission events; UI should stop live reconnects or restart the run"
+
+
+def _mission_next_action(job: Job, *, live_execution: bool, persisted_total: int) -> str:
+    status = _job_status_value(job)
+    if live_execution:
+        return "stream live mission events"
+    if status in {"completed", "failed", "cancelled", "canceled", "success", "error"}:
+        return "show terminal session state and replay saved events"
+    if persisted_total > 0:
+        return "replay saved events and poll compact status only if needed"
+    return "classify as no-active-execution; do not reconnect every 2s"
+
+
+def _log_mission_status(
+    job: Job,
+    *,
+    route: str,
+    live_execution: bool,
+    persisted_total: int,
+    replay_events: int,
+    last_seq: int | None = None,
+) -> None:
+    """Emit a throttled support breadcrumb that answers what is happening."""
+    summary = _job_observability_summary(job)
+    running_agents = [
+        _agent_label(agent)
+        for agent in (job.agents or [])
+        if _agent_status_value(agent) in {"running", "waiting"}
+    ]
+    payload = {
+        "route": route,
+        "session": job.id,
+        "status": summary.get("status"),
+        "liveExecution": live_execution,
+        "persistedTotal": persisted_total,
+        "replayEvents": replay_events,
+        "lastSeq": last_seq,
+        "agentStatuses": summary.get("agentStatuses"),
+        "phaseCount": summary.get("phaseCount"),
+        "actionCount": summary.get("actionCount"),
+        "runningAgents": running_agents,
+        "waitingFor": _mission_waiting_for(job, live_execution=live_execution, persisted_total=persisted_total),
+        "nextAction": _mission_next_action(job, live_execution=live_execution, persisted_total=persisted_total),
+    }
+    digest = stable_digest(payload)
+    cache_key = f"{route}:{job.id}"
+    now = time.monotonic()
+    cached = _mission_status_log_cache.get(cache_key)
+    if cached and cached[1] == digest and now - cached[0] < _MISSION_STATUS_LOG_TTL_SEC:
+        return
+    _mission_status_log_cache[cache_key] = (now, digest)
+    logger.info(
+        "[MISSION_STATUS:%s] route=%s process=%s session_status=%s workspace=%s "
+        "persisted_events=%d replay_events=%d agents=%d agent_statuses=%s running_agents=%s "
+        "phase_count=%d action_count=%d last_seq=%s waiting_for=%s next_action=%s task=%s digest=%s",
+        job.id[:8],
+        route,
+        "yes" if live_execution else "no",
+        summary.get("status"),
+        summary.get("workspaceId"),
+        persisted_total,
+        replay_events,
+        summary.get("agentCount", 0),
+        summary.get("agentStatuses", {}),
+        running_agents or "none",
+        summary.get("phaseCount", 0),
+        summary.get("actionCount", 0),
+        str(last_seq) if last_seq is not None else "none",
+        payload["waitingFor"],
+        payload["nextAction"],
+        bounded_text(job.task_description, max_chars=160),
+        digest,
+        extra=log_extra("high_level"),
+    )
+
+
+def _dynamic_seed_composition(
+    *,
+    task_description: str,
+    require_approvals: bool,
+) -> Composition:
+    """Build the default dynamic mission seed without an LLM round trip."""
+    session_id = str(uuid.uuid4())
+    return Composition(
+        session_id=session_id,
+        task=task_description,
+        architecture="dynamic",
+        rationale=(
+            "Start immediately with the hidden generalist mission controller. "
+            "The live runtime will inspect context, use MCP tools when safe, and "
+            "delegate structured follow-up work to specialists as needed."
+        ),
+        headline="Dynamic mission",
+        subtitle="A generalist controller starts now and delegates specialist work on demand.",
+        slots=[
+            AgentSlot(
+                id="generalist",
+                agent_id="generalist",
+                role="Generalist mission controller",
+                skills=[],
+            )
+        ],
+        handoffs=[],
+        entrypoint_slot_id="generalist",
+        budget=Budget(
+            max_turns=20,
+            max_tool_calls=100,
+            max_wallclock_s=_default_max_wallclock_seconds(),
+            require_approvals=require_approvals,
+        ),
+    )
+
+
 @router.post("/sessions")
 async def create_session(
     req: CreateJobRequest,
     request: Request,
     ctx: AuthorizationContext | None = Depends(require_user),
 ):
-    """Create a new session and compose an execution graph."""
+    """Create a new dynamic session without blocking on planning."""
     user_id = _user_key_from_context(ctx)
     user_upn = _user_upn_from_context(ctx)
     logger.info(
-        "[AGENTHUB] Plan this → composing session (workspace=%s, task_chars=%d, attachments=%d)",
+        "[AGENTHUB] Start mission → seeding dynamic session (user=%s, workspace=%s, attachments=%d, model=%s)",
+        user_upn or user_id[:8],
         req.workspace_id,
-        len(req.task_description or ""),
         len(req.attachments or []),
+        req.model or "default",
     )
+    logger.info(
+        "[AGENTHUB] task: %.500s%s",
+        req.task_description,
+        " [TRUNCATED]" if len(req.task_description) > 500 else "",
+    )
+    if req.attachments:
+        for i, att in enumerate(req.attachments):
+            logger.info(
+                "[AGENTHUB] attachment[%d]: %s (kind=%s, %d chars)",
+                i, att.name, att.kind, len(att.content),
+            )
     _rate_limit(user_id, "create_session")
-    # Compose only needs the Copilot token — MCP/Fabric OBO tokens are
-    # not referenced anywhere in this handler and were previously awaited
-    # for no reason (up to ~2s of OBO exchange on the hot path).
-    copilot_token = await _copilot_token(request)
 
-    try:
-        composition = await get_orchestrator_engine().compose(
-            task_description=req.task_description,
-            workspace_id=req.workspace_id,
-            copilot_token=copilot_token,
-            attachments=req.attachments,
-            model=req.model,
-        )
-    except CompositionError as e:
-        # Spec: surface as structured 422 so the UI can render a
-        # "Composition could not be generated" empty state rather than a
-        # blank card.
-        raise HTTPException(
-            status_code=422,
-            detail={"error": "composition_failed", "reason": e.reason, **e.details},
-        ) from e
+    ctx_dict = req.context or {}
+    require_approvals = True
+    if isinstance(ctx_dict, dict) and "require_approvals" in ctx_dict:
+        require_approvals = bool(ctx_dict.get("require_approvals"))
+    composition = _dynamic_seed_composition(
+        task_description=req.task_description,
+        require_approvals=require_approvals,
+    )
 
-    persisted_context = _persist_context_with_attachments(req.context, req.attachments)
+    persisted_context = build_pi_session_context(_persist_context_with_attachments(req.context, req.attachments))
 
     # Note: the legacy code captured a Fabric workspace snapshot here so
     # the Session Detail page could later show "as-of HH:MM:SS". With
@@ -2213,7 +2652,7 @@ async def create_session(
     # asyncio tasks spawned from it) carry the s:<id> tag.
     set_session_id(job.id)
     logger.info(
-        "[AGENTHUB] Session %s composed — %s (%d slots)",
+        "[AGENTHUB] Session %s seeded — %s (%d slots)",
         job.id, composition.architecture, len(composition.slots),
     )
     return _serialize_job(job)
@@ -2235,8 +2674,64 @@ async def list_sessions(
     ``GET /api/sessions/{id}``.
     """
     user_id = _user_key_from_context(ctx)
-    jobs = session_store.list_sessions(user_id, status=status, limit=limit, offset=offset)
-    return [_strip_attachment_content(_serialize_job(j)) for j in jobs]
+    rows = session_store.list_session_summaries(user_id, status=status, limit=limit, offset=offset)
+    logger.info(
+        "[SESSIONS] list user=%s filter=%s count=%d limit=%d offset=%d statuses=%s arch=%s digest=%s",
+        user_id[:12],
+        status or "all",
+        len(rows),
+        limit,
+        offset,
+        collection_counts(rows, "status"),
+        collection_counts(
+            [r.get("composition") or {} for r in rows],
+            "architecture",
+        ),
+        stable_digest(rows),
+    )
+    return rows
+
+
+@router.get("/sessions/summary")
+async def sessions_summary(
+    ctx: AuthorizationContext | None = Depends(require_user),
+):
+    """Return aggregate session counts for the caller.
+
+    Designed for dashboard KPIs: one lightweight grouped query instead of
+    materializing all session rows client-side just to compute totals.
+    """
+    user_id = _user_key_from_context(ctx)
+    summary = session_store.summarize_sessions(user_id)
+    logger.info(
+        "[SESSIONS] summary: user=%s total=%d active=%d history=%d",
+        user_id[:12],
+        summary.get("total", 0),
+        summary.get("active_total", 0),
+        summary.get("history_total", 0),
+    )
+    return summary
+
+
+@router.get("/sessions/{session_id}/status")
+async def get_session_status(
+    session_id: UUID,
+    ctx: AuthorizationContext | None = Depends(require_user),
+):
+    """Return the minimal persisted run status needed by recovery polling."""
+    job = _ensure_owner(session_store.get_session(str(session_id)), _user_key_from_context(ctx))
+    summary = _job_observability_summary(job)
+    digest = _job_observability_digest(job)
+    logger.info(
+        "[SESSION] status id=%s status=%s agents=%d phases=%d actions=%d digest=%s",
+        str(session_id)[:8],
+        summary.get("status"),
+        summary.get("agentCount", 0),
+        summary.get("phaseCount", 0),
+        summary.get("actionCount", 0),
+        digest,
+    )
+    return {**summary, "digest": digest}
 
 
 @router.get("/sessions/{session_id}")
@@ -2245,6 +2740,20 @@ async def get_session(
     ctx: AuthorizationContext | None = Depends(require_user),
 ):
     job = _ensure_owner(session_store.get_session(str(session_id)), _user_key_from_context(ctx))
+    summary = _job_observability_summary(job)
+    digest = _job_observability_digest(job)
+    logger.debug(
+        "[SESSION] load id=%s status=%s arch=%s slots=%d agents=%d phases=%d actions=%d digest=%s task=%s",
+        str(session_id)[:8],
+        summary.get("status"),
+        summary.get("architecture") or "-",
+        summary.get("slotCount", 0),
+        summary.get("agentCount", 0),
+        summary.get("phaseCount", 0),
+        summary.get("actionCount", 0),
+        digest,
+        bounded_text(job.task_description, max_chars=120),
+    )
     return _serialize_job(job)
 
 
@@ -2297,10 +2806,114 @@ async def send_message_to_session(
     user_key = _user_key_from_context(ctx)
     _rate_limit(user_key, "send_message")
     _ensure_owner(session_store.get_session(str(session_id)), user_key)
-    ok = get_orchestrator_engine().inject_message(str(session_id), req.message, req.target_agent_id)
-    if not ok:
+    result = get_orchestrator_engine().inject_message(str(session_id), req.message, req.target_agent_id, mode=req.mode)
+    if not result:
         raise HTTPException(404, "Session not running or not found")
-    return {"status": "sent"}
+    return result
+
+
+@router.post("/sessions/{session_id}/agents")
+async def add_agent_to_session(
+    session_id: UUID,
+    req: AddAgentRequest,
+    ctx: AuthorizationContext | None = Depends(require_user),
+):
+    """Attach a new agent to a running session on demand.
+
+    Implements the runtime-side half of the Orchestrator's
+    ``team-orchestration`` skill. Callable by the session owner when
+    the execution surfaces a missing capability (e.g. realising
+    mid-run that a ``fabric-admin`` is needed to create a workspace).
+    Returns the newly-created ``AgentAssignment`` so the UI can
+    render it optimistically before the ``agent_added`` SSE frame
+    arrives.
+    """
+    user_key = _user_key_from_context(ctx)
+    _rate_limit(user_key, "add_agent")
+    _ensure_owner(session_store.get_session(str(session_id)), user_key)
+    assignment = await get_orchestrator_engine().add_agent_to_job(
+        str(session_id),
+        agent_id=req.agent_id,
+        role=req.role,
+        goal=req.goal,
+    )
+    if assignment is None:
+        raise HTTPException(
+            404,
+            "Session not running, stopping, or agent id unknown",
+        )
+    return {
+        "status": "attached",
+        "agent": assignment.model_dump(mode="json", by_alias=True),
+    }
+
+
+@router.get("/sessions/{session_id}/events.json")
+async def session_events_inspect(
+    session_id: UUID,
+    types: str | None = None,
+    after_seq: int | None = Query(default=None, alias="afterSeq"),
+    limit: int = 500,
+    ctx: AuthorizationContext | None = Depends(require_user),
+):
+    """Return the recorded ring of mission events as JSON.
+
+    This is the inspection counterpart to the SSE endpoint and is intended
+    for e2e tests and developer tooling that need to assert on specific
+    event types (e.g. ``verifier_verdict``) without holding an SSE
+    connection open. Events are returned in emit order; ``types`` filters
+    to a CSV of event-type names.
+
+    When the live in-memory ``_JobExecution`` is no longer available
+    (mission completed, backend restart, ring rotated), the response is
+    served from the persisted ``session_events`` table so the live log can
+    be reconstructed exactly when the user re-opens the session later.
+    """
+    job = _ensure_owner(session_store.get_session(str(session_id)), _user_key_from_context(ctx))
+    type_filter: set[str] | None = None
+    if types:
+        type_filter = {t.strip() for t in types.split(",") if t.strip()}
+    execution = get_orchestrator_engine().get_job_execution(str(session_id))
+    if execution is not None:
+        ring = list(execution._ring)  # type: ignore[attr-defined]
+        if after_seq is not None:
+            ring = [ev for ev in ring if int(ev.get("seq") or 0) > after_seq]
+        if type_filter:
+            ring = [ev for ev in ring if ev.get("type") in type_filter]
+        if limit and limit > 0:
+            ring = ring[-limit:]
+        return {
+            "sessionId": str(session_id),
+            "source": "live",
+            "liveExecution": True,
+            "sessionStatus": _job_status_value(job),
+            "count": len(ring),
+            "events": ring,
+        }
+    persisted_total = session_event_store.event_count(str(session_id))
+    persisted = session_event_store.load_events(
+        str(session_id),
+        types=type_filter,
+        limit=limit if limit and limit > 0 else None,
+        after_seq=after_seq,
+    )
+    if persisted_total == 0:
+        _log_mission_status(
+            job,
+            route="events.json",
+            live_execution=False,
+            persisted_total=persisted_total,
+            replay_events=len(persisted),
+        )
+    return {
+        "sessionId": str(session_id),
+        "source": "persisted",
+        "liveExecution": False,
+        "sessionStatus": _job_status_value(job),
+        "persistedTotal": persisted_total,
+        "count": len(persisted),
+        "events": persisted,
+    }
 
 
 @router.get("/sessions/{session_id}/events")
@@ -2319,10 +2932,8 @@ async def session_events_sse(
     ``run_overview`` snapshot and start streaming live from there —
     the client's reducer is idempotent on ``seq`` so duplicate-safe.
     """
-    _ensure_owner(session_store.get_session(str(session_id)), _user_key_from_context(ctx))
+    job = _ensure_owner(session_store.get_session(str(session_id)), _user_key_from_context(ctx))
     execution = get_orchestrator_engine().get_job_execution(str(session_id))
-    if not execution:
-        raise HTTPException(404, "No active execution for this session")
 
     last_event_id_raw = request.headers.get("last-event-id") or request.query_params.get("lastEventId")
     last_seq: int | None = None
@@ -2332,13 +2943,65 @@ async def session_events_sse(
         except ValueError:
             last_seq = None
 
+    if execution is None:
+        # No live execution (mission completed, backend restarted, or
+        # ring rotated). Reload the persisted event log from SQLite so
+        # re-opening the session shows the full live log instead of an
+        # empty trace, then close the stream. The frontend reducer is
+        # idempotent on ``seq`` so this is duplicate-safe.
+        persisted = session_event_store.load_events(
+            str(session_id),
+            after_seq=last_seq,
+        )
+        persisted_total = session_event_store.event_count(str(session_id))
+        _log_mission_status(
+            job,
+            route="events",
+            live_execution=False,
+            persisted_total=persisted_total,
+            replay_events=len(persisted),
+            last_seq=last_seq,
+        )
+
+        async def replay_stream():
+            for ev in persisted:
+                yield _format_sse_frame(ev)
+
+        return StreamingResponse(
+            replay_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "Content-Encoding": "identity",
+            },
+        )
+
+    persisted_total = session_event_store.event_count(str(session_id))
+    _log_mission_status(
+        job,
+        route="events",
+        live_execution=True,
+        persisted_total=persisted_total,
+        replay_events=0,
+        last_seq=last_seq,
+    )
+    logger.info(
+        "[SSE] subscribe session=%s user=%s last_seq=%s has_auth=%s has_fabric=%s",
+        str(session_id)[:8],
+        _user_key_from_context(ctx)[:12],
+        str(last_seq) if last_seq is not None else "none",
+        bool(request.headers.get("Authorization")),
+        bool(request.headers.get("X-Fabric-Token")),
+    )
+
     async def event_stream():
         # Always seed a new subscriber with a fresh snapshot so the UI
         # never renders a blank frame, even when resume replay is
         # available. The reducer dedupes on ``seq``.
         snapshot = {
             "type": "run_overview",
-            "seq": execution._seq,  # noqa: SLF001 — accessor kept internal
+            "seq": _sse_snapshot_seq(last_seq),
             "sessionId": str(session_id),
             **execution.snapshot_run_overview(),
         }
@@ -2350,8 +3013,19 @@ async def session_events_sse(
     return StreamingResponse(
         event_stream(),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            # Bypass GZipMiddleware — gzip compression buffers small SSE
+            # frames and prevents real-time delivery to the browser.
+            "Content-Encoding": "identity",
+        },
     )
+
+
+def _sse_snapshot_seq(last_seq: int | None) -> int:
+    """Return a snapshot cursor that does not suppress replayed events."""
+    return last_seq if last_seq is not None else 0
 
 
 def _format_sse_frame(ev: dict) -> str:
@@ -2393,6 +3067,260 @@ async def debug_session_snapshot(
     }
 
 
+class _MakeStreamingSessionRequest(BaseModel):
+    frames: int = 5
+    interval_ms: int = 400
+
+
+@router.post("/_test/make-streaming-session")
+async def make_streaming_session(req: _MakeStreamingSessionRequest):
+    """Debug-only — create a fake in-memory session and emit ``frames``
+    log_line events spaced ``interval_ms`` apart in the background.
+
+    Consumers of ``GET /api/sessions/{id}/events`` can then verify the
+    SSE stream arrives in real time (not buffered). Gated on
+    ``Application.Debug`` so it never ships enabled in production.
+    """
+    import asyncio
+    import uuid
+
+    from domain.models.agent_models import Job, JobStatus
+    from services.agenthub import session_store as _store
+    from services.agenthub.orchestrator_engine import (
+        _JobExecution,
+    )
+    from services.agenthub.orchestrator_engine import (
+        get_orchestrator_engine as _engine,
+    )
+
+    config = get_configuration_service()
+    if not config.is_debug():
+        raise HTTPException(404, "Not found")
+
+    session_id = str(uuid.uuid4())
+    job = Job(
+        id=session_id,
+        user_id=_DEV_USER_KEY,
+        task_description="SSE streaming smoke test",
+        workspace_id="test",
+        status=JobStatus.RUNNING,
+        started_at=datetime.now(UTC),
+    )
+    _store.create_session(job)
+    execution = _JobExecution(job, copilot_token="", mcp_tokens=None)
+    _engine()._active_jobs[session_id] = execution
+
+    async def _emit():
+        await asyncio.sleep(0.15)  # give the caller time to subscribe
+        for i in range(req.frames):
+            # ``message`` is the field the frontend reducer reads for
+            # log_line events (see mission/missionReducer.ts). ``level``
+            # is required so the UI renders the row with the right icon.
+            execution.emit(
+                "log_line",
+                message=f"streaming-test event #{i}",
+                level="info",
+            )
+            await asyncio.sleep(req.interval_ms / 1000)
+        execution.emit("job_complete", reason="streaming test done")
+
+    asyncio.create_task(_emit())
+    return {"session_id": session_id}
+
+
+@router.post("/_test/make-mission-fixture")
+async def make_mission_fixture():
+    """Debug-only — create a fixture mission with a Generalist + 3 specialists,
+    handoff lines, structured changes, and per-agent log lines. Used by the
+    Mission Control visual-regression Playwright test to iterate on layout
+    without running the full live Fabric pipeline.
+
+    Gated on ``Application.Debug`` so it never ships in production.
+    Returns ``{session_id}`` for the frontend to navigate to.
+    """
+    from domain.models.agent_models import Job, JobStatus
+    from services.agenthub import session_store as _store
+    from services.agenthub.orchestrator_engine import (
+        _JobExecution,
+        QueuedUserMessage,
+        get_orchestrator_engine as _engine,
+    )
+
+    config = get_configuration_service()
+    if not config.is_debug():
+        raise HTTPException(404, "Not found")
+
+    session_id = str(uuid.uuid4())
+    generalist_id = "agent-generalist"
+    data_eng_id = "agent-data-engineer"
+    admin_id = "agent-admin"
+    modeler_id = "agent-modeler"
+    agents = [
+        (generalist_id, "AgentHub Generalist", "Generalist", "generalist"),
+        (data_eng_id, "Fabric Data Engineer", "Fabric Data Engineer", "fabric-data-engineer"),
+        (admin_id, "Fabric Admin", "Fabric Admin", "fabric-admin"),
+        (modeler_id, "Modeler", "Modeler", "modeler"),
+    ]
+    job = Job(
+        id=session_id,
+        user_id=_DEV_USER_KEY,
+        task_description="Create an end to end solution (ingestion, transformation, "
+                         "semantic modelling and a report) which shows all Fabric items.",
+        workspace_id="test",
+        status=JobStatus.RUNNING,
+        started_at=datetime.now(UTC),
+        agents=[
+            AgentAssignment(
+                agent_id=template_id,
+                session_id=agent_session_id,
+                role=role,
+                goal=f"Fixture {role} stream",
+                status=AgentStatus.RUNNING,
+                current_step="Fixture stream active",
+            )
+            for agent_session_id, _agent_name, role, template_id in agents
+        ],
+    )
+    _store.create_session(job)
+    execution = _JobExecution(job, copilot_token="", mcp_tokens=None)
+    _engine()._active_jobs[session_id] = execution
+
+    async def _drain_fixture_queue(agent_session_id: str, agent_name: str, queue: asyncio.Queue):
+        while not execution.cancelled:
+            queued = await queue.get()
+            if not isinstance(queued, QueuedUserMessage):
+                continue
+            execution.emit(
+                "user_message_delivered",
+                steeringId=queued.steering_id,
+                targetAgentSessionId=agent_session_id,
+                targetMode=queued.target_mode,
+                mode=queued.mode,
+                messagePreview=queued.message_preview,
+            )
+            if queued.mode == "interrupt":
+                execution.pending_interrupts.pop(queued.steering_id, None)
+                execution.emit(
+                    "turn_interrupted",
+                    steeringId=queued.steering_id,
+                    targetAgentSessionId=agent_session_id,
+                    targetMode=queued.target_mode,
+                    messagePreview=queued.message_preview,
+                )
+            execution.emit(
+                "log_line",
+                agentId=agent_session_id,
+                agentName=agent_name,
+                level="info",
+                tags=["user_action"],
+                message=f"User instruction received: {queued.message_preview}",
+            )
+
+    for agent_session_id, agent_name, _role, _template_id in agents:
+        queue: asyncio.Queue = asyncio.Queue()
+        execution.user_message_queues[agent_session_id] = queue
+        execution.tasks.append(asyncio.create_task(_drain_fixture_queue(agent_session_id, agent_name, queue)))
+
+    composition = {
+        "architecture": "dynamic",
+        "task": job.task_description,
+        "slots": [
+            {"id": generalist_id, "agentId": generalist_id, "role": "Generalist",
+             "skills": [], "status": "active"},
+            {"id": data_eng_id, "agentId": data_eng_id, "role": "Fabric Data Engineer",
+             "skills": [], "status": "active"},
+            {"id": admin_id, "agentId": admin_id, "role": "Fabric Admin",
+             "skills": [], "status": "active"},
+            {"id": modeler_id, "agentId": modeler_id, "role": "Modeler",
+             "skills": [], "status": "active"},
+        ],
+        "handoffs": [
+            {"from": generalist_id, "to": data_eng_id, "kind": "delegate"},
+            {"from": generalist_id, "to": admin_id, "kind": "delegate"},
+            {"from": generalist_id, "to": modeler_id, "kind": "delegate"},
+        ],
+    }
+
+    async def _emit_fixture():
+        await asyncio.sleep(0.15)
+        execution.emit("composition_ready", composition=composition)
+
+        for agent_id, agent_name, role, _template_id in agents:
+            execution.emit("slot_progress", slotId=agent_id, agentId=agent_id,
+                           agentName=agent_name, role=role, status="running")
+            execution.emit("agent_status", agentId=agent_id, agentName=agent_name,
+                           role=role, status="running")
+            await asyncio.sleep(0.05)
+
+        logs_per_agent = {
+            generalist_id: [
+                "Parallel discovery is running across three specialists.",
+                "Capacity, certification, access, and evidence actions are tracked.",
+                "Detailed logs are available without changing the run state.",
+            ],
+            data_eng_id: [
+                "Workspace and item scan is active.",
+                "Pipeline and lakehouse dependencies are being mapped.",
+                "Evidence artifact is being produced.",
+            ],
+            admin_id: [
+                "Capacity and permissions checks are active.",
+                "Legacy access and F2 utilization are under review.",
+                "Approval-bound changes are being drafted.",
+            ],
+            modeler_id: [
+                "Semantic model checks are active.",
+                "FinanceModel certification path is being prepared.",
+                "Report readiness is being tracked.",
+            ],
+        }
+        for agent_id, messages in logs_per_agent.items():
+            agent_name = next(a[1] for a in agents if a[0] == agent_id)
+            for msg in messages:
+                execution.emit("log_line", agentId=agent_id, agentName=agent_name,
+                               level="info", message=msg)
+                await asyncio.sleep(0.02)
+
+        # Structured ChangeRecorded events (ChangeKind: created|updated|deleted|important_action)
+        changes = [
+            {"recordId": str(uuid.uuid4()), "kind": "created", "status": "pending",
+             "agentId": data_eng_id, "agentName": "Fabric Data Engineer",
+             "targetName": "dependency_map.json", "targetType": "Artifact",
+             "targetScope": "file", "summary": "Producing the dependency evidence artifact.",
+             "toolName": "fabric_lakehouse_dependency_scan", "ts": datetime.now(UTC).isoformat()},
+            {"recordId": str(uuid.uuid4()), "kind": "updated", "status": "pending",
+             "agentId": modeler_id, "agentName": "Modeler",
+             "targetName": "FinanceModel certification", "targetType": "SemanticModel",
+             "targetScope": "item", "summary": "Missing certified label found; update path is being prepared.",
+             "toolName": "powerbi_certify_model", "ts": datetime.now(UTC).isoformat()},
+            {"recordId": str(uuid.uuid4()), "kind": "deleted", "status": "pending",
+             "agentId": admin_id, "agentName": "Fabric Admin",
+             "targetName": "ServiceAcc_Old access", "targetType": "Access",
+             "targetScope": "access", "summary": "Legacy access detected and marked for removal review.",
+             "toolName": "fabric_admin_remove_access", "ts": datetime.now(UTC).isoformat()},
+            {"recordId": str(uuid.uuid4()), "kind": "important_action", "status": "pending",
+             "agentId": admin_id, "agentName": "Fabric Admin",
+             "targetName": "Capacity F2 → F4", "targetType": "Capacity",
+             "targetScope": "execution", "summary": "Two-hour capacity scale window is being drafted.",
+             "toolName": "fabric_admin_scale_capacity", "ts": datetime.now(UTC).isoformat()},
+            {"recordId": str(uuid.uuid4()), "kind": "important_action", "status": "pending",
+             "agentId": admin_id, "agentName": "Fabric Admin",
+             "targetName": "Require MFA for new group members", "targetType": "TenantSetting",
+             "targetScope": "settings", "summary": "Tenant setting change is being prepared for approval.",
+             "toolName": "fabric_admin_set_tenant_setting", "ts": datetime.now(UTC).isoformat()},
+        ]
+        for change in changes:
+            execution.emit("change_recorded", **change)
+            await asyncio.sleep(0.03)
+
+        execution.emit("artifact_added", artifactId=str(uuid.uuid4()),
+                       agentId=data_eng_id, kind="json",
+                       name="dependency_map.json", state="draft")
+
+    asyncio.create_task(_emit_fixture())
+    return {"session_id": session_id}
+
+
 # ── Orchestration endpoints ──────────────────────────────────────────
 
 @router.get("/orchestrate/compose-models")
@@ -2424,6 +3352,10 @@ async def list_compose_models(
     raw_models = catalog.get("models", []) if isinstance(catalog, dict) else []
     ranked = rank_compose_models(raw_models)
     default_id = ranked[0]["id"] if ranked else None
+    logger.info(
+        "[COMPOSE-MODELS] catalog=%d models, ranked=%d, default=%s",
+        len(raw_models), len(ranked), default_id,
+    )
     return {"models": ranked, "default": default_id}
 
 
@@ -2476,13 +3408,23 @@ async def run_session(
     if job.composition is None:
         raise HTTPException(400, "Session has no composition")
 
+    comp = job.composition
+    slot_summary = " → ".join(
+        f"{s.agent_id}({s.id})" for s in comp.slots
+    )
+    logger.info(
+        "[AGENTHUB] Run session %s: arch=%s slots=[%s] budget=%d/%d/%ds",
+        session_id, comp.architecture, slot_summary,
+        comp.budget.max_turns, comp.budget.max_tool_calls, comp.budget.max_wallclock_s,
+    )
+
     job.status = JobStatus.APPROVED
     session_store.update_session(job)
 
     copilot_token = await _copilot_token(request)
     mcp_tokens = await _mcp_tokens(request)
     await get_orchestrator_engine().start_job(job, copilot_token, mcp_tokens)
-    return {"status": "running", "session_id": job.id}
+    return {"status": job.status.value, "session_id": job.id}
 
 
 @router.post("/orchestrate/reject")
@@ -2502,9 +3444,10 @@ async def reject_composition(
 
 @router.get("/catalogs/architectures")
 async def list_architectures():
-    """Return the architecture catalog the composer chooses from — used
-    by the UI to render the "Regenerate as …" picker and any future
-    user-facing architecture explainer.
+    """Return the dynamic mission strategy catalog.
+
+    Fixed architecture choices are no longer part of the default UI;
+    this endpoint remains for clients that still fetch the catalog.
     """
     return [
         {
@@ -2656,7 +3599,7 @@ async def configure_agent(
 @router.get("/agents/{agent_id}")
 async def get_agent_template(agent_id: str):
     t = get_template(agent_id)
-    if not t:
+    if not t or t.is_internal:
         raise HTTPException(404, "Agent template not found")
     return t.model_dump()
 

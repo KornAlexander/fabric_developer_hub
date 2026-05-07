@@ -1,0 +1,36 @@
+{
+  "mcpServers": {
+    "context-mode": {
+      "command": "npx",
+      "args": ["-y", "context-mode@1.0.103"]
+    },
+    "microsoft-learn-docs": {
+      "type": "http",
+      "url": "https://learn.microsoft.com/api/mcp",
+      "tools": [
+        "microsoft_docs_search",
+        "microsoft_docs_fetch",
+        "microsoft_code_sample_search"
+      ]
+    },
+    "azure-mcp-guidance": {
+      "type": "local",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@azure/mcp@latest",
+        "server",
+        "start",
+        "--tool",
+        "get_azure_bestpractices_get",
+        "--tool",
+        "get_azure_bestpractices_ai_app",
+        "--read-only"
+      ],
+      "tools": [
+        "get_azure_bestpractices_get",
+        "get_azure_bestpractices_ai_app"
+      ]
+    }
+  }
+}

@@ -83,6 +83,27 @@ def test_list_workspaces_no_fabric_token_returns_400(isolated_client: TestClient
     assert "Fabric token" in resp.json()["detail"]
 
 
+def test_e2e_fabric_token_bypasses_auth_validation_in_dev(isolated_client: TestClient) -> None:
+    from app.core.service_registry import get_service_registry
+    from services.auth.authentication import AuthenticationService
+
+    registry = get_service_registry()
+    services = getattr(registry, "_services")
+    fake_auth = AsyncMock()
+    fake_auth.authenticate_data_plane_call.side_effect = AssertionError("should not validate e2e token")
+    services[AuthenticationService] = fake_auth
+    try:
+        resp = isolated_client.get(
+            "/api/sessions/summary",
+            headers={"X-Fabric-Token": "Bearer e2e-fabric-token"},
+        )
+    finally:
+        services.pop(AuthenticationService, None)
+
+    assert resp.status_code == 200
+    fake_auth.authenticate_data_plane_call.assert_not_called()
+
+
 def test_list_workspaces_no_mcp_manager_returns_503(
     isolated_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -192,3 +213,67 @@ def test_list_workspaces_ok_returns_simplified_shape(
             assert key in w, f"missing {key} in {w}"
     assert body["source"] == "refreshed"
     assert body["cached_at"] is not None
+
+
+def test_query_semantic_model_uses_backend_obo_powerbi_token(
+    isolated_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def _fake_acquire(_token: str) -> dict:
+        return {
+            "FABRIC_API_TOKEN": "fab-tok",
+            "POWERBI_API_TOKEN": "pbi-tok",
+            "ONELAKE_TOKEN": "ol-tok",
+        }
+
+    monkeypatch.setattr(
+        "api.github_chat_controller._acquire_mcp_tokens", _fake_acquire,
+    )
+
+    captured: dict[str, object] = {}
+
+    class _FakeResponse:
+        status_code = 200
+        text = "ok"
+
+        def json(self) -> dict:
+            return {"results": [{"tables": [{"rows": [{"[ItemCount]": 3}]}]}]}
+
+    class _FakePowerBIClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+        async def post(self, url: str, *, headers: dict, json: dict):
+            captured.update({"url": url, "headers": headers, "json": json})
+            return _FakeResponse()
+
+    monkeypatch.setattr(agenthub_controller.httpx, "AsyncClient", _FakePowerBIClient)
+
+    resp = isolated_client.post(
+        "/api/workspaces/ws-1/semantic-models/ds-1/query",
+        headers={"X-Fabric-Token": "Bearer test"},
+        json={"query": 'EVALUATE ROW("ItemCount", [Item Count])'},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "rows": [{"[ItemCount]": 3}],
+        "source": "powerbi_executeQueries",
+    }
+    assert captured["url"] == (
+        "https://api.powerbi.com/v1.0/myorg/groups/ws-1"
+        "/datasets/ds-1/executeQueries"
+    )
+    assert captured["headers"] == {
+        "Authorization": "Bearer pbi-tok",
+        "Content-Type": "application/json",
+    }
+    assert captured["json"] == {
+        "queries": [{"query": 'EVALUATE ROW("ItemCount", [Item Count])'}],
+        "serializerSettings": {"includeNulls": True},
+    }

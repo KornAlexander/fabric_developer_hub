@@ -1,7 +1,7 @@
 import React, { useMemo, useState, useCallback, useEffect, Suspense, lazy } from "react";
 import { useHistory, useLocation, useRouteMatch } from "react-router-dom";
 import "../../styles.scss";
-import { EditorTabsProvider, useEditorTabs, type TabDescriptor, descriptorFromPath, makeNewSessionDescriptor, isReloadNavigation } from "./EditorTabs/EditorTabsContext";
+import { EditorTabsProvider, useEditorTabs, type TabDescriptor, descriptorFromPath, makeNewSessionDescriptor, makeSessionsDescriptor, makeAgentsDescriptor, isReloadNavigation } from "./EditorTabs/EditorTabsContext";
 import { EditorGroupsRoot } from "./EditorTabs/EditorGroupsRoot";
 import { DRAG_NAVITEM_MIME } from "./EditorTabs/EditorTabsBar";
 import { SideNavContextMenu } from "./EditorTabs/SideNavContextMenu";
@@ -76,6 +76,7 @@ import { useGitHubAuth, GitHubAuth } from "./useGitHubAuth";
 import { ItemProvider, useItemContext } from "./ItemContext";
 import { WORKLOAD_VERSION } from "../../version";
 import { SearchProvider, useSearch, searchPlaceholderFor, isFilterScope, type SearchScope } from "./SearchContext";
+import { openExternalTab, externalLinkOnClick } from "./openExternalTab";
 import { getFabricTokenCached } from "../../controller/AgentHubController";
 import * as api from "../../controller/AgentHubApi";
 import {
@@ -87,6 +88,7 @@ import {
 
 /** Max time we linger on the current page while prefetching the target. */
 const NAV_PREFETCH_TIMEOUT_MS = 1000;
+const SESSIONS_PREFETCH_PAGE_SIZE = 50;
 
 /** True on macOS — used to render the correct modifier glyph for keyboard
  *  shortcuts (⌘ on Apple, Ctrl everywhere else). Prefers the modern
@@ -108,6 +110,28 @@ const IS_MAC: boolean = (() => {
 /** Human-readable "⌘B" / "Ctrl+B" string for the given base key. */
 function modShortcut(key: string): string {
     return IS_MAC ? `⌘${key.toUpperCase()}` : `Ctrl+${key.toUpperCase()}`;
+}
+
+/**
+ * Normalise the route base used to build internal SPA paths.
+ *
+ * In Fabric iframe bootstraps, React Router may mount this layout under the
+ * fallback `"/"` route before it settles on `/agent-hub/*`. If we then build
+ * paths as `${matchPath}/orchestrator`, a `matchPath` of `"/"` produces
+ * `"//orchestrator"`, which the browser interprets as network-path URL
+ * `http://orchestrator/...` and rejects in `history.replaceState`.
+ */
+function normaliseRouteBase(base: string | undefined | null): string {
+    const raw = (base || "").trim();
+    if (!raw || raw === "/") return "/agent-hub";
+    return raw.endsWith("/") ? raw.slice(0, -1) : raw;
+}
+
+/** Join route path segments with exactly one `/` separator. */
+function joinRoute(base: string, leaf: string): string {
+    const b = normaliseRouteBase(base);
+    const l = leaf.replace(/^\/+/, "");
+    return `${b}/${l}`;
 }
 
 /** Maps a nav page id to the preload key for its data dependency. */
@@ -311,6 +335,7 @@ function AgentHubLayoutAuthed({ workloadClient, itemObjectId: routeItemObjectId,
     const history = useHistory();
     const location = useLocation();
     const match = useRouteMatch();
+    const routeBase = useMemo(() => normaliseRouteBase(match.path), [match.path]);
 
     // Extract workspaceObjectId from ?ws= query param (set by index.worker.ts).
     // Recompute on every URL change because the workload SDK navigates to
@@ -346,7 +371,7 @@ function AgentHubLayoutAuthed({ workloadClient, itemObjectId: routeItemObjectId,
         // Legacy history-based navigator retained for callers that
         // haven't migrated to the tabs API yet. Kept internal to the
         // layout — prefer ``handleNavClick`` in ``AgentHubShell``.
-        history.push(`${match.url}/${page}`);
+        history.push(joinRoute(routeBase, page));
     }
     void nav;
 
@@ -440,9 +465,21 @@ function AgentHubLayoutAuthed({ workloadClient, itemObjectId: routeItemObjectId,
                     try {
                         fabricToken = await getFabricTokenCached(workloadClient);
                     } catch { /* best-effort */ }
-                    const data = await api.listSessions({ githubToken, fabricToken });
-                    setPreloaded(key, data);
-                    return data;
+                    const [summary, rows] = await Promise.all([
+                        api.getSessionSummary({ githubToken, fabricToken }),
+                        api.listSessions(
+                            { githubToken, fabricToken },
+                            undefined,
+                            { limit: SESSIONS_PREFETCH_PAGE_SIZE, offset: 0 },
+                        ),
+                    ]);
+                    const payload = {
+                        rows,
+                        summary,
+                        hasMore: rows.length >= SESSIONS_PREFETCH_PAGE_SIZE && summary.total > rows.length,
+                    };
+                    setPreloaded(key, payload);
+                    return payload;
                 })();
             } else {
                 fetchPromise = (async () => {
@@ -482,6 +519,76 @@ function AgentHubLayoutAuthed({ workloadClient, itemObjectId: routeItemObjectId,
     }
     void navTo;
 
+    if (!auth.githubToken) {
+        return (
+            <div className="agenthub-root">
+                <div className="agenthub-auth-gate">
+                    <BrainCircuit24Regular style={{ fontSize: 48, color: "#0078d4" }} />
+                    <Text size={700} weight="bold">Developer Hub</Text>
+                    <Body1 style={{ color: "#605e5c", textAlign: "center" }}>
+                        Sign in with GitHub to access the Agent Dashboard.
+                        <br />A GitHub Copilot subscription is required.
+                    </Body1>
+
+                    {auth.deviceFlow ? (
+                        <div className="agenthub-device-flow">
+                            <Body1>Enter this code at GitHub:</Body1>
+                            <code className="device-code-display">{auth.deviceFlow.userCode}</code>
+                            {auth.codeCopied && (
+                                <Text size={200} style={{ color: "#0ea50e" }}>Code copied to clipboard automatically</Text>
+                            )}
+                            <Button appearance="subtle" size="small" onClick={auth.copyCode}>
+                                Copy code again
+                            </Button>
+                            <a
+                                href={auth.deviceFlow.verificationUri}
+                                target="_blank"
+                                rel="noreferrer noopener"
+                                className="github-verify-link"
+                                onClick={externalLinkOnClick(workloadClient, auth.deviceFlow.verificationUri, { skipClipboard: true })}
+                            >
+                                Open {auth.deviceFlow.verificationUri}
+                            </a>
+                            {auth.isPolling && (
+                                <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
+                                    <Spinner size="tiny" />
+                                    <Text size={200} style={{ color: "#605e5c" }}>Waiting for authorization...</Text>
+                                </div>
+                            )}
+                        </div>
+                    ) : (
+                        <Button
+                            appearance="primary"
+                            size="large"
+                            onClick={async () => {
+                                // One-click sign-in: start the device flow, then
+                                // immediately open GitHub's Authorize page with
+                                // the code pre-embedded. Popups are blocked in
+                                // the Fabric iframe sandbox, so we route through
+                                // ``openExternalTab`` (which uses the Fabric
+                                // SDK's host-level navigation API). This is
+                                // still part of the user's click gesture, so
+                                // no extra permission prompts fire.
+                                const flow = await auth.startDeviceFlow();
+                                if (!flow) return;
+                                const url = flow.verificationUriComplete || flow.verificationUri;
+                                // If every automatic path fails the device-flow
+                                // card already renders the code + link below as
+                                // a fallback, so the user can still proceed.
+                                // ``skipClipboard`` preserves the user-code that
+                                // ``startDeviceFlow`` just copied — otherwise
+                                // the helper would overwrite it with the URL.
+                                void openExternalTab(workloadClient, url, { skipClipboard: true });
+                            }}
+                        >
+                            Sign in with GitHub
+                        </Button>
+                    )}
+                </div>
+            </div>
+        );
+    }
+
     return (
         <ItemProvider
             workloadClient={workloadClient}
@@ -495,7 +602,7 @@ function AgentHubLayoutAuthed({ workloadClient, itemObjectId: routeItemObjectId,
         <EditorTabsProvider>
         <AgentHubShell
             workloadClient={workloadClient}
-            matchPath={match.path}
+            matchPath={routeBase}
             activePage={activePage}
             auth={auth}
             sidebarOpen={sidebarOpen}
@@ -588,16 +695,15 @@ function AgentHubContent({ workloadClient, matchPath }: { workloadClient: Worklo
     // gets a unique draft id — successive New Session clicks then open
     // additional tabs rather than reusing this one.
     //
-    // On a *reload* (F5 / Ctrl+Shift+R) we also bounce the URL back to
-    // the base path so the user always lands on the default view. The
-    // persisted tab state in `sessionStorage` has already been cleared
-    // in `EditorTabsContext` at module-load time, so the tab bar starts
-    // fresh to match.
+    // On reload, `EditorTabsContext` clears persisted tab state at
+    // module-load time and URL-sync reopens the current route. Keep real
+    // Fabric routes intact so iframe remounts do not erase an in-progress
+    // New Session or session permalink.
     useEffect(() => {
         const p = history.location.pathname;
         const atBase = p === matchPath || p === matchPath + "/";
-        if (atBase || isReloadNavigation()) {
-            const desc = makeNewSessionDescriptor(`${matchPath}/orchestrator`);
+        if (atBase) {
+            const desc = makeNewSessionDescriptor(joinRoute(matchPath, "orchestrator"));
             history.replace(desc.path);
         }
     }, [history, matchPath]);
@@ -694,9 +800,15 @@ function pageSlugForNavItem(item: NavItemId): string {
  *  produced by ``descriptorFromPath``. */
 function descriptorForNavItem(item: NavItemId, matchPath: string): TabDescriptor {
     if (item === "newsession") {
-        return makeNewSessionDescriptor(`${matchPath}/orchestrator`);
+        return makeNewSessionDescriptor(joinRoute(matchPath, "orchestrator"));
     }
-    const path = `${matchPath}/${pageSlugForNavItem(item)}`;
+    if (item === "sessions") {
+        return makeSessionsDescriptor(joinRoute(matchPath, "home"));
+    }
+    if (item === "agents") {
+        return makeAgentsDescriptor(joinRoute(matchPath, "agents"));
+    }
+    const path = joinRoute(matchPath, pageSlugForNavItem(item));
     const desc = descriptorFromPath(path);
     return desc ?? { id: item, kind: "home", path, title: item };
 }

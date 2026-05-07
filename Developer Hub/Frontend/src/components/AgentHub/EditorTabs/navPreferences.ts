@@ -47,6 +47,9 @@ export const DEFAULT_NAV_PREFERENCES: NavPreferences = {
         // Each New Session click should produce a fresh draft — matches
         // VS Code opening a new untitled file on "New File".
         newsession: "new-tab",
+        // Sessions and Agents also open fresh instances per click.
+        sessions: "new-tab",
+        agents: "new-tab",
     },
 };
 

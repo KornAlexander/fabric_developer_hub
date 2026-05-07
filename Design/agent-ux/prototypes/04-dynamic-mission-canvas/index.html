@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html class="light" lang="en">
+<head>
+    <meta charset="utf-8"/>
+    <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+    <title>Developer Hub | Dynamic Mission Canvas prototype</title>
+
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet"/>
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+    <link href="../../../_shared/styles.css" rel="stylesheet"/>
+    <link href="styles.css" rel="stylesheet"/>
+
+    <script>
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "outline-variant": "#c0c7d4",
+                        "on-surface": "#1a1c1c",
+                        "on-surface-variant": "#404752",
+                        "surface": "#faf9f8",
+                        "surface-container-lowest": "#ffffff",
+                        "surface-container-low": "#f4f3f2",
+                        "surface-container": "#efeeed",
+                        "surface-container-high": "#e9e8e7",
+                        "primary": "#005faa",
+                        "primary-container": "#0078d4",
+                        "primary-fixed": "#d3e3ff",
+                        "success": "#107c10",
+                        "warning": "#ca5010",
+                        "danger": "#a4262c",
+                        "violet": "#5c2d91",
+                        "teal": "#00796b"
+                    },
+                    borderRadius: { DEFAULT: "0.125rem", lg: "0.25rem", xl: "0.5rem", full: "0.75rem" },
+                    fontFamily: { body: ["Inter"], headline: ["Inter"], label: ["Inter"] }
+                }
+            }
+        }
+    </script>
+</head>
+
+<body class="bg-surface text-on-surface font-body selection:bg-primary-fixed dmc-body overflow-hidden h-screen flex flex-col">
+
+<header class="flex justify-between items-center px-5 w-full sticky top-0 z-50 bg-surface h-12 border-b border-outline-variant/10 shrink-0">
+    <div class="flex items-center gap-3 min-w-0">
+        <div class="flex items-center gap-2 shrink-0">
+            <div class="w-6 h-6 bg-primary-container rounded-lg flex items-center justify-center text-white">
+                <span class="material-symbols-outlined text-[14px] filled">dataset</span>
+            </div>
+            <span class="text-base font-semibold tracking-tight">Developer Hub</span>
+        </div>
+        <div class="h-3.5 w-px bg-outline-variant/30"></div>
+        <nav class="flex items-center gap-1.5 min-w-0" aria-label="Breadcrumb">
+            <span class="material-symbols-outlined text-[18px] filled text-on-surface-variant">add_circle</span>
+            <span class="text-xs font-semibold truncate">New Session</span>
+        </nav>
+    </div>
+    <div class="flex items-center gap-4 flex-1 max-w-md mx-8">
+        <div class="relative w-full">
+            <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant text-[16px]">search</span>
+            <input class="w-full bg-surface-container-low border-none rounded-lg py-1.5 pl-9 pr-4 text-xs focus:ring-1 focus:ring-primary/20 placeholder:text-on-surface-variant/50" placeholder="Search sessions, agents, workspaces..." type="text"/>
+        </div>
+    </div>
+    <div class="flex items-center gap-2 shrink-0">
+        <div class="hidden" title="Prototype screen counter">
+            <span class="material-symbols-outlined text-[14px] text-on-surface-variant">slideshow</span>
+            <span class="text-[11px] font-mono font-semibold" id="dmc-counter">1 / 7</span>
+        </div>
+        <button class="p-1.5 text-on-surface-variant hover:bg-surface-container-low rounded-lg transition-colors" aria-label="Notifications">
+            <span class="material-symbols-outlined text-[20px]">notifications</span>
+        </button>
+        <button class="p-1.5 text-on-surface-variant hover:bg-surface-container-low rounded-lg transition-colors" aria-label="Help">
+            <span class="material-symbols-outlined text-[20px]">help</span>
+        </button>
+        <div class="w-7 h-7 rounded-full overflow-hidden border border-outline-variant/20 ml-1">
+            <div class="w-full h-full bg-primary-container flex items-center justify-center text-white text-[10px] font-bold">LO</div>
+        </div>
+    </div>
+</header>
+
+<div class="dmc-session-tabs" aria-label="Open tabs">
+    <button type="button"><span class="material-symbols-outlined">add_circle</span> New Session</button>
+    <button type="button"><span class="material-symbols-outlined">home</span> Sessions</button>
+    <button type="button"><span class="material-symbols-outlined">add_circle</span> New Session</button>
+    <button type="button" class="is-active"><span class="material-symbols-outlined">add_circle</span> New Session <span class="material-symbols-outlined">close</span></button>
+</div>
+
+<div class="flex flex-1 overflow-hidden min-h-0">
+    <aside id="agenthub-sidebar"></aside>
+    <script src="../../../_shared/sidebar.js"></script>
+    <script>try { localStorage.setItem('agenthub.sidebar.collapsed', '1'); } catch (_) {} renderAgentHubSidebar('new-session', { collapsed: true });</script>
+
+    <main class="flex-1 flex flex-col overflow-hidden min-w-0">
+        <section class="screen smooth-scroll" data-screen="1" data-active="true" aria-labelledby="s1-title">
+            <div class="dmc-compose-page">
+                <header class="dmc-compose-hero">
+                    <div class="dmc-compose-hero__icon"><span class="material-symbols-outlined filled">auto_awesome</span></div>
+                    <h1 id="s1-title">Orchestrate your vision.</h1>
+                    <p>Describe what you need done. We’ll decompose your goal into steps, select the right agents, and execute—with your approval at every critical decision.</p>
+                </header>
+
+                <section class="dmc-composer-card" aria-label="Start mission">
+                    <div class="dmc-composer-card__glow"></div>
+                    <div class="dmc-composer-card__body">
+                        <div class="dmc-composer-label">New Task Description</div>
+                        <div class="dmc-composer-text" role="textbox" aria-label="Task prompt">Create an end to end solution (ingestion, transformation, semantic modelling and a report) which shows all Fabric items I have access to in a nice appropriate visualization. Work in folder tmp_&lt;timestamp&gt; where &lt;timestamp&gt; is the timestamp when you start working</div>
+                        <div class="dmc-composer-count">262 characters</div>
+
+                        <div class="dmc-composer-pills" aria-label="Attached context">
+                            <span class="dmc-context-pill dmc-context-pill--workspace"><span class="material-symbols-outlined">workspaces</span> Fabric ClawHub <span class="material-symbols-outlined">close</span></span>
+                            <span class="dmc-context-pill dmc-context-pill--lakehouse"><span class="material-symbols-outlined">database</span> FabricItems_Lakehouse <span class="material-symbols-outlined">close</span></span>
+                            <span class="dmc-context-pill dmc-context-pill--pipeline"><span class="material-symbols-outlined">account_tree</span> Pipeline_1 <span class="material-symbols-outlined">close</span></span>
+                            <span class="dmc-context-pill dmc-context-pill--image"><span class="material-symbols-outlined">image</span> task_prompt_overview.png <span class="material-symbols-outlined">close</span></span>
+                            <span class="dmc-context-pill dmc-context-pill--pdf"><span class="material-symbols-outlined">picture_as_pdf</span> Fabric workshop (1).pdf <span class="material-symbols-outlined">close</span></span>
+                        </div>
+
+                        <div class="dmc-composer-quick-actions" aria-label="Context actions">
+                            <button type="button"><span class="material-symbols-outlined">add</span> Add item</button>
+                            <button type="button"><span class="material-symbols-outlined">add</span> Add workspace</button>
+                            <button type="button"><span class="material-symbols-outlined">attach_file</span> Attach files</button>
+                        </div>
+
+                        <div class="dmc-composer-controls">
+                            <div class="dmc-composer-toggles" aria-label="Run options">
+                                <button type="button" aria-pressed="false"><span class="material-symbols-outlined">shield_person</span> Require approvals <span class="dmc-toggle" aria-hidden="true"></span></button>
+                                <button type="button" aria-pressed="false"><span class="material-symbols-outlined">fork_right</span> Branch out <span class="dmc-toggle" aria-hidden="true"></span></button>
+                            </div>
+
+                            <div class="dmc-workspace-select">
+                                <label>Workspace <button type="button" aria-label="Refresh workspace"><span class="material-symbols-outlined">refresh</span></button></label>
+                                <div><span class="material-symbols-outlined">workspaces</span> Fabric ClawHub <span class="material-symbols-outlined">expand_more</span></div>
+                            </div>
+
+                            <div class="dmc-composer-footer">
+                                <button class="dmc-recent-prompts" type="button"><span class="material-symbols-outlined">history</span> Recent prompts</button>
+                                <div class="dmc-submit-row">
+                                    <button class="dmc-model-select" type="button">Claude Opus 4.7 <span class="material-symbols-outlined">expand_more</span></button>
+                                    <button class="dmc-start-button" type="button" data-demo-start="true">Start mission <span class="material-symbols-outlined">auto_awesome</span></button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="dmc-discovery" aria-label="Discovery and recommendations">
+                    <header class="dmc-discovery__header">
+                        <div><span class="material-symbols-outlined filled">bolt</span><h2>Discovery &amp; Recommendations</h2></div>
+                        <button type="button">View all suggestions</button>
+                    </header>
+                    <div class="dmc-discovery-grid">
+                        <button class="dmc-discovery-card" type="button"><span class="dmc-discovery-icon dmc-discovery-icon--amber material-symbols-outlined">bolt</span><strong>Optimize Sales Pipeline</strong><p>High latency detected in yesterday’s sync job. Recommend re-partitioning the source.</p><span>Start Optimization →</span></button>
+                        <button class="dmc-discovery-card" type="button"><span class="dmc-discovery-icon dmc-discovery-icon--blue material-symbols-outlined">security</span><strong>Review Security Permissions</strong><p>Audit access for the new Gold Layer schema. 12 unauthorized attempts flagged.</p><span>Begin Audit →</span></button>
+                        <button class="dmc-discovery-card" type="button"><span class="dmc-discovery-icon dmc-discovery-icon--purple material-symbols-outlined">account_tree</span><strong>Audit Data Lineage</strong><p>Trace ‘Customer_ID’ across all transforms to ensure GDPR compliance standards.</p><span>Map Lineage →</span></button>
+                        <button class="dmc-discovery-card" type="button"><span class="dmc-discovery-icon dmc-discovery-icon--green material-symbols-outlined">warning</span><strong>Fix Schema Drift</strong><p>Upstream Marketing_API added 3 new fields. Pipelines currently ignore them.</p><span>Remediate Drift →</span></button>
+                        <button class="dmc-discovery-card" type="button"><span class="dmc-discovery-icon dmc-discovery-icon--rose material-symbols-outlined">payments</span><strong>Optimize Tenant Costs</strong><p>Identified idle warehouse compute in the development environment.</p><span>Apply Savings →</span></button>
+                        <button class="dmc-discovery-card dmc-discovery-card--accent" type="button"><span class="dmc-discovery-icon dmc-discovery-icon--primary material-symbols-outlined">add</span><strong>Create Custom Agent</strong><p>Build a specialized agent for your specific Fabric workflow.</p><span>Go to Studio →</span></button>
+                    </div>
+                </section>
+            </div>
+        </section>
+
+        <section class="screen smooth-scroll" data-screen="2" aria-label="High-level log view">
+            <div class="mission-layout">
+                <div class="run-status-strip"><div class="mission-status"><span class="live-dot"></span> Running · parallel wave 1 · 4 agents active</div></div>
+                <div class="prompt-recap" data-open="false">
+                    <button class="prompt-recap__summary" type="button" aria-expanded="false">
+                        <span class="prompt-recap__icon material-symbols-outlined filled">edit_note</span>
+                        <div class="prompt-recap__summary-copy">
+                            <div class="prompt-recap__meta"><span>Task prompt</span><span>1 workspace · 2 items · 2 files</span></div>
+                            <div class="prompt-recap__summary-line">Create an end to end solution (ingestion, transformation, semantic modelling and a report) which shows all Fabric items I have access to in a nice appropriate visualization. Work in folder tmp_&lt;timestamp&gt; where &lt;timestamp&gt; is the timestamp when you start working</div>
+                        </div>
+                        <div class="prompt-recap__counts" aria-hidden="true">
+                            <span class="prompt-count prompt-count--workspace"><span class="material-symbols-outlined">workspaces</span>1</span>
+                            <span class="prompt-count prompt-count--item"><span class="material-symbols-outlined">database</span>2</span>
+                            <span class="prompt-count prompt-count--file"><span class="material-symbols-outlined">attachment</span>2</span>
+                        </div>
+                        <span class="prompt-recap__chevron material-symbols-outlined">expand_more</span>
+                    </button>
+                    <div class="prompt-recap__expanded">
+                        <div class="prompt-recap__detail-grid">
+                            <div class="prompt-recap__field"><span>Runs in</span><div><strong>Feature Demo — End To End Fabric Solution</strong><small><span class="material-symbols-outlined">fork_right</span> feature/end-to-end-fabric-visualization · from Feature Demo</small></div></div>
+                            <div class="prompt-recap__field"><span>Workspace</span><div class="prompt-token-row"><span class="prompt-token prompt-token--workspace"><span class="material-symbols-outlined">workspaces</span> Fabric ClawHub</span></div></div>
+                            <div class="prompt-recap__field"><span>Items</span><div class="prompt-token-row"><span class="prompt-token prompt-token--lakehouse"><span class="material-symbols-outlined">database</span> FabricItems_Lakehouse</span><span class="prompt-token prompt-token--pipeline"><span class="material-symbols-outlined">account_tree</span> Pipeline_1</span></div></div>
+                            <div class="prompt-recap__field"><span>Files</span><div class="prompt-token-row"><span class="prompt-token prompt-token--image"><span class="material-symbols-outlined">image</span> task_prompt_overview.png</span><span class="prompt-token prompt-token--pdf"><span class="material-symbols-outlined">picture_as_pdf</span> Fabric workshop (1).pdf</span></div></div>
+                        </div>
+                        <div class="prompt-recap__config"><span><span class="material-symbols-outlined">verified_user</span> Require approvals <strong>ON</strong></span><span><span class="material-symbols-outlined">fork_right</span> Branch out <strong>ON</strong></span></div>
+                    </div>
+                </div>
+                <div class="mission-grid mission-grid--right">
+                    <section class="agent-canvas agent-canvas--dense" aria-label="Parallel agent canvas">
+                        <div class="canvas-toolbar"><div class="log-mode-switch" role="group" aria-label="Log detail mode"><button class="log-mode-switch__option is-active" type="button" aria-pressed="true" data-goto="2"><span class="material-symbols-outlined">view_agenda</span> High-level logs</button><button class="log-mode-switch__option" type="button" aria-pressed="false" data-goto="3"><span class="material-symbols-outlined">subject</span> Detailed logs</button></div></div>
+                        <svg class="canvas-lines" viewBox="0 0 1100 720" preserveAspectRatio="none" aria-hidden="true">
+                            <path class="line line--active" data-from="generalist" data-to="data-engineer"/>
+                            <path class="line line--sleep" data-from="generalist" data-to="admin"/>
+                            <path class="line line--sleep" data-from="generalist" data-to="modeler"/>
+                        </svg>
+                        <article class="agent-node agent-node--generalist agent-node--running agent-node--compact" data-node="generalist" style="--x: 35%; --y: 3%;" aria-label="Generalist running">
+                            <div class="agent-head">
+                                <span class="agent-icon agent-icon--generalist material-symbols-outlined filled">hub</span>
+                                <div><h2>Generalist</h2><p>Observe, plan, dispatch</p></div>
+                                <span class="state-pill state-pill--running">Running</span>
+                            </div>
+                            <div class="log-window">
+                                <p><time>[08:43]</time> Parallel discovery is running across three specialists.</p>
+                                <p class="log-warn"><time>[08:43]</time> Capacity, certification, access, and evidence actions are tracked.</p>
+                                <p><time>[08:43]</time> Detailed logs are available without changing the run state.</p>
+                            </div>
+                        </article>
+
+                        <article class="agent-node agent-node--sub agent-node--running" data-node="data-engineer" style="--x: 1.5%; --y: 35%;">
+                            <div class="agent-head"><span class="agent-icon agent-icon--data material-symbols-outlined">database_search</span><div><h2>Fabric Data Engineer</h2><p>Discovery · read-only</p></div><span class="state-pill state-pill--running">Running</span></div>
+                            <div class="log-window"><p><time>[08:43]</time> Workspace and item scan is active.</p><p><time>[08:43]</time> Pipeline and lakehouse dependencies are being mapped.</p><p><time>[08:43]</time> Evidence artifact is being produced.</p></div>
+                        </article>
+                        <article class="agent-node agent-node--sub agent-node--running" data-node="admin" style="--x: 35%; --y: 35%;">
+                            <div class="agent-head"><span class="agent-icon agent-icon--admin material-symbols-outlined">admin_panel_settings</span><div><h2>Fabric Admin</h2><p>Capacity and permissions</p></div><span class="state-pill state-pill--running">Running</span></div>
+                            <div class="log-window"><p><time>[08:43]</time> Capacity and permissions checks are active.</p><p><time>[08:43]</time> Legacy access and F2 utilization are under review.</p><p><time>[08:43]</time> Approval-bound changes are being drafted.</p></div>
+                        </article>
+                        <article class="agent-node agent-node--sub agent-node--running" data-node="modeler" style="--x: 67.5%; --y: 35%;">
+                            <div class="agent-head"><span class="agent-icon agent-icon--report material-symbols-outlined">query_stats</span><div><h2>Modeler</h2><p>Semantic model checks</p></div><span class="state-pill state-pill--running">Running</span></div>
+                            <div class="log-window"><p><time>[08:43]</time> Semantic model checks are active.</p><p><time>[08:43]</time> FinanceModel certification path is being prepared.</p><p><time>[08:43]</time> Report readiness is being tracked.</p></div>
+                        </article>
+                    </section>
+
+                    <aside class="right-rail" aria-label="Change overview">
+                        <section class="change-ledger">
+                            <header class="change-ledger__header"><h2>Change overview</h2><span>5 tracked</span></header>
+                            <section class="ledger-section"><h3>Created</h3><article class="ledger-row ledger-row--created ledger-row--live"><span class="material-symbols-outlined">description</span><div class="ledger-row__body"><div class="ledger-row__meta"><span class="ledger-agent">Fabric Data Engineer</span><span class="ledger-status ledger-status--creating">Creating</span></div><strong>dependency_map.json</strong><small>Producing the dependency evidence artifact.</small></div></article></section>
+                            <section class="ledger-section"><h3>Updated</h3><article class="ledger-row ledger-row--pending ledger-row--live"><span class="material-symbols-outlined">dataset</span><div class="ledger-row__body"><div class="ledger-row__meta"><span class="ledger-agent">Modeler</span><span class="ledger-status ledger-status--changing">Changing</span></div><strong>FinanceModel certification</strong><small>Missing certified label found; update path is being prepared.</small></div></article></section>
+                            <section class="ledger-section"><h3>Deleted</h3><article class="ledger-row ledger-row--pending ledger-row--live"><span class="material-symbols-outlined">person_remove</span><div class="ledger-row__body"><div class="ledger-row__meta"><span class="ledger-agent">Fabric Admin</span><span class="ledger-status ledger-status--reviewing">Reviewing</span></div><strong>ServiceAcc_Old access</strong><small>Legacy access detected and marked for removal review.</small></div></article></section>
+                            <section class="ledger-section"><h3>Important actions</h3><article class="ledger-row ledger-row--pending ledger-row--live"><span class="material-symbols-outlined">rocket_launch</span><div class="ledger-row__body"><div class="ledger-row__meta"><span class="ledger-agent">Fabric Admin</span><span class="ledger-status ledger-status--changing">Drafting</span></div><strong>Capacity F2 -> F4</strong><small>Two-hour capacity scale window is being drafted.</small></div></article><article class="ledger-row ledger-row--pending ledger-row--live"><span class="material-symbols-outlined">admin_panel_settings</span><div class="ledger-row__body"><div class="ledger-row__meta"><span class="ledger-agent">Fabric Admin</span><span class="ledger-status ledger-status--changing">Drafting</span></div><strong>Require MFA for new group members</strong><small>Tenant setting change is being prepared for approval.</small></div></article></section>
+                        </section>
+                    </aside>
+                </div>
+            </div>
+        </section>
+
+        <section class="screen smooth-scroll" data-screen="3" aria-label="Detailed log view">
+            <div class="mission-layout">
+                <div class="run-status-strip"><div class="mission-status"><span class="live-dot"></span> Running · parallel wave 1 · 4 agents active</div></div>
+                <div class="prompt-recap" data-open="false">
+                    <button class="prompt-recap__summary" type="button" aria-expanded="false"><span class="prompt-recap__icon material-symbols-outlined filled">edit_note</span><div class="prompt-recap__summary-copy"><div class="prompt-recap__meta"><span>Task prompt</span><span>1 workspace · 2 items · 2 files</span></div><div class="prompt-recap__summary-line">Create an end to end solution (ingestion, transformation, semantic modelling and a report) which shows all Fabric items I have access to in a nice appropriate visualization. Work in folder tmp_&lt;timestamp&gt; where &lt;timestamp&gt; is the timestamp when you start working</div></div><div class="prompt-recap__counts" aria-hidden="true"><span class="prompt-count prompt-count--workspace"><span class="material-symbols-outlined">workspaces</span>1</span><span class="prompt-count prompt-count--item"><span class="material-symbols-outlined">database</span>2</span><span class="prompt-count prompt-count--file"><span class="material-symbols-outlined">attachment</span>2</span></div><span class="prompt-recap__chevron material-symbols-outlined">expand_more</span></button>
+                    <div class="prompt-recap__expanded"><div class="prompt-recap__detail-grid"><div class="prompt-recap__field"><span>Runs in</span><div><strong>Feature Demo — End To End Fabric Solution</strong><small><span class="material-symbols-outlined">fork_right</span> feature/end-to-end-fabric-visualization · from Feature Demo</small></div></div><div class="prompt-recap__field"><span>Workspace</span><div class="prompt-token-row"><span class="prompt-token prompt-token--workspace"><span class="material-symbols-outlined">workspaces</span> Fabric ClawHub</span></div></div><div class="prompt-recap__field"><span>Items</span><div class="prompt-token-row"><span class="prompt-token prompt-token--lakehouse"><span class="material-symbols-outlined">database</span> FabricItems_Lakehouse</span><span class="prompt-token prompt-token--pipeline"><span class="material-symbols-outlined">account_tree</span> Pipeline_1</span></div></div><div class="prompt-recap__field"><span>Files</span><div class="prompt-token-row"><span class="prompt-token prompt-token--image"><span class="material-symbols-outlined">image</span> task_prompt_overview.png</span><span class="prompt-token prompt-token--pdf"><span class="material-symbols-outlined">picture_as_pdf</span> Fabric workshop (1).pdf</span></div></div></div><div class="prompt-recap__config"><span><span class="material-symbols-outlined">verified_user</span> Require approvals <strong>ON</strong></span><span><span class="material-symbols-outlined">fork_right</span> Branch out <strong>ON</strong></span></div></div>
+                </div>
+                <div class="mission-grid mission-grid--right">
+                    <section class="agent-canvas agent-canvas--dense" aria-label="Parallel agent canvas">
+                        <div class="canvas-toolbar"><div class="log-mode-switch" role="group" aria-label="Log detail mode"><button class="log-mode-switch__option" type="button" aria-pressed="false" data-goto="2"><span class="material-symbols-outlined">view_agenda</span> High-level logs</button><button class="log-mode-switch__option is-active" type="button" aria-pressed="true" data-goto="3"><span class="material-symbols-outlined">subject</span> Detailed logs</button></div></div>
+                        <svg class="canvas-lines" viewBox="0 0 1100 720" preserveAspectRatio="none" aria-hidden="true">
+                            <path class="line line--active" data-from="generalist" data-to="data-engineer"/>
+                            <path class="line line--active" data-from="generalist" data-to="admin"/>
+                            <path class="line line--active" data-from="generalist" data-to="modeler"/>
+                        </svg>
+
+                        <article class="agent-node agent-node--generalist agent-node--running agent-node--compact" data-node="generalist" style="--x: 35%; --y: 3%;">
+                            <div class="agent-head"><span class="agent-icon agent-icon--generalist material-symbols-outlined filled">hub</span><div><h2>Generalist</h2><p>Watching progress · merging signals</p></div><span class="state-pill state-pill--running">Running</span></div>
+                            <div class="log-window"><p><time>[08:43:02]</time> Three tasks are independent. Launching in parallel.</p><p><time>[08:43:09]</time> Monitoring Fabric Admin for permission drift evidence.</p><p><time>[08:43:12]</time> Awaiting first inventory result before capacity decision.</p></div>
+                        </article>
+
+                        <article class="agent-node agent-node--sub agent-node--running" data-node="data-engineer" style="--x: 1.5%; --y: 35%;">
+                            <div class="agent-head"><span class="agent-icon agent-icon--data material-symbols-outlined">database_search</span><div><h2>Fabric Data Engineer</h2><p>Workspace and item scan</p></div><span class="state-pill state-pill--running">Running</span></div>
+                            <div class="log-window"><p><time>[08:43:18]</time> Listing lakehouses and refresh schedules.</p><p><time>[08:43:22]</time> Found Pipeline_1 writes to Gold_Sales_DW.</p><p><time>[08:43:27]</time> Capturing current item dependency map.</p></div>
+                        </article>
+
+                        <article class="agent-node agent-node--sub agent-node--running" data-node="admin" style="--x: 35%; --y: 35%;">
+                            <div class="agent-head"><span class="agent-icon agent-icon--admin material-symbols-outlined">admin_panel_settings</span><div><h2>Fabric Admin</h2><p>Capacity and permissions</p></div><span class="state-pill state-pill--running">Running</span></div>
+                            <div class="log-window"><p><time>[08:43:20]</time> Reading tenant settings and group membership.</p><p class="log-warn"><time>[08:43:29]</time> Legacy ACL detected: ServiceAcc_Old.</p><p><time>[08:43:34]</time> Preparing approval summary for MFA enforcement.</p></div>
+                        </article>
+
+                        <article class="agent-node agent-node--sub agent-node--running" data-node="modeler" style="--x: 67.5%; --y: 35%;">
+                            <div class="agent-head"><span class="agent-icon agent-icon--report material-symbols-outlined">query_stats</span><div><h2>Modeler</h2><p>Semantic model checks</p></div><span class="state-pill state-pill--running">Running</span></div>
+                            <div class="log-window"><p><time>[08:43:21]</time> Inspecting Finance dashboard dataset lineage.</p><p><time>[08:43:25]</time> Comparing Gold schema to reference PDF.</p><p><time>[08:43:31]</time> Found missing certified label on model.</p></div>
+                        </article>
+                    </section>
+
+                    <aside class="right-rail" aria-label="Change overview">
+                        <section class="change-ledger">
+                            <header class="change-ledger__header"><h2>Change overview</h2><span>5 tracked</span></header>
+                            <section class="ledger-section"><h3>Created</h3><article class="ledger-row ledger-row--created ledger-row--live"><span class="material-symbols-outlined">description</span><div class="ledger-row__body"><div class="ledger-row__meta"><span class="ledger-agent">Fabric Data Engineer</span><span class="ledger-status ledger-status--creating">Creating</span></div><strong>dependency_map.json</strong><small>Producing the dependency evidence artifact.</small></div></article></section>
+                            <section class="ledger-section"><h3>Updated</h3><article class="ledger-row ledger-row--pending ledger-row--live"><span class="material-symbols-outlined">dataset</span><div class="ledger-row__body"><div class="ledger-row__meta"><span class="ledger-agent">Modeler</span><span class="ledger-status ledger-status--changing">Changing</span></div><strong>FinanceModel certification</strong><small>Missing certified label found; update path is being prepared.</small></div></article></section>
+                            <section class="ledger-section"><h3>Deleted</h3><article class="ledger-row ledger-row--pending ledger-row--live"><span class="material-symbols-outlined">person_remove</span><div class="ledger-row__body"><div class="ledger-row__meta"><span class="ledger-agent">Fabric Admin</span><span class="ledger-status ledger-status--reviewing">Reviewing</span></div><strong>ServiceAcc_Old access</strong><small>Legacy access detected and marked for removal review.</small></div></article></section>
+                            <section class="ledger-section"><h3>Important actions</h3><article class="ledger-row ledger-row--pending ledger-row--live"><span class="material-symbols-outlined">rocket_launch</span><div class="ledger-row__body"><div class="ledger-row__meta"><span class="ledger-agent">Fabric Admin</span><span class="ledger-status ledger-status--changing">Drafting</span></div><strong>Capacity F2 -> F4</strong><small>Two-hour capacity scale window is being drafted.</small></div></article><article class="ledger-row ledger-row--pending ledger-row--live"><span class="material-symbols-outlined">admin_panel_settings</span><div class="ledger-row__body"><div class="ledger-row__meta"><span class="ledger-agent">Fabric Admin</span><span class="ledger-status ledger-status--changing">Drafting</span></div><strong>Require MFA for new group members</strong><small>Tenant setting change is being prepared for approval.</small></div></article></section>
+                        </section>
+                    </aside>
+                </div>
+            </div>
+        </section>
+
+        <section class="screen smooth-scroll" data-screen="4" aria-label="Steering detailed log view">
+            <div class="mission-layout">
+                <div class="run-status-strip"><div class="mission-status"><span class="live-dot"></span> Running · generalist inspecting subagent logs</div></div>
+                <div class="prompt-recap" data-open="false">
+                    <button class="prompt-recap__summary" type="button" aria-expanded="false"><span class="prompt-recap__icon material-symbols-outlined filled">edit_note</span><div class="prompt-recap__summary-copy"><div class="prompt-recap__meta"><span>Task prompt</span><span>1 workspace · 2 items · 2 files</span></div><div class="prompt-recap__summary-line">Create an end to end solution (ingestion, transformation, semantic modelling and a report) which shows all Fabric items I have access to in a nice appropriate visualization. Work in folder tmp_&lt;timestamp&gt; where &lt;timestamp&gt; is the timestamp when you start working</div></div><div class="prompt-recap__counts" aria-hidden="true"><span class="prompt-count prompt-count--workspace"><span class="material-symbols-outlined">workspaces</span>1</span><span class="prompt-count prompt-count--item"><span class="material-symbols-outlined">database</span>2</span><span class="prompt-count prompt-count--file"><span class="material-symbols-outlined">attachment</span>2</span></div><span class="prompt-recap__chevron material-symbols-outlined">expand_more</span></button>
+                    <div class="prompt-recap__expanded"><div class="prompt-recap__detail-grid"><div class="prompt-recap__field"><span>Runs in</span><div><strong>Feature Demo — End To End Fabric Solution</strong><small><span class="material-symbols-outlined">fork_right</span> feature/end-to-end-fabric-visualization · from Feature Demo</small></div></div><div class="prompt-recap__field"><span>Workspace</span><div class="prompt-token-row"><span class="prompt-token prompt-token--workspace"><span class="material-symbols-outlined">workspaces</span> Fabric ClawHub</span></div></div><div class="prompt-recap__field"><span>Items</span><div class="prompt-token-row"><span class="prompt-token prompt-token--lakehouse"><span class="material-symbols-outlined">database</span> FabricItems_Lakehouse</span><span class="prompt-token prompt-token--pipeline"><span class="material-symbols-outlined">account_tree</span> Pipeline_1</span></div></div><div class="prompt-recap__field"><span>Files</span><div class="prompt-token-row"><span class="prompt-token prompt-token--image"><span class="material-symbols-outlined">image</span> task_prompt_overview.png</span><span class="prompt-token prompt-token--pdf"><span class="material-symbols-outlined">picture_as_pdf</span> Fabric workshop (1).pdf</span></div></div></div><div class="prompt-recap__config"><span><span class="material-symbols-outlined">verified_user</span> Require approvals <strong>ON</strong></span><span><span class="material-symbols-outlined">fork_right</span> Branch out <strong>ON</strong></span></div></div>
+                </div>
+                <div class="mission-grid mission-grid--right">
+                    <section class="agent-canvas agent-canvas--inspect" aria-label="Steering canvas">
+                        <div class="canvas-toolbar"><div class="log-mode-switch" role="group" aria-label="Log detail mode"><button class="log-mode-switch__option" type="button" aria-pressed="false" data-goto="2"><span class="material-symbols-outlined">view_agenda</span> High-level logs</button><button class="log-mode-switch__option is-active" type="button" aria-pressed="true" data-goto="3"><span class="material-symbols-outlined">subject</span> Detailed logs</button></div></div>
+                        <svg class="canvas-lines" viewBox="0 0 1000 650" preserveAspectRatio="none" aria-hidden="true">
+                            <path class="line line--return" data-from="data-engineer" data-to="generalist"/>
+                            <path class="line line--active" data-from="generalist" data-to="admin"/>
+                            <path class="line line--return" data-from="modeler" data-to="generalist"/>
+                        </svg>
+                        <article class="agent-node agent-node--generalist agent-node--running" data-node="generalist" style="--x: 35%; --y: 5%;">
+                            <div class="agent-head"><span class="agent-icon agent-icon--generalist material-symbols-outlined filled">hub</span><div><h2>Generalist</h2><p>Inspecting loop signal</p></div><span class="state-pill state-pill--running">Running</span></div>
+                            <div class="log-window log-window--large"><p><time>[08:44:06]</time> Fabric Admin repeated the same membership query 4 times.</p><p><time>[08:44:10]</time> Recent inventory result includes canonical security group: Fabric_Admins_NA.</p><p><time>[08:44:12]</time> Steering Fabric Admin with new group context and narrower task.</p></div>
+                        </article>
+                        <article class="agent-node agent-node--sub agent-node--done" data-node="data-engineer" style="--x: 2%; --y: 50%;"><div class="agent-head"><span class="agent-icon agent-icon--data material-symbols-outlined">database_search</span><div><h2>Fabric Data Engineer</h2><p>Returned summary</p></div><span class="state-pill state-pill--done">Done</span></div><div class="log-window"><p><time>[08:43:48]</time> Returned inventory summary to Generalist.</p><p><time>[08:43:54]</time> Included F2 utilization spike, admin group, and Pipeline_1 lineage.</p><p><time>[08:44:00]</time> Evidence artifact ready for merge.</p></div></article>
+                        <article class="agent-node agent-node--sub agent-node--attention" data-node="admin" style="--x: 35%; --y: 50%;"><div class="agent-head"><span class="agent-icon agent-icon--admin material-symbols-outlined">admin_panel_settings</span><div><h2>Fabric Admin</h2><p>Needs steering</p></div><span class="state-pill state-pill--attention">Loop risk</span></div><div class="log-window"><p><time>[08:44:01]</time> Querying legacy group membership.</p><p><time>[08:44:04]</time> Querying legacy group membership.</p><p><time>[08:44:07]</time> Querying legacy group membership.</p></div></article>
+                        <article class="agent-node agent-node--sub agent-node--running" data-node="modeler" style="--x: 67.5%; --y: 50%;"><div class="agent-head"><span class="agent-icon agent-icon--report material-symbols-outlined">query_stats</span><div><h2>Modeler</h2><p>Continuing independently</p></div><span class="state-pill state-pill--running">Running</span></div><div class="log-window"><p><time>[08:44:03]</time> Refreshing measure dependency map.</p><p><time>[08:44:09]</time> Gold schema drift reduced to two nullable columns.</p></div></article>
+                    </section>
+
+                    <aside class="right-rail" aria-label="Change overview">
+                        <section class="change-ledger">
+                            <header class="change-ledger__header"><h2>Change overview</h2><span>5 tracked</span></header>
+                            <section class="ledger-section"><h3>Created</h3><article class="ledger-row ledger-row--created"><span class="material-symbols-outlined">description</span><div class="ledger-row__body"><div class="ledger-row__meta"><span class="ledger-agent">Fabric Data Engineer</span><span class="ledger-status ledger-status--creating">Created</span></div><strong>dependency_map.json</strong><small>Evidence artifact is ready for merge.</small></div></article></section>
+                            <section class="ledger-section"><h3>Updated</h3><article class="ledger-row ledger-row--pending ledger-row--live"><span class="material-symbols-outlined">dataset</span><div class="ledger-row__body"><div class="ledger-row__meta"><span class="ledger-agent">Modeler</span><span class="ledger-status ledger-status--changing">Changing</span></div><strong>FinanceModel certification</strong><small>Certification update remains active while schema checks finish.</small></div></article></section>
+                            <section class="ledger-section"><h3>Deleted</h3><article class="ledger-row ledger-row--pending ledger-row--live"><span class="material-symbols-outlined">person_remove</span><div class="ledger-row__body"><div class="ledger-row__meta"><span class="ledger-agent">Fabric Admin</span><span class="ledger-status ledger-status--reviewing">Rechecking</span></div><strong>ServiceAcc_Old access</strong><small>Generalist narrowed the group context before removal approval.</small></div></article></section>
+                            <section class="ledger-section"><h3>Important actions</h3><article class="ledger-row ledger-row--pending"><span class="material-symbols-outlined">rocket_launch</span><div class="ledger-row__body"><div class="ledger-row__meta"><span class="ledger-agent">Fabric Admin</span><span class="ledger-status ledger-status--waiting">Waiting</span></div><strong>Capacity F2 -> F4</strong><small>Two-hour capacity scale window is waiting for approval.</small></div></article><article class="ledger-row ledger-row--pending"><span class="material-symbols-outlined">admin_panel_settings</span><div class="ledger-row__body"><div class="ledger-row__meta"><span class="ledger-agent">Fabric Admin</span><span class="ledger-status ledger-status--waiting">Waiting</span></div><strong>Require MFA for new group members</strong><small>Tenant setting change is waiting for approval.</small></div></article></section>
+                        </section>
+                    </aside>
+                </div>
+            </div>
+        </section>
+
+        <section class="screen smooth-scroll" data-screen="5" aria-label="Approval detailed log view">
+            <div class="mission-layout">
+                <div class="run-status-strip"><div class="mission-status"><span class="live-dot live-dot--amber"></span> Waiting on approval · merge phase</div></div>
+                <div class="prompt-recap" data-open="false">
+                    <button class="prompt-recap__summary" type="button" aria-expanded="false"><span class="prompt-recap__icon material-symbols-outlined filled">edit_note</span><div class="prompt-recap__summary-copy"><div class="prompt-recap__meta"><span>Task prompt</span><span>1 workspace · 2 items · 2 files</span></div><div class="prompt-recap__summary-line">Create an end to end solution (ingestion, transformation, semantic modelling and a report) which shows all Fabric items I have access to in a nice appropriate visualization. Work in folder tmp_&lt;timestamp&gt; where &lt;timestamp&gt; is the timestamp when you start working</div></div><div class="prompt-recap__counts" aria-hidden="true"><span class="prompt-count prompt-count--workspace"><span class="material-symbols-outlined">workspaces</span>1</span><span class="prompt-count prompt-count--item"><span class="material-symbols-outlined">database</span>2</span><span class="prompt-count prompt-count--file"><span class="material-symbols-outlined">attachment</span>2</span></div><span class="prompt-recap__chevron material-symbols-outlined">expand_more</span></button>
+                    <div class="prompt-recap__expanded"><div class="prompt-recap__detail-grid"><div class="prompt-recap__field"><span>Runs in</span><div><strong>Feature Demo — End To End Fabric Solution</strong><small><span class="material-symbols-outlined">fork_right</span> feature/end-to-end-fabric-visualization · from Feature Demo</small></div></div><div class="prompt-recap__field"><span>Workspace</span><div class="prompt-token-row"><span class="prompt-token prompt-token--workspace"><span class="material-symbols-outlined">workspaces</span> Fabric ClawHub</span></div></div><div class="prompt-recap__field"><span>Items</span><div class="prompt-token-row"><span class="prompt-token prompt-token--lakehouse"><span class="material-symbols-outlined">database</span> FabricItems_Lakehouse</span><span class="prompt-token prompt-token--pipeline"><span class="material-symbols-outlined">account_tree</span> Pipeline_1</span></div></div><div class="prompt-recap__field"><span>Files</span><div class="prompt-token-row"><span class="prompt-token prompt-token--image"><span class="material-symbols-outlined">image</span> task_prompt_overview.png</span><span class="prompt-token prompt-token--pdf"><span class="material-symbols-outlined">picture_as_pdf</span> Fabric workshop (1).pdf</span></div></div></div><div class="prompt-recap__config"><span><span class="material-symbols-outlined">verified_user</span> Require approvals <strong>ON</strong></span><span><span class="material-symbols-outlined">fork_right</span> Branch out <strong>ON</strong></span></div></div>
+                </div>
+                <div class="mission-grid mission-grid--right">
+                    <section class="agent-canvas agent-canvas--merge" aria-label="Merge canvas">
+                        <div class="canvas-toolbar"><div class="log-mode-switch" role="group" aria-label="Log detail mode"><button class="log-mode-switch__option" type="button" aria-pressed="false" data-goto="2"><span class="material-symbols-outlined">view_agenda</span> High-level logs</button><button class="log-mode-switch__option is-active" type="button" aria-pressed="true" data-goto="3"><span class="material-symbols-outlined">subject</span> Detailed logs</button></div></div>
+                        <svg class="canvas-lines" viewBox="0 0 1000 650" preserveAspectRatio="none" aria-hidden="true"><path class="line line--return" data-from="data-engineer" data-to="generalist"/><path class="line line--return" data-from="admin" data-to="generalist"/><path class="line line--return" data-from="modeler" data-to="generalist"/></svg>
+                        <article class="agent-node agent-node--generalist agent-node--waiting" data-node="generalist" style="--x: 35%; --y: 18%;"><div class="agent-head"><span class="agent-icon agent-icon--generalist material-symbols-outlined filled">hub</span><div><h2>Generalist</h2><p>Merging summaries · approval gate</p></div><span class="state-pill state-pill--waiting">Waiting</span></div><div class="log-window log-window--large"><p><time>[08:45:12]</time> All parallel branches returned structured results.</p><p><time>[08:45:16]</time> Capacity upgrade and admin setting changes require approval.</p><p><time>[08:45:19]</time> Prepared reversible action group with blast radius summary.</p></div></article>
+                        <article class="agent-node result-node" data-node="data-engineer" style="--x: 2%; --y: 58%;"><div class="agent-head"><span class="agent-icon agent-icon--data material-symbols-outlined">database_search</span><div><h2>Fabric Data Engineer</h2><p>Summary returned</p></div><span class="state-pill state-pill--done">Done</span></div><div class="log-window"><p><time>[08:45:01]</time> Mapped 11 Fabric dependencies.</p><p><time>[08:45:03]</time> Found F2 bottleneck evidence.</p><p><time>[08:45:05]</time> Produced dependency_map.json.</p></div></article>
+                        <article class="agent-node result-node" data-node="admin" style="--x: 35%; --y: 58%;"><div class="agent-head"><span class="agent-icon agent-icon--admin material-symbols-outlined">admin_panel_settings</span><div><h2>Fabric Admin</h2><p>Summary returned</p></div><span class="state-pill state-pill--done">Done</span></div><div class="log-window"><p><time>[08:45:02]</time> Detected legacy ACL user.</p><p><time>[08:45:04]</time> Verified MFA enforcement is safe for target group.</p><p><time>[08:45:06]</time> Flagged two guests for manual review.</p></div></article>
+                        <article class="agent-node result-node" data-node="modeler" style="--x: 67.5%; --y: 58%;"><div class="agent-head"><span class="agent-icon agent-icon--report material-symbols-outlined">query_stats</span><div><h2>Modeler</h2><p>Summary returned</p></div><span class="state-pill state-pill--done">Done</span></div><div class="log-window"><p><time>[08:45:02]</time> Confirmed Gold schema compatibility.</p><p><time>[08:45:04]</time> Reported missing certification label.</p><p><time>[08:45:06]</time> Cleared dataset refresh to proceed.</p></div></article>
+                    </section>
+                    <aside class="right-rail" aria-label="Change overview"><section class="change-ledger change-ledger--approval"><header class="change-ledger__header"><h2>Change overview</h2><span>Approval needed</span></header><section class="ledger-section"><h3>Created</h3><article class="ledger-row ledger-row--created"><span class="material-symbols-outlined">description</span><div class="ledger-row__body"><div class="ledger-row__meta"><span class="ledger-agent">Fabric Data Engineer</span><span class="ledger-status ledger-status--ready">Ready</span></div><strong>dependency_map.json</strong><small>Evidence packet is ready.</small></div></article></section><section class="ledger-section"><h3>Updated</h3><article class="ledger-row ledger-row--pending"><span class="material-symbols-outlined">dataset</span><div class="ledger-row__body"><div class="ledger-row__meta"><span class="ledger-agent">Modeler</span><span class="ledger-status ledger-status--waiting">Waiting</span></div><strong>FinanceModel certification</strong><small>Pending approval after refresh.</small></div></article></section><section class="ledger-section"><h3>Deleted</h3><article class="ledger-row ledger-row--pending"><span class="material-symbols-outlined">person_remove</span><div class="ledger-row__body"><div class="ledger-row__meta"><span class="ledger-agent">Fabric Admin</span><span class="ledger-status ledger-status--waiting">Waiting</span></div><strong>ServiceAcc_Old access</strong><small>Removal pending approval.</small></div></article></section><section class="ledger-section"><h3>Important actions</h3><article class="ledger-row ledger-row--pending"><span class="material-symbols-outlined">rocket_launch</span><div class="ledger-row__body"><div class="ledger-row__meta"><span class="ledger-agent">Fabric Admin</span><span class="ledger-status ledger-status--waiting">Waiting</span></div><strong>Capacity F2 -> F4</strong><small>Two-hour capacity scale window.</small></div></article><article class="ledger-row ledger-row--pending"><span class="material-symbols-outlined">admin_panel_settings</span><div class="ledger-row__body"><div class="ledger-row__meta"><span class="ledger-agent">Fabric Admin</span><span class="ledger-status ledger-status--waiting">Waiting</span></div><strong>Require MFA for new group members</strong><small>Tenant setting change pending approval.</small></div></article></section><div class="auto-approval-note"><span class="material-symbols-outlined">schedule</span> Offline demo auto-approves after a short pause.</div><button class="primary-button primary-button--full" data-goto="6"><span class="material-symbols-outlined filled">check_circle</span> Approve & continue</button></section></aside>
+                </div>
+            </div>
+        </section>
+
+        <section class="screen smooth-scroll" data-screen="6" aria-label="Completed run view">
+            <div class="mission-layout">
+                <div class="run-status-strip"><div class="mission-status mission-status--done"><span class="material-symbols-outlined filled">check_circle</span> Completed · 5m 38s · 4 agents</div></div>
+                <div class="prompt-recap" data-open="false">
+                    <button class="prompt-recap__summary" type="button" aria-expanded="false"><span class="prompt-recap__icon material-symbols-outlined filled">edit_note</span><div class="prompt-recap__summary-copy"><div class="prompt-recap__meta"><span>Task prompt</span><span>1 workspace · 2 items · 2 files</span></div><div class="prompt-recap__summary-line">Create an end to end solution (ingestion, transformation, semantic modelling and a report) which shows all Fabric items I have access to in a nice appropriate visualization. Work in folder tmp_&lt;timestamp&gt; where &lt;timestamp&gt; is the timestamp when you start working</div></div><div class="prompt-recap__counts" aria-hidden="true"><span class="prompt-count prompt-count--workspace"><span class="material-symbols-outlined">workspaces</span>1</span><span class="prompt-count prompt-count--item"><span class="material-symbols-outlined">database</span>2</span><span class="prompt-count prompt-count--file"><span class="material-symbols-outlined">attachment</span>2</span></div><span class="prompt-recap__chevron material-symbols-outlined">expand_more</span></button>
+                    <div class="prompt-recap__expanded"><div class="prompt-recap__detail-grid"><div class="prompt-recap__field"><span>Runs in</span><div><strong>Feature Demo — End To End Fabric Solution</strong><small><span class="material-symbols-outlined">fork_right</span> feature/end-to-end-fabric-visualization · from Feature Demo</small></div></div><div class="prompt-recap__field"><span>Workspace</span><div class="prompt-token-row"><span class="prompt-token prompt-token--workspace"><span class="material-symbols-outlined">workspaces</span> Fabric ClawHub</span></div></div><div class="prompt-recap__field"><span>Items</span><div class="prompt-token-row"><span class="prompt-token prompt-token--lakehouse"><span class="material-symbols-outlined">database</span> FabricItems_Lakehouse</span><span class="prompt-token prompt-token--pipeline"><span class="material-symbols-outlined">account_tree</span> Pipeline_1</span></div></div><div class="prompt-recap__field"><span>Files</span><div class="prompt-token-row"><span class="prompt-token prompt-token--image"><span class="material-symbols-outlined">image</span> task_prompt_overview.png</span><span class="prompt-token prompt-token--pdf"><span class="material-symbols-outlined">picture_as_pdf</span> Fabric workshop (1).pdf</span></div></div></div><div class="prompt-recap__config"><span><span class="material-symbols-outlined">verified_user</span> Require approvals <strong>ON</strong></span><span><span class="material-symbols-outlined">fork_right</span> Branch out <strong>ON</strong></span></div></div>
+                </div>
+                <div class="complete-grid">
+                    <section class="completion-summary">
+                        <div class="completion-hero"><span class="material-symbols-outlined filled">task_alt</span><div><h2>Fabric item visibility run is complete.</h2><p>The generalist merged the dependency map, semantic model readiness checks, capacity window, and governance cleanup into the tmp_&lt;timestamp&gt; run evidence packet.</p></div></div>
+                        <div class="change-board" aria-label="Fabric item and action changes">
+                            <article><span class="change-icon change-icon--created material-symbols-outlined">add_circle</span><div><strong>Created</strong><p>dependency_map.json and tmp_&lt;timestamp&gt; evidence packet.</p></div></article>
+                            <article><span class="change-icon change-icon--updated material-symbols-outlined">published_with_changes</span><div><strong>Updated</strong><p>FinanceModel docs and certification for report readiness.</p></div></article>
+                            <article><span class="change-icon change-icon--action material-symbols-outlined">rocket_launch</span><div><strong>Changed</strong><p>Capacity F2 -> F4 for the approved two-hour window.</p></div></article>
+                            <article><span class="change-icon change-icon--deleted material-symbols-outlined">person_remove</span><div><strong>Removed</strong><p>Legacy ServiceAcc_Old workspace access.</p></div></article>
+                        </div>
+                    </section>
+
+                    <aside class="right-rail right-rail--complete" aria-label="Change overview"><section class="change-ledger"><header class="change-ledger__header"><h2>Change overview</h2><span>5 applied</span></header><section class="ledger-section"><h3>Created</h3><article class="ledger-row ledger-row--created"><span class="material-symbols-outlined">description</span><div class="ledger-row__body"><div class="ledger-row__meta"><span class="ledger-agent">Fabric Data Engineer</span><span class="ledger-status ledger-status--applied">Applied</span></div><strong>dependency_map.json</strong><small>Mapped 11 Fabric dependencies for the visualization.</small></div></article></section><section class="ledger-section"><h3>Updated</h3><article class="ledger-row ledger-row--updated"><span class="material-symbols-outlined">dataset</span><div class="ledger-row__body"><div class="ledger-row__meta"><span class="ledger-agent">Modeler</span><span class="ledger-status ledger-status--applied">Applied</span></div><strong>FinanceModel</strong><small>Certification label and dataset docs updated for report readiness.</small></div></article></section><section class="ledger-section"><h3>Deleted</h3><article class="ledger-row ledger-row--deleted"><span class="material-symbols-outlined">person_remove</span><div class="ledger-row__body"><div class="ledger-row__meta"><span class="ledger-agent">Fabric Admin</span><span class="ledger-status ledger-status--applied">Applied</span></div><strong>ServiceAcc_Old access</strong><small>Removed from Sales Operations workspace.</small></div></article></section><section class="ledger-section"><h3>Important actions</h3><article class="ledger-row ledger-row--action"><span class="material-symbols-outlined">rocket_launch</span><div class="ledger-row__body"><div class="ledger-row__meta"><span class="ledger-agent">Fabric Admin</span><span class="ledger-status ledger-status--applied">Applied</span></div><strong>Capacity F2 -> F4</strong><small>Approved two-hour capacity scale window started after the F2 spike.</small></div></article><article class="ledger-row ledger-row--action"><span class="material-symbols-outlined">admin_panel_settings</span><div class="ledger-row__body"><div class="ledger-row__meta"><span class="ledger-agent">Fabric Admin</span><span class="ledger-status ledger-status--applied">Applied</span></div><strong>Require MFA for new group members</strong><small>Tenant setting enforced for new group members.</small></div></article></section></section></aside>
+                </div>
+
+                <section class="final-log" aria-label="Full run log">
+                    <div class="final-log__tabs"><button aria-current="true">All</button><button>Generalist</button><button>Fabric Data Engineer</button><button>Fabric Admin</button><button>Modeler</button></div>
+                    <div class="log-window log-window--final"><p><time>[08:46:09]</time> [Generalist] Approval received. Applying capacity and governance action group.</p><p><time>[08:46:18]</time> [Fabric Data Engineer] dependency_map.json finalized with 11 Fabric item relationships.</p><p><time>[08:46:25]</time> [Fabric Admin] Capacity F4 provisioned for the approved two-hour window.</p><p><time>[08:46:31]</time> [Fabric Admin] Revoked legacy access from ServiceAcc_Old.</p><p><time>[08:46:42]</time> [Modeler] FinanceModel refresh completed and certification label applied for report readiness.</p><p><time>[08:47:03]</time> [Generalist] tmp_&lt;timestamp&gt; evidence packet attached to session ORD-992-FX.</p></div>
+                </section>
+            </div>
+        </section>
+
+        <nav class="dmc-nav" aria-label="Prototype navigation">
+            <button id="dmc-prev" class="nav-button" type="button" aria-label="Previous screen"><span class="material-symbols-outlined">chevron_left</span></button>
+            <div id="dmc-crumbs" class="dmc-nav__crumbs"></div>
+            <button id="dmc-next" class="nav-button" type="button" aria-label="Next screen"><span class="material-symbols-outlined">chevron_right</span></button>
+            <div class="flow-player" aria-live="polite">
+                <div class="flow-player__bar"><span id="dmc-flow-progress"></span></div>
+                <span id="dmc-flow-label" class="flow-player__label">Ready to run offline demo</span>
+                <button id="dmc-flow-toggle" class="flow-player__button" type="button"><span class="material-symbols-outlined filled">play_arrow</span> Play flow</button>
+                <button id="dmc-flow-replay" class="flow-player__button" type="button"><span class="material-symbols-outlined">replay</span> Replay</button>
+                <button id="dmc-log-toggle" class="flow-player__button" type="button"><span class="material-symbols-outlined">open_in_full</span> Large logs</button>
+            </div>
+        </nav>
+    </main>
+</div>
+
+<div class="mock-banner">Prototype · dynamic generalist run · static clickthrough</div>
+<script src="nav.js"></script>
+</body>
+</html>

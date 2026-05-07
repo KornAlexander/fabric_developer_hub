@@ -426,7 +426,7 @@ All other workstreams add to their own files + append-only exports from `types/s
 
 ## Non-Goals (explicitly out of scope for v0.x)
 - v1.0 — requires explicit green light from Alexander
-- **Script Runner / arbitrary code execution** — removed May 2026 (was WS-K). 
+- **Script Runner / arbitrary code execution** — removed May 2026 (was WS-K).
 - Custom BPA rule authoring (use sempy-labs default ruleset; `rulesetUrl?` param reserved, no UI)
 - Offline mode
 - Mobile layout

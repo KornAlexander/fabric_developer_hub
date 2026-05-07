@@ -81,7 +81,7 @@ def _unescape_value(s: str) -> str:
 def _escape_value(v: str) -> str:
     """Wrap in double-quotes when the value has surrounding whitespace
     or embedded double-quotes; doubles up embedded ``"``."""
-    if v == "" or v != v.strip() or '"' in v:
+    if v == "" or v != v.strip() or '"' in v or any(c in v for c in ":#-"):
         return '"' + v.replace('"', '""') + '"'
     return v
 

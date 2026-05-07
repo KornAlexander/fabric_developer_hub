@@ -18,6 +18,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.datastructures import MutableHeaders
 
 import app.bootstrap as _bootstrap  # noqa: F401  # MUST be first import: loads .env before anything reads os.environ
 from api.agenthub_controller import router as agenthub_router
@@ -32,6 +33,7 @@ from api.onelake_controller import router as onelake_controller
 from app.core.service_initializer import get_service_initializer
 from app.core.service_registry import get_service_registry
 from app.exception_handlers import register_exception_handlers
+from services.logging_categories import log_extra
 
 # Import controllers
 from fabric_api.apis.endpoint_resolution_api import (
@@ -134,16 +136,16 @@ def setup_logging(config_service=None) -> logging.Logger:
         },
         "formatters": {
             "default": {
-                "format": "%(asctime)s - %(name)s - %(levelname)s - [req %(request_id)s u:%(user_id)s s:%(session_id)s] - %(message)s",
+                "format": "%(asctime)s - %(name)s - %(levelname)s - [log_category %(log_category)s req %(request_id)s u:%(user_id)s s:%(session_id)s] - %(message)s",
                 "datefmt": "%Y-%m-%d %H:%M:%S"
             },
             "color": {
                 "()": "main.ColorFormatter",
-                "format": "%(asctime)s - %(name)s - %(levelname)s - [req %(request_id)s u:%(user_id)s s:%(session_id)s] - %(message)s",
+                "format": "%(asctime)s - %(name)s - %(levelname)s - [log_category %(log_category)s req %(request_id)s u:%(user_id)s s:%(session_id)s] - %(message)s",
                 "datefmt": "%Y-%m-%d %H:%M:%S"
             },
             "detailed": {
-                "format": "%(asctime)s - %(name)s - %(levelname)s - [req %(request_id)s u:%(user_id)s s:%(session_id)s] - [%(filename)s:%(lineno)d] - %(funcName)s() - %(message)s",
+                "format": "%(asctime)s - %(name)s - %(levelname)s - [log_category %(log_category)s req %(request_id)s u:%(user_id)s s:%(session_id)s] - [%(filename)s:%(lineno)d] - %(funcName)s() - %(message)s",
                 "datefmt": "%Y-%m-%d %H:%M:%S"
             }
         },
@@ -200,7 +202,7 @@ def setup_logging(config_service=None) -> logging.Logger:
 
     logging.config.dictConfig(logging_config)
     logger = logging.getLogger(__name__)
-    logger.info("Logging initialized - Level: %s, File: %s", log_level, log_file)
+    logger.info("Logging initialized - Level: %s, File: %s", log_level, log_file, extra=log_extra("high_level"))
 
     return logger
 
@@ -259,7 +261,8 @@ async def lifespan(app: FastAPI):
         # fatal — it would only fail on a code/config bug, and silently
         # masking it (as a previous version did) hid an IndexError that
         # broke MCP entirely in production. Per-server discovery failures
-        # are still tolerated inside ``discover_tools``.
+        # are also fatal: agents must never accept missions with a partial
+        # MCP tool surface.
         try:
             mcp_config_path = os.path.join(os.path.dirname(__file__), "mcp_servers.json")
             mcp_manager: MCPClientManager | None = MCPClientManager(mcp_config_path)
@@ -269,39 +272,34 @@ async def lifespan(app: FastAPI):
 
         # Narrow for the type checker: construction succeeded above, so
         # ``mcp_manager`` is definitely non-None entering the discovery block.
-        # (It may be set back to None in the except clause below on failure.)
         assert mcp_manager is not None
-        try:
-            await mcp_manager.discover_tools()
-            set_mcp_manager(mcp_manager)
-            tool_count = len(mcp_manager.tools)
-            logger.info(
-                "\u2713 MCP client initialized: %d tools from %d servers",
-                tool_count, len(mcp_manager.config.get('servers', {})),
-            )
-            # Register tool-runtime policies and warn about any MCP tool
-            # that was discovered but has no policy entry — the runtime
-            # denies unregistered tools by default.
-            from services.agenthub import tool_policies
-            tool_policies.register_all()
-            tool_policies.warn_about_unregistered(list(mcp_manager.tools.keys()))
+        await mcp_manager.discover_tools()
+        set_mcp_manager(mcp_manager)
+        tool_count = len(mcp_manager.tools)
+        logger.info(
+            "\u2713 MCP client initialized: %d tools from %d servers",
+            tool_count, len(mcp_manager.config.get('servers', {})),
+        )
+        # Register tool-runtime policies and warn about any MCP tool
+        # that was discovered but has no policy entry — the runtime
+        # denies unregistered tools by default.
+        from services.agenthub import tool_policies
+        tool_policies.register_all()
+        tool_policies.require_all_registered(list(mcp_manager.tools.keys()))
 
-            # Cross-validate the capability catalog (skills → tools,
-            # agents → skills) against the just-discovered MCP tool set.
-            # Issues are logged, not fatal — see capability_registry.py.
-            from services.agenthub import capability_registry
-            from services.agenthub.agent_registry import SKILLS, _AGENT_SKILLS
-            capability_issues = capability_registry.validate_catalog(
-                SKILLS, _AGENT_SKILLS, mcp_manager,
-            )
-            capability_registry.log_issues(capability_issues)
-            logger.info(
-                "\u2713 Capability catalog validated: %d skills, %d agents, %d issues",
-                len(SKILLS), len(_AGENT_SKILLS), len(capability_issues),
-            )
-        except Exception:
-            logger.warning("\u26a0 MCP tool discovery failed (chat will work without tools)", exc_info=True)
-            mcp_manager = None
+        # Cross-validate the capability catalog (skills → tools,
+        # agents → skills) against the just-discovered MCP tool set.
+        from services.agenthub import capability_registry
+        from services.agenthub.agent_registry import SKILLS, _AGENT_SKILLS
+        capability_issues = capability_registry.validate_catalog(
+            SKILLS, _AGENT_SKILLS, mcp_manager,
+        )
+        capability_registry.log_issues(capability_issues)
+        capability_registry.raise_for_issues(capability_issues)
+        logger.info(
+            "\u2713 Capability catalog validated: %d skills, %d agents, %d issues",
+            len(SKILLS), len(_AGENT_SKILLS), len(capability_issues),
+        )
 
         # Initialize AgentHub database
         try:
@@ -318,7 +316,49 @@ async def lifespan(app: FastAPI):
         if mcp_manager:
             get_orchestrator_engine().configure(mcp_manager, _get_copilot_token, _acquire_mcp_tokens)
             logger.info("\u2713 Orchestrator engine configured")
+            try:
+                from services.mcp.mission_runtime_manager import cleanup_mission_mcp_runtimes
 
+                cleanup = await cleanup_mission_mcp_runtimes(active_session_ids=set())
+                if cleanup.get("removed") or cleanup.get("errors"):
+                    logger.info(
+                        "\u2713 Mission MCP runtime startup sweep removed=%s skipped=%s errors=%s",
+                        cleanup.get("removed"),
+                        cleanup.get("skipped"),
+                        len(cleanup.get("errors") or []),
+                    )
+            except Exception:
+                logger.warning("\u26a0 Mission MCP runtime startup sweep failed", exc_info=True)
+        if os.environ.get("AGENT_ISOLATION", "inprocess").lower() == "container":
+            try:
+                from services.agenthub.drivers.container_backend import DockerBackend, warm_pool_target_from_env
+
+                warm_target = warm_pool_target_from_env()
+                if warm_target > 0:
+                    warm_result = await DockerBackend().prewarm_from_env()
+                    logger.info(
+                        "\u2713 Agent container warm pool ready: target=%s ready=%s created=%s errors=%s",
+                        warm_result.get("target"),
+                        warm_result.get("ready"),
+                        warm_result.get("created"),
+                        len(warm_result.get("errors") or []),
+                    )
+                else:
+                    logger.info("Agent container warm pool disabled")
+            except Exception:
+                logger.warning("\u26a0 Agent container warm pool prewarm failed", exc_info=True)
+        # Pre-warm the OpenID Connect configuration so the first
+        # authenticated request doesn't block on a ~3s network call to
+        # login.microsoftonline.com. The cache lasts 1 hour; background
+        # refresh kicks in at 90% of TTL so subsequent requests never
+        # block either.
+        try:
+            from services.auth.open_id_connect_configuration import get_openid_manager_service
+            oidc_mgr = await get_openid_manager_service()
+            await oidc_mgr.get_configuration_async()
+            logger.info("✓ OpenID Connect configuration pre-warmed")
+        except Exception:
+            logger.warning("⚠ OIDC pre-warm failed (first auth request will be slow)", exc_info=True)
         startup_time = time.time() - startup_start
         logger.info("\u2713 Application started successfully in %.2fs", startup_time)
         logger.info("\u2713 Server: %s", config_service.get_http_endpoint())
@@ -363,20 +403,41 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception("Error during service registry cleanup")
 
+    try:
+        from services.agenthub.drivers.container_backend import DockerBackend
+
+        cleanup = await DockerBackend().cleanup_warm_pool()
+        if cleanup.get("removed") or cleanup.get("errors"):
+            logger.info(
+                "\u2713 Agent container warm pool cleanup removed=%s errors=%s",
+                cleanup.get("removed"),
+                len(cleanup.get("errors") or []),
+            )
+    except Exception:
+        logger.warning("\u26a0 Agent container warm pool cleanup failed", exc_info=True)
+
     shutdown_duration = time.time() - shutdown_start_time
     logger.info("\u2713 Application shutdown completed in %.2fs", shutdown_duration)
     logger.info("=" * 60)
 
 # Create FastAPI app
 # ─── Security headers ─────────────────────────────────────────────────
-class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+class SecurityHeadersMiddleware:
     """Adds baseline security response headers.
 
-    Fabric-embedded workloads are loaded inside the Fabric portal iframe, so
-    ``frame-ancestors`` is explicitly set to the Fabric hosts rather than
-    ``'none'``. HSTS is only set when the request arrives over HTTPS (or when
-    a trusted proxy has annotated ``X-Forwarded-Proto: https``) to avoid
-    poisoning local-dev HTTP origins.
+    Implemented as pure ASGI middleware (not ``BaseHTTPMiddleware``)
+    because ``BaseHTTPMiddleware`` buffers the entire response body
+    before emitting it, which destroys real-time SSE streaming. Pure
+    ASGI middleware mutates the ``http.response.start`` message in
+    place and passes every ``http.response.body`` chunk straight
+    through — preserving server-sent-event streaming semantics.
+
+    Fabric-embedded workloads are loaded inside the Fabric portal
+    iframe, so ``frame-ancestors`` is explicitly set to the Fabric
+    hosts rather than ``'none'``. HSTS is only set when the request
+    arrives over HTTPS (or when a trusted proxy has annotated
+    ``X-Forwarded-Proto: https``) to avoid poisoning local-dev HTTP
+    origins.
     """
 
     _FABRIC_FRAME_ANCESTORS = (
@@ -386,42 +447,61 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         "https://df.fabric.microsoft.com"
     )
 
-    async def dispatch(self, request, call_next):
-        response = await call_next(request)
-        headers = response.headers
+    def __init__(self, app):
+        self.app = app
 
-        # Content Security Policy: the backend serves JSON/SSE only — no
-        # inline scripts should ever execute from backend responses. Frame
-        # ancestors are restricted to the Fabric portal origins.
-        headers.setdefault(
-            "Content-Security-Policy",
-            "default-src 'none'; "
-            "frame-ancestors " + self._FABRIC_FRAME_ANCESTORS + "; "
-            "base-uri 'none'; form-action 'none'",
-        )
-        headers.setdefault("X-Content-Type-Options", "nosniff")
-        headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
-        headers.setdefault(
-            "Permissions-Policy",
-            "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
-        )
-        headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
-        headers.setdefault("Cross-Origin-Resource-Policy", "cross-origin")
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
 
-        # HSTS only when the edge is HTTPS.
-        forwarded_proto = request.headers.get("x-forwarded-proto", "").lower()
-        is_https = request.url.scheme == "https" or forwarded_proto == "https"
-        if is_https:
-            headers.setdefault(
-                "Strict-Transport-Security",
-                "max-age=31536000; includeSubDomains",
-            )
+        # Probe ``X-Forwarded-Proto`` once from the request headers so
+        # we can decide whether to emit HSTS on the response.
+        raw_headers = scope.get("headers") or []
+        forwarded_proto = ""
+        for name, value in raw_headers:
+            if name == b"x-forwarded-proto":
+                try:
+                    forwarded_proto = value.decode("latin-1").lower()
+                except Exception:
+                    forwarded_proto = ""
+                break
+        is_https = scope.get("scheme") == "https" or forwarded_proto == "https"
 
-        return response
+        async def send_with_headers(message):
+            if message["type"] == "http.response.start":
+                # Use MutableHeaders to respect existing header casing
+                # and setdefault semantics.
+                headers = MutableHeaders(scope=message)
+                headers.setdefault(
+                    "Content-Security-Policy",
+                    "default-src 'none'; "
+                    "frame-ancestors " + self._FABRIC_FRAME_ANCESTORS + "; "
+                    "base-uri 'none'; form-action 'none'",
+                )
+                headers.setdefault("X-Content-Type-Options", "nosniff")
+                headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+                headers.setdefault(
+                    "Permissions-Policy",
+                    "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+                )
+                headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+                headers.setdefault("Cross-Origin-Resource-Policy", "cross-origin")
+                if is_https:
+                    headers.setdefault(
+                        "Strict-Transport-Security",
+                        "max-age=31536000; includeSubDomains",
+                    )
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
 
 
-class PrivateNetworkAccessMiddleware(BaseHTTPMiddleware):
+class PrivateNetworkAccessMiddleware:
     """Acknowledge Chrome's Private Network Access preflight.
+
+    Pure ASGI middleware — see :class:`SecurityHeadersMiddleware` for
+    the rationale for not using ``BaseHTTPMiddleware`` (SSE buffering).
 
     When a page on a public origin (e.g. https://app.powerbi.com) fetches
     a resource from a private IP / loopback address, Chrome sends a
@@ -434,11 +514,34 @@ class PrivateNetworkAccessMiddleware(BaseHTTPMiddleware):
     production traffic (which never sends that header) is unaffected.
     """
 
-    async def dispatch(self, request, call_next):
-        response = await call_next(request)
-        if request.headers.get("access-control-request-private-network", "").lower() == "true":
-            response.headers["Access-Control-Allow-Private-Network"] = "true"
-        return response
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        wants_pna = False
+        for name, value in scope.get("headers") or []:
+            if name == b"access-control-request-private-network":
+                try:
+                    wants_pna = value.decode("latin-1").strip().lower() == "true"
+                except Exception:
+                    wants_pna = False
+                break
+
+        if not wants_pna:
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_pna(message):
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                headers["Access-Control-Allow-Private-Network"] = "true"
+            await send(message)
+
+        await self.app(scope, receive, send_with_pna)
 
 
 def create_app() -> FastAPI:
@@ -486,6 +589,7 @@ def create_app() -> FastAPI:
             "Accept",
             "X-Fabric-Token",
             "X-Request-ID",
+            "X-AgentHub-Session-ID",
         ],
         expose_headers=["X-Request-ID", "X-Process-Time"],
         max_age=600,
@@ -519,6 +623,13 @@ def create_app() -> FastAPI:
     app.include_router(lakehouse_controller)
     app.include_router(github_chat_router)
     app.include_router(agenthub_router)
+
+    # Internal endpoints for container-isolated agents (tool proxy,
+    # slot completion reporting, tool schema discovery). Only
+    # reachable from the Docker bridge network — not exposed to
+    # external users.
+    from api.internal_agent_api import router as internal_agent_router
+    app.include_router(internal_agent_router)
 
     return app
 
@@ -576,8 +687,14 @@ async def add_process_time_header(request: Request, call_next):
             content={"message": "Server is shutting down"}
         )
 
-    # Generate or get request ID
-    request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
+    # Generate or get request ID. AgentHub child processes/MCP calls use
+    # X-AgentHub-Request-ID; treat it as equivalent so downstream Fabric
+    # proxy logs join the same mission trace instead of minting a blind id.
+    request_id = (
+        request.headers.get("X-Request-ID")
+        or request.headers.get("X-AgentHub-Request-ID")
+        or str(uuid.uuid4())
+    )
     request.state.request_id = request_id
 
     # Bind to the contextvar so every logger.* call inside this request
@@ -611,14 +728,35 @@ async def add_process_time_header(request: Request, call_next):
                 _uid_token = set_user_id(_oid)
         except Exception:
             pass
+    # Fabric-specific: the UI sends the Fabric JWT via X-Fabric-Token,
+    # not Authorization. Try to extract the oid from there too so ALL
+    # request log lines carry the user identity, not just the ones
+    # that call require_user.
+    if _uid_token is None:
+        _fabric_hdr = request.headers.get("x-fabric-token", "")
+        _fabric_tok = _fabric_hdr.removeprefix("Bearer ").strip()
+        if _fabric_tok:
+            try:
+                from jose import jwt as _jwt
+                _claims = _jwt.get_unverified_claims(_fabric_tok)
+                _oid = _claims.get("oid")
+                if _oid:
+                    _uid_token = set_user_id(_oid)
+            except Exception:
+                pass
 
-    # If the path targets a specific session, bind its id so that every log line
-    # (including background orchestrator tasks spawned from this request via
-    # asyncio.create_task, which inherits contextvars) is tagged with it.
+    # If the path targets a specific session, or an AgentHub child/MCP caller
+    # forwarded X-AgentHub-Session-ID, bind it so every log line is tagged with
+    # the owning mission. This is critical for Fabric proxy calls whose URL is
+    # workspace-scoped rather than /sessions/{id}-scoped.
     _sid_token = None
     _sid_match = _SESSION_PATH_RE.match(request.url.path)
     if _sid_match:
         _sid_token = set_session_id(_sid_match.group(1))
+    else:
+        _agenthub_session_id = request.headers.get("X-AgentHub-Session-ID")
+        if _agenthub_session_id:
+            _sid_token = set_session_id(_agenthub_session_id)
 
     # Track active request
     async with app_state.request_lock:
@@ -634,12 +772,18 @@ async def add_process_time_header(request: Request, call_next):
         response.headers["X-Process-Time"] = f"{process_time:.3f}"
         response.headers["X-Request-ID"] = request_id
 
-        # Log request (skip health checks to reduce noise)
+        # Log request (skip health checks and OPTIONS preflight to reduce noise)
         if request.url.path not in ["/health", "/ready"] and app_state.logger:
-            app_state.logger.info(
-                "%s %s \u2192 %s (%.3fs) [ID: %s]",
-                request.method, request.url.path, response.status_code, process_time, request_id[:8],
-            )
+            if request.method == "OPTIONS":
+                app_state.logger.debug(
+                    "%s %s → %s (%.3fs) [ID: %s]",
+                    request.method, request.url.path, response.status_code, process_time, request_id[:8],
+                )
+            else:
+                app_state.logger.info(
+                    "%s %s → %s (%.3fs) [ID: %s]",
+                    request.method, request.url.path, response.status_code, process_time, request_id[:8],
+                )
 
         return response
 

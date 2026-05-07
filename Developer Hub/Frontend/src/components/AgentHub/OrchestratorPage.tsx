@@ -45,20 +45,25 @@ import { WorkloadClientAPI } from "@ms-fabric/workload-client";
 import { callAuthAcquireAccessToken, callDatahubOpen, getFabricTokenCached } from "../../controller/AgentHubController";
 import * as api from "../../controller/AgentHubApi";
 import type { Workspace } from "../../controller/AgentHubApi";
-import type { Plan } from "./plan";
 import { PdfPreview } from "./PdfPreview";
 import { useSearch } from "./SearchContext";
 import { fuzzyFilter } from "./fuzzySearch";
 import { WorkspacePreviewModal } from "./WorkspacePreviewModal";
 import { MissionControlPage } from "./mission/MissionControlPage";
-import { Step2View } from "./Step2View";
+import { useEditorTabs } from "./EditorTabs/EditorTabsContext";
 import { MentionPicker, type MentionSuggestion } from "./MentionPicker";
+import { externalLinkOnClick, openExternalTab } from "./openExternalTab";
 import {
     RichComposer, plainTextToTokens,
     type RichComposerHandle, type RichComposerValue, type RichTrigger,
 } from "./RichComposer";
+import { buildPiSessionOrchestrationContext } from "./mission/pi/piExtensionPackages";
 
 const BE = process.env.WORKLOAD_BE_URL || "http://127.0.0.1:5000";
+const ALLOWED_TEXT_ATTACHMENT_EXTENSIONS = new Set([
+    ".txt", ".md", ".markdown", ".json", ".yaml", ".yml", ".csv", ".tsv", ".log",
+    ".sql", ".py", ".js", ".ts", ".tsx", ".jsx", ".xml", ".html", ".cfg", ".ini", ".toml",
+]);
 
 // Common Fabric data item types surfaced in the Datahub item picker.
 // The picker itself will show workspace navigation so any item the user can
@@ -235,10 +240,30 @@ function recentStatusInfo(status?: string): { variant: RecentStatusVariant; labe
     return null;
 }
 
+const WORKSPACE_ID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+
+function normalizeWorkspaceId(value: string | null | undefined): string {
+    return value?.match(WORKSPACE_ID_RE)?.[0] || "";
+}
+
+function defaultWorkspaceIdFromLocation(): string {
+    if (typeof window === "undefined") return "";
+    const params = new URLSearchParams(window.location.search);
+    const direct = normalizeWorkspaceId(params.get("ws"));
+    if (direct) return direct;
+
+    // Fabric can mount workload routes as encoded segments such as
+    // /orchestrator%3Fws%3D<guid>; recover the workspace id from either form.
+    const href = window.location.href;
+    const encodedMatch = href.match(/(?:[?&]|%3[fF]|%26)ws(?:=|%3[dD])([^&#]+)/i);
+    return normalizeWorkspaceId(encodedMatch?.[1]);
+}
+
 /* ── Component ────────────────────────────────────────────────── */
 
 export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
     const { t } = useTranslation();
+    const defaultWs = defaultWorkspaceIdFromLocation();
     // taskText is the plain-text projection of the rich composer (see
     // RichComposer). Every upstream consumer — planner payload, drafts,
     // recent prompts, change-signature — still reads this string, so the
@@ -258,25 +283,19 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
         setComposerValue({ tokens: plainTextToTokens(text) });
     }
     const [planning, setPlanning] = useState(false);
-    // Serialized snapshot of every input that feeds plan generation, taken
-    // the instant planning starts. Used to tell whether the user has changed
-    // anything while a plan is in flight — if so we show the "won't be
-    // reflected" warning; if nothing changed, we stay quiet.
+    // Serialized snapshot of every input that feeds session creation, taken
+    // the instant start begins. Used to tell whether the user has changed
+    // anything while the backend is composing/starting the mission.
     const [planningSnapshot, setPlanningSnapshot] = useState<string | null>(null);
-    // Exact prompt text at the instant the user clicked "Plan this". The Step2
-    // view uses this to typewriter-render the prompt back while waiting on the
-    // LLM — independent of any edits the user may make to ``taskText`` later.
-    const [planningTaskSnapshot, setPlanningTaskSnapshot] = useState<string | null>(null);
-    // Abort controller for the in-flight plan generation. Clicking "Edit
-    // task" on the Step 2 loading view aborts the fetch so the user gets
-    // back to Step 1 immediately instead of waiting for the LLM to finish.
+    // Abort controller for the in-flight create-session request.
     const planningAbortRef = useRef<AbortController | null>(null);
-    const [plan, setPlan] = useState<any | null>(null);
-    const [sessionId, setSessionId] = useState<string | null>(null);
-    const [approving, setApproving] = useState(false);
-    // P5 · When non-null, we render the in-place run view (SessionDetailPage)
-    // instead of the composer + plan. Keeps the user on the same route.
+    // When non-null, we render Mission Control instead of the composer.
     const [runningSessionId, setRunningSessionId] = useState<string | null>(null);
+    const [runningSessionJob, setRunningSessionJob] = useState<any | null>(null);
+    // Token captured at the exact start moment and forwarded to
+    // Mission Control so SSE can connect immediately without waiting for a
+    // second token acquisition round-trip.
+    const [runningFabricToken, setRunningFabricToken] = useState<string | undefined>(undefined);
     const [error, setError] = useState<string | null>(null);
 
     // ── Composer model picker ───────────────────────────────────────
@@ -284,6 +303,10 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
     // once on mount; persists across re-renders. Empty list ⇒ hide the
     // picker and let the backend pick the default.
     const [composeModels, setComposeModels] = useState<api.ComposeModelEntry[]>([]);
+    // True until the initial catalog fetch resolves (success or fail).
+    // Drives a shimmer placeholder in the picker so it never reads
+    // "Default model" while we're actually still loading.
+    const [composeModelsLoading, setComposeModelsLoading] = useState<boolean>(true);
     // User's current selection. When null we send no ``model`` to the
     // backend and it picks the top-ranked option from the catalog.
     const [selectedModel, setSelectedModel] = useState<string | null>(
@@ -305,6 +328,8 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                 }
             } catch {
                 if (!cancelled) setComposeModels([]);
+            } finally {
+                if (!cancelled) setComposeModelsLoading(false);
             }
         })();
         return () => { cancelled = true; };
@@ -331,9 +356,6 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
     //   - image: `content` is a data URI (`data:image/...;base64,…`).
     //   - pdf:   `content` is a data URI (`data:application/pdf;base64,…`).
     const fileInputRef = useRef<HTMLInputElement | null>(null);
-    // Anchor for the generated-plan section. We auto-scroll to this once a
-    // plan arrives so the user isn't left staring at the prompt form.
-    const planSectionRef = useRef<HTMLDivElement | null>(null);
     // Focus the rich composer when the New Session page first mounts so
     // users can start typing immediately. One-shot — subsequent re-renders
     // don't steal focus from whatever the user is doing.
@@ -371,6 +393,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
 
     type AttachmentKind = "text" | "image" | "pdf";
     interface UiAttachment {
+        id: string;
         name: string;
         size: number;
         kind: AttachmentKind;
@@ -381,6 +404,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
     }
     const [attachedFiles, setAttachedFiles] = useState<UiAttachment[]>([]);
     const [uploadError, setUploadError] = useState<string | null>(null);
+    const attachmentIdRef = useRef(0);
     // Which attachment (if any) is currently shown in the preview overlay.
     // Clicking a pill opens the overlay; it closes on Escape or backdrop
     // click. Images render inline, PDFs in an iframe, and text files in a
@@ -512,8 +536,8 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
 
     // Workspace selection
     const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
-    const [selectedWorkspace, setSelectedWorkspace] = useState("");
-    const [destinationWorkspace, setDestinationWorkspace] = useState("");
+    const [selectedWorkspace, setSelectedWorkspace] = useState(defaultWs);
+    const [destinationWorkspace, setDestinationWorkspace] = useState(defaultWs);
     const [loadingWorkspaces, setLoadingWorkspaces] = useState(false);
     // The workspace-picker Menu popover must match the trigger width.
     // Fluent's ``matchTargetSize: 'width'`` is flaky once custom CSS
@@ -581,10 +605,19 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
 
     const history = useHistory();
     const match = useRouteMatch();
+    const { replaceActiveTab } = useEditorTabs();
     const githubToken = sessionStorage.getItem("github_token") || "";
 
-    const urlParams = new URLSearchParams(window.location.search);
-    const defaultWs = urlParams.get("ws") || "";
+    function sessionPathFor(id: string): string {
+        // Fabric may mount this route as an encoded segment such as
+        // "/agent-hub/orchestrator%3Fws%3D...", so regex-replacing
+        // "/orchestrator" can fail. Build the permalink from a stable
+        // agent-hub base instead.
+        const path = history.location.pathname || "";
+        const m = path.match(/\/agent-hub(?:\/|$)/);
+        const base = m ? "/agent-hub" : "/agent-hub";
+        return `${base}/session/${id}${history.location.search || ""}`;
+    }
 
     async function getFabricToken(): Promise<string | undefined> {
         try {
@@ -775,6 +808,10 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
             });
         } catch (e: any) {
             console.warn("Failed to load workspaces:", e);
+            if (defaultWs) {
+                setSelectedWorkspace(prev => prev || defaultWs);
+                setDestinationWorkspace(prev => prev || defaultWs);
+            }
             // Surface the failure so users don't stare at an empty dropdown
             // wondering why they can't pick a workspace.
             const msg = e?.message || String(e) || "Unknown error";
@@ -859,6 +896,11 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
     // to encoded-byte length for text. The backend enforces a matching cap.
     const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10 MB
     const MAX_TOTAL_BYTES = 25 * 1024 * 1024; // 25 MB combined
+
+    function nextAttachmentId() {
+        attachmentIdRef.current += 1;
+        return `attachment-${attachmentIdRef.current}`;
+    }
 
     // ── Recent prompts ────────────────────────────────────────────────
     function toRecentLite(s: any): RecentSessionLite {
@@ -1025,6 +1067,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                         ? new Blob([content]).size
                         : Math.max(0, Math.floor(content.length * 0.75));
                 restored.push({
+                    id: nextAttachmentId(),
                     name: String(a.name || "attachment"),
                     size: approxSize,
                     kind,
@@ -1102,7 +1145,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
             const fabricToken = await getFabricToken();
             const resp = await api.listWorkspaceItems(
                 workspaceId,
-                { githubToken, fabricToken, refresh: opts.refresh },
+                { githubToken, fabricToken, refresh: opts.refresh, agentHubSessionId: runningSessionId || undefined },
             );
             setPreviewWsItems(resp.items);
             setPreviewWsCapturedAt(resp.capturedAt);
@@ -1132,7 +1175,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                 const fabricToken = await getFabricToken();
                 const resp = await api.listWorkspaceItems(
                     previewWorkspace.id,
-                    { githubToken, fabricToken },
+                    { githubToken, fabricToken, agentHubSessionId: runningSessionId || undefined },
                 );
                 if (cancelled) return;
                 setPreviewWsItems(resp.items);
@@ -1151,14 +1194,23 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
     /**
      * Trigger a browser download of the currently previewed attachment.
      *
-     * Works for text/image/pdf by converting the attachment's content
-     * (data-URI or raw text) into a ``Blob`` and driving a programmatic
-     * ``<a download>`` click. Because the blob lives in our own origin,
-     * this survives Fabric's sandboxed iframe: as long as the host frame
-     * grants ``allow-downloads`` (which the Fabric workload host does)
-     * the browser saves the file normally. If the host frame disallows
-     * downloads we fall back to opening the blob in a new tab so the user
-     * can save it from there.
+     * Fabric's iframe sandbox grants ``allow-downloads``, so an in-frame
+     * anchor click with the ``download`` attribute triggers the browser
+     * download manager without needing the host portal's URL allowlist
+     * (which is why ``openBrowserTab`` fails for ``127.0.0.1`` backends).
+     *
+     * Flow:
+     *   1. Mint a short-lived backend URL that serves the bytes with
+     *      ``Content-Disposition: attachment``.
+     *   2. ``fetch`` that URL from inside the iframe (CORS is already
+     *      wired up for every other backend call) and read the body as
+     *      a ``Blob``.
+     *   3. Wrap the blob in an object URL and click a synthetic anchor
+     *      with ``download="<name>"`` — browsers treat this as a native
+     *      download and the sandbox's ``allow-downloads`` flag lets it
+     *      through. Works identically in dev (``127.0.0.1``) and prod.
+     *   4. On failure, fall back to ``openExternalTab`` + manual-URL
+     *      dialog so the user can still retrieve the file.
      */
     async function downloadPreviewAttachment() {
         if (!previewAttachment) return;
@@ -1171,24 +1223,6 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                 : "application/octet-stream");
         console.log("[attachment-download] click", { name, kind: previewAttachment.kind });
 
-        // The Fabric workload iframe sandbox blocks every in-frame save
-        // path (``<a download>``, ``window.open``, ``showSaveFilePicker``
-        // all fail with a SecurityError or silent "allow-downloads not
-        // set" warning). The only path that escapes the sandbox is
-        // ``workloadClient.navigation.openBrowserTab`` — and even that
-        // has an allowlist and refuses URLs outside the workload's
-        // trusted hosts (e.g. ``localhost`` in dev).
-        //
-        // Strategy:
-        //   1. Mint a short-lived backend URL that serves the bytes
-        //      with ``Content-Disposition: attachment`` (works from any
-        //      top-level tab).
-        //   2. Try ``openBrowserTab`` — works in production where the
-        //      backend is on a trusted HTTPS domain.
-        //   3. If Fabric refuses (dev, or any domain not on the
-        //      tenant's allowlist), surface a small "Download ready"
-        //      dialog. The user can copy-paste the URL into a fresh
-        //      browser tab; the browser saves via Content-Disposition.
         let url: string;
         try {
             const fabricToken = await getFabricToken();
@@ -1201,18 +1235,41 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
             return;
         }
 
+        // Preferred path: fetch bytes and trigger an in-frame download
+        // via <a download>. Works regardless of Fabric's host allowlist
+        // because we never navigate — the browser's download manager
+        // consumes the blob URL directly.
         try {
-            const result = await workloadClient.navigation.openBrowserTab({ url });
-            console.log("[attachment-download] openBrowserTab result", result);
-            if (!result?.success) {
-                throw new Error("openBrowserTab returned success=false");
-            }
-            // Success — native download flow is underway.
+            const res = await fetch(url, { credentials: "omit" });
+            if (!res.ok) throw new Error(`download fetch ${res.status}`);
+            const blob = await res.blob();
+            const objectUrl = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = objectUrl;
+            a.download = name;
+            a.rel = "noopener";
+            a.style.display = "none";
+            document.body.appendChild(a);
+            a.click();
+            // Defer cleanup so the browser has committed the download.
+            setTimeout(() => {
+                a.remove();
+                URL.revokeObjectURL(objectUrl);
+            }, 1000);
+            console.log("[attachment-download] blob download dispatched");
             return;
         } catch (e) {
-            console.warn("[attachment-download] openBrowserTab failed, falling back to manual URL", e);
-            setManualDownloadUrl(url);
+            console.warn("[attachment-download] blob path failed, falling back to openBrowserTab:", e);
         }
+
+        // Fallback: let the Fabric host open the URL in a new tab
+        // (requires allowlisted hostname). If that also fails, surface
+        // the manual-URL dialog.
+        const outcome = await openExternalTab(workloadClient, url, {
+            skipClipboard: true,
+            onFallback: (u) => setManualDownloadUrl(u),
+        });
+        console.log("[attachment-download] outcome", outcome);
     }
 
     // Keep the popover anchored to the trigger button as the user scrolls
@@ -1291,9 +1348,21 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
         if (mime === "application/pdf" || name.endsWith(".pdf")) {
             return { kind: "pdf", mime: "application/pdf" };
         }
-        // Anything else — treat as text. Final read-as-text attempt will
-        // surface an error if the file isn't valid UTF-8.
+        if (mime.startsWith("text/")) return { kind: "text", mime };
         return { kind: "text", mime: mime || "text/plain" };
+    }
+
+    function isSupportedAttachmentFile(f: File): boolean {
+        const mime = f.type || "";
+        const name = f.name.toLowerCase();
+        if (mime.startsWith("image/")) return true;
+        if (mime === "application/pdf" || name.endsWith(".pdf")) return true;
+        if (mime.startsWith("text/")) return true;
+        const dot = name.lastIndexOf(".");
+        const ext = dot >= 0 ? name.slice(dot) : "";
+        if (ALLOWED_TEXT_ATTACHMENT_EXTENSIONS.has(ext)) return true;
+        if (mime === "application/json" && ext === ".json") return true;
+        return false;
     }
 
     function readAsDataUrl(f: File): Promise<string> {
@@ -1305,6 +1374,47 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
         });
     }
 
+    /** Build a Blob from an attachment's in-memory ``content`` string
+     *  without touching the network.
+     *
+     *  Supports:
+     *   - ``data:<mime>;base64,…`` URIs (used for images, PDFs)
+     *   - ``data:<mime>,…`` (uri-encoded text variant)
+     *   - plain strings (treated as text/utf-8 content)
+     *
+     *  Runs synchronously so callers can preserve the browser's
+     *  user-activation for a subsequent ``<a download>`` click.
+     *  Returns ``null`` when the input can't be decoded. */
+    function buildBlobSync(src: unknown, mime: string): Blob | null {
+        if (typeof src !== "string") return null;
+        if (!src.startsWith("data:")) {
+            return new Blob([src], { type: mime || "text/plain" });
+        }
+        const commaIdx = src.indexOf(",");
+        if (commaIdx < 0) return null;
+        const meta = src.slice(5, commaIdx); // after "data:"
+        const payload = src.slice(commaIdx + 1);
+        const semi = meta.indexOf(";");
+        const srcMime = (semi >= 0 ? meta.slice(0, semi) : meta) || mime || "application/octet-stream";
+        const isBase64 = /;base64$/i.test(meta);
+        try {
+            if (isBase64) {
+                const binStr = atob(payload);
+                const len = binStr.length;
+                const bytes = new Uint8Array(len);
+                for (let i = 0; i < len; i++) bytes[i] = binStr.charCodeAt(i);
+                return new Blob([bytes], { type: srcMime });
+            }
+            // Non-base64 data URI — payload is percent-encoded text.
+            const text = decodeURIComponent(payload);
+            return new Blob([text], { type: srcMime });
+        } catch (e) {
+            // eslint-disable-next-line no-console
+            console.warn("[attachment-download] data URI decode failed", e);
+            return null;
+        }
+    }
+
     async function handleUploadFile(e: React.ChangeEvent<HTMLInputElement>) {
         const input = e.target;
         const files = Array.from(input.files || []);
@@ -1314,6 +1424,10 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
         const accepted: UiAttachment[] = [];
         let runningTotal = attachedFiles.reduce((acc, a) => acc + a.size, 0);
         for (const f of files) {
+            if (!isSupportedAttachmentFile(f)) {
+                setUploadError(`"${f.name}" is not a supported attachment type. Attach images, PDFs, or text-based files.`);
+                continue;
+            }
             if (f.size > MAX_FILE_BYTES) {
                 setUploadError(`"${f.name}" is ${(f.size / (1024 * 1024)).toFixed(1)} MB — max is ${MAX_FILE_BYTES / (1024 * 1024)} MB per file.`);
                 continue;
@@ -1326,11 +1440,11 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
             try {
                 if (kind === "text") {
                     const content = await f.text();
-                    accepted.push({ name: f.name, size: f.size, kind, mime, content });
+                    accepted.push({ id: nextAttachmentId(), name: f.name, size: f.size, kind, mime, content });
                 } else {
                     const dataUrl = await readAsDataUrl(f);
                     const previewUrl = kind === "image" ? URL.createObjectURL(f) : undefined;
-                    accepted.push({ name: f.name, size: f.size, kind, mime, content: dataUrl, previewUrl });
+                    accepted.push({ id: nextAttachmentId(), name: f.name, size: f.size, kind, mime, content: dataUrl, previewUrl });
                 }
                 runningTotal += f.size;
             } catch {
@@ -1342,13 +1456,15 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
         }
     }
 
-    function removeAttachedFile(name: string) {
+    function removeAttachedFile(id: string) {
         setAttachedFiles(prev => {
-            const target = prev.find(f => f.name === name);
+            const target = prev.find(f => f.id === id);
             if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl);
-            return prev.filter(f => f.name !== name);
+            return prev.filter(f => f.id !== id);
         });
     }
+
+    const promptCountTone = "normal";
 
     // Revoke preview object URLs on unmount.
     useEffect(() => {
@@ -1361,22 +1477,6 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
     // remove-file path already revokes individually.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
-
-    // When a plan arrives, scroll it into view. Uses a short rAF delay so
-    // the section has actually rendered before we measure its position; a
-    // second frame is cheap insurance against layout jank from late-loading
-    // agent avatars / badges. Respects the user's reduced-motion preference.
-    useEffect(() => {
-        if (!plan || !planSectionRef.current) return undefined;
-        const prefersReduced =
-            typeof window !== "undefined" &&
-            window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-        const behavior: ScrollBehavior = prefersReduced ? "auto" : "smooth";
-        const id = window.requestAnimationFrame(() => {
-            planSectionRef.current?.scrollIntoView({ behavior, block: "start" });
-        });
-        return () => window.cancelAnimationFrame(id);
-    }, [plan]);
 
     async function handleGeneratePlan() {
         if (!taskText.trim() || !selectedWorkspace) return;
@@ -1392,11 +1492,8 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
         }
         setPlanning(true);
         setPlanningSnapshot(computePlanInputSignature());
-        setPlanningTaskSnapshot(taskText);
         setError(null);
-        setPlan(null);
-        // Fresh abort controller for this plan request; Edit-task in the
-        // Step 2 loading view can cancel it.
+        // Fresh abort controller for this create-session request.
         planningAbortRef.current?.abort();
         const ctrl = new AbortController();
         planningAbortRef.current = ctrl;
@@ -1416,12 +1513,29 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                 taskText, selectedWorkspace,
                 {
                     workspace_name: wsName,
+                    ...buildPiSessionOrchestrationContext(),
                     destination_workspace: destinationWorkspace,
                     branch_out: branchOut,
                     branch_name: branchOut ? branchName : undefined,
                     destination_workspace_name: branchOut ? childWsName : undefined,
                     require_approvals: requireApprovals,
                     context_items: contextItems,
+                    // Send the items the frontend already cached for the
+                    // destination workspace so the compose LLM can assess
+                    // greenfield vs brownfield without an extra API call.
+                    workspace_items: mentionItemsByWs[selectedWorkspace] ?? undefined,
+                    // Also send items for any non-destination workspaces
+                    // referenced via pills (e.g. @-mentioned workspaces).
+                    referenced_workspace_items: (() => {
+                        const refs: Record<string, typeof mentionItemsByWs[string]> = {};
+                        for (const ci of contextItems) {
+                            if (ci.type === "workspace" && ci.id && ci.id !== selectedWorkspace) {
+                                const items = mentionItemsByWs[ci.id];
+                                if (items) refs[ci.id] = items;
+                            }
+                        }
+                        return Object.keys(refs).length ? refs : undefined;
+                    })(),
                 },
                 { githubToken, fabricToken },
                 apiAttachments,
@@ -1430,8 +1544,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
             );
             // Aborted after a late-arriving response — ignore it.
             if (ctrl.signal.aborted) return;
-            setSessionId(job.id);
-            setPlan(job.plan);
+            setRunningFabricToken(fabricToken);
             // Surface the just-created prompt in the Recent-prompts popover
             // immediately so the user sees their task reflected without
             // having to wait for a list reload. Dedup by id in case a
@@ -1448,59 +1561,29 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
             // persisted entry in the popover.
             setDraftEntry(null);
             setLastRecentPickId(null);
+            const sessionPath = sessionPathFor(job.id);
+            replaceActiveTab({
+                id: `session:${job.id}`,
+                kind: "session",
+                path: sessionPath,
+                title: `Session ${job.id.slice(0, 8)}`,
+                subtitle: job.id,
+            });
+            setRunningSessionJob(job);
+            setRunningSessionId(job.id);
+            void api.runSession(job.id, { githubToken, fabricToken }).catch((runError: any) => {
+                if (ctrl.signal.aborted) return;
+                setError(runError?.message || "Failed to start mission");
+            });
         } catch (e: any) {
-            // User clicked "Edit task" while the plan was being generated —
-            // swallow the abort; cancel handler already reset UI state.
+            // Request was aborted while the mission was being created.
             if (e?.name === "AbortError" || ctrl.signal.aborted) return;
-            setError(e.message || "Plan generation failed");
+            setRunningFabricToken(undefined);
+            setError(e.message || "Failed to start mission");
         } finally {
             if (planningAbortRef.current === ctrl) planningAbortRef.current = null;
             setPlanning(false);
             setPlanningSnapshot(null);
-            setPlanningTaskSnapshot(null);
-        }
-    }
-
-    /**
-     * Cancel Step 2 and return to Step 1 immediately. Works in every
-     * state: while the LLM is still generating the plan (aborts the
-     * fetch), and after the plan has arrived (rejects the session). The
-     * user does not have to wait for the in-flight request to finish.
-     */
-    function handleCancelPlanning() {
-        // Abort any in-flight plan request.
-        planningAbortRef.current?.abort();
-        planningAbortRef.current = null;
-        // Reject the session on the backend (best-effort, fire-and-forget)
-        // if one was already created.
-        if (sessionId) {
-            api.rejectPlan(sessionId, { githubToken }).catch(() => { /* ok */ });
-        }
-        setPlanning(false);
-        setPlanningSnapshot(null);
-        setPlanningTaskSnapshot(null);
-        setPlan(null);
-        setSessionId(null);
-        setError(null);
-    }
-
-    async function handleApprove() {
-        if (!sessionId) return;
-        setApproving(true);
-        try {
-            const fabricToken = await getFabricToken();
-            await api.approvePlan(sessionId, { githubToken, fabricToken });
-            // P5 · Mission Control — single-surface run evolution. Rather
-            // than navigating to the session detail route, flip a local
-            // flag so the same page re-renders the run view in place.
-            // Deep-link permalink at /session/:id still works (via
-            // route rendering), which keeps refresh and bookmarking
-            // behaviour intact.
-            setRunningSessionId(sessionId);
-        } catch (e: any) {
-            setError(e.message || "Failed to start job");
-        } finally {
-            setApproving(false);
         }
     }
 
@@ -1567,7 +1650,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
             const result = await Promise.race<
                 { items: api.WorkspaceItem[] } | { timeout: true }
             >([
-                api.listWorkspaceItems(wsId, { githubToken, fabricToken })
+                api.listWorkspaceItems(wsId, { githubToken, fabricToken, agentHubSessionId: runningSessionId || undefined })
                     .then(r => ({ items: r.items || [] })),
                 new Promise(resolve =>
                     setTimeout(() => resolve({ timeout: true } as const), PER_FETCH_TIMEOUT_MS),
@@ -1588,7 +1671,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
         } finally {
             mentionFetchInFlight.current.delete(wsId);
         }
-    }, []);
+    }, [runningSessionId]);
 
     // Prefetch the selected workspace eagerly — it's the most likely
     // source of mentions and was already doing this historically.
@@ -1901,7 +1984,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
             try {
                 const githubToken = sessionStorage.getItem("github_token") || "";
                 const fabricToken = await getFabricToken();
-                api.warmWorkspaceItems(ws.id, { githubToken, fabricToken });
+                api.warmWorkspaceItems(ws.id, { githubToken, fabricToken, agentHubSessionId: runningSessionId || undefined });
             } catch { /* ignore — best effort */ }
         })();
     }
@@ -2046,21 +2129,24 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
 
     return (
         <div className="compose-page">
-            {/* P5 · Mission Control — single-surface run evolution. After
-                "Approve & run", we render SessionDetailPage inline on the
-                same route so the user never navigates. Deep-linking via
-                /session/:id still renders SessionDetailPage standalone. */}
+            {/* Single-surface run evolution. After the mission starts, render
+                Mission Control inline on the same route so the user never
+                detours through a static team-review screen. */}
             {runningSessionId ? (
                 <MissionControlPage
                     workloadClient={workloadClient}
                     sessionId={runningSessionId}
+                    githubToken={githubToken}
+                    initialFabricToken={runningFabricToken}
                     initialJob={{
-                        task_description: taskText,
-                        workspace_id: selectedWorkspace || undefined,
-                        workspace_name: workspaces.find(w => w.id === selectedWorkspace)?.name || null,
+                        task_description: runningSessionJob?.task_description ?? taskText,
+                        workspace_id: (runningSessionJob?.workspace_id ?? selectedWorkspace) || undefined,
+                        workspace_name: (runningSessionJob?.context?.workspace_name ?? workspaces.find(w => w.id === selectedWorkspace)?.name) || null,
+                        runtime: runningSessionJob?.runtime ?? runningSessionJob?.context?.runtime ?? null,
                         started_at: new Date().toISOString(),
                         status: "running",
-                        context: { context_items: contextItems },
+                        context: runningSessionJob?.context ?? { context_items: contextItems },
+                        composition: runningSessionJob?.composition ?? null,
                     }}
                 />
             ) : null}
@@ -2102,7 +2188,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                                     type="button"
                                     className="compose-search-row"
                                     onClick={() => {
-                                        history.push(match.url.replace(/\/orchestrator$/, `/session/${s.id}`));
+                                        history.push(sessionPathFor(s.id));
                                         setGlobalSearchQuery("");
                                     }}
                                     title={s.prompt}
@@ -2170,7 +2256,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
             <div className="compose-container">
 
                 {/* ── HERO ── */}
-                <section className="compose-hero" style={{ display: (planning || plan) ? "none" : undefined }}>
+                <section className="compose-hero">
                     <div className="compose-hero-icon">
                         <Sparkle24Regular />
                     </div>
@@ -2182,16 +2268,16 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                 </section>
 
                 {/* ── COMPOSER ── */}
-                <section className="composer-wrap" style={{ display: (planning || plan) ? "none" : undefined }}>
+                <section className="composer-wrap">
                     <div className="composer-card">
                         <div className="composer-glow" />
                         <div className="composer-inner">
                             {planning && planningDirty && (
-                                // Shown while the plan is being generated in the background.
+                                // Shown while the mission is being composed and started.
                                 // We intentionally leave the composer editable so the user can
                                 // keep refining their task while they wait — but any edits made
-                                // here won't reach the in-flight plan generator. They'll take
-                                // effect on the next "Propose team" click.
+                                // here won't reach the in-flight mission. They'll take effect
+                                // on the next start.
                                 <div
                                     className="composer-planning-warn"
                                     role="status"
@@ -2199,9 +2285,9 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                                 >
                                     <Warning20Regular />
                                     <span>
-                                        A plan is being generated from your current input. Any
+                                        A mission is being started from your current input. Any
                                         edits you make now <strong>won't be reflected</strong> in
-                                        the in-flight plan — regenerate to apply them.
+                                        the in-flight run — start again to apply them.
                                     </span>
                                 </div>
                             )}
@@ -2222,7 +2308,9 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                                     setLastRecentPickId(null);
                                 }}
                                 onTriggerChange={setMention}
-                                placeholder="Describe what you need done — the orchestrator will plan the steps."
+                                placeholder="Describe what you need done — AgentHub will start the mission."
+                                ariaDescribedBy="composer-task-meta composer-task-error"
+                                ariaInvalid={false}
                             />
                             {/* Floating @-mention popover (fixed position, anchored to caret). */}
                             <MentionPicker
@@ -2249,6 +2337,14 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                                     Type <kbd>@</kbd> to reference a workspace,
                                     Fabric item, or file
                                 </span>
+                            </div>
+                            <div
+                                id="composer-task-meta"
+                                className="composer-task-meta"
+                                data-tone={promptCountTone}
+                                aria-live="polite"
+                            >
+                                <span>{taskText.length.toLocaleString()} characters</span>
                             </div>
 
                             {/* Context pills */}
@@ -2345,7 +2441,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                                         : "ctx-pill--attachment";
                                     return (
                                         <span
-                                            key={f.name}
+                                            key={f.id}
                                             className={`ctx-pill ctx-pill--clickable ${kindClass}`}
                                             title={`${f.name} · ${sizeLabel} · click to preview`}
                                             role="button"
@@ -2375,7 +2471,7 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                                             <button
                                                 type="button"
                                                 className="ctx-pill-close"
-                                                onClick={(e) => { e.stopPropagation(); removeAttachedFile(f.name); }}
+                                                onClick={(e) => { e.stopPropagation(); removeAttachedFile(f.id); }}
                                                 aria-label={`Remove ${f.name}`}
                                             >
                                                 <Dismiss16Regular />
@@ -2712,28 +2808,10 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                                                         target="_blank"
                                                         rel="noopener noreferrer"
                                                         className="workspace-create-openfabric"
-                                                        onClick={(e) => {
-                                                            // Try the workload SDK first (opens in the
-                                                            // host's tab-group without popup-blocker
-                                                            // issues). If it works, prevent the default
-                                                            // anchor navigation. If it throws or the SDK
-                                                            // isn't available, let the browser follow
-                                                            // the href normally — sandboxed iframes with
-                                                            // allow-popups honour target="_blank".
-                                                            try {
-                                                                const p = workloadClient?.navigation?.openBrowserTab?.({
-                                                                    url: "https://app.fabric.microsoft.com/groups/me/list",
-                                                                });
-                                                                if (p && typeof (p as any).then === "function") {
-                                                                    e.preventDefault();
-                                                                    (p as Promise<unknown>).catch(() => {
-                                                                        window.open("https://app.fabric.microsoft.com/groups/me/list", "_blank", "noopener,noreferrer");
-                                                                    });
-                                                                }
-                                                            } catch {
-                                                                /* fall through to default anchor nav */
-                                                            }
-                                                        }}
+                                                        onClick={externalLinkOnClick(
+                                                            workloadClient,
+                                                            "https://app.fabric.microsoft.com/groups/me/list",
+                                                        )}
                                                     >
                                                         Open in Fabric
                                                     </a>
@@ -3287,13 +3365,26 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                                                 <Button
                                                     appearance="subtle"
                                                     size="small"
-                                                    className="composer-model-btn"
-                                                    disabled={planning || composeModels.length === 0}
-                                                    title={effectiveModel ? `Composer model: ${effectiveModel.name}` : "Loading models…"}
+                                                    className={`composer-model-btn${composeModelsLoading ? " composer-model-btn--loading" : ""}`}
+                                                    disabled={planning || composeModelsLoading || composeModels.length === 0}
+                                                    title={
+                                                        composeModelsLoading
+                                                            ? "Loading available models\u2026"
+                                                            : effectiveModel
+                                                                ? `Composer model: ${effectiveModel.name}`
+                                                                : "No compatible models available"
+                                                    }
                                                     iconPosition="after"
-                                                    icon={<ChevronDown16Regular />}
+                                                    icon={composeModelsLoading ? undefined : <ChevronDown16Regular />}
                                                 >
-                                                    {effectiveModel?.name || "Default model"}
+                                                    {composeModelsLoading ? (
+                                                        <span className="composer-model-loading" aria-live="polite">
+                                                            <span className="composer-model-loading-shimmer" aria-hidden="true" />
+                                                            <span className="composer-model-loading-label">Loading models…</span>
+                                                        </span>
+                                                    ) : (
+                                                        effectiveModel?.name || "No models available"
+                                                    )}
                                                 </Button>
                                             </MenuTrigger>
                                             <MenuPopover className="composer-model-menu">
@@ -3356,61 +3447,8 @@ export function OrchestratorPage({ workloadClient }: OrchestratorPageProps) {
                     </div>
                 )}
 
-                {/* ── S2 · PROPOSED TEAM & ORCHESTRATION ──
-                   Step2View renders immediately on "Plan this" (before the
-                   LLM responds) with skeletons, typewriter prompt, and
-                   rotating status labels; once ``plan`` arrives it smoothly
-                   swaps to the real team graph + role cards. */}
-                {(planning || plan) && (
-                    <>
-                        <div ref={planSectionRef}>
-                            <Step2View
-                                task={planningTaskSnapshot || taskText}
-                                plan={plan as Plan | null}
-                                loading={planning && !plan}
-                                running={approving}
-                                workspaceName={branchOut ? (childWsName || wsName) : wsName}
-                                workspaceId={branchOut ? null : (selectedWorkspace || null)}
-                                workspaceItems={contextItems as any}
-                                attachments={attachedFiles as any}
-                                requireApprovals={requireApprovals}
-                                branchOut={branchOut}
-                                branchName={branchOut ? (branchName || null) : null}
-                                sourceWorkspaceName={branchOut ? (wsName || null) : null}
-                                onRun={handleApprove}
-                                onBack={handleCancelPlanning}
-                                error={error}
-                                onRetry={handleGeneratePlan}
-                                onWorkspaceClick={(ws) => {
-                                    if (!ws.id) return;
-                                    setPreviewHighlightItemId(null);
-                                    setPreviewWorkspace({ id: ws.id, name: ws.name });
-                                }}
-                                onItemClick={(item: any) => {
-                                    const typeLower = String(item?.type || "").toLowerCase();
-                                    if (typeLower === "workspace" && item.id) {
-                                        setPreviewHighlightItemId(null);
-                                        setPreviewWorkspace({ id: item.id, name: item.name });
-                                        return;
-                                    }
-                                    if (item?.workspaceId) {
-                                        const wsCtx = contextItems.find(c => c.type === "workspace" && c.id === item.workspaceId);
-                                        const wsMeta = workspaces.find(w => w.id === item.workspaceId);
-                                        setPreviewHighlightItemId(item.id || null);
-                                        setPreviewWorkspace({
-                                            id: item.workspaceId,
-                                            name: wsCtx?.name || wsMeta?.name || "Workspace",
-                                        });
-                                    }
-                                }}
-                                onAttachmentClick={(att: any) => setPreviewAttachment(att)}
-                            />
-                        </div>
-                    </>
-                )}
-
                 {/* ── DISCOVERY & RECOMMENDATIONS ── */}
-                {!plan && !planning && (
+                {!planning && (
                     <section className="discovery-section">
                         <div className="discovery-header">
                             <div className="discovery-title">

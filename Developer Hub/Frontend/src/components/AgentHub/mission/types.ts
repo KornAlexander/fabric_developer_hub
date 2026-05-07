@@ -41,6 +41,7 @@ export interface Composition {
 }
 
 const ARCHITECTURE_TO_PATTERN: Record<string, TeamPattern> = {
+    dynamic: "solo",
     supervisor: "supervisor",
     sequential: "sequential",
     network: "network",
@@ -69,15 +70,21 @@ const HANDOFF_TO_EDGE_KIND: Record<string, TeamEdgeKind> = {
  */
 export function teamFromComposition(c: Composition | null | undefined): Team | null {
     if (!c) return null;
-    const pattern: TeamPattern = ARCHITECTURE_TO_PATTERN[c.architecture] || "supervisor";
+    const pattern: TeamPattern = ARCHITECTURE_TO_PATTERN[c.architecture] || "solo";
     const nodes: TeamNode[] = (c.slots || []).map(s => ({
         id: s.id,
         agent: s.agentId,
         role: s.role,
-        status: s.status === "active" ? "active"
-             : s.status === "done" ? "done"
-             : s.status === "waiting" ? "waiting"
-             : "planned",
+           status: s.status === "active" ? "active"
+               : s.status === "done" ? "done"
+               : s.status === "waiting" ? "waiting"
+               : s.status === "error" ? "failed"
+               : "planned",
+           lifecycle: s.status === "active" ? "running"
+              : s.status === "done" ? "finished"
+              : s.status === "waiting" ? "waiting"
+              : s.status === "error" ? "failed"
+              : "planned",
     }));
     const edges: TeamEdge[] = (c.handoffs || []).map(h => ({
         from: h.from,

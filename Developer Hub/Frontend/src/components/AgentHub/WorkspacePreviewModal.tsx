@@ -54,6 +54,7 @@ import {
     VariableLibrary20Item,
 } from "@fabric-msft/svg-icons";
 import type { WorkloadClientAPI } from "@ms-fabric/workload-client";
+import { openExternalTab } from "./openExternalTab";
 import type { WorkspaceItem } from "../../controller/AgentHubApi";
 
 /**
@@ -274,76 +275,20 @@ export function WorkspacePreviewModal(props: WorkspacePreviewModalProps) {
 
     // Open the Fabric portal URL in a new browser tab.
     //
-    // The workload iframe is sandboxed WITHOUT ``allow-popups``, so a
-    // plain-left-click on ``<a target="_blank">`` is blocked by the
-    // browser. Ctrl/Cmd/middle-click still works because Chromium
-    // routes those through its "open in new tab" UI bypass — we can't
-    // simulate those modifiers programmatically (browsers reject
-    // synthetic ``ctrlKey`` on untrusted ``MouseEvent``s for security).
-    //
-    // Strategy for plain-left-click:
-    //   1. Try ``workloadClient.navigation.openBrowserTab`` — the
-    //      host-level SDK API that can escape the sandbox.
-    //   2. If the SDK resolves with ``success=false`` (e.g. Fabric's
-    //      URL allowlist rejected it), retry without the ``experience``
-    //      query param, which commonly trips the allowlist.
-    //   3. If both fail, fall back to ``window.open`` (will also be
-    //      blocked by the sandbox — but some host configs permit it).
-    //   4. As last resort show a banner with the URL so the user can
-    //      copy it or Ctrl-click it into a new tab manually.
-    async function tryOpen(url: string): Promise<boolean> {
-        const sdk = workloadClient?.navigation?.openBrowserTab;
-        if (typeof sdk !== "function") return false;
-        try {
-            // eslint-disable-next-line no-console
-            console.log("[WorkspacePreview] openBrowserTab →", url);
-            const res = await sdk.call(workloadClient!.navigation, { url });
-            // eslint-disable-next-line no-console
-            console.log("[WorkspacePreview] openBrowserTab result", res);
-            return !!(res && (res as { success?: boolean }).success);
-        } catch (err) {
-            // eslint-disable-next-line no-console
-            console.warn("[WorkspacePreview] openBrowserTab threw", err);
-            return false;
-        }
-    }
+    // Delegates to the shared ``openExternalTab`` helper which handles
+    // the SDK call, the ``experience`` param retry, the ``window.open``
+    // fallback, and the clipboard copy. If every automatic path fails
+    // we surface the URL in the banner below so the user can copy it
+    // or Ctrl/Cmd-click it into a new tab manually.
     async function openInNewTab(rawUrl: string): Promise<void> {
+        const outcome = await openExternalTab(workloadClient, rawUrl, {
+            onFallback: (url) => {
+                setFallbackUrl(url);
+                setFallbackCopied(false);
+            },
+        });
         // eslint-disable-next-line no-console
-        console.log("[WorkspacePreview] openInNewTab click", rawUrl);
-        try { await navigator.clipboard.writeText(rawUrl); } catch { /* no-op */ }
-
-        // Attempt 1: full URL through the SDK.
-        if (await tryOpen(rawUrl)) return;
-
-        // Attempt 2: strip ``experience`` param, which Fabric's host
-        // allowlist often rejects.
-        let stripped = rawUrl;
-        try {
-            const u = new URL(rawUrl);
-            if (u.searchParams.has("experience")) {
-                u.searchParams.delete("experience");
-                stripped = u.toString();
-                if (stripped !== rawUrl && await tryOpen(stripped)) return;
-            }
-        } catch { /* ignore */ }
-
-        // Attempt 3: native ``window.open`` — usually blocked but cheap
-        // to try (some hosts permit it with ``noopener``).
-        try {
-            // eslint-disable-next-line no-console
-            console.log("[WorkspacePreview] trying window.open");
-            const w = window.open(rawUrl, "_blank", "noopener,noreferrer");
-            if (w) return;
-        } catch (err) {
-            // eslint-disable-next-line no-console
-            console.warn("[WorkspacePreview] window.open threw", err);
-        }
-
-        // Last resort: show the fallback banner.
-        // eslint-disable-next-line no-console
-        console.warn("[WorkspacePreview] all open paths failed — showing fallback banner");
-        setFallbackUrl(rawUrl);
-        setFallbackCopied(false);
+        console.log("[WorkspacePreview] openInNewTab outcome", outcome, rawUrl);
     }
 
     // Fabric auto-creates a ``SQLAnalyticsEndpoint`` (a.k.a.

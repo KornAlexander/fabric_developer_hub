@@ -32,6 +32,9 @@ _WORKSPACE_ID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
 _AGENT_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_\-]{0,63}$")
+_TARGET_AGENT_ID_RE = re.compile(
+    r"^(?:[A-Za-z][A-Za-z0-9_\-]{0,127}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$"
+)
 
 # ── Enums ────────────────────────────────────────────────────────────
 
@@ -73,6 +76,37 @@ class MessageType(enum.StrEnum):
 
 # ── Agent Templates ──────────────────────────────────────────────────
 
+class AgentBoundaries(BaseModel):
+    """Structured ownership boundaries for an agent.
+
+    Lives on :class:`AgentTemplate` and drives the composer prompt
+    deterministically. The composer renders these fields into the
+    "Boundary matrix" prompt section so adding a new agent requires
+    only registering its boundaries — no prompt string edits.
+
+    Fields are intentionally lists (not free text): prose variations
+    across agents were a major source of cross-LLM compose variance
+    before this refactor.
+
+    * ``owns``           — exclusive responsibilities.
+    * ``does_not_own``   — responsibilities the LLM often confuses
+                           this agent with; each entry may end with
+                           ``" -> <other-agent-id>"`` to tell the
+                           composer where to route instead.
+    * ``hands_off_to``   — agent ids this agent typically delegates
+                           to next (prose hint for sequencing).
+    * ``pick_when``      — user-task sentences that select this agent.
+    * ``skip_when``      — user-task situations where this agent is
+                           NOT a fit and should be omitted.
+    """
+
+    owns: list[str] = Field(default_factory=list)
+    does_not_own: list[str] = Field(default_factory=list)
+    hands_off_to: list[str] = Field(default_factory=list)
+    pick_when: list[str] = Field(default_factory=list)
+    skip_when: list[str] = Field(default_factory=list)
+
+
 class AgentTemplate(BaseModel):
     id: str
     name: str
@@ -90,6 +124,12 @@ class AgentTemplate(BaseModel):
     default_access_level: str = "read"
     icon: str | None = None
     version: str = "1.0.0"
+    # Structured composer-facing metadata. Optional: agents without
+    # boundaries defined fall back to a description-only render in
+    # the compose prompt (legacy path). New agents should always set
+    # boundaries so the composer picks deterministically.
+    boundaries: AgentBoundaries | None = None
+    is_internal: bool = False
 
 
 class UserAgentConfig(BaseModel):
@@ -287,15 +327,39 @@ class ApprovePlanRequest(BaseModel):
 
 class SendMessageRequest(BaseModel):
     message: str = Field(min_length=1, max_length=_MAX_MESSAGE_LEN)
-    target_agent_id: str | None = Field(default=None, max_length=64)
+    target_agent_id: str | None = Field(default=None, max_length=128)
+    mode: str = Field(default="queue", pattern="^(queue|interrupt)$")
 
     @field_validator("target_agent_id")
     @classmethod
     def _validate_agent_id(cls, v: str | None) -> str | None:
         if v is None:
             return v
-        if not _AGENT_ID_RE.match(v):
+        if not _TARGET_AGENT_ID_RE.match(v):
             raise ValueError("target_agent_id has an invalid format")
+        return v
+
+
+class AddAgentRequest(BaseModel):
+    """Body for ``POST /api/sessions/{id}/agents``.
+
+    Drives the Orchestrator's team-orchestration capability: attach a
+    new agent to a running job on demand. ``agent_id`` must reference
+    a registered :class:`AgentTemplate` (e.g. ``fabric-admin``).
+    ``goal`` is optional — when omitted the engine synthesises one
+    from the job task + ``role`` + template skills, matching the path
+    used by ``start_job``.
+    """
+
+    agent_id: str = Field(min_length=1, max_length=64)
+    role: str = Field(min_length=1, max_length=160)
+    goal: str | None = Field(default=None, max_length=_MAX_MESSAGE_LEN)
+
+    @field_validator("agent_id")
+    @classmethod
+    def _validate_agent_id(cls, v: str) -> str:
+        if not _AGENT_ID_RE.match(v):
+            raise ValueError("agent_id has an invalid format")
         return v
 
 

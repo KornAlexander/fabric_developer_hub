@@ -13,10 +13,12 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from services.agenthub._db import connect as _connect
+from services.logging_categories import log_extra
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +105,7 @@ def get_cached(user_id: str) -> tuple[list[CachedWorkspace], datetime | None]:
 
     Returns ``([], None)`` when the cache is empty.
     """
+    started = time.monotonic()
     conn = _connect()
     try:
         rows = conn.execute(
@@ -115,6 +118,12 @@ def get_cached(user_id: str) -> tuple[list[CachedWorkspace], datetime | None]:
     finally:
         conn.close()
     if not rows:
+        logger.info(
+            "[WORKSPACE-CACHE] get user=%s count=0 newest=None elapsed=%.3fs",
+            user_id[:12],
+            time.monotonic() - started,
+            extra=log_extra("detailed"),
+        )
         return [], None
     items = [
         CachedWorkspace(
@@ -130,6 +139,16 @@ def get_cached(user_id: str) -> tuple[list[CachedWorkspace], datetime | None]:
         for r in rows
     ]
     newest = max(item.cached_at for item in items)
+    git_known = sum(1 for item in items if item.git_connected is not None)
+    logger.info(
+        "[WORKSPACE-CACHE] get user=%s count=%d newest=%s git_known=%d elapsed=%.3fs",
+        user_id[:12],
+        len(items),
+        newest.isoformat(),
+        git_known,
+        time.monotonic() - started,
+        extra=log_extra("detailed"),
+    )
     return items, newest
 
 
@@ -157,6 +176,7 @@ def reconcile(user_id: str, fresh: list[dict], user_upn: str | None = None) -> R
     ``user_upn`` is stored for human readability only; all lookups remain
     keyed on ``user_id``.
     """
+    started = time.monotonic()
     now = datetime.now(UTC).isoformat()
     fresh_by_id = {w["id"]: w["name"] for w in fresh if w.get("id")}
 
@@ -219,11 +239,18 @@ def reconcile(user_id: str, fresh: list[dict], user_upn: str | None = None) -> R
         updated=len(to_update),
         deleted=len(to_delete),
     )
-    if result.inserted or result.updated or result.deleted:
-        logger.info(
-            "Workspace cache reconcile for user=%s: +%d / ~%d / -%d",
-            user_id, result.inserted, result.updated, result.deleted,
-        )
+    logger.info(
+        "[WORKSPACE-CACHE] reconcile user=%s fresh=%d existing=%d inserted=%d updated=%d touched=%d deleted=%d elapsed=%.3fs",
+        user_id[:12],
+        len(fresh_by_id),
+        len(existing),
+        result.inserted,
+        result.updated,
+        len(to_touch),
+        result.deleted,
+        time.monotonic() - started,
+        extra=log_extra("high_level" if result.inserted or result.updated or result.deleted else "detailed"),
+    )
     return result
 
 
@@ -254,6 +281,7 @@ def update_git_status(
     was probed and is genuinely not git-connected (vs. "never probed"
     which is NULL).
     """
+    started = time.monotonic()
     now = datetime.now(UTC).isoformat()
     conn = _connect()
     try:
@@ -265,5 +293,15 @@ def update_git_status(
             (1 if connected else 0, provider, branch, repo_name, now, user_id, workspace_id),
         )
         conn.commit()
+        logger.info(
+            "[WORKSPACE-CACHE] git_status user=%s workspace=%s connected=%s provider=%s branch=%s elapsed=%.3fs",
+            user_id[:12],
+            workspace_id[:8],
+            connected,
+            provider or "-",
+            branch or "-",
+            time.monotonic() - started,
+            extra=log_extra("detailed"),
+        )
     finally:
         conn.close()

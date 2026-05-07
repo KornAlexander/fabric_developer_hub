@@ -101,4 +101,5 @@ def install_fake_client(monkeypatch: pytest.MonkeyPatch, module: Any, fake: Fake
 def fabric_token_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Inject the per-request tokens that MCP tools read from os.environ."""
     monkeypatch.setenv("FABRIC_API_TOKEN", "fake-fabric-token")
+    monkeypatch.setenv("POWERBI_API_TOKEN", "fake-powerbi-token")
     monkeypatch.setenv("ONELAKE_TOKEN", "fake-onelake-token")

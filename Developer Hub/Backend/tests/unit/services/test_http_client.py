@@ -146,6 +146,70 @@ async def test_put_empty_string_sends_empty_body() -> None:
         svc._closed = True
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method_name", "content", "expected_content", "expected_content_type"),
+    [
+        ("put", None, b"", None),
+        ("put", b"raw", b"raw", None),
+        ("put", {"x": 1}, b'{"x":1}', "application/json"),
+        ("post", "hello", b"hello", None),
+        ("patch", {"x": 1}, b'{"x":1}', "application/json"),
+        ("patch", b"raw", b"raw", "application/octet-stream"),
+        ("patch", "hello", b"hello", None),
+    ],
+)
+async def test_content_helpers_shape_request_bodies(
+    method_name: str,
+    content,
+    expected_content: bytes,
+    expected_content_type: str | None,
+) -> None:
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["content"] = request.content
+        captured["content_type"] = request.headers.get("content-type")
+        return httpx.Response(200)
+
+    svc = HttpClientService()
+    await svc._client.aclose()
+    svc._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    try:
+        method = getattr(svc, method_name)
+        if method_name == "patch" and isinstance(content, bytes):
+            await method("https://api.test/x", content, "t", content_type="application/octet-stream")
+        else:
+            await method("https://api.test/x", content, "t")
+
+        assert captured["content"] == expected_content
+        if expected_content_type:
+            assert captured["content_type"] == expected_content_type
+    finally:
+        await svc._client.aclose()
+        svc._closed = True
+
+
+@pytest.mark.asyncio
+async def test_delete_and_head_delegate_to_make_request() -> None:
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.method)
+        return httpx.Response(200)
+
+    svc = HttpClientService()
+    await svc._client.aclose()
+    svc._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    try:
+        await svc.delete("https://api.test/x", token="t")
+        await svc.head("https://api.test/x", token="t")
+        assert seen == ["DELETE", "HEAD"]
+    finally:
+        await svc._client.aclose()
+        svc._closed = True
+
+
 async def _no_op() -> None:
     """Awaitable used to monkeypatch asyncio.sleep to a no-op."""
     return None

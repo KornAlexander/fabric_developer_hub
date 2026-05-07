@@ -17,6 +17,7 @@ import {
 import type { Plan, Team, TeamNode, TeamPattern } from "./plan/types";
 import { TaskPromptRecap } from "./TaskPromptRecap";
 import { OrchCanvas, naturalCanvasSize, agentKind, agentIcon, formatRole } from "./team/OrchCanvas";
+import { visibleTeam } from "./team/teamVisibility";
 import { CompareArchitecturesModal } from "./CompareArchitecturesModal";
 
 /**
@@ -159,8 +160,8 @@ function useCanvasFit(
 const PATTERN_META: Record<TeamPattern, { label: string; headline: (n: number) => string; subtitle: string }> = {
     supervisor: {
         label: "Supervisor pattern",
-        headline: (n) => n <= 1 ? "A single orchestrator." : `A supervisor with ${n - 1} specialist${n - 1 === 1 ? "" : "s"}.`,
-        subtitle: "One orchestrator coordinates the domain agents. Regenerate, swap agents, or inspect any node before anything runs.",
+        headline: (n) => n <= 1 ? "A focused specialist." : `A coordinated team of ${n} specialist${n === 1 ? "" : "s"}.`,
+        subtitle: "Specialists stay visible; lifecycle, recovery, and routing are coordinated behind the scenes.",
     },
     sequential: {
         label: "Sequential pipeline",
@@ -185,7 +186,7 @@ const PATTERN_META: Record<TeamPattern, { label: string; headline: (n: number) =
     mixed: {
         label: "Mixed architecture",
         headline: (n) => `A composed team of ${n} agents.`,
-        subtitle: "A top-level supervisor delegates to sub-teams that each use the pattern that fits their sub-task.",
+        subtitle: "Specialist sub-teams use the pattern that fits each sub-task, with internal orchestration handling routing and recovery.",
     },
 };
 
@@ -211,6 +212,14 @@ export interface Step2ViewProps {
     branchOut?: boolean;
     branchName?: string | null;
     sourceWorkspaceName?: string | null;
+    /** Display name of the compose model the user picked in Step 1
+     *  (e.g. ``"GPT-4.1"``). Surfaced in the task-prompt recap so the
+     *  model stays visible through planning and review. */
+    modelName?: string | null;
+    /** ``true`` when the chosen model is the composer's top pick. */
+    modelTopPick?: boolean;
+    /** ``true`` when the chosen model is in the recommended tier. */
+    modelRecommended?: boolean;
     onRun: () => void;
     onBack: () => void;
     /** Called when the user picks a different architecture from the
@@ -239,6 +248,9 @@ export function Step2View({
     branchOut,
     branchName,
     sourceWorkspaceName,
+    modelName,
+    modelTopPick,
+    modelRecommended,
     onRun,
     onBack,
     onRegenerateAs,
@@ -290,10 +302,78 @@ export function Step2View({
     // the canvas at the floor and let the wrapper scroll horizontally —
     // panning beats scaling on small viewports.
     const canvasWrapRef = useRef<HTMLDivElement | null>(null);
-    const team: Team | null = plan?.team ?? null;
+    const rawTeam: Team | null = plan?.team ? visibleTeam(plan.team) : null;
+
+    // Resolve workspace GUIDs appearing in node role strings to their
+    // human-readable names before rendering. The backend sometimes
+    // composes roles like "Configure the default Spark pool on
+    // workspace 9e460dd1-…" — raw GUIDs are unreadable on a card,
+    // so we substitute the destination-workspace name when the GUID
+    // matches, names for any added context workspaces, and fall back
+    // to a short "<last-8>…" form for truly unknown ids. Memoised so
+    // node identity stays stable across re-renders (prevents canvas
+    // relayout on hover, etc.).
+    const workspaceNameById = useMemo(() => {
+        const map = new Map<string, string>();
+        if (workspaceId && workspaceName) {
+            map.set(workspaceId.toLowerCase(), workspaceName);
+        }
+        (workspaceItems || []).forEach((it: any) => {
+            const typeLower = String(it?.itemType || it?.type || "").toLowerCase();
+            if (!typeLower.includes("workspace")) return;
+            const id = String(it?.id || "").toLowerCase();
+            const name = it?.displayName || it?.name;
+            if (id && name) map.set(id, name);
+        });
+        return map;
+    }, [workspaceId, workspaceName, workspaceItems]);
+
+    const humanizeRoleText = useMemo(() => {
+        // 36-char canonical UUID form. Matches anywhere in the role
+        // text (with or without a preceding "workspace " word).
+        const UUID_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
+        return (raw: string): string => {
+            if (!raw) return raw;
+            return raw.replace(UUID_RE, (guid) => {
+                const hit = workspaceNameById.get(guid.toLowerCase());
+                if (hit) return `"${hit}"`;
+                // Unknown workspace — keep a compact reference the
+                // user can still correlate, without blowing up the
+                // card width. "…def84" reads as a short reference.
+                return `"…${guid.slice(-8)}"`;
+            });
+        };
+    }, [workspaceNameById]);
+
+    const team: Team | null = useMemo(() => {
+        if (!rawTeam) return null;
+        const anyNeedsRewrite = rawTeam.nodes.some(n =>
+            /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i.test(n.role || "")
+        );
+        if (!anyNeedsRewrite) return rawTeam;
+        return {
+            ...rawTeam,
+            nodes: rawTeam.nodes.map(n => ({ ...n, role: humanizeRoleText(n.role) })),
+        };
+    }, [rawTeam, humanizeRoleText]);
+    // Shared hover/focus state for cross-highlighting between the
+    // graph nodes and the sidebar role cards. Hovering a node in
+    // either surface lights up the matching peer in the other.
+    const [hoveredAgentId, setHoveredAgentId] = useState<string | null>(null);
     const pattern = (team?.pattern || "supervisor") as TeamPattern;
     const meta = PATTERN_META[pattern] || PATTERN_META.supervisor;
     const agentCount = team?.nodes.length || 0;
+    const workerCount = team ? Math.max(0, team.nodes.length - 1) : 0;
+    // Count unique unordered endpoint pairs rather than raw edges, so
+    // a delegate (A→B) + report (B→A) round-trip reports as ONE
+    // connection — matching what the canvas actually renders after
+    // OrchCanvas merges round-trip edges into a single curve.
+    const connectionCount = useMemo(() => {
+        if (!team) return 0;
+        const seen = new Set<string>();
+        for (const e of team.edges) seen.add([e.from, e.to].sort().join("↔"));
+        return seen.size;
+    }, [team]);
     const naturalSize = useMemo(
         () => team ? naturalCanvasSize(team) : { width: CANVAS_NATURAL_FLOOR, height: 420 },
         [team],
@@ -328,9 +408,73 @@ export function Step2View({
     const [userZoom, setUserZoom] = useState(1);
     const [pan, setPan] = useState<{ x: number; y: number } | null>(null);
     const canvasScrollRef = useRef<HTMLDivElement | null>(null);
-    const effectiveScale = scale * userZoom;
+    const canvasInnerRef = useRef<HTMLDivElement | null>(null);
+    // Actual rendered content height (pre-transform). Measured after
+    // mount because nodes with many selected skills, long roles, or
+    // wrapped summaries render much taller than the static
+    // ``NODE_CONTENT_H`` budget baked into ``naturalCanvasSize``. We
+    // use this true height so the initial fit-to-view centers on the
+    // real bounding box instead of clipping rows.
+    const [measuredH, setMeasuredH] = useState<number>(naturalSize.height);
+    // Observed viewport height — ``useCanvasFit`` measures width, but
+    // fit-to-view must consider both axes or a tall hierarchical tree
+    // overflows the top of the stage when the width-fit scale is too
+    // generous. We keep a separate observer tied to the same element
+    // so ``scale`` and ``measuredH`` combine into a true "fit" below.
+    const [measuredViewportH, setMeasuredViewportH] = useState<number>(0);
+    useLayoutEffect(() => {
+        const el = canvasScrollRef.current;
+        if (!el) return undefined;
+        const read = () => setMeasuredViewportH(el.clientHeight);
+        read();
+        const ro = new ResizeObserver(read);
+        ro.observe(el);
+        return () => ro.disconnect();
+    }, []);
+    useLayoutEffect(() => {
+        const el = canvasInnerRef.current;
+        if (!el) return undefined;
+        // The ``.mc-canvas`` box inside carries an explicit height from
+        // the layout math (based on static ``NODE_CONTENT_H``), but
+        // absolutely-positioned node children can render well past
+        // that — long roles, many highlighted skill chips, or wrapped
+        // summaries commonly push nodes from the 188px budget to
+        // 260–360px. We scan the node children and take the max
+        // bottom edge so fit-to-view is based on what the user can
+        // actually see, not what the layout thinks it drew.
+        const read = () => {
+            let maxBottom = el.offsetHeight;
+            const nodes = el.querySelectorAll<HTMLElement>(".mc-node");
+            nodes.forEach((n) => {
+                const bottom = n.offsetTop + n.offsetHeight;
+                if (bottom > maxBottom) maxBottom = bottom;
+            });
+            // Add a small bottom gutter so the last row doesn't butt
+            // the viewport edge on initial fit.
+            setMeasuredH(Math.max(naturalSize.height, maxBottom + 24));
+        };
+        read();
+        const ro = new ResizeObserver(read);
+        ro.observe(el);
+        el.querySelectorAll<HTMLElement>(".mc-node").forEach((n) => ro.observe(n));
+        return () => ro.disconnect();
+    }, [naturalSize.height, team]);
+    // Height-aware fit correction. ``scale`` from ``useCanvasFit`` only
+    // considers width, so a hierarchical tree — taller than wide —
+    // overflowed the top of the stage at the default zoom, clipping
+    // the root node. We multiply in a "height fit" ratio when the
+    // content would overflow vertically at ``scale``, so the
+    // effective fit scale honours both axes.
+    const heightFitMultiplier = useMemo(() => {
+        if (!measuredViewportH || measuredH <= 0 || scale <= 0) return 1;
+        const displayH = measuredH * scale;
+        if (displayH <= measuredViewportH) return 1;
+        return measuredViewportH / displayH;
+    }, [measuredH, scale, measuredViewportH]);
+    const autoFitScale = scale * heightFitMultiplier;
+    const effectiveScale = autoFitScale * userZoom;
     const effectiveDisplayW = canvasWidth * effectiveScale;
-    const effectiveDisplayH = naturalSize.height * effectiveScale;
+    const effectiveDisplayH = measuredH * effectiveScale;
     const isInteractive = userZoom !== 1 || scrolls;
 
     // Initial/recenter pan — whenever the viewport size, the natural
@@ -347,7 +491,7 @@ export function Step2View({
         const cy = (vh - effectiveDisplayH) / 2;
         setPan({ x: cx, y: cy });
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [canvasWidth, naturalSize.height, scale]);
+    }, [canvasWidth, measuredH, autoFitScale]);
     // (effectiveDisplayW/H are derived from the above — no need to add.)
 
     /** Zoom while keeping ``focal`` (in viewport-local px) stationary
@@ -362,8 +506,8 @@ export function Step2View({
             const nextZ = Math.max(USER_ZOOM_MIN, Math.min(USER_ZOOM_MAX, z + delta));
             const rounded = Math.round(nextZ * 100) / 100;
             if (rounded === z) return z;
-            const prevEff = scale * z;
-            const nextEff = scale * rounded;
+            const prevEff = autoFitScale * z;
+            const nextEff = autoFitScale * rounded;
             const r = nextEff / prevEff;
             setPan((p) => {
                 const px = p ? p.x : 0;
@@ -383,8 +527,8 @@ export function Step2View({
         setUserZoom(1);
         const el = canvasScrollRef.current;
         if (el) {
-            const fitW = canvasWidth * scale;
-            const fitH = naturalSize.height * scale;
+            const fitW = canvasWidth * autoFitScale;
+            const fitH = measuredH * autoFitScale;
             setPan({
                 x: (el.clientWidth - fitW) / 2,
                 y: (el.clientHeight - fitH) / 2,
@@ -421,9 +565,10 @@ export function Step2View({
 
     // Click-drag panning — mutates the transform pan directly so the
     // cursor stays glued to the world point under it while dragging.
+    // Always enabled so users can grab-and-drag at any zoom level.
     useEffect(() => {
         const el = canvasScrollRef.current;
-        if (!el || !isInteractive) return undefined;
+        if (!el) return undefined;
         let down = false;
         let startX = 0, startY = 0, startPan = { x: 0, y: 0 };
         const onDown = (e: MouseEvent) => {
@@ -453,7 +598,7 @@ export function Step2View({
             window.removeEventListener("mousemove", onMove);
             window.removeEventListener("mouseup", onUp);
         };
-    }, [isInteractive, pan]);
+    }, [pan]);
 
     // "Compare architectures" modal state.
     const [compareOpen, setCompareOpen] = useState(false);
@@ -472,9 +617,7 @@ export function Step2View({
         ? LOADING_STATUSES[statusIndex]
         : meta.subtitle;
 
-    const orchestrator = team?.nodes.find((n) => n.id === "orchestrator") || team?.nodes[0];
-    const workers = team ? team.nodes.filter((n) => n.id !== orchestrator?.id) : [];
-    const orderedRoles = orchestrator && team ? [orchestrator, ...workers] : [];
+    const orderedRoles = team?.nodes ?? [];
 
     return (
         <section className="mc-review mc-step2" aria-labelledby="mc-step2-title" aria-busy={loading}>
@@ -498,6 +641,35 @@ export function Step2View({
                     <p className="mc-review__subtitle mc-step2__subtitle" key={subtitle}>
                         {subtitle}
                     </p>
+                    {/* "Planning with / Planned by" attribution — tells
+                       the user which LLM composed this team. Lives in
+                       the header (not the task-prompt recap) because
+                       the model is an authoring artefact of the plan,
+                       not part of the user's task input.
+
+                       Design notes: no leading icon (the eyebrow above
+                       already owns the sparkle treatment) and no
+                       uppercase label (competes with the eyebrow as a
+                       third hierarchy tier). Plain sentence-case reads
+                       as a natural continuation of the subtitle. */}
+                    {modelName && (
+                        <div
+                            className="mc-step2__attribution"
+                            title={
+                                loading || !team
+                                    ? `Planning this team with ${modelName}${modelTopPick ? " (recommended for this task)" : ""}`
+                                    : `This plan was composed by ${modelName}${modelTopPick ? " (recommended for this task)" : ""}`
+                            }
+                        >
+                            <span className="mc-step2__attribution-prefix">
+                                {loading || !team ? "Planning with" : "Planned by"}
+                            </span>
+                            <span className="mc-step2__attribution-model">{modelName}</span>
+                            {modelTopPick && (
+                                <span className="mc-step2__attribution-badge">Recommended</span>
+                            )}
+                        </div>
+                    )}
                 </div>
                 <div className="mc-review__actions">
                     <button
@@ -573,7 +745,7 @@ export function Step2View({
                             )}
                             <span className="mc-section-meta">
                                 {team
-                                    ? `${agentCount} agent${agentCount === 1 ? "" : "s"} · ${team.edges.length} connection${team.edges.length === 1 ? "" : "s"}`
+                                    ? `${agentCount} agent${agentCount === 1 ? "" : "s"} · ${connectionCount} connection${connectionCount === 1 ? "" : "s"}`
                                     : null}
                             </span>
                         </div>
@@ -635,9 +807,12 @@ export function Step2View({
                         {team ? (
                             <div
                                 className="mc-canvas-fit__inner"
+                                ref={canvasInnerRef}
                                 style={{
                                     width: canvasWidth,
-                                    height: naturalSize.height,
+                                    /* No explicit height — let the
+                                       stage size to its real content
+                                       so offsetHeight reads true. */
                                     transform: `translate(${pan?.x || 0}px, ${pan?.y || 0}px) scale(${effectiveScale})`,
                                     transformOrigin: "0 0",
                                 }}
@@ -646,6 +821,8 @@ export function Step2View({
                                     team={team}
                                     showLegend={false}
                                     canvasWidth={canvasWidth}
+                                    activeAgentId={hoveredAgentId}
+                                    onNodeHover={setHoveredAgentId}
                                 />
                             </div>
                         ) : (
@@ -661,9 +838,6 @@ export function Step2View({
 
                 <aside className="mc-sidebar">
                     <div>
-                        <div className="mc-sidebar__eyebrow">
-                            {(t("Review_Eyebrow") || "Agents in this run")}
-                        </div>
                         <h3 className="mc-section-title mc-sidebar__h2">
                             {t("Review_Roles") || "Roles & handoffs"}
                         </h3>
@@ -679,9 +853,18 @@ export function Step2View({
                             ? Array.from({ length: 4 }).map((_, i) => <RoleCardSkeleton key={i} delay={i * 120} />)
                             : orderedRoles.map((n) => {
                                 const kind = agentKind(n.agent, n.id);
-                                const summary = n.summary || roleSummary(n, team, workers.length);
+                                const summary = n.summary || roleSummary(n, team, workerCount);
                                 return (
-                                <article key={n.id} className="mc-role-card mc-slide-up">
+                                <article
+                                    key={n.id}
+                                    className="mc-role-card mc-slide-up"
+                                    data-active={hoveredAgentId === n.id ? "true" : undefined}
+                                    onMouseEnter={() => setHoveredAgentId(n.id)}
+                                    onMouseLeave={() => setHoveredAgentId(null)}
+                                    onFocus={() => setHoveredAgentId(n.id)}
+                                    onBlur={() => setHoveredAgentId(null)}
+                                    tabIndex={0}
+                                >
                                     <div className="mc-role-card__head">
                                         <span className="mc-role-card__icon" data-agent={kind} aria-hidden="true">
                                             {agentIcon(kind)}
@@ -733,6 +916,7 @@ export function Step2View({
                     team={team}
                     meta={meta}
                     agentCount={agentCount}
+                    connectionCount={connectionCount}
                     onClose={() => setFullscreenOpen(false)}
                 />
             )}
@@ -743,34 +927,68 @@ export function Step2View({
 /* ── Helpers & skeletons ─────────────────────────────────────── */
 
 /**
- * Render a natural-language blurb describing what an agent does in the
- * current run — the paragraph shown under each role card in the
- * Step 2 sidebar. When the backend supplies ``TeamNode.summary`` we
- * use that directly; this fallback keeps the design-accurate prose
- * shape even for legacy plans that don't include a summary.
+ * Render a one-liner describing the agent's **connections and skills**
+ * — the information that the graph shows visually but the sidebar
+ * expresses in words.
+ *
+ * The role card header already shows the role text (what the agent
+ * does), so the summary must NOT repeat it. Instead it answers:
+ *   "Who feeds this agent? What does it hand off to? What skills?"
  */
 function roleSummary(node: TeamNode, team: Team | null, workerCount: number): string {
     if (!team) return "";
-    const isOrchestrator = node.id === "orchestrator";
-    if (isOrchestrator) {
-        const n = Math.max(1, workerCount);
-        const workstreams = n === 1 ? "the workstream" : `${n} workstreams`;
-        return `Splits the task into ${workstreams}, delegates each, and gates approvals to you.`;
-    }
+
+    // Incoming edges (who sends work to this agent)
+    const inbound = team.edges
+        .filter((e) => e.to === node.id)
+        .map((e) => {
+            const src = team.nodes.find((x) => x.id === e.from);
+            return { agent: src?.agent || e.from, kind: e.kind };
+        });
+
+    // Outgoing edges (who this agent hands off to)
     const outbound = team.edges
-        .filter((e) => e.from === node.id && e.kind !== "report")
-        .map((e) => team.nodes.find((x) => x.id === e.to)?.agent)
-        .filter((x): x is string => Boolean(x));
-    // Normalize the role text: backend often supplies it in uppercase
-    // with a trailing period (display-friendly for the node card's
-    // eyebrow line, but awkward when spliced into a sentence). Strip
-    // both so we produce "Handles transform the data, then hands off…"
-    // instead of "Handles TRANSFORM THE DATA. for this run."
-    const role = node.role.toLowerCase().replace(/[.!?\s]+$/, "").trim();
-    const handoffClause = outbound.length > 0
-        ? `, then hands off to ${outbound.join(" and ")}.`
-        : ".";
-    return `Handles ${role}${handoffClause}`;
+        .filter((e) => e.from === node.id)
+        .map((e) => {
+            const tgt = team.nodes.find((x) => x.id === e.to);
+            return { agent: tgt?.agent || e.to, kind: e.kind };
+        });
+
+    // Skills selected for this slot
+    const skills = node.skills || [];
+
+    const parts: string[] = [];
+
+    // Connection description
+    const receivesFrom = inbound.filter((e) => e.kind === "delegate" || e.kind === "report");
+    if (receivesFrom.length > 0) {
+        parts.push(`Receives from ${receivesFrom.map((e) => e.agent).join(", ")}`);
+    }
+    const handsTo = outbound.filter((e) => e.kind !== "report");
+    const reportsTo = outbound.filter((e) => e.kind === "report");
+    if (handsTo.length > 0) {
+        parts.push(`hands off to ${handsTo.map((e) => e.agent).join(", ")}`);
+    }
+    if (reportsTo.length > 0) {
+        parts.push(`reports to ${reportsTo.map((e) => e.agent).join(", ")}`);
+    }
+    if (inbound.length === 0 && outbound.length === 0) {
+        parts.push("Works independently");
+    }
+
+    // Skills line (only if we have selected skills)
+    if (skills.length > 0) {
+        const MAX_SHOW = 3;
+        const shown = skills.slice(0, MAX_SHOW).join(", ");
+        const overflow = skills.length > MAX_SHOW ? ` +${skills.length - MAX_SHOW} more` : "";
+        parts.push(`using ${shown}${overflow}`);
+    }
+
+    if (parts.length === 0) return "";
+
+    // Join: first part capitalised, rest lower, end with period
+    const sentence = parts.join("; ");
+    return sentence.charAt(0).toUpperCase() + sentence.slice(1) + ".";
 }
 
 function RoleCardSkeleton({ delay = 0 }: { delay?: number }) {
@@ -794,6 +1012,8 @@ function CanvasSkeleton({ canvasWidth }: { canvasWidth: number }) {
     const W = canvasWidth;
     const H = 480;
     const NODE_W = 200;
+    const NODE_H = 56;            // skeleton node: 10px pad + 32px avatar + 10px pad + border
+    const orchY = 40;
     const orchX = (W - NODE_W) / 2;
     const workerY = 320;
     const gutter = 32;
@@ -806,7 +1026,7 @@ function CanvasSkeleton({ canvasWidth }: { canvasWidth: number }) {
                 <svg className="mc-canvas__edges" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" aria-hidden="true">
                     {workerXs.map((wx, i) => {
                         const x1 = orchX + NODE_W / 2;
-                        const y1 = 40 + 110;
+                        const y1 = orchY + NODE_H;
                         const x2 = wx + NODE_W / 2;
                         const y2 = workerY;
                         const midY = (y1 + y2) / 2;
@@ -820,7 +1040,7 @@ function CanvasSkeleton({ canvasWidth }: { canvasWidth: number }) {
                         );
                     })}
                 </svg>
-                <div className="mc-node mc-node--skeleton" data-state="planned" style={{ left: orchX, top: 40, width: NODE_W }}>
+                <div className="mc-node mc-node--skeleton" data-state="planned" style={{ left: orchX, top: orchY, width: NODE_W }}>
                     <div className="mc-node__head">
                         <span className="mc-skeleton mc-skeleton--avatar" />
                         <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4 }}>
@@ -864,16 +1084,19 @@ function TeamCompositionFullscreen({
     team,
     meta,
     agentCount,
+    connectionCount,
     onClose,
 }: {
     team: Team;
     meta: { label: string };
     agentCount: number;
+    connectionCount: number;
     onClose: () => void;
 }) {
     const { t } = useTranslation();
     const natural = useMemo(() => naturalCanvasSize(team), [team]);
     const wrapRef = useRef<HTMLDivElement | null>(null);
+    const innerRef = useRef<HTMLDivElement | null>(null);
     // Auto-fit on open; then the user can zoom freely.
     const [containerSize, setContainerSize] = useState({ w: natural.width, h: natural.height });
     useLayoutEffect(() => {
@@ -885,9 +1108,40 @@ function TeamCompositionFullscreen({
         ro.observe(el);
         return () => ro.disconnect();
     }, []);
+    // Measured content bounds — nodes can render significantly taller
+    // than the static ``NODE_CONTENT_H`` budget because of multi-line
+    // roles, multiple selected skill chips, and wrapped descriptions.
+    // Using the max ``offsetTop + offsetHeight`` of any rendered node
+    // gives us the true content bottom so fit-to-view centers on
+    // what the user sees (not on the layout's internal guess).
+    const [contentSize, setContentSize] = useState({ w: natural.width, h: natural.height });
+    useLayoutEffect(() => {
+        const el = innerRef.current;
+        if (!el) return undefined;
+        const read = () => {
+            let maxBottom = el.offsetHeight;
+            let maxRight = el.offsetWidth;
+            const nodes = el.querySelectorAll<HTMLElement>(".mc-node");
+            nodes.forEach((n) => {
+                const bottom = n.offsetTop + n.offsetHeight;
+                const right = n.offsetLeft + n.offsetWidth;
+                if (bottom > maxBottom) maxBottom = bottom;
+                if (right > maxRight) maxRight = right;
+            });
+            setContentSize({
+                w: Math.max(natural.width, maxRight + 24),
+                h: Math.max(natural.height, maxBottom + 24),
+            });
+        };
+        read();
+        const ro = new ResizeObserver(read);
+        ro.observe(el);
+        el.querySelectorAll<HTMLElement>(".mc-node").forEach((n) => ro.observe(n));
+        return () => ro.disconnect();
+    }, [natural.width, natural.height, team]);
     const fitScale = useMemo(() => {
-        const sW = containerSize.w / natural.width;
-        const sH = containerSize.h / natural.height;
+        const sW = containerSize.w / contentSize.w;
+        const sH = containerSize.h / contentSize.h;
         // Never upscale past natural in the fullscreen view — the
         // purpose is to *fit* the graph, not stretch it onto a 4K
         // monitor. Users who want zoom-in can still push the
@@ -896,7 +1150,7 @@ function TeamCompositionFullscreen({
         // butting against the stage edges (the user wants a
         // "image-1-style" centered look by default).
         return Math.min(0.9, Math.max(0.3, Math.min(sW, sH)));
-    }, [containerSize, natural]);
+    }, [containerSize, contentSize]);
     const [userZoom, setUserZoom] = useState(1);
     const [pan, setPan] = useState<{ x: number; y: number } | null>(null);
     const effective = fitScale * userZoom;
@@ -905,14 +1159,14 @@ function TeamCompositionFullscreen({
     // pan/zoom is preserved (deps list intentionally excludes userZoom).
     useLayoutEffect(() => {
         if (!containerSize.w || !containerSize.h) return;
-        const w = natural.width * fitScale;
-        const h = natural.height * fitScale;
+        const w = contentSize.w * fitScale;
+        const h = contentSize.h * fitScale;
         setPan({
             x: (containerSize.w - w) / 2,
             y: (containerSize.h - h) / 2,
         });
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [containerSize.w, containerSize.h, natural.width, natural.height, fitScale]);
+    }, [containerSize.w, containerSize.h, contentSize.w, contentSize.h, fitScale]);
 
     /** Cursor-anchored zoom via single transform. */
     const zoomAt = (delta: number, focal: { x: number; y: number } | null) => {
@@ -935,8 +1189,8 @@ function TeamCompositionFullscreen({
     const resetZoom = () => {
         setUserZoom(1);
         setPan({
-            x: (containerSize.w - natural.width * fitScale) / 2,
-            y: (containerSize.h - natural.height * fitScale) / 2,
+            x: (containerSize.w - contentSize.w * fitScale) / 2,
+            y: (containerSize.h - contentSize.h * fitScale) / 2,
         });
     };
 
@@ -1021,7 +1275,7 @@ function TeamCompositionFullscreen({
                         <span>{t("Review_TeamComposition") || "Team composition"}</span>
                         <span className="mc-pill mc-pill--planned" style={{ marginLeft: 8 }}>{meta.label}</span>
                         <span className="mc-section-meta" style={{ marginLeft: 8 }}>
-                            {`${agentCount} agent${agentCount === 1 ? "" : "s"} · ${team.edges.length} connection${team.edges.length === 1 ? "" : "s"}`}
+                            {`${agentCount} agent${agentCount === 1 ? "" : "s"} · ${connectionCount} connection${connectionCount === 1 ? "" : "s"}`}
                         </span>
                     </span>
                     <div className="workspace-preview-head-actions">
@@ -1074,9 +1328,12 @@ function TeamCompositionFullscreen({
                 >
                     <div
                         className="mc-canvas-fit__inner"
+                        ref={innerRef}
                         style={{
                             width: natural.width,
-                            height: natural.height,
+                            /* No explicit height — measuredH picks up
+                               the real rendered bottom so fit-to-view
+                               centers on the true bounding box. */
                             transform: `translate(${pan?.x || 0}px, ${pan?.y || 0}px) scale(${effective})`,
                             transformOrigin: "0 0",
                         }}

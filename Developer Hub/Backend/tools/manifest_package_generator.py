@@ -36,7 +36,7 @@ class ManifestPackageGenerator:
         self.version = version
         self.build_config = build_config
         self.manifest_dir = self.project_root / "manifest"
-        self.frontend_package_dir = self.project_root.parent.parent / "Frontend" / "Package"
+        self.frontend_package_dir = self._resolve_frontend_package_dir()
 
         # Validate project structure
         if not self.manifest_dir.exists():
@@ -54,6 +54,18 @@ class ManifestPackageGenerator:
         else:
             self.nuspec_file = self.manifest_dir / "ManifestPackageDebug.nuspec"
             self.package_id = "ManifestPackage"
+
+    def _resolve_frontend_package_dir(self) -> Path:
+        """Return the mounted/frontend Package directory for host and container builds."""
+        candidates = [
+            self.project_root.parent / "Frontend" / "Package",
+            self.project_root.parent.parent / "Frontend" / "Package",
+            Path("/Frontend/Package"),
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        return candidates[0]
 
     def validate_source_files(self) -> bool:
         """Validate that all required source files exist."""
@@ -407,6 +419,19 @@ class ManifestPackageGenerator:
     # Placeholders in the manifest templates that must be supplied via env vars.
     REQUIRED_ENV_PLACEHOLDERS = ("WORKLOAD_NAME", "CLIENT_ID", "AUDIENCE")
 
+    # Optional placeholders with built-in defaults. Set these in
+    # ``Developer Hub/.env`` to register real (HTTPS) workload origins
+    # with Fabric's openBrowserTab allowlist.
+    #
+    # Fabric rejects ``http://`` for any non-Microsoft origin, so dev
+    # scenarios that want ``openBrowserTab`` to work (e.g. attachment
+    # downloads that mint a backend URL) need the workload backend to be
+    # reachable over HTTPS and declared here.
+    OPTIONAL_ENV_DEFAULTS = {
+        "WORKLOAD_BACKEND_URL": "https://be.endpointurl.net/workload",
+        "WORKLOAD_FRONTEND_URL": "https://fe.endpointurl.net",
+    }
+
     def substitute_env_placeholders(self, xml_path: Path) -> None:
         """Replace ${VAR} placeholders in an XML file with values from os.environ.
 
@@ -424,8 +449,12 @@ class ManifestPackageGenerator:
                 f"Developer Hub/.env): {', '.join(missing)}"
             )
 
+        # Layer env vars on top of our defaults so templates still render
+        # when operators haven't overridden the optional endpoints.
+        merged_env = {**self.OPTIONAL_ENV_DEFAULTS, **os.environ}
+
         content = xml_path.read_text(encoding="utf-8")
-        rendered = string.Template(content).safe_substitute(os.environ)
+        rendered = string.Template(content).safe_substitute(merged_env)
         xml_path.write_text(rendered, encoding="utf-8")
         print(f"✅ Substituted env placeholders in {xml_path.name}")
 

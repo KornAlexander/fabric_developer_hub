@@ -160,6 +160,12 @@ class TestManifestPackageGenerator:
         assert "BE/AgentHubItem.xml" in names, (
             f"missing BE/AgentHubItem.xml; got {sorted(names)}"
         )
+        assert "FE/Product.json" in names, (
+            f"missing FE/Product.json; Fabric cannot render the workload create cards. got {sorted(names)}"
+        )
+        assert "FE/AgentHubItem.json" in names, (
+            f"missing FE/AgentHubItem.json; Fabric cannot open created workload items. got {sorted(names)}"
+        )
         # No stray .nuspec — that would make DevGateway reject the package.
         assert not any(n.endswith(".nuspec") for n in names), (
             "Fabric rejects packages that contain .nuspec entries"

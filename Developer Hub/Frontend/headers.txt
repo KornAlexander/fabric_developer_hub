@@ -1,0 +1,13 @@
+HTTP/2 200 
+cache-control: no-store, must-revalidate, no-cache
+pragma: no-cache
+content-type: application/pdf
+strict-transport-security: max-age=31536000; includeSubDomains
+x-frame-options: deny
+x-content-type-options: nosniff
+requestid: a0d04e78-3909-4489-96da-9b4743beca32
+access-control-expose-headers: RequestId
+request-redirected: true
+home-cluster-uri: https://wabi-west-us3-a-primary-redirect.analysis.windows.net/
+date: Mon, 27 Apr 2026 16:43:37 GMT
+

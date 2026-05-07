@@ -13,7 +13,7 @@ from services.agenthub.catalog_loader import (
 
 def test_default_catalog_loads_and_matches_known_shape() -> None:
     """REGRESSION: the bundled catalog.yaml must load cleanly and
-    contain the 15 skills and 7 agents the redesign is built around.
+    contain the 33 skills and 7 public agents the redesign is built around.
 
     Guards against accidental deletions / typos in the YAML file that
     would only surface at boot time otherwise.
@@ -23,13 +23,23 @@ def test_default_catalog_loads_and_matches_known_shape() -> None:
     # Spot-check the count so future additions don't slip through
     # unnoticed — bump this number when you deliberately add a skill.
     # Current: 10 from skills-for-fabric + 3 unique from
-    # AnalyticsPlatformAgents + 1 Fabric Local MCP docs grounding = 14.
-    assert len(skills) == 14
+    # AnalyticsPlatformAgents + 1 Fabric Local MCP docs grounding
+    # + 1 team-orchestration (coordinator-plane) + 1 verification
+    # super skill + 1 Fabric Remote Core MCP skill + 8 cross-cutting
+    # utility skills (time / sequential-thinking / web-research /
+    # code-execution / workspace-shell / azure-management /
+    # powerbi-modeling / powerbi-design) + 3 full-surface operational
+    # skills (fabric-admin-operations / powerbi-governance-remediation /
+    # pbir-advanced-tools) + 3 explicit diagnostic skills
+    # (fabric-powerbi-diagnostics / azure-diagnostics /
+    # entra-identity-diagnostics) + 2 official docs/Azure MCP grounding
+    # skills (microsoft-docs / azure-mcp-guidance) = 33.
+    assert len(skills) == 33
     assert len(agent_skills) == 7
 
     expected_agents = {
         "fabric-admin", "fabric-app-dev", "fabric-data-engineer",
-        "architect", "modeler", "creator", "orchestrator",
+        "architect", "modeler", "creator", "fabric-verifier",
     }
     assert set(agent_skills.keys()) == expected_agents
 
@@ -38,6 +48,45 @@ def test_default_catalog_loads_and_matches_known_shape() -> None:
     assert "fabric-api-docs" in skills
     for agent in ("fabric-app-dev", "fabric-data-engineer", "architect", "modeler"):
         assert "fabric-api-docs" in agent_skills[agent]
+
+    assert "fabric-remote-core" in skills
+    assert "list_workspaces" in skills["fabric-remote-core"].tools
+    assert "get_item_definition" in skills["fabric-remote-core"].tools
+    for agent in (
+        "fabric-admin", "fabric-app-dev", "fabric-data-engineer",
+        "architect", "modeler", "fabric-verifier",
+    ):
+        assert "fabric-remote-core" in agent_skills[agent]
+
+    assert "team-orchestration" in skills
+    # team-orchestration is intentionally tool-less (control plane).
+    assert skills["team-orchestration"].tools == []
+    assert "fabric-verification" in skills
+    assert "fabric_verify_workspace_inventory_solution" in skills["fabric-verification"].tools
+    assert "browser_verify_visual_render" in skills["fabric-verification"].tools
+    assert agent_skills["fabric-verifier"][0] == "fabric-verification"
+    assert "fabric-powerbi-diagnostics" in skills
+    assert "fabric_diagnose_workspace_artifacts" in skills["fabric-powerbi-diagnostics"].tools
+    assert "azure-diagnostics" in skills
+    assert "azure_diagnose_resource" in skills["azure-diagnostics"].tools
+    assert "microsoft-docs" in skills
+    assert skills["microsoft-docs"].tools == [
+        "microsoft_docs_search",
+        "microsoft_docs_fetch",
+        "microsoft_code_sample_search",
+    ]
+    for agent in agent_skills:
+        assert "microsoft-docs" in agent_skills[agent]
+    assert "azure-mcp-guidance" in skills
+    assert skills["azure-mcp-guidance"].tools == [
+        "get_azure_bestpractices_get",
+        "get_azure_bestpractices_ai_app",
+    ]
+    for agent in ("fabric-admin", "fabric-app-dev", "architect", "fabric-verifier"):
+        assert "azure-mcp-guidance" in agent_skills[agent]
+    assert "entra-identity-diagnostics" in skills
+    assert "entra_token_diagnostics" in skills["entra-identity-diagnostics"].tools
+    assert "entra_diagnose_principal_access" in skills["entra-identity-diagnostics"].tools
 
 
 def test_every_skill_agent_reference_resolves() -> None:

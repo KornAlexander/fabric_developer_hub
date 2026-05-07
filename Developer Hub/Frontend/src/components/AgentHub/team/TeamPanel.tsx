@@ -12,9 +12,10 @@ import {
 import type { Team, TeamPattern } from "../plan/types";
 import { TeamStrip } from "./TeamStrip";
 import { OrchCanvas } from "./OrchCanvas";
+import { visibleTeam } from "./teamVisibility";
 
 /**
- * Collapsible panel that surfaces the proposed orchestration graph on
+ * Collapsible panel that surfaces the proposed visible-agent graph on
  * the run page. Default state: compact ``TeamStrip`` (one line). When
  * expanded, the full ``OrchCanvas`` is revealed, height-capped at
  * ``min(520px, 42vh)`` with internal scroll so the live log underneath
@@ -41,9 +42,12 @@ export function TeamPanel({
 }: TeamPanelProps) {
     const { t } = useTranslation();
     const [expanded, setExpanded] = useState(false);
+    const displayTeam = visibleTeam(team);
 
-    const agentCount = team.nodes.length;
-    const patternLabel = t(PATTERN_KEYS[team.pattern] || PATTERN_KEYS.supervisor);
+    if (displayTeam.nodes.length === 0) return null;
+
+    const agentCount = displayTeam.nodes.length;
+    const patternLabel = t(PATTERN_KEYS[displayTeam.pattern] || PATTERN_KEYS.supervisor);
 
     return (
         <section className={`team-panel ${expanded ? "team-panel--open" : ""}`}>
@@ -74,9 +78,9 @@ export function TeamPanel({
                 className="team-panel__body"
             >
                 {expanded ? (
-                    <OrchCanvas team={team} activeAgentId={activeAgentId} />
+                    <OrchCanvas team={displayTeam} activeAgentId={activeAgentId} />
                 ) : (
-                    <TeamStrip team={team} activeAgentId={activeAgentId} />
+                    <TeamStrip team={displayTeam} activeAgentId={activeAgentId} />
                 )}
             </div>
         </section>

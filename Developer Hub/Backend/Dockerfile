@@ -35,14 +35,18 @@ FROM python:3.13-slim AS production
 
 WORKDIR /app
 
-# Node.js + npm are needed so the backend can spawn the ``fabric-docs``
-# MCP server via ``npx -y @microsoft/fabric-mcp`` (see
-# ``src/mcp_servers.json``). Without them the server fails to start
-# with ``No such file or directory: 'npx'`` and the 6 ``docs_*`` tools
-# are unavailable (the capability validator logs this as a WARNING).
-# Debian's ``nodejs`` package ships a current-enough Node for npx.
+# Runtime MCP servers may use uvx (for official Python reference
+# servers such as mcp-server-time). Keep it available in production
+# without installing the full build toolchain.
+COPY --from=uv /uv /uvx /usr/local/bin/
+
+# Node.js + npm are needed so the backend can spawn Node-based MCP helpers.
+# ``chromium`` + globally available ``playwright-core`` let the
+# browser-visual verifier capture screenshots without downloading a browser at
+# tool-call time.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends nodejs npm \
+    && apt-get install -y --no-install-recommends nodejs npm chromium \
+    && npm install -g playwright-core \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the resolved venv.
@@ -57,6 +61,8 @@ USER appuser
 
 ENV PYTHON_ENVIRONMENT=Production \
     PYTHONPATH=/app \
+    NODE_PATH=/usr/local/lib/node_modules \
+    BROWSER_VISUAL_CHROMIUM_EXECUTABLE=/usr/bin/chromium \
     PATH="/app/.venv/bin:$PATH"
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
@@ -65,3 +71,16 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
 EXPOSE 5000
 
 CMD ["python3", "src/main.py"]
+
+
+# ── MCP runtime: per-mission sidecar HTTP service ───────────────────
+# Built separately so dynamically spawned MCP sidecars are not named as
+# backend containers. The dependency base is intentionally shared in dev:
+# MCP servers need the same Python package, uvx, Node/npm, and Chromium
+# helpers that the backend validates at startup.
+FROM production AS mcp-runtime
+
+HEALTHCHECK NONE
+EXPOSE 8765
+
+CMD ["python3", "-m", "services.mcp.mission_runtime_service"]

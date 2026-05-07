@@ -209,7 +209,7 @@ def _iter_blocks(text: str, kind: str):
         # `column` matches inside `tableColumns` / `relatedColumnDetails`?
         # Filter: must be a real header line (no preceding non-whitespace).
         indent_str = m.group(1)
-        if "(" in ln:
+        if kind != "measure" and "(" in ln:
             # `relatedColumnDetails(column ...)` etc — skip
             continue
         name = m.group(3) if kind != "relationship" else m.group(2)

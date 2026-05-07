@@ -25,6 +25,7 @@ import {
     DismissCircle16Filled,
     ErrorCircle16Filled,
     MoreVertical20Regular,
+    ShieldCheckmark20Regular,
     Warning20Regular,
     Play16Regular,
     ArrowClockwise16Regular,
@@ -39,12 +40,32 @@ import { WorkloadClientAPI } from "@ms-fabric/workload-client";
 import * as api from "../../controller/AgentHubApi";
 import { getFabricTokenCached } from "../../controller/AgentHubController";
 import { useItemContext } from "./ItemContext";
-import { readPreloaded, setPreloaded } from "./pagePreloadCache";
+import { getPending, readPreloaded, setPreloaded } from "./pagePreloadCache";
 import { useSearch } from "./SearchContext";
 import { fuzzyMatches } from "./fuzzySearch";
 
 interface DashboardPageProps {
     workloadClient: WorkloadClientAPI;
+}
+
+interface SessionsPreloadPayload {
+    rows: any[];
+    summary: api.SessionSummary | null;
+    hasMore: boolean;
+}
+
+function normalizeSessionsPreload(payload: SessionsPreloadPayload | any[] | undefined | null): SessionsPreloadPayload | null {
+    if (Array.isArray(payload)) {
+        return { rows: payload, summary: null, hasMore: false };
+    }
+    if (payload && Array.isArray(payload.rows)) {
+        return {
+            rows: payload.rows,
+            summary: payload.summary ?? null,
+            hasMore: payload.hasMore ?? false,
+        };
+    }
+    return null;
 }
 
 type CardTone = "primary" | "secondary" | "error";
@@ -86,12 +107,59 @@ function statusLabel(status: string): string {
     return status.charAt(0).toUpperCase() + status.slice(1);
 }
 
+function stripSessionsLeaf(path: string): string {
+    const cleaned = path.replace(/\/(home|sessions)\/?$/, "");
+    return cleaned || "/agent-hub";
+}
+
+export function dashboardSessionPath(basePath: string, sessionId: string): string {
+    return `${stripSessionsLeaf(basePath)}/session/${sessionId}`;
+}
+
+export function dashboardNewSessionPath(basePath: string): string {
+    return `${stripSessionsLeaf(basePath)}/orchestrator`;
+}
+
+export function computeDashboardCounts(jobs: any[], summary: api.SessionSummary | null) {
+    const RUNNING_STATUSES = ["running", "executing"];
+    const WAITING_STATUSES = ["planned", "approved", "queued", "waiting", "generating_plan"];
+    const ERROR_STATUSES = ["failed", "error"];
+    const COMPLETED_STATUSES = ["completed", "cancelled"];
+
+    const activeJobs = jobs.filter(j => [...RUNNING_STATUSES, ...WAITING_STATUSES, ...ERROR_STATUSES].includes(j.status));
+    const completedJobs = jobs.filter(j => COMPLETED_STATUSES.includes(j.status));
+
+    const runningCount = summary?.running ?? jobs.filter(j => RUNNING_STATUSES.includes(j.status)).length;
+    const waitingCount = summary?.waiting ?? jobs.filter(j => WAITING_STATUSES.includes(j.status)).length;
+    const errorCount = summary?.failed ?? jobs.filter(j => ERROR_STATUSES.includes(j.status)).length;
+    const activeTotal = summary?.active_total ?? (runningCount + waitingCount + errorCount);
+    const historyTotal = summary?.history_total ?? completedJobs.length;
+    const totalSessions = summary?.total ?? jobs.length;
+
+    return {
+        runningCount,
+        waitingCount,
+        errorCount,
+        activeTotal,
+        historyTotal,
+        totalSessions,
+        activeJobs,
+        completedJobs,
+    };
+}
+
 export function DashboardPage({ workloadClient }: DashboardPageProps) {
     // If navTo() prefetched the session list before route-changing, use it
     // directly so the page mounts fully populated with no skeleton flicker.
-    const preloaded = readPreloaded<any[]>("sessions");
-    const [jobs, setJobs] = useState<any[]>(preloaded ?? []);
-    const [loading, setLoading] = useState(preloaded === undefined);
+    const preloaded = readPreloaded<SessionsPreloadPayload | any[]>("sessions");
+    const preloadedRows = Array.isArray(preloaded) ? preloaded : preloaded?.rows;
+    const preloadedSummary = Array.isArray(preloaded) ? null : preloaded?.summary ?? null;
+    const preloadedHasMore = Array.isArray(preloaded) ? false : preloaded?.hasMore ?? false;
+    const [jobs, setJobs] = useState<any[]>(preloadedRows ?? []);
+    const [summary, setSummary] = useState<api.SessionSummary | null>(preloadedSummary);
+    const [loading, setLoading] = useState(preloadedRows === undefined);
+    const [syncingMore, setSyncingMore] = useState(false);
+    const [hasMoreSessions, setHasMoreSessions] = useState(preloadedHasMore);
     const [slowLoading, setSlowLoading] = useState(false);
     const [loadError, setLoadError] = useState<string | null>(null);
     const [creating, setCreating] = useState(false);
@@ -107,6 +175,11 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
     const { itemObjectId, workspaceObjectId, createItem } = useItemContext();
 
     const githubToken = sessionStorage.getItem("github_token") || "";
+    const PAGE_SIZE = 50;
+
+    function cacheSessions(rows: any[], nextSummary: api.SessionSummary | null, nextHasMore: boolean) {
+        setPreloaded("sessions", { rows, summary: nextSummary, hasMore: nextHasMore });
+    }
 
     useEffect(() => {
         // If we already have preloaded data, skip the initial fetch.
@@ -118,9 +191,26 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
     async function loadJobs() {
         setLoading(true);
         setSlowLoading(false);
+        setSyncingMore(false);
         setLoadError(null);
         const slowTimer = window.setTimeout(() => setSlowLoading(true), 1200);
         try {
+            const pending = getPending<SessionsPreloadPayload | any[]>("sessions");
+            if (pending) {
+                try {
+                    const pendingPayload = normalizeSessionsPreload(await pending);
+                    if (pendingPayload) {
+                        setSummary(pendingPayload.summary);
+                        setJobs(pendingPayload.rows);
+                        setHasMoreSessions(pendingPayload.hasMore);
+                        cacheSessions(pendingPayload.rows, pendingPayload.summary, pendingPayload.hasMore);
+                        return;
+                    }
+                } catch {
+                    // Fall through to the normal page-owned fetch below.
+                }
+            }
+
             // Need the Fabric token so the backend can identify the user by
             // UPN (same key sessions were written under). Without it the
             // backend falls back to an Authorization hash and returns nothing.
@@ -130,9 +220,17 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
             } catch (e) {
                 console.warn("Could not acquire Fabric token for sessions list:", e);
             }
-            const data = await api.listSessions({ githubToken, fabricToken });
-            setJobs(data || []);
-            setPreloaded("sessions", data || []);
+            const [summaryData, firstPage] = await Promise.all([
+                api.getSessionSummary({ githubToken, fabricToken }),
+                api.listSessions({ githubToken, fabricToken }, undefined, { limit: PAGE_SIZE, offset: 0 }),
+            ]);
+
+            const baseRows = firstPage || [];
+            const hasMore = baseRows.length >= PAGE_SIZE && (summaryData?.total ?? baseRows.length) > baseRows.length;
+            setSummary(summaryData || null);
+            setJobs(baseRows);
+            setHasMoreSessions(hasMore);
+            cacheSessions(baseRows, summaryData || null, hasMore);
         } catch (e: any) {
             console.error("Failed to load jobs:", e);
             // Surface the error instead of silently showing an empty state —
@@ -146,6 +244,7 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
                     ? "Can't reach the Developer Hub backend. Check that it's running, then retry."
                     : `Failed to load sessions: ${msg}`,
             );
+            setSummary(null);
             setJobs([]);
         } finally {
             window.clearTimeout(slowTimer);
@@ -154,11 +253,45 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
         }
     }
 
-    const activeJobs = jobs.filter(j => ["running", "approved", "planned", "waiting"].includes(j.status));
-    const completedJobs = jobs.filter(j => ["completed", "failed", "cancelled"].includes(j.status));
-    const runningCount = jobs.filter(j => j.status === "running").length;
-    const waitingCount = jobs.filter(j => ["planned", "approved", "waiting"].includes(j.status)).length;
-    const errorCount = jobs.filter(j => ["failed", "error"].includes(j.status)).length;
+    async function loadMoreJobs() {
+        if (syncingMore || !hasMoreSessions) return;
+        setSyncingMore(true);
+        try {
+            let fabricToken: string | undefined;
+            try {
+                const tok = await callAuthAcquireAccessToken(workloadClient, undefined);
+                fabricToken = tok?.token;
+            } catch (e) {
+                console.warn("Could not acquire Fabric token for more sessions:", e);
+            }
+            const page: any[] = await api.listSessions(
+                { githubToken, fabricToken },
+                undefined,
+                { limit: PAGE_SIZE, offset: jobs.length },
+            );
+            const nextRows = [...jobs, ...(page || [])];
+            const nextHasMore = (page || []).length >= PAGE_SIZE && (summary?.total ?? Number.POSITIVE_INFINITY) > nextRows.length;
+            setJobs(nextRows);
+            setHasMoreSessions(nextHasMore);
+            cacheSessions(nextRows, summary, nextHasMore);
+        } catch (e: any) {
+            console.error("Failed to load older sessions:", e);
+            window.alert(`Could not load older sessions: ${e?.message || e}`);
+        } finally {
+            setSyncingMore(false);
+        }
+    }
+
+    const {
+        runningCount,
+        waitingCount,
+        errorCount,
+        activeTotal,
+        historyTotal,
+        totalSessions,
+        activeJobs,
+        completedJobs,
+    } = computeDashboardCounts(jobs, summary);
 
     // ── Topbar search: filter sessions by task / plan / attachment filename ──
     const { query: searchQuery } = useSearch();
@@ -225,11 +358,11 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
     const activeRemaining = Math.max(0, filteredActiveJobs.length - activeRenderLimit);
 
     function gotoSession(sessionId: string) {
-        history.push(match.url.replace(/\/home$/, `/session/${sessionId}`));
+        history.push(dashboardSessionPath(match.url, sessionId));
     }
 
     function gotoNew() {
-        history.push(match.url.replace(/\/home$/, "/orchestrator"));
+        history.push(dashboardNewSessionPath(match.url));
     }
 
     async function dismissSession(job: any) {
@@ -265,7 +398,7 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
                 : j,
         );
         setJobs(optimistic);
-        setPreloaded("sessions", optimistic);
+        cacheSessions(optimistic, summary, hasMoreSessions);
 
         try {
             let fabricToken: string | undefined;
@@ -277,7 +410,7 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
         } catch (e: any) {
             console.error("Failed to cancel session:", e);
             setJobs(snapshot);
-            setPreloaded("sessions", snapshot);
+            cacheSessions(snapshot, summary, hasMoreSessions);
             window.alert(`Could not cancel session: ${e?.message || e}`);
         } finally {
             setCancelBusy(false);
@@ -316,7 +449,7 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
             <div className="sessions-kpis" role="group" aria-label="Session summary">
                 <div className="sessions-kpi">
                     <div className="sessions-kpi-label">Total</div>
-                    <div className="sessions-kpi-value">{loading ? "—" : jobs.length}</div>
+                    <div className="sessions-kpi-value">{loading ? "—" : totalSessions}</div>
                 </div>
                 <div className={`sessions-kpi sessions-kpi--running${runningCount > 0 ? " is-active" : ""}`}>
                     <div className="sessions-kpi-label">
@@ -334,7 +467,9 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
                 </div>
                 <div className={`sessions-kpi sessions-kpi--error${errorCount > 0 ? " is-active" : ""}`}>
                     <div className="sessions-kpi-label">
-                        <Warning20Regular aria-hidden="true" />
+                        {errorCount > 0
+                            ? <Warning20Regular aria-hidden="true" />
+                            : <ShieldCheckmark20Regular aria-hidden="true" />}
                         Errors
                     </div>
                     <div className="sessions-kpi-value">{loading ? "—" : errorCount}</div>
@@ -386,10 +521,10 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
                         <Flash16Regular aria-hidden="true" />
                         <h2 className="sessions-h2">Active Sessions</h2>
                         {!loading && !loadError && (
-                            <span className="sessions-section-count">{visibleActiveJobs.length}</span>
+                            <span className="sessions-section-count">{activeTotal}</span>
                         )}
                     </div>
-                    {!loading && !loadError && activeJobs.length > 0 && (
+                    {!loading && !loadError && activeTotal > 0 && (
                         <div className="sessions-filter-chips" role="tablist" aria-label="Filter active sessions by status">
                             {([
                                 { key: "all" as const, label: "All", count: visibleActiveJobs.length },
@@ -458,7 +593,7 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
                             Retry
                         </Button>
                     </div>
-                ) : activeJobs.length === 0 ? (
+                ) : activeTotal === 0 ? (
                     <div className="sessions-empty sessions-empty--illustrated">
                         <div className="sessions-empty-icon" aria-hidden="true">
                             <Bot24Regular />
@@ -484,7 +619,7 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
                         <div className="sessions-grid">
                             {renderedActiveJobs.map((job, idx) => {
                                 const agent = job.agents?.[0];
-                                const agentName = agent?.role || agent?.agent_id || "Orchestrator";
+                                const agentName = agent?.role || agent?.agent_id || "AgentHub";
                                 const agentSubtitle = agent?.specialty || agent?.role_description || "Workload";
                                 const visual = pickVisual(agentName, idx);
                                 const variant = statusPillVariant(job.status);
@@ -597,11 +732,13 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
                     <div className="sessions-section-title">
                         <History24Regular aria-hidden="true" />
                         <h2 className="sessions-h2">Recent Sessions</h2>
-                        {completedJobs.length > 0 && (
-                            <span className="sessions-section-count">{recentFilteredJobs.length}</span>
+                        {(completedJobs.length > 0 || historyTotal > 0) && (
+                            <span className="sessions-section-count">
+                                {recentQuery.trim() || searchQuery.trim() ? recentFilteredJobs.length : historyTotal}
+                            </span>
                         )}
                     </div>
-                    {completedJobs.length > 0 && (
+                    {historyTotal > 0 && (
                         <div className="sessions-search">
                             <Search16Regular aria-hidden="true" />
                             <input
@@ -614,7 +751,7 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
                         </div>
                     )}
                 </div>
-                {completedJobs.length === 0 ? (
+                {historyTotal === 0 ? (
                     <div className="sessions-empty sessions-empty--illustrated">
                         <div className="sessions-empty-icon" aria-hidden="true">
                             <History24Regular />
@@ -630,6 +767,12 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
                     </div>
                 ) : (
                     <div className="recent-jobs-card">
+                        {syncingMore && (
+                            <div className="sessions-loading" role="status" style={{ paddingBottom: 8 }}>
+                                <Spinner size="tiny" />
+                                Loading older sessions…
+                            </div>
+                        )}
                         <table className="recent-jobs-table">
                             <thead>
                                 <tr>
@@ -726,6 +869,17 @@ export function DashboardPage({ workloadClient }: DashboardPageProps) {
                                     Showing all {recentFilteredJobs.length}{" "}
                                     {recentFilteredJobs.length === 1 ? "session" : "sessions"}
                                 </span>
+                            )}
+                            {hasMoreSessions && !recentQuery.trim() && !searchQuery.trim() && (
+                                <button
+                                    className="recent-jobs-viewall"
+                                    onClick={loadMoreJobs}
+                                    disabled={syncingMore}
+                                >
+                                    {syncingMore
+                                        ? "Loading older sessions…"
+                                        : `Load older sessions (${jobs.length} of ${summary?.total ?? "many"})`}
+                                </button>
                             )}
                         </div>
                     </div>

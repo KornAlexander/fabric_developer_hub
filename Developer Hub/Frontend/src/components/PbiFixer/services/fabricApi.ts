@@ -1623,7 +1623,6 @@ export async function createNotebook(
     displayName: result.displayName ?? displayName,
   };
 }
-
 // ---------------------------------------------------------------------------
 // Power BI embed token (used by ReportExplorer live preview)
 // ---------------------------------------------------------------------------
@@ -1670,4 +1669,3 @@ export async function getReportEmbedToken(
     workspaceId,
   };
 }
-

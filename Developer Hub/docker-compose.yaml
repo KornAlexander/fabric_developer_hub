@@ -1,3 +1,5 @@
+name: developer-hub
+
 services:
   # ── 0. Bind-mount ownership fixer ──────────────────────────
   # Docker creates bind-mount dirs as root when they don't exist on the
@@ -14,9 +16,35 @@ services:
     entrypoint: ["sh", "-c", "chown -R 1000:1000 /data && echo 'data-dir-init: /data owned by 1000:1000'"]
     restart: "no"
 
+  # ── 0a. Build the isolated agent runtime image ────────────────────
+  # Agent containers are spawned dynamically by the backend, not by
+  # Compose. This one-shot service makes sure the specialized image
+  # exists before mission orchestration starts.
+  agent-image:
+    image: developer-hub-agent:dev
+    build:
+      context: Backend
+      dockerfile: Dockerfile.agent
+    entrypoint: ["python", "-c", "print('agent-image: developer-hub-agent:dev ready')"]
+    restart: "no"
+
+  # ── 0b. Build the per-mission MCP runtime image ───────────────────
+  # The sidecar runs only the MCP HTTP runtime service. It intentionally
+  # gets a separate image tag from the backend even though both are built
+  # from the same dependency base during local development.
+  mcp-runtime-image:
+    image: developer-hub-mcp-runtime:dev
+    build:
+      context: Backend
+      target: mcp-runtime
+      dockerfile: Dockerfile
+    command: ["python3", "-c", "print('mcp-runtime-image: developer-hub-mcp-runtime:dev ready')"]
+    restart: "no"
+
   # ── 1. Generate the manifest package (.nupkg) ──────────────
   # Runs once at startup, writes the package to a shared volume.
   manifest-generator:
+    image: developer-hub-backend:dev
     build:
       context: Backend
       target: production
@@ -39,10 +67,17 @@ services:
 
   # ── 2. Backend (Python / FastAPI) ──────────────────────────
   backend:
+    image: developer-hub-backend:dev
     build:
       context: Backend
       target: production
       dockerfile: Dockerfile
+    group_add:
+      # Must match the host Docker socket group id, e.g.
+      #   DOCKER_GID=$(stat -c '%g' /var/run/docker.sock) docker compose up
+      # Mission MCP runtime startup hard-fails without Docker socket access,
+      # so do not fall back to a guessed group id.
+      - "${DOCKER_GID:?Set DOCKER_GID to the host Docker socket group id, e.g. stat -c '%g' /var/run/docker.sock}"
     ports:
       - "5000:5000"
     env_file:
@@ -63,12 +98,32 @@ services:
       # escape codes, which makes ERROR lines pop red in the log stream.
       FORCE_COLOR: "1"
       PYTHONUNBUFFERED: "1"
+      # Local observability: 100% sampled traces and support-grade mission
+      # events persisted to the bind-mounted ./Backend/.data folder. Keep
+      # stdout export off so docker logs stay readable.
+      AGENTHUB_OTEL_ENABLED: "1"
+      AGENTHUB_OTEL_SAMPLE_RATE: "1.0"
+      AGENTHUB_OTEL_CONSOLE_EXPORTER: "0"
+      AGENTHUB_OTEL_TRACE_FILE: /app/data/otel-traces.jsonl
+      AGENTHUB_EVENT_LEDGER_FILE: /app/data/agenthub-events.jsonl
+      AGENTHUB_DEFAULT_MAX_WALLCLOCK_SECONDS: "1200"
+      BROWSER_VISUAL_MAX_TIMEOUT_SECONDS: "600"
+      OTEL_SERVICE_NAME: developer-hub-backend
       # Tell MCPClientManager where to resolve ``${REPO_DIR}/mcp/...``
       # references inside the container. We mount the host's repo-root
       # ``mcp/`` directory at ``/opt/agenthub-mcp/mcp`` (see ``volumes``
       # below) — we cannot mount it at ``/app/mcp`` because that name
       # would shadow the installed ``mcp`` Python SDK package.
       MCP_REPO_DIR: /opt/agenthub-mcp
+      MCP_RUNTIME_IMAGE: developer-hub-mcp-runtime:dev
+      AGENT_IMAGE: developer-hub-agent:dev
+      AGENT_ISOLATION: container
+      AGENTHUB_MCP_RUNTIME: container
+      AGENTHUB_ORCHESTRATION_RUNTIME: pi-subagents
+      AGENTHUB_PI_OBSERVABILITY: pi-subagents
+      AGENT_NETWORK: developer-hub_default
+      MCP_RUNTIME_NETWORK: developer-hub_default
+      AGENT_ORCHESTRATOR_ENDPOINT: http://backend:5000
       # PBI Fixer → SLL sidecar (Michael Kovalsky's run_model_bpa /
       # vertipaq_analyzer). The backend proxies requests through.
       SLL_SIDECAR_URL: http://sll-sidecar:5100
@@ -91,6 +146,15 @@ services:
       # NOTE: must NOT be mounted at ``/app/mcp`` — that path would
       # shadow the installed ``mcp`` Python SDK package and break imports.
       - ../mcp:/opt/agenthub-mcp/mcp:ro
+      # External MCP sources are required too. In particular,
+      # ``powerbi-design`` resolves to
+      # /opt/agenthub-mcp/external/powerbi-creator-skill/... inside the
+      # container. With fail-fast MCP validation enabled, a missing clone
+      # blocks startup instead of silently removing the server.
+      - ../external:/opt/agenthub-mcp/external:ro
+      # Required for container-isolated agents and per-mission MCP runtime
+      # sidecars. Mission startup now hard-fails if Docker is unavailable.
+      - /var/run/docker.sock:/var/run/docker.sock
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health').read()"]
       interval: 30s
@@ -99,6 +163,10 @@ services:
       start_period: 40s
     depends_on:
       data-dir-init:
+        condition: service_completed_successfully
+      agent-image:
+        condition: service_completed_successfully
+      mcp-runtime-image:
         condition: service_completed_successfully
 
   # ── 2b. SLL Sidecar (Michael Kovalsky's semantic-link-labs) ─
@@ -250,10 +318,12 @@ services:
   #     --query accessToken -o tsv)
   #   docker compose up
   dev-gateway:
+    # Microsoft distributes the Fabric DevGateway binary as x64-only.
+    # ARM64 hosts need amd64 binfmt emulation registered before running this.
+    platform: linux/amd64
     build:
       context: tools/DevGatewayContainer
       dockerfile: Dockerfile
-    platform: linux/amd64
     user: "0"
     env_file:
       - .env

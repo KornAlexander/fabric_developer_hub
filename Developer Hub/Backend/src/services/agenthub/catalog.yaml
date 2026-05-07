@@ -10,11 +10,22 @@
 #   skills:       map of skill-id → Skill fields (matches domain.models.skill.Skill)
 #   agent_skills: map of agent-id → list of skill-ids
 #
+# This file does NOT contain full agent definitions. Agent prompts,
+# boundaries, display metadata, and upstream origin are defined in
+# `services/agenthub/agent_registry.py`; this YAML only binds those
+# agents to skill ids and binds skills to MCP tool names.
+#
+# This file also does NOT define where a tool comes from. Tool origin is
+# runtime-discovered from `src/mcp_servers.json` by `MCPClientManager`:
+#   * tool name → MCP server id is exposed by `/api/catalogs/tools`
+#   * log/error output can render `server_id::tool_name` via
+#     `MCPClientManager.qualified_name(...)`
+#
 # Validation runs at startup via `services.agenthub.capability_registry`:
 #   * every tool a skill declares must be provided by a running MCP server
 #   * every skill an agent declares must exist in the `skills:` map
-# Both are logged (non-fatal) so a typo surfaces in boot output without
-# taking the backend down.
+# Any missing tool, missing skill, or unbound discovered MCP tool fails
+# startup so agents never run with a partial diagnostic/tool surface.
 
 skills:
 
@@ -30,7 +41,11 @@ skills:
     tools:
       - fabric_list_workspaces
       - fabric_list_items
+      - fabric_list_folders
+      - fabric_diagnose_workspace_artifacts
       - fabric_create_item
+      - fabric_create_workspace_inventory_solution
+      - fabric_create_folder
       - fabric_delete_item
       - fabric_list_files
       - fabric_read_file
@@ -75,7 +90,10 @@ skills:
     tools:
       - fabric_list_workspaces
       - fabric_list_items
+      - fabric_list_folders
+      - fabric_diagnose_workspace_artifacts
       - fabric_create_item
+      - fabric_create_folder
       - fabric_delete_item
       - sl_list_warehouses
       - sl_list_sql_endpoints
@@ -108,7 +126,10 @@ skills:
     tools:
       - fabric_list_workspaces
       - fabric_list_items
+      - fabric_list_folders
+      - fabric_diagnose_workspace_artifacts
       - fabric_create_item
+      - fabric_create_folder
       - fabric_delete_item
     applicable_when: >-
       Create or alter KQL tables, ingest into Eventhouse, or configure
@@ -130,21 +151,35 @@ skills:
     description: >-
       Create and deploy Power BI semantic models (TMDL), manage refresh
       and permissions, author reports, and run the PBIR tool surface for
-      CI/CD.
+      CI/CD. Semantic-model creation/publish must be performed with the
+      delegated mission user's OBO identity; app-registration/service-principal
+      ownership is a blocker, not something to heal after creation.
     tools:
       - fabric_list_items
+      - fabric_list_folders
+      - fabric_diagnose_workspace_artifacts
       - fabric_create_item
+      - fabric_create_folder
       - fabric_delete_item
+      - fabric_definition_checkout
+      - fabric_definition_list_files
+      - fabric_definition_diff
+      - fabric_definition_validate
+      - fabric_definition_plan_publish
+      - fabric_definition_publish
+      - fabric_definition_discard_checkout
       - sl_list_semantic_models
       - sl_get_semantic_model_definition
       - sl_get_semantic_model_tables
       - sl_deploy_semantic_model
       - sl_refresh_semantic_model
       - sl_get_refresh_history
+      - fabric_get_semantic_model_refresh_history
       - sl_cancel_refresh
       - sl_set_endorsement
       - sl_list_reports
       - sl_get_report_definition
+      - sl_create_report_from_reportjson
       - sl_clone_report
       - sl_rebind_report
       - sl_export_report
@@ -181,6 +216,7 @@ skills:
       tables, columns, measures, relationships.
     tools:
       - fabric_list_items
+      - fabric_diagnose_workspace_artifacts
       - sl_evaluate_dax
       - sl_list_semantic_models
       - sl_get_semantic_model_tables
@@ -188,9 +224,56 @@ skills:
       - sl_list_reports
       - sl_get_report_definition
       - sl_get_refresh_history
+      - fabric_get_semantic_model_refresh_history
     applicable_when: >-
       Run a DAX query, inspect a semantic model, or list measures /
       tables.
+
+  fabric-verification:
+    name: Fabric verification super skill
+    description: >-
+      Verify created Fabric and Power BI deliverables against the original
+      task: capacity readiness, item existence, semantic-model data,
+      Lakehouse tables, PBIR/report definitions, report renderability, and
+      browser screenshot evidence. For Power BI reports, this is a strict
+      UI/UX gate: judge championship-caliber hierarchy, 3-30-300 storytelling,
+      interactions, methodology/source transparency, accessibility, theme,
+      naming, model clarity, and usability unless the user explicitly asked
+      for lower-fidelity styling or supplied another sample to mimic.
+    tools:
+      - fabric_list_workspaces
+      - fabric_list_items
+      - fabric_list_folders
+      - fabric_validate_workspace_capacity
+      - fabric_diagnose_workspace_artifacts
+      - fabric_verify_report_renderable
+      - fabric_verify_workspace_inventory_solution
+      - fabric_get_semantic_model_refresh_history
+      - browser_verify_visual_render
+      - fabric_definition_checkout
+      - fabric_definition_list_files
+      - fabric_definition_validate
+      - sl_list_lakehouses
+      - sl_get_lakehouse_tables
+      - sl_list_semantic_models
+      - sl_get_semantic_model_tables
+      - sl_get_semantic_model_definition
+      - sl_evaluate_dax
+      - sl_list_reports
+      - sl_get_report_definition
+      - sl_get_refresh_history
+      - pbir_validate
+      - pbir_visuals
+      - pbir_pages
+      - pbir_fields
+      - scan_report
+      - scan_semantic_model
+    applicable_when: >-
+      Final verification, acceptance verification, quality gates, or checking
+      that created Fabric items, semantic models, reports, and visuals work
+      and match the user's requested outcome. Use browser screenshot evidence
+      for design, style, layout, map, visual-quality, usability, accessibility,
+      and championship-report requirements.
 
   e2e-medallion-architecture:
     name: End-to-end Medallion
@@ -201,7 +284,10 @@ skills:
     tools:
       - fabric_list_workspaces
       - fabric_list_items
+      - fabric_list_folders
+      - fabric_diagnose_workspace_artifacts
       - fabric_create_item
+      - fabric_create_folder
       - fabric_list_files
       - fabric_read_file
       - fabric_write_file
@@ -227,6 +313,24 @@ skills:
       User asks whether skills are up-to-date or wants the changelog for
       Skills for Fabric.
 
+  team-orchestration:
+    name: Team orchestration
+    description: >-
+      Coordinator-plane capability owned by the Orchestrator. Covers
+      routing work across the team, validating handoffs between phases,
+      and expanding the team on demand — i.e. spinning up additional
+      agents mid-run when the plan turns out to need a capability that
+      isn't on the roster yet (e.g. realising partway through that an
+      Admin is needed to provision a workspace). Not backed by an MCP
+      tool; exposed via the ``POST /api/sessions/{id}/agents`` control
+      endpoint which the Orchestrator (or a human supervisor) calls to
+      attach a new ``AgentAssignment`` to the running job.
+    tools: []
+    applicable_when: >-
+      Always applicable to the Orchestrator. Never selected on worker
+      agents — those run a single scoped assignment and do not shape
+      the team.
+
   # ── Unique additions from AnalyticsPlatformAgents (3) ────────────
 
   paginated-report-authoring:
@@ -236,7 +340,9 @@ skills:
       datasets, deployment to a workspace.
     tools:
       - fabric_list_items
+      - fabric_list_folders
       - fabric_create_item
+      - fabric_create_folder
       - sl_list_reports
       - sl_get_report_definition
       - sl_clone_report
@@ -264,7 +370,8 @@ skills:
     description: >-
       Apply International Business Communication Standards (IBCS)
       patterns to Power BI reports — consistent variance visuals, colour
-      semantics, chart hygiene.
+      semantics, chart hygiene, layout alignment, and visual design
+      review for presentation-ready dashboards.
     tools:
       - scan_report
       - fix_report_bpa
@@ -277,8 +384,9 @@ skills:
       - pbir_set
       - pbir_validate
     applicable_when: >-
-      User asks for IBCS-compliant reports, variance visualisations, or
-      strict chart-style hygiene.
+      User asks for IBCS-compliant reports, variance visualisations,
+      strict chart-style hygiene, visual appeal, report design review,
+      layout alignment, or presentation-ready dashboards.
 
   # ── Grounding from the Fabric Local MCP (docs tool only) ─────────
   # Pulled in via the `fabric-docs` server in `mcp_servers.json` with a
@@ -301,6 +409,518 @@ skills:
       schemas, or recommending pagination / retry / error-handling
       patterns.
 
+  microsoft-docs:
+    name: Microsoft Learn grounding
+    description: >-
+      Search and fetch current official Microsoft Learn documentation and
+      code samples through the Microsoft Learn / Microsoft Docs MCP
+      endpoint. Public documentation only; no tenant data or credentials.
+    tools:
+      - microsoft_docs_search
+      - microsoft_docs_fetch
+      - microsoft_code_sample_search
+    applicable_when: >-
+      Use before answering narrow Microsoft technology questions, generating
+      Microsoft SDK/API code, checking schema details, or troubleshooting
+      product behavior where current Microsoft documentation matters.
+
+  fabric-remote-core:
+    name: Fabric Remote Core operations
+    description: >-
+      Operate live Fabric workspaces, items, folders, permissions,
+      capacities, item definitions, long-running operations, and item-type
+      guidance through Microsoft's cloud-hosted Fabric Core MCP Server.
+      Uses the caller's Entra ID / Fabric RBAC context and Fabric Audit Logs.
+    tools:
+      - list_workspaces
+      - get_workspace
+      - create_workspace
+      - update_workspace
+      - delete_workspace
+      - add_workspace_role
+      - list_workspace_roles
+      - get_workspace_role
+      - update_workspace_role
+      - delete_workspace_role
+      - list_items
+      - get_item
+      - create_item
+      - update_item
+      - delete_item
+      - get_item_definition
+      - update_item_definition
+      - bulk_move_items
+      - create_folder
+      - list_folders
+      - get_folder
+      - update_folder
+      - delete_folder
+      - move_folder
+      - list_capacities
+      - get_operation_state
+      - get_operation_result
+      - get_knowledge
+    applicable_when: >-
+      Use for live Fabric control-plane operations where the official Remote
+      MCP should execute under the signed-in user's permissions and audit
+      trail. Prefer read-only/list/get tools for verification and planning;
+      writes remain governed by AgentHub tool policies.
+
+  # ── Cross-cutting utilities ──────────────────────────────────────
+  # The skills below are not tied to a single Fabric workload. They
+  # surface MCP servers (`time`, `sequential-thinking`, `web-access`,
+  # `code-interpreter`, `workspace-shell`, `azure-management`,
+  # `powerbi-modeling-mcp`, `powerbi-design`) that would otherwise be
+  # running but unreachable from any agent. Each is bound to the agents
+  # in ``agent_skills`` below so every tool the runtime discovers is
+  # owned by at least one agent.
+
+  time-utilities:
+    name: Time and timezone helpers
+    description: >-
+      Get the current UTC / local time and convert between IANA
+      timezones. Lightweight helpers exposed by the official
+      `mcp-server-time` reference server. Useful for SLA reasoning,
+      schedule planning, and time-stamping report runs.
+    tools:
+      - get_current_time
+      - convert_time
+    applicable_when: >-
+      Need the current time, schedule a refresh, reason about an SLA
+      window, or convert a timestamp between timezones.
+
+  sequential-thinking:
+    name: Structured reasoning
+    description: >-
+      Step-wise reasoning helper from the official MCP
+      `sequential-thinking` server. Encourages the agent to externalise
+      a chain of thought before committing to multi-step plans, which
+      stabilises planning on long-horizon Fabric work.
+    tools:
+      - sequentialthinking
+    applicable_when: >-
+      Tackling a complex multi-step plan, ambiguous requirements, or
+      cross-skill orchestration where the agent benefits from an
+      explicit reasoning scratchpad.
+
+  web-research:
+    name: Web research
+    description: >-
+      Look up public documentation, blog posts, schema references, and
+      changelogs from the open web. Backed by the local `web-access`
+      server which guards URLs and trims responses to model-friendly
+      sizes.
+    tools:
+      - web_fetch_url
+      - web_search
+    applicable_when: >-
+      Need to ground a recommendation in current public docs, look up
+      Microsoft Learn / Fabric blog content, or check a third-party
+      schema reference that isn't in the Fabric MCP knowledge base.
+
+  code-execution:
+    name: Sandboxed Python execution
+    description: >-
+      Run short Python snippets in a sandboxed interpreter to validate
+      computations, parse JSON/CSV samples, or prototype transformations
+      before committing them to a notebook or pipeline. Backed by the
+      local `code-interpreter` MCP server.
+    tools:
+      - run_python_code
+    applicable_when: >-
+      Verify a computation, decode/transform a small payload, or
+      prototype a snippet before authoring it as a Fabric notebook /
+      pipeline activity.
+
+  workspace-shell:
+    name: Workspace shell
+    description: >-
+      Run scoped shell commands inside the AgentHub workspace root for
+      developer-loop tasks (running scripts, inspecting tooling output,
+      formatting). Backed by the local `workspace-shell` MCP server,
+      which constrains the working directory and the command surface.
+    tools:
+      - run_shell_command
+    applicable_when: >-
+      Execute a developer-loop command (build, lint, format, run a
+      provided script) inside the workspace — never for arbitrary host
+      shell access.
+
+  azure-management:
+    name: Azure control plane
+    description: >-
+      Read-only Azure management operations needed to reason about the
+      Fabric capacity and surrounding Azure resources: list
+      subscriptions / resource groups / resources, inspect role
+      assignments, query activity logs and resource health, and
+      list / resume Fabric capacities. Backed by the local
+      `azure-management` MCP server using the caller's OBO identity.
+    tools:
+      - azure_list_subscriptions
+      - azure_list_resource_groups
+      - azure_list_resources
+      - azure_get_resource
+      - azure_check_permissions
+      - azure_list_role_assignments
+      - azure_list_role_definitions
+      - azure_get_activity_log
+      - azure_get_resource_health
+      - azure_list_fabric_capacities
+      - azure_get_fabric_capacity
+      - azure_resume_fabric_capacity
+    applicable_when: >-
+      Inspect or operate Azure resources surrounding Fabric — capacity
+      lifecycle, RBAC validation, activity log triage, or resource
+      health checks during admin / architecture work.
+
+  azure-diagnostics:
+    name: Azure diagnostics
+    description: >-
+      Read-only Azure failure triage across resource health, Activity Log,
+      Azure Monitor diagnostic settings, metric definitions, recent metrics,
+      Fabric capacity resources, RBAC permission checks, and network-adjacent
+      inventory such as VNets, NSGs, route tables, private endpoints, DNS,
+      gateways, firewalls, load balancers, and public IPs.
+    tools:
+      - azure_list_subscriptions
+      - azure_list_resource_groups
+      - azure_list_resources
+      - azure_get_resource
+      - azure_check_permissions
+      - azure_list_role_assignments
+      - azure_list_role_definitions
+      - azure_get_activity_log
+      - azure_get_resource_health
+      - azure_list_diagnostic_settings
+      - azure_list_metric_definitions
+      - azure_query_metrics
+      - azure_network_inventory
+      - azure_diagnose_resource
+      - azure_list_fabric_capacities
+      - azure_get_fabric_capacity
+    applicable_when: >-
+      Diagnose Azure-side failures: capacity paused/unhealthy, provisioning
+      failures, missing metrics/logs, failed recent operations, RBAC denials,
+      network connectivity risks, or any Fabric workload issue that may be
+      rooted in the surrounding Azure control plane.
+
+  azure-mcp-guidance:
+    name: Azure MCP guidance
+    description: >-
+      Current read-only Azure guidance from the official Azure MCP Server,
+      limited to best-practice tools for Azure resources and Azure AI agent
+      applications. Live Azure resource operations stay on the OBO-backed
+      `azure-management` and `azure-diagnostics` tools.
+    tools:
+      - get_azure_bestpractices_get
+      - get_azure_bestpractices_ai_app
+    applicable_when: >-
+      Use before implementing Azure-facing agent features, deployment plans,
+      Azure AI workflows, or recommendations where current Azure MCP
+      best-practice guidance should shape the answer.
+
+  entra-identity-diagnostics:
+    name: Entra identity diagnostics
+    description: >-
+      Diagnose identity and permission failures through token audience / claim
+      inspection, signed-in user lookup, user and service-principal lookup,
+      group membership, app-role assignments, Azure RBAC role assignments, and
+      effective Azure permission checks. Token diagnostics never expose token
+      values.
+    tools:
+      - entra_token_diagnostics
+      - entra_get_signed_in_user
+      - entra_get_user
+      - entra_get_service_principal
+      - entra_diagnose_principal_access
+      - entra_list_group_memberships
+      - entra_list_app_role_assignments
+      - azure_check_permissions
+      - azure_list_role_assignments
+      - azure_list_role_definitions
+    applicable_when: >-
+      Diagnose 401/403, wrong audience, app-only vs delegated identity,
+      owner mismatch, owners who left the org or were disabled, missing
+      consent, missing group membership, service-principal confusion, or
+      role-assignment gaps in Fabric, Power BI, Azure, or Entra ID.
+
+  fabric-powerbi-diagnostics:
+    name: Fabric and Power BI diagnostics
+    description: >-
+      Broad read-only diagnostics for Fabric and Power BI artifacts we create:
+      workspace/item metadata, roles, capacity, operation state, definitions,
+      refresh history, semantic-model queryability, Lakehouse/Warehouse/KQL
+      inventory, PBIR validation, report renderability, browser evidence, and
+      governance scans.
+    tools:
+      - fabric_list_workspaces
+      - fabric_list_items
+      - fabric_list_folders
+      - fabric_validate_workspace_capacity
+      - fabric_diagnose_workspace_artifacts
+      - fabric_verify_report_renderable
+      - fabric_verify_workspace_inventory_solution
+      - fabric_get_semantic_model_refresh_history
+      - browser_verify_visual_render
+      - list_workspaces
+      - get_workspace
+      - list_workspace_roles
+      - list_items
+      - get_item
+      - get_item_definition
+      - list_capacities
+      - get_operation_state
+      - get_operation_result
+      - sl_list_lakehouses
+      - sl_get_lakehouse_tables
+      - sl_list_warehouses
+      - sl_list_sql_endpoints
+      - sl_list_mirrored_databases
+      - sl_get_mirroring_status
+      - sl_list_semantic_models
+      - sl_get_semantic_model_tables
+      - sl_get_semantic_model_definition
+      - sl_evaluate_dax
+      - sl_get_refresh_history
+      - sl_list_reports
+      - sl_get_report_definition
+      - pbir_validate
+      - pbir_visuals
+      - pbir_pages
+      - pbir_fields
+      - pbir_report
+      - scan_report
+      - scan_semantic_model
+      - scan_workspaces
+    applicable_when: >-
+      Diagnose anything Fabric or Power BI related: broken created items,
+      missing folders, stale or failed refresh, semantic model errors, report
+      loading/render/export failures, PBIR definition issues, capacity gaps,
+      workspace role problems, or artifact quality regressions.
+
+  powerbi-modeling:
+    name: Power BI semantic-model authoring (Microsoft MCP)
+    description: >-
+      Author Power BI semantic models through Microsoft's official
+      `powerbi-modeling-mcp` server, which talks to the Analysis
+      Services engine directly: create / alter tables, columns,
+      measures, relationships, partitions, calculation groups, security
+      roles, and validate DAX. Use this in preference to hand-rolling
+      TMDL/TMSL whenever the modeler is available.
+    tools:
+      - database_operations
+      - model_operations
+      - table_operations
+      - column_operations
+      - measure_operations
+      - named_expression_operations
+      - function_operations
+      - object_translation_operations
+      - relationship_operations
+      - dax_query_operations
+      - partition_operations
+      - calculation_group_operations
+      - security_role_operations
+      - calendar_operations
+      - query_group_operations
+      - user_hierarchy_operations
+      - culture_operations
+      - perspective_operations
+      - connection_operations
+      - transaction_operations
+      - trace_operations
+    applicable_when: >-
+      Create or modify a Power BI semantic model — tables, columns,
+      measures, relationships, partitions, calculation groups, security
+      roles — or validate DAX through the Microsoft modeling MCP.
+
+  powerbi-design:
+    name: Power BI report design (powerbi-creator-skill)
+    description: >-
+      Author and modernise Power BI reports through the third-party
+      `powerbi-creator-skill` Design MCP server. Covers visual CRUD, theme
+      injection, conditional formatting, layout/overlap validation, style
+      guides, audit logging, and backups. Use it for championship-level
+      hierarchy, 3-30-300 flow, interactions/tooltips, accessibility, modern
+      themes, source/methodology transparency, and avoiding default one-card
+      shells.
+    # The upstream package must be cloned to
+    # ``${WORKSPACE_ROOT}/external/powerbi-creator-skill`` for the
+    # server to start. ``MCPClientManager`` fails startup if the path
+    # is missing, because agents must not run with a partial MCP stack.
+    tools:
+      - analyze_report_structure
+      - get_report_assets
+      - apply_style_guide
+      - patch_report_properties
+      - patch_page_properties
+      - patch_visual_properties
+      - replace_theme_resource
+      - validate_report_definition
+      - preview_changes
+      - diff_report_definition
+      - update_report_definition
+      - backup_report_definition
+      - score_modernization_readiness
+      - bulk_apply_style_guide
+      - extract_style_guide_from_report
+      - add_visual_to_page
+      - rearrange_page_visuals
+      - add_image_visual
+      - build_page
+      - get_default_style_guide
+      - set_default_style_guide
+      - get_audit_log
+      - list_backups
+      - restore_report_definition
+      - apply_full_style
+      - add_page
+      - reorder_pages
+      - full_modernization
+      - inject_custom_theme
+      - apply_conditional_format
+      - remove_visual
+      - remove_page
+      - rename_visual
+      - get_semantic_model_schema
+      - suggest_visuals
+      - auto_layout
+      - compare_reports
+      - export_report_summary
+    applicable_when: >-
+      Authoring or polishing Power BI report visuals, themes,
+      conditional formatting, layouts, page management, or running
+      bulk style-guide modernisation. Prefer this over hand-editing
+      visual.json, especially when a generated report must qualify from
+      UI/UX/design/usability and screenshot-review perspectives. Pair with
+      `powerbi-modeling` for the model side.
+
+  fabric-admin-operations:
+    name: Fabric tenant and workspace administration
+    description: >-
+      Administrative Fabric operations exposed by Semantic Link and the
+      first-party Fabric MCP surface: workspace creation, capacity
+      assignment, user / role inspection, schedules, item jobs,
+      gateway / connection discovery, Git status and sync, and tenant
+      activity diagnostics.
+    tools:
+      - fabric_create_workspace
+      - sl_add_workspace_user
+      - sl_admin_get_activity_events
+      - sl_admin_list_dataset_users
+      - sl_admin_list_datasets
+      - sl_admin_list_workspace_users
+      - sl_admin_list_workspaces
+      - sl_assign_workspace_to_capacity
+      - sl_commit_to_git
+      - sl_get_git_connection
+      - sl_get_git_status
+      - sl_list_capacities
+      - sl_list_connections
+      - sl_list_gateways
+      - sl_list_item_schedules
+      - sl_list_workspace_users
+      - sl_run_item_job
+      - sl_update_from_git
+    applicable_when: >-
+      Manage workspace membership, capacity assignment, Git integration,
+      schedules / jobs, tenant activity, gateways, or connection
+      inventory.
+
+  powerbi-governance-remediation:
+    name: Power BI governance and remediation
+    description: >-
+      Full Power BI remediation surface from pbi-fixer and Semantic Link:
+      scan workspaces / reports / semantic models, fix BPA and visual
+      issues, add governance artefacts, generate shared expressions,
+      migrate model objects, upgrade to PBIR, and inspect model size /
+      BIM definitions.
+    tools:
+      - scan_everything
+      - scan_workspaces
+      - fix_all_report_issues
+      - fix_all_semantic_model_issues
+      - fix_avoid_adding_zero
+      - fix_bar_to_column
+      - fix_barcharts
+      - fix_capitalize_object_names
+      - fix_column_to_bar
+      - fix_column_to_line
+      - fix_columncharts
+      - fix_data_category
+      - fix_date_column_format
+      - fix_default_datasource_version
+      - fix_disable_show_items_no_data
+      - fix_discourage_implicit_measures
+      - fix_do_not_summarize
+      - fix_flag_column_format
+      - fix_floating_point_datatype
+      - fix_hide_foreign_keys
+      - fix_isavailable_in_mdx
+      - fix_isavailable_in_mdx_true
+      - fix_linecharts
+      - fix_mark_primary_keys
+      - fix_measure_descriptions
+      - fix_measure_format
+      - fix_migrate_report_level_measures
+      - fix_migrate_slicers
+      - fix_model_bpa
+      - fix_month_column_format
+      - fix_page_size
+      - fix_percentage_format
+      - fix_piecharts
+      - fix_sort_month_column
+      - fix_trim_object_names
+      - fix_upgrade_to_pbir
+      - fix_use_divide_function
+      - fix_whole_number_format
+      - add_cache_warming
+      - add_calc_group_time_intelligence
+      - add_calc_group_units
+      - add_calculated_calendar
+      - add_incremental_refresh
+      - add_last_refresh_table
+      - add_measure_table
+      - add_measures_from_columns
+      - add_prep_for_ai
+      - add_py_measures
+      - create_blank_semantic_model
+      - create_model_bpa_report
+      - create_pqt_file
+      - deploy_semantic_model
+      - export_report
+      - generate_shared_expression
+      - get_semantic_model_bim
+      - get_semantic_model_size
+      - migrate_calc_tables_to_lakehouse
+      - migrate_calc_tables_to_semantic_model
+      - migrate_model_objects_to_semantic_model
+      - migrate_tables_columns_to_semantic_model
+      - upgrade_to_pbir_bulk
+    applicable_when: >-
+      Run report / semantic-model audits, apply automated fixes,
+      enforce Power BI best practices, migrate models, or prepare a
+      semantic model for production governance.
+
+  pbir-advanced-tools:
+    name: PBIR advanced inspection and execution
+    description: >-
+      Low-level PBIR filesystem / CLI helpers for inspecting, finding,
+      reading, modelling, running and navigating report definitions.
+      Complements the higher-level PBIR authoring tools.
+    tools:
+      - pbir_cat
+      - pbir_find
+      - pbir_get
+      - pbir_help
+      - pbir_ls
+      - pbir_model
+      - pbir_run
+      - pbir_tree
+    applicable_when: >-
+      Inspect PBIR files, navigate a downloaded report definition,
+      run PBIR helper commands, or debug report definition structure.
+
 
 # ── Agent → skill-id mapping ───────────────────────────────────────
 # Taken verbatim from each upstream agent's ``delegates_to`` list, with
@@ -320,10 +940,24 @@ agent_skills:
     - eventhouse-consumption-cli
     - powerbi-authoring-cli
     - powerbi-consumption-cli
+    - fabric-verification
     - e2e-medallion-architecture
     - paginated-report-authoring
     - paginated-report-ops
     - fabric-api-docs
+    - microsoft-docs
+    - fabric-remote-core
+    - fabric-powerbi-diagnostics
+    - entra-identity-diagnostics
+    - powerbi-modeling
+    - powerbi-design
+    - powerbi-governance-remediation
+    - pbir-advanced-tools
+    - code-execution
+    - workspace-shell
+    - web-research
+    - sequential-thinking
+    - time-utilities
 
   fabric-admin:
     - spark-authoring-cli
@@ -334,17 +968,61 @@ agent_skills:
     - eventhouse-consumption-cli
     - powerbi-authoring-cli
     - powerbi-consumption-cli
+    - fabric-verification
     - e2e-medallion-architecture
     - check-updates
+    - fabric-remote-core
+    - azure-management
+    - azure-diagnostics
+    - entra-identity-diagnostics
+    - fabric-powerbi-diagnostics
+    - fabric-admin-operations
+    - powerbi-governance-remediation
+    - web-research
+    - microsoft-docs
+    - azure-mcp-guidance
+    - sequential-thinking
+    - time-utilities
 
   fabric-app-dev:
     - sqldw-authoring-cli
     - sqldw-consumption-cli
     - powerbi-consumption-cli
+    - fabric-verification
     - paginated-report-ops
     - fabric-api-docs
+    - microsoft-docs
+    - fabric-remote-core
+    - fabric-powerbi-diagnostics
+    - azure-diagnostics
+    - azure-mcp-guidance
+    - entra-identity-diagnostics
+    - pbir-advanced-tools
+    - code-execution
+    - workspace-shell
+    - web-research
+    - sequential-thinking
+    - time-utilities
 
-  # AnalyticsPlatformAgents — architect / modeler / creator / orchestrator
+  fabric-verifier:
+    - fabric-verification
+    - powerbi-consumption-cli
+    - spark-consumption-cli
+    - sqldw-consumption-cli
+    - eventhouse-consumption-cli
+    - fabric-remote-core
+    - fabric-powerbi-diagnostics
+    - azure-diagnostics
+    - azure-mcp-guidance
+    - entra-identity-diagnostics
+    - powerbi-governance-remediation
+    - pbir-advanced-tools
+    - web-research
+    - microsoft-docs
+    - sequential-thinking
+    - time-utilities
+
+  # AnalyticsPlatformAgents — architect / modeler / creator
 
   # Architect is technology-agnostic but needs awareness of what the
   # downstream modeller / engineers can build, so we expose the
@@ -354,8 +1032,20 @@ agent_skills:
     - sqldw-authoring-cli
     - eventhouse-authoring-cli
     - powerbi-authoring-cli
+    - fabric-verification
     - e2e-medallion-architecture
     - fabric-api-docs
+    - microsoft-docs
+    - fabric-remote-core
+    - azure-management
+    - azure-diagnostics
+    - azure-mcp-guidance
+    - entra-identity-diagnostics
+    - fabric-admin-operations
+    - code-execution
+    - web-research
+    - sequential-thinking
+    - time-utilities
 
   # Modeler translates the architecture into a Fabric blueprint and
   # needs the full authoring surface.
@@ -367,14 +1057,30 @@ agent_skills:
     - e2e-medallion-architecture
     - paginated-report-authoring
     - powerbi-ibcs
+    - fabric-verification
     - fabric-api-docs
+    - microsoft-docs
+    - fabric-remote-core
+    - fabric-powerbi-diagnostics
+    - entra-identity-diagnostics
+    - powerbi-modeling
+    - powerbi-design
+    - powerbi-governance-remediation
+    - pbir-advanced-tools
+    - code-execution
+    - web-research
+    - sequential-thinking
+    - time-utilities
 
   # Creator dispatches work to the Fabric agents — it doesn't build
   # itself. Keep the skill set narrow (pattern-awareness only).
   creator:
     - e2e-medallion-architecture
+    - sequential-thinking
+    - web-research
+    - microsoft-docs
+    - time-utilities
 
-  # Orchestrator coordinates the team. Its only direct concern is
-  # version hygiene across the marketplace.
-  orchestrator:
-    - check-updates
+  # The Orchestrator is internal control plane now, not an agent entry.
+  # ``team-orchestration`` remains in the skill catalog as documentation
+  # for the runtime capability implemented by ``OrchestratorEngine``.

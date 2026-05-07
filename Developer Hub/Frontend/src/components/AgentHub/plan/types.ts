@@ -31,7 +31,8 @@ export interface ToolCallPreview {
 
 // P3 · Mission Control — orchestration graph
 export type TeamPattern = "supervisor" | "sequential" | "network" | "hierarchical" | "solo" | "mixed";
-export type TeamNodeStatus = "planned" | "active" | "done" | "waiting";
+export type TeamNodeStatus = "planned" | "active" | "done" | "waiting" | "failed";
+export type TeamNodeLifecycle = "planned" | "spinning_up" | "waiting" | "running" | "finished" | "failed";
 export type TeamEdgeKind = "delegate" | "peer" | "report";
 
 export interface TeamNode {
@@ -52,6 +53,12 @@ export interface TeamNode {
      *  deterministic blurb generated from role + handoffs + skills
      *  when the backend doesn't supply one. */
     summary?: string;
+    /** Runtime lifecycle projected from slot_progress + agent_status.
+     *  This is used by Step 3 mission execution views where agents can
+     *  be spinning up, waiting, actively running, or finished. */
+    lifecycle?: TeamNodeLifecycle;
+    /** Optional runtime context string shown next to lifecycle state. */
+    stateReason?: string;
 }
 
 export interface TeamEdge {

@@ -17,7 +17,11 @@ from domain.models.authentication_models import (
     Claim,
     SubjectAndAppToken,
 )
-from services.auth.authentication import AuthenticationService
+from services.auth.authentication import (
+    AuthenticationService,
+    _MSAL_HTTP_TIMEOUT_SECONDS,
+    _build_msal_http_session,
+)
 from services.auth.open_id_connect_configuration import OpenIdConnectConfiguration
 
 
@@ -44,6 +48,24 @@ class TestAuthenticationServiceInitialization:
 
                 # Verify MSAL app creation
                 mock_msal.ConfidentialClientApplication.assert_called_once()
+
+    def test_msal_http_session_applies_default_timeout(self):
+        """MSAL calls should not inherit requests' unbounded timeout."""
+        session = _build_msal_http_session()
+
+        with patch("requests.sessions.Session.request", return_value=Mock()) as request:
+            session.get("https://login.microsoftonline.com/test")
+
+        assert request.call_args.kwargs["timeout"] == _MSAL_HTTP_TIMEOUT_SECONDS
+
+    def test_msal_http_session_preserves_explicit_timeout(self):
+        """Callers can still override the default timeout when needed."""
+        session = _build_msal_http_session()
+
+        with patch("requests.sessions.Session.request", return_value=Mock()) as request:
+            session.post("https://login.microsoftonline.com/test", timeout=3.5)
+
+        assert request.call_args.kwargs["timeout"] == 3.5
 
 
 @pytest.mark.unit

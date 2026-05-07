@@ -10,12 +10,14 @@ per-request by MCPClientManager — no Fabric notebook context needed.
 
 Token env vars (set by MCPClientManager):
   FABRIC_API_TOKEN  — Fabric REST API (api.fabric.microsoft.com)
+    POWERBI_API_TOKEN — Power BI REST API (api.powerbi.com)
   ONELAKE_TOKEN     — OneLake DFS API  (onelake.dfs.fabric.microsoft.com)
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import sys
@@ -27,6 +29,7 @@ _SRC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
 
+from jose import jwt
 from mcp.server.fastmcp import FastMCP
 
 from mcp_servers._common import format_http_error, shared_client
@@ -50,9 +53,181 @@ def _headers() -> dict:
     return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
 
+def _token_claims(token: str) -> dict | None:
+    if not token:
+        return None
+    try:
+        claims = jwt.get_unverified_claims(token)
+    except Exception:
+        return None
+    return claims if isinstance(claims, dict) else None
+
+
+def _token_auth_mode(claims: dict | None) -> str:
+    if not claims:
+        return "unknown"
+    scp = claims.get("scp")
+    idtyp = str(claims.get("idtyp") or "").lower()
+    roles = claims.get("roles")
+    if isinstance(scp, str) and scp.strip():
+        return "delegated_user"
+    if idtyp == "app" or (roles and not scp):
+        return "application"
+    return "unknown"
+
+
+def _require_delegated_fabric_token(operation: str) -> None:
+    token = os.environ.get("FABRIC_API_TOKEN", "")
+    if not token:
+        raise RuntimeError("FABRIC_API_TOKEN not set")
+    claims = _token_claims(token)
+    if _token_auth_mode(claims) != "application":
+        return
+    principal = (
+        claims.get("app_displayname")
+        or claims.get("name")
+        or claims.get("appid")
+        or claims.get("azp")
+        or "the app registration/service principal"
+    ) if isinstance(claims, dict) else "the app registration/service principal"
+    raise RuntimeError(
+        f"Blocked Semantic Link write for {operation}: FABRIC_API_TOKEN is an "
+        f"application/service-principal token ({principal}). AgentHub refuses to create "
+        "semantic models with app-only identity because they would be owned by the app "
+        "registration instead of the mission user. Re-authenticate through delegated "
+        "user/OBO flow and retry."
+    )
+
+
 def _pbi_headers() -> dict:
-    """Power BI REST API shares the same Fabric token."""
-    return _headers()
+    token = os.environ.get("POWERBI_API_TOKEN") or os.environ.get("FABRIC_API_TOKEN", "")
+    if not token:
+        raise RuntimeError("POWERBI_API_TOKEN or FABRIC_API_TOKEN not set")
+    return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+
+def _pbi_header_candidates() -> list[dict]:
+    candidates: list[dict] = []
+    seen: set[str] = set()
+    for env_name in ("POWERBI_API_TOKEN", "FABRIC_API_TOKEN"):
+        token = os.environ.get(env_name, "")
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        candidates.append({"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+    if not candidates:
+        raise RuntimeError("POWERBI_API_TOKEN or FABRIC_API_TOKEN not set")
+    return candidates
+
+
+async def _post_powerbi_json_with_auth_fallback(client, url: str, body: dict):
+    last_resp = None
+    for headers in _pbi_header_candidates():
+        last_resp = await client.post(url, json=body, headers=headers)
+        if last_resp.status_code not in (401, 403):
+            return last_resp
+    return last_resp
+
+
+async def _execute_powerbi_query_rows(workspace_id: str, dataset_id: str, dax_query: str) -> list[dict] | None:
+    body = {"queries": [{"query": dax_query}], "serializerSettings": {"includeNulls": True}}
+    url = f"{PBI_API}/groups/{workspace_id}/datasets/{dataset_id}/executeQueries"
+    async with shared_client(60.0) as client:
+        resp = await _post_powerbi_json_with_auth_fallback(client, url, body)
+    if resp.status_code != 200:
+        return None
+    data = resp.json()
+    results = data.get("results", [])
+    if not results:
+        return []
+    tables = results[0].get("tables", [])
+    if not tables:
+        return []
+    rows = tables[0].get("rows", [])
+    return rows if isinstance(rows, list) else []
+
+
+async def _get_semantic_model_definition_parts(workspace_id: str, dataset_id: str) -> list[dict] | None:
+    url = f"{FABRIC_API}/workspaces/{workspace_id}/semanticModels/{dataset_id}/getDefinition"
+    hdrs = _headers()
+    async with shared_client(60.0) as client:
+        resp = await client.post(url, headers=hdrs)
+        if resp.status_code == 200:
+            parts = resp.json().get("definition", {}).get("parts", [])
+            return parts if isinstance(parts, list) else []
+        if resp.status_code != 202:
+            return None
+        location = resp.headers.get("Location", "")
+        if not location:
+            return None
+        result_url = location.rstrip("/") + "/result"
+        await _async_sleep(int(resp.headers.get("Retry-After", "5")))
+        resp2 = await client.get(result_url, headers=hdrs)
+    if resp2.status_code != 200:
+        return None
+    parts = resp2.json().get("definition", {}).get("parts", [])
+    return parts if isinstance(parts, list) else []
+
+
+def _decode_inline_json_part(part: dict) -> dict | None:
+    payload = part.get("payload") if isinstance(part, dict) else None
+    if not isinstance(payload, str):
+        return None
+    try:
+        return json.loads(base64.b64decode(payload).decode("utf-8"))
+    except Exception:
+        return None
+
+
+def _semantic_model_metadata_from_parts(parts: list[dict]) -> dict | None:
+    bim_part = next(
+        (
+            part for part in parts
+            if isinstance(part, dict) and str(part.get("path") or "").endswith("model.bim")
+        ),
+        None,
+    )
+    if not bim_part:
+        return None
+    bim = _decode_inline_json_part(bim_part)
+    model = bim.get("model") if isinstance(bim, dict) else None
+    if not isinstance(model, dict):
+        return None
+    tables = []
+    measures = []
+    columns = []
+    for table in model.get("tables") or []:
+        if not isinstance(table, dict):
+            continue
+        table_name = str(table.get("name") or "")
+        if not table_name:
+            continue
+        tables.append({"name": table_name, "description": table.get("description")})
+        for measure in table.get("measures") or []:
+            if isinstance(measure, dict) and measure.get("name"):
+                measures.append({
+                    "table": table_name,
+                    "name": measure.get("name"),
+                    "expression": measure.get("expression"),
+                })
+        for column in table.get("columns") or []:
+            if isinstance(column, dict) and column.get("name"):
+                columns.append({
+                    "table": table_name,
+                    "name": column.get("name"),
+                    "dataType": column.get("dataType"),
+                    "sourceColumn": column.get("sourceColumn"),
+                })
+    relationships = [rel for rel in (model.get("relationships") or []) if isinstance(rel, dict)]
+    return {
+        "status": "ok",
+        "via": "fabric_getDefinition_model_bim",
+        "tables": tables,
+        "columns": columns,
+        "measures": measures,
+        "relationships": relationships,
+        "warnings": ["INFO.VIEW metadata query was unavailable; used model definition fallback."],
+    }
 
 
 async def _async_sleep(seconds: float) -> None:
@@ -79,7 +254,7 @@ async def sl_evaluate_dax(
     body = {"queries": [{"query": dax_query}], "serializerSettings": {"includeNulls": True}}
     url = f"{PBI_API}/groups/{workspace_id}/datasets/{dataset_id}/executeQueries"
     async with shared_client(60.0) as client:
-        resp = await client.post(url, json=body, headers=_pbi_headers())
+        resp = await _post_powerbi_json_with_auth_fallback(client, url, body)
     if resp.status_code != 200:
         return format_http_error(resp)
     data = resp.json()
@@ -171,7 +346,33 @@ async def sl_get_semantic_model_tables(
         ROW("section", "relations", "data", CONCATENATEX(INFO.VIEW.RELATIONSHIPS(), [FromTableName] & ".[" & [FromColumnName] & "] -> " & [ToTableName] & ".[" & [ToColumnName] & "]", " ||| "))
     )
     """
-    return await sl_evaluate_dax(workspace_id, dataset_id, dax)
+    rows = await _execute_powerbi_query_rows(workspace_id, dataset_id, dax)
+    if rows is not None:
+        return json.dumps(rows, indent=2)
+
+    simple_rows = await _execute_powerbi_query_rows(
+        workspace_id,
+        dataset_id,
+        'EVALUATE SELECTCOLUMNS(INFO.TABLES(), "section", "tables", "data", [Name])',
+    )
+    if simple_rows is not None:
+        return json.dumps({
+            "status": "ok",
+            "via": "powerbi_executeQueries_INFO_TABLES",
+            "tables": [row.get("[data]") or row.get("data") for row in simple_rows],
+            "rows": simple_rows,
+            "warnings": ["INFO.VIEW metadata query was unavailable; returned table metadata only."],
+        }, indent=2)
+
+    parts = await _get_semantic_model_definition_parts(workspace_id, dataset_id)
+    metadata = _semantic_model_metadata_from_parts(parts or []) if parts is not None else None
+    if metadata is not None:
+        return json.dumps(metadata, indent=2)
+    return json.dumps({
+        "status": "metadata_unavailable",
+        "via": "powerbi_executeQueries_and_fabric_getDefinition",
+        "message": "Semantic model metadata could not be read with INFO functions or getDefinition.",
+    }, indent=2)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -245,6 +446,121 @@ async def sl_cancel_refresh(
 # ═══════════════════════════════════════════════════════════════════════
 #  REPORT operations
 # ═══════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+async def sl_create_report_from_reportjson(
+    workspace_id: str,
+    report_name: str,
+    semantic_model_id: str,
+    report_json: dict,
+    theme_json: dict | None = None,
+) -> str:
+    """Create a Power BI report from a PBIR-Legacy ``report.json`` payload.
+
+    Mirrors `sempy_labs.report.create_report_from_reportjson` exactly:
+    posts a 2-part PBIR-Legacy item definition (``report.json`` +
+    ``definition.pbir``) where the ``definition.pbir`` uses the proven
+    ``pbiServiceXmlaStyleLive`` connection format
+    (``pbiModelVirtualServerName="sobe_wowvirtualserver"``,
+    ``pbiModelDatabaseName=<semantic_model_id>``,
+    ``connectionType="pbiServiceXmlaStyleLive"``).
+
+    Use this whenever you have a known-good ``report.json`` document
+    (e.g. one cloned via ``sl_get_report_definition`` from an existing
+    working report). Prefer it over hand-rolling new-format PBIR
+    folders — the legacy 2-part format is what Microsoft's own
+    `semantic-link-labs` library uses to create reports successfully.
+
+    Args:
+        workspace_id: Workspace UUID where the report should be created.
+        report_name: Display name of the new report.
+        semantic_model_id: UUID of the semantic model to bind the report to.
+        report_json: Full PBIR-Legacy single-file report.json document.
+        theme_json: Optional theme.json document. When provided, a
+            ``StaticResources/SharedResources/BaseThemes/<displayName>.json``
+            part is attached using
+            ``theme_json["payload"]["blob"]["displayName"]`` for the file name.
+    """
+    def _b64(payload: dict) -> str:
+        return base64.b64encode(
+            json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        ).decode("ascii")
+
+    definition_pbir = {
+        "version": "1.0",
+        "datasetReference": {
+            "byPath": None,
+            "byConnection": {
+                "connectionString": None,
+                "pbiServiceModelId": None,
+                "pbiModelVirtualServerName": "sobe_wowvirtualserver",
+                "pbiModelDatabaseName": semantic_model_id,
+                "name": "EntityDataSource",
+                "connectionType": "pbiServiceXmlaStyleLive",
+            },
+        },
+    }
+    parts = [
+        {
+            "path": "report.json",
+            "payload": _b64(report_json),
+            "payloadType": "InlineBase64",
+        },
+        {
+            "path": "definition.pbir",
+            "payload": _b64(definition_pbir),
+            "payloadType": "InlineBase64",
+        },
+    ]
+    if theme_json is not None:
+        try:
+            theme_id = theme_json["payload"]["blob"]["displayName"]
+        except Exception:
+            return "Error: theme_json must contain payload.blob.displayName"
+        parts.append({
+            "path": f"StaticResources/SharedResources/BaseThemes/{theme_id}.json",
+            "payload": _b64(theme_json),
+            "payloadType": "InlineBase64",
+        })
+
+    body = {
+        "displayName": report_name,
+        "definition": {"parts": parts},
+    }
+    url = f"{FABRIC_API}/workspaces/{workspace_id}/reports"
+    hdrs = _headers()
+    async with shared_client(120.0) as client:
+        resp = await client.post(url, json=body, headers=hdrs)
+        if resp.status_code in (200, 201):
+            return json.dumps(resp.json(), indent=2)
+        if resp.status_code == 202:
+            # Long-running operation: poll the operation result.
+            location = resp.headers.get("Location") or ""
+            if not location:
+                return "Error: 202 Accepted but no Location header was returned"
+            retry_after = int(resp.headers.get("Retry-After", "5"))
+            await _async_sleep(retry_after)
+            for _ in range(60):
+                resp2 = await client.get(location, headers=hdrs)
+                if resp2.status_code in (200, 201):
+                    body2 = resp2.json() if resp2.text else {}
+                    status = (body2.get("status") or "").lower()
+                    if status in ("succeeded", "completed", "running"):
+                        if status in ("succeeded", "completed"):
+                            result_url = location.rstrip("/") + "/result"
+                            resp3 = await client.get(result_url, headers=hdrs)
+                            if resp3.status_code in (200, 201):
+                                return json.dumps(resp3.json(), indent=2)
+                            return f"LRO completed but result fetch failed: {resp3.status_code} {resp3.text[:300]}"
+                        await _async_sleep(retry_after)
+                        continue
+                    return f"LRO ended with status={status}: {resp2.text[:500]}"
+                if resp2.status_code != 202:
+                    return format_http_error(resp2)
+                await _async_sleep(retry_after)
+            return "Error: LRO timed out after 60 polls"
+    return format_http_error(resp)
+
 
 @mcp.tool()
 async def sl_list_reports(
@@ -695,6 +1011,7 @@ async def sl_deploy_semantic_model(
         target_workspace_id: Target workspace UUID.
         target_dataset_name: Display name in the target workspace.
     """
+    _require_delegated_fabric_token("deploying semantic model")
     hdrs = _headers()
     async with shared_client(120.0) as client:
         # 1. Get source definition
