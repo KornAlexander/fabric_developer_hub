@@ -30,6 +30,7 @@
       <li><a href="#features">Features</a></li>
       <li><a href="#screenshots">Screenshots</a></li>
       <li><a href="#tools">The Two Tools</a></li>
+      <li><a href="#pbi-fixer">PBI Fixer</a></li>
       <li><a href="#getting-started">Getting Started</a></li>
       <li><a href="https://github.com/LukaszObst/fabric_developer_hub" target="_blank" rel="noopener">GitHub ↗</a></li>
     </ul>
@@ -115,7 +116,7 @@
           <li>Memory analyzer, Vertipaq, Delta Analyzer</li>
           <li>Ships natively inside the Developer Hub workload</li>
         </ul>
-        <a href="#features" class="card-link">See PBI Fixer features →</a>
+        <a href="#pbi-fixer" class="card-link">Explore Power BI Fixer →</a>
       </div>
     </div>
   </div>
@@ -279,12 +280,86 @@
   </div>
 </section>
 
+<!-- ═══════════════ PBI Fixer Deep Dive ═══════════════ -->
+<section class="section pbi-fixer-section" id="pbi-fixer">
+  <div class="container">
+    <div class="section-header">
+      <span class="section-eyebrow">Tool 2 · Power BI Engineering</span>
+      <h2>Power BI Fixer — 12 Tabs, 50+ Automated Fixes</h2>
+      <p>The full Power BI Fixer toolkit ships as the second built-in tool inside Developer Hub. Originally a notebook-native tool (<code>from sempy_labs import pbi_fixer</code>), now fully merged into the Hub workload — same engine, native UI, same one-click fixes for semantic models and reports.</p>
+    </div>
+
+    <div class="stats fixer-stats">
+      <div class="stat"><div class="stat-number">12</div><div class="stat-label">Interactive Tabs</div></div>
+      <div class="stat"><div class="stat-number">50+</div><div class="stat-label">Automated Fixers</div></div>
+      <div class="stat"><div class="stat-number">19</div><div class="stat-label">Model BPA Rules</div></div>
+      <div class="stat"><div class="stat-number">15</div><div class="stat-label">Unique Auto-Fixes</div></div>
+      <div class="stat"><div class="stat-number">0</div><div class="stat-label">License Cost</div></div>
+    </div>
+
+    <h3 class="subsection-title">The 12 Tabs</h3>
+    <div class="fixer-tabs-grid">
+      <div class="fixer-tab"><div class="fixer-tab-icon">⚡</div><h4>Fix All</h4><p>One-click scan &amp; fix across report fixers, model fixers, Model BPA and Report BPA. Grouped results with selective execution.</p></div>
+      <div class="fixer-tab"><div class="fixer-tab-icon">📄</div><h4>Model Explorer</h4><p>Browse tables, columns, measures, hierarchies, relationships. Edit DAX, properties, display folders. Create measures, calc columns, calc tables.</p></div>
+      <div class="fixer-tab"><div class="fixer-tab-icon">📊</div><h4>Report Explorer</h4><p>Navigate pages &amp; visuals with live preview. Scan for violations, fix chart formatting, convert to PBIR, align visuals.</p></div>
+      <div class="fixer-tab"><div class="fixer-tab-icon">📋</div><h4>Model BPA</h4><p>19 best-practice rules across 6 categories with one-click auto-fix. <strong>15 of 19</strong> rules have no auto-fix equivalent in any other tool.</p></div>
+      <div class="fixer-tab"><div class="fixer-tab-icon">📄</div><h4>Report BPA</h4><p>Report-level analysis with automatic PBIRLegacy → PBIR conversion. Catches unused custom visuals, report-level measures and more.</p></div>
+      <div class="fixer-tab"><div class="fixer-tab-icon">💾</div><h4>Memory Analyzer</h4><p>Vertipaq stats by tables, columns, partitions, relationships. Color-coded size bars, cardinality, encoding, Direct Lake support.</p></div>
+      <div class="fixer-tab"><div class="fixer-tab-icon">🌐</div><h4>Translations</h4><p>Manage metadata translations across all model objects. One-click auto-translate via Azure AI Translator — no API key needed.</p></div>
+      <div class="fixer-tab"><div class="fixer-tab-icon">👁</div><h4>Perspectives</h4><p>Create, edit, delete model perspectives with tri-state checkboxes. Visual table-level summaries with one-click save.</p></div>
+      <div class="fixer-tab"><div class="fixer-tab-icon">📐</div><h4>Delta Analyzer</h4><p>Inspect delta tables — parquet files, row groups, column chunks, column statistics. Essential for Direct Lake optimization.</p></div>
+      <div class="fixer-tab"><div class="fixer-tab-icon">✏️</div><h4>Prototype</h4><p>Capture page screenshots with navigation detection. Export to Excalidraw or SVG. Auto-detects drillthrough and button links.</p></div>
+      <div class="fixer-tab"><div class="fixer-tab-icon">🗺</div><h4>Model Diagram</h4><p>Auto-generated SVG relationship diagram with table boxes, columns, measures and nearest-edge connection lines.</p></div>
+      <div class="fixer-tab"><div class="fixer-tab-icon">ℹ️</div><h4>About</h4><p>Version info, credits and links to source code, documentation and the legacy notebook site.</p></div>
+    </div>
+
+    <h3 class="subsection-title">Highlighted Capabilities</h3>
+    <div class="fixer-highlight-grid">
+      <div class="fixer-highlight">
+        <h4>🎨 Report Fixers (15)</h4>
+        <p>Pie/Bar/Column/Line chart cleanup, IBCS Variance, Column → Bar (IBCS), Page Size to Full HD, Hide Visual Filters, Visual Alignment, Remove Unused Custom Visuals, and more — all one click.</p>
+      </div>
+      <div class="fixer-highlight">
+        <h4>🧠 Model BPA Auto-Fix</h4>
+        <p>Categories: Data Types · MDX · Documentation · Formatting · Schema · Naming. Fix All / Fix Rule / Fix Row granularity with severity indicators and finding counts.</p>
+      </div>
+      <div class="fixer-highlight">
+        <h4>⚡ IBCS Implementation</h4>
+        <p>International Business Communication Standards built in — proper variance bars with green/red coloring, IBCS theme application, standardized axis &amp; data label formatting.</p>
+      </div>
+      <div class="fixer-highlight">
+        <h4>🌐 AI Translations</h4>
+        <p>20 common language codes built in. Auto-translate via Azure AI / SynapseML, preview diff before applying — no API keys, no cost.</p>
+      </div>
+      <div class="fixer-highlight">
+        <h4>💾 Vertipaq Memory Analysis</h4>
+        <p>Model summary, partition &amp; column-level breakdown with color-coded % bars (red &gt;30 %, orange &gt;10 %, green ≤10 %). Direct Lake residency &amp; temperature included.</p>
+      </div>
+      <div class="fixer-highlight">
+        <h4>✏️ Prototype → Excalidraw</h4>
+        <p>Capture every report page as a screenshot with auto-detected page navigation and drillthrough arrows. Export the whole flow to <code>.excalidraw</code> or <code>.svg</code>.</p>
+      </div>
+    </div>
+
+    <div class="fixer-callout">
+      <div>
+        <h4>Built on Semantic Link Labs</h4>
+        <p>The Power BI Fixer engine is open source and built on top of <a href="https://github.com/microsoft/semantic-link-labs" target="_blank" rel="noopener">Semantic Link Labs</a> by <a href="https://www.linkedin.com/in/michaelkovalsky/" target="_blank" rel="noopener">Michael Kovalsky</a>. The same engine that powers the standalone notebook now ships natively inside Developer Hub.</p>
+      </div>
+      <div class="fixer-callout-actions">
+        <a href="https://kornalexander.github.io/pbi_fixer/" target="_blank" rel="noopener" class="btn btn-primary btn-fixer">Legacy Notebook Site ↗</a>
+        <a href="https://github.com/microsoft/semantic-link-labs" target="_blank" rel="noopener" class="btn btn-outline">sempy-labs on GitHub ↗</a>
+      </div>
+    </div>
+  </div>
+</section>
+
 <!-- ═══════════════ Screenshots ═══════════════ -->
 <section class="section section-alt" id="screenshots">
   <div class="container">
     <div class="section-header">
-      <h2>See It in Action</h2>
-      <p>A visual tour through the Developer Hub experience.</p>
+      <h2>Agent Hub — See It in Action</h2>
+      <p>A visual tour through the Agent Hub experience inside the Developer Hub workload.</p>
     </div>
 
     <div class="screenshot-section">
