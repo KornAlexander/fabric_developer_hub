@@ -29,7 +29,7 @@
       <li><a href="#workflow">Workflow</a></li>
       <li><a href="#features">Features</a></li>
       <li><a href="#screenshots">Screenshots</a></li>
-      <li><a href="#vs-fixer">vs. PBI Fixer</a></li>
+      <li><a href="#tools">The Two Tools</a></li>
       <li><a href="#getting-started">Getting Started</a></li>
       <li><a href="https://github.com/LukaszObst/fabric_developer_hub" target="_blank" rel="noopener">GitHub ↗</a></li>
     </ul>
@@ -65,8 +65,8 @@
     </div>
 
     <p style="margin-top:1.5rem;font-size:0.85rem;color:var(--text-muted);">
-      Maintained by <a href="https://github.com/LukaszObst" target="_blank" rel="noopener">Lukasz Obst</a> ·
-      Contributions by <a href="https://www.linkedin.com/in/alexanderkorn/" target="_blank" rel="noopener">Alexander Korn</a>
+      Co-maintained by <a href="https://github.com/LukaszObst" target="_blank" rel="noopener">Lukasz Obst</a> &amp;
+      <a href="https://www.linkedin.com/in/alexanderkorn/" target="_blank" rel="noopener">Alexander Korn</a>
     </p>
   </div>
 </section>
@@ -83,17 +83,17 @@
   </div>
 </section>
 
-<!-- ═══════════════ Distinction (Hub vs Fixer) ═══════════════ -->
-<section class="distinction" id="vs-fixer">
+<!-- ═══════════════ Two Tools (Agent Hub + PBI Fixer) ═══════════════ -->
+<section class="distinction" id="tools">
   <div class="container">
     <div class="section-header">
-      <h2>Two Tools, One Mission</h2>
-      <p>Fabric Developer Hub and Power BI Fixer are <strong>distinct, complementary projects</strong>. They share design DNA but solve very different problems.</p>
+      <h2>One Hub, Two Tools</h2>
+      <p>Fabric Developer Hub is the umbrella platform. It bundles <strong>two complementary tools</strong> under one Fabric workload: <strong>Agent Hub</strong> for AI-agent orchestration, and <strong>Power BI Fixer</strong> for Power BI engineering. The previously standalone Power BI Fixer was <strong>merged into the Developer Hub</strong> and is now shipped as a first-class tool inside it.</p>
     </div>
 
     <div class="distinction-grid">
       <div class="distinction-card is-hub">
-        <h3>Fabric Developer Hub <span class="pill">This site</span></h3>
+        <h3>Agent Hub <span class="pill">Tool 1</span></h3>
         <p><strong>An agent orchestration platform</strong> that runs as a native Fabric workload. Build, run, and govern AI agents that touch Lakehouses, Warehouses, Pipelines and Reports.</p>
         <ul>
           <li>Skill-based composition model</li>
@@ -102,20 +102,20 @@
           <li>Workspace branching for safe experimentation</li>
           <li>Microsoft Fabric workload (iframe + REST APIs)</li>
         </ul>
-        <a href="#concepts" class="card-link">Explore the platform →</a>
+        <a href="#concepts" class="card-link">Explore Agent Hub →</a>
       </div>
 
       <div class="distinction-card is-fixer">
-        <h3>Power BI Fixer <span class="pill">Sister project</span></h3>
-        <p><strong>A Power BI engineering toolkit</strong> for scanning, fixing and exploring semantic models and reports. Originally a notebook-native tool, now also embedded as a sub-workload inside the Developer Hub.</p>
+        <h3>Power BI Fixer <span class="pill">Tool 2</span></h3>
+        <p><strong>A Power BI engineering toolkit</strong> for scanning, fixing and exploring semantic models and reports. Originally a notebook-native tool, now <strong>fully merged into the Developer Hub</strong> as its second built-in tool.</p>
         <ul>
           <li>50+ automated fixers for SM &amp; Reports</li>
           <li>Model BPA with one-click auto-fix</li>
           <li>Translations, perspectives, prototypes</li>
           <li>Memory analyzer, Vertipaq, Delta Analyzer</li>
-          <li>Standalone or embedded in Developer Hub</li>
+          <li>Ships natively inside the Developer Hub workload</li>
         </ul>
-        <a href="https://kornalexander.github.io/pbi_fixer/" target="_blank" rel="noopener" class="card-link">Visit pbi_fixer site ↗</a>
+        <a href="#features" class="card-link">See PBI Fixer features →</a>
       </div>
     </div>
   </div>
@@ -257,8 +257,8 @@
       <div class="feature-card">
         <div class="feature-icon">🧠</div>
         <div class="feature-content">
-          <h3>Power BI Fixer Embedded</h3>
-          <p>The full Power BI Fixer toolkit ships as a sub-workload — 50+ automated fixers, BPA, translations, prototypes.</p>
+          <h3>Power BI Fixer Built-In</h3>
+          <p>The full Power BI Fixer toolkit is one of the Hub&rsquo;s two core tools — 50+ automated fixers, BPA, translations, prototypes.</p>
         </div>
       </div>
       <div class="feature-card">
@@ -462,14 +462,14 @@ docker compose logs -f dev-gateway
   <div class="container">
     <div class="footer-links">
       <a href="https://github.com/LukaszObst/fabric_developer_hub" target="_blank" rel="noopener">GitHub Repository</a>
-      <a href="https://kornalexander.github.io/pbi_fixer/" target="_blank" rel="noopener">Power BI Fixer</a>
+      <a href="https://kornalexander.github.io/pbi_fixer/" target="_blank" rel="noopener">Power BI Fixer (legacy notebook site)</a>
       <a href="https://github.com/microsoft/skills-for-fabric" target="_blank" rel="noopener">skills-for-fabric</a>
       <a href="https://learn.microsoft.com/fabric/" target="_blank" rel="noopener">Microsoft Fabric docs</a>
     </div>
     <p>
       Fabric Developer Hub is in active development. Status: <strong>Design + Workload Preview</strong>.<br/>
-      Maintained by <a href="https://github.com/LukaszObst" target="_blank" rel="noopener">Lukasz Obst</a> ·
-      Contributions by <a href="https://www.linkedin.com/in/alexanderkorn/" target="_blank" rel="noopener">Alexander Korn</a>
+      Co-maintained by <a href="https://github.com/LukaszObst" target="_blank" rel="noopener">Lukasz Obst</a> &amp;
+      <a href="https://www.linkedin.com/in/alexanderkorn/" target="_blank" rel="noopener">Alexander Korn</a>
     </p>
   </div>
 </footer>
