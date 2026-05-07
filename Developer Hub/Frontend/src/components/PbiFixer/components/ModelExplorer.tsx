@@ -1,7 +1,7 @@
 // ModelExplorer — React component (FluentUI)
 // Mirrors model_explorer_tab() from _sm_explorer.py
 
-import React, { useState, useCallback, useMemo } from "react";
+import React, { useState, useCallback, useMemo, useEffect } from "react";
 import {
   Button,
   Input,
@@ -36,6 +36,8 @@ import {
   ICON_ACCENT,
   SECTION_BG,
 } from "../utils";
+// Hero design ported from AgentHub Sessions tab. Eyebrow + gradient title +
+// blue CTA mirror .sessions-hero / .sessions-cta in src/styles.scss.
 import {
   listSemanticModels,
   loadModelData,
@@ -69,7 +71,76 @@ const useStyles = makeStyles({
     display: "flex",
     flexDirection: "column",
     height: "100%",
+    ...shorthands.gap("12px"),
+    backgroundColor: "#faf9f8",
+    ...shorthands.padding("20px", "24px"),
+    ...shorthands.margin("-24px"),
+    overflowY: "auto",
+  },
+  hero: {
+    display: "flex",
+    flexDirection: "column",
+    ...shorthands.gap("4px"),
+    marginBottom: "4px",
+  },
+  heroEyebrowRow: {
+    display: "flex",
+    alignItems: "center",
     ...shorthands.gap("8px"),
+  },
+  heroEyebrow: {
+    fontSize: "12px",
+    fontWeight: 600,
+    letterSpacing: "0.08em",
+    textTransform: "uppercase",
+    color: "#0078d4",
+  },
+  heroVersion: {
+    fontSize: "12px",
+    color: tokens.colorNeutralForeground2,
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+    ...shorthands.padding("2px", "6px"),
+    ...shorthands.border("1px", "solid", "rgba(192, 199, 212, 0.4)"),
+    ...shorthands.borderRadius("4px"),
+    backgroundColor: tokens.colorNeutralBackground3,
+  },
+  inlineConnection: {
+    display: "flex",
+    alignItems: "flex-end",
+    ...shorthands.gap("12px"),
+    flexWrap: "wrap",
+    ...shorthands.margin("4px", "0", "8px", "0"),
+  },
+  heroTitle: {
+    fontSize: "28px",
+    fontWeight: 700,
+    lineHeight: 1.15,
+    margin: 0,
+    backgroundImage: "linear-gradient(95deg, #1a1c1c 0%, #004883 72%, #0078d4 100%)",
+    WebkitBackgroundClip: "text",
+    backgroundClip: "text",
+    color: "transparent",
+  },
+  heroSubtitle: {
+    fontSize: "14px",
+    color: "#5a5e62",
+    margin: 0,
+    maxWidth: "720px",
+  },
+  loadCta: {
+    backgroundImage: "linear-gradient(135deg, #005faa 0%, #0078d4 100%)",
+    backgroundColor: "#0078d4",
+    color: "#ffffff",
+    border: "none",
+    "&:hover": {
+      backgroundImage: "linear-gradient(135deg, #004883 0%, #0066b8 100%)",
+      backgroundColor: "#0066b8",
+      color: "#ffffff",
+    },
+    "&:active": {
+      backgroundImage: "linear-gradient(135deg, #003a6b 0%, #005faa 100%)",
+      color: "#ffffff",
+    },
   },
   toolbar: {
     display: "flex",
@@ -124,16 +195,24 @@ const useStyles = makeStyles({
     ...shorthands.border("1px", "solid", BORDER_COLOR),
     ...shorthands.borderRadius("8px"),
     ...shorthands.padding("8px"),
-    backgroundColor: SECTION_BG,
+    backgroundColor: "#ffffff",
+    boxShadow: "0 1px 2px rgba(0, 0, 0, 0.04)",
     minHeight: "160px",
   },
   propertiesPanel: {
     ...shorthands.border("1px", "solid", BORDER_COLOR),
     ...shorthands.borderRadius("8px"),
     ...shorthands.padding("8px"),
-    backgroundColor: SECTION_BG,
+    backgroundColor: "#ffffff",
+    boxShadow: "0 1px 2px rgba(0, 0, 0, 0.04)",
     flex: 1,
+    minHeight: 0,
     overflowY: "auto",
+    // v0.87 — column flex so child blocks (e.g. partition Expression
+    // editor) can flex-grow to fill the panel instead of being capped
+    // by their minHeight, leaving the bottom of the panel unused.
+    display: "flex",
+    flexDirection: "column",
   },
   sectionLabel: {
     // v0.70 — mirror Fluent <Field label="…"> styling used by the
@@ -180,6 +259,12 @@ export interface ModelExplorerProps {
    *  name-based lookup against /groups/{ws}/datasets (which 404s for
    *  Fabric-native semantic models that aren't indexed in PBI). */
   datasetId?: string;
+  /** Inline connection picker (Workspace + Semantic Model) injected by
+   *  PbiFixerPage so it sits between the description and the Load Model
+   *  toolbar instead of in the page-level chrome. */
+  connectionSlot?: React.ReactNode;
+  /** Version badge shown next to the eyebrow ("POWER BI FIXER"). */
+  version?: string;
 }
 
 export const ModelExplorer: React.FC<ModelExplorerProps> = ({
@@ -187,6 +272,8 @@ export const ModelExplorer: React.FC<ModelExplorerProps> = ({
   workspace,
   datasetName,
   datasetId,
+  connectionSlot,
+  version,
 }) => {
   const styles = useStyles();
 
@@ -397,6 +484,12 @@ export const ModelExplorer: React.FC<ModelExplorerProps> = ({
       setLoading(false);
     }
   }, [auth, workspace, datasetName, datasetId]);
+
+  // v0.91 — Auto-load on selection (mirrors Memory Analyzer / Model BPA pattern).
+  // The Load Model button has been removed; selecting a workspace + semantic
+  // model in the shared picker triggers handleLoad automatically. handleLoad
+  // is memoised on those inputs, so the effect re-runs whenever they change.
+  useEffect(() => { void handleLoad(); }, [handleLoad]);
 
   const handleToggleNode = useCallback(
     (key: string) => {
@@ -1164,15 +1257,44 @@ export const ModelExplorer: React.FC<ModelExplorerProps> = ({
           <PropRow label="Table" value={tableName} />
           <PropRow label="Name" value={p.name} />
           <PropRow label="Source Type" value={p.sourceType} />
-          <PropEditRow label="Expression (M / DAX)">
+          {/* v0.87 — Expression editor expands to fill the remaining
+              vertical space of the Properties panel instead of staying
+              at a fixed 160px and leaving the bottom empty. */}
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              flex: 1,
+              minHeight: 0,
+              marginTop: "6px",
+            }}
+          >
+            <span
+              className={styles.propLabel}
+              style={{ marginBottom: 4, minWidth: 0 }}
+            >
+              Expression (M / DAX)
+            </span>
             <Textarea
               size="small"
               value={exprValue}
-              resize="vertical"
-              style={{ width: "100%", minHeight: "160px", fontFamily: "Consolas, 'Cascadia Code', monospace", fontSize: "12px" }}
+              resize="none"
+              style={{
+                width: "100%",
+                flex: 1,
+                minHeight: "160px",
+                display: "flex",
+              }}
+              textarea={{
+                style: {
+                  height: "100%",
+                  fontFamily: "Consolas, 'Cascadia Code', monospace",
+                  fontSize: "12px",
+                },
+              }}
               onChange={(_, d) => setPartitionEdit(tableName, p.name, d.value)}
             />
-          </PropEditRow>
+          </div>
         </>
       );
     }
@@ -1218,17 +1340,25 @@ export const ModelExplorer: React.FC<ModelExplorerProps> = ({
 
   return (
     <div className={styles.root}>
+      <div className={styles.hero}>
+        <div className={styles.heroEyebrowRow}>
+          <div className={styles.heroEyebrow}>Power BI Fixer</div>
+          {version && <span className={styles.heroVersion}>{version}</span>}
+        </div>
+        <h1 className={styles.heroTitle}>Model Explorer</h1>
+        <p className={styles.heroSubtitle}>
+          Browse tables, measures, columns and relationships of the loaded
+          semantic model. Inspect DAX expressions, edit properties, and run
+          model fixes.
+        </p>
+      </div>
+      {connectionSlot && (
+        <div className={styles.inlineConnection}>{connectionSlot}</div>
+      )}
       <div className={styles.toolbar}>
         <Button
           appearance="primary"
-          onClick={handleLoad}
-          disabled={loading}
-          icon={loading ? <Spinner size="tiny" /> : undefined}
-        >
-          {loading ? "Loading Model" : "Load Model"}
-        </Button>
-        <Button
-          appearance="subtle"
+          className={styles.loadCta}
           icon={<ArrowExpand20Regular />}
           onClick={handleExpandAll}
           disabled={!modelData}
@@ -1236,7 +1366,8 @@ export const ModelExplorer: React.FC<ModelExplorerProps> = ({
           Expand All
         </Button>
         <Button
-          appearance="subtle"
+          appearance="primary"
+          className={styles.loadCta}
           icon={<ArrowCollapseAll20Regular />}
           onClick={handleCollapseAll}
           disabled={!modelData}
@@ -1244,13 +1375,19 @@ export const ModelExplorer: React.FC<ModelExplorerProps> = ({
           Collapse All
         </Button>
         <Button
-          appearance="subtle"
+          appearance="primary"
+          className={styles.loadCta}
           icon={scanning ? <Spinner size="tiny" /> : <Wrench20Regular />}
           onClick={handleScanFixers}
           disabled={!resolvedIds || scanning}
         >
           {scanning ? "Scanning" : "Scan model fixes"}
         </Button>
+        {loading && (
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: GRAY_COLOR, fontSize: 12 }}>
+            <Spinner size="tiny" /> Loading model...
+          </span>
+        )}
         {perspectives.length > 0 && (
           <Dropdown
             size="small"
@@ -1313,7 +1450,7 @@ export const ModelExplorer: React.FC<ModelExplorerProps> = ({
             })}
             {perspectiveFilteredOptions.length === 0 && !loading && (
               <div style={{ padding: "20px", color: GRAY_COLOR, textAlign: "center", fontStyle: "italic" }}>
-                {modelData ? "No matching items" : "Click Load Model to explore"}
+                {modelData ? "No matching items" : "Pick a workspace and semantic model to load"}
               </div>
             )}
           </div>

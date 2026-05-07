@@ -33,6 +33,7 @@ import {
   ICON_ACCENT,
   SECTION_BG,
 } from "../utils";
+// Hero design ported from AgentHub Sessions tab.
 import {
   listReports,
   loadReportDefinition,
@@ -97,7 +98,76 @@ const useStyles = makeStyles({
     display: "flex",
     flexDirection: "column",
     height: "100%",
+    ...shorthands.gap("12px"),
+    backgroundColor: "#faf9f8",
+    ...shorthands.padding("20px", "24px"),
+    ...shorthands.margin("-24px"),
+    overflow: "hidden",
+  },
+  hero: {
+    display: "flex",
+    flexDirection: "column",
+    ...shorthands.gap("4px"),
+    marginBottom: "4px",
+  },
+  heroEyebrowRow: {
+    display: "flex",
+    alignItems: "center",
     ...shorthands.gap("8px"),
+  },
+  heroEyebrow: {
+    fontSize: "12px",
+    fontWeight: 600,
+    letterSpacing: "0.08em",
+    textTransform: "uppercase",
+    color: "#0078d4",
+  },
+  heroVersion: {
+    fontSize: "12px",
+    color: tokens.colorNeutralForeground2,
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+    ...shorthands.padding("2px", "6px"),
+    ...shorthands.border("1px", "solid", "rgba(192, 199, 212, 0.4)"),
+    ...shorthands.borderRadius("4px"),
+    backgroundColor: tokens.colorNeutralBackground3,
+  },
+  inlineConnection: {
+    display: "flex",
+    alignItems: "flex-end",
+    ...shorthands.gap("12px"),
+    flexWrap: "wrap",
+    ...shorthands.margin("4px", "0", "8px", "0"),
+  },
+  heroTitle: {
+    fontSize: "28px",
+    fontWeight: 700,
+    lineHeight: 1.15,
+    margin: 0,
+    backgroundImage: "linear-gradient(95deg, #1a1c1c 0%, #004883 72%, #0078d4 100%)",
+    WebkitBackgroundClip: "text",
+    backgroundClip: "text",
+    color: "transparent",
+  },
+  heroSubtitle: {
+    fontSize: "14px",
+    color: "#5a5e62",
+    margin: 0,
+    maxWidth: "720px",
+  },
+  loadCta: {
+    backgroundImage: "linear-gradient(135deg, #005faa 0%, #0078d4 100%)",
+    backgroundColor: "#0078d4",
+    color: "#ffffff",
+    border: "none",
+    "&:hover": {
+      backgroundImage: "linear-gradient(135deg, #004883 0%, #0066b8 100%)",
+      backgroundColor: "#0066b8",
+      color: "#ffffff",
+    },
+    "&:active": {
+      backgroundImage: "linear-gradient(135deg, #003a6b 0%, #005faa 100%)",
+      color: "#ffffff",
+    },
   },
   toolbar: {
     display: "flex",
@@ -154,7 +224,8 @@ const useStyles = makeStyles({
     ...shorthands.border("1px", "solid", BORDER_COLOR),
     ...shorthands.borderRadius("8px"),
     ...shorthands.padding("8px"),
-    backgroundColor: SECTION_BG,
+    backgroundColor: "#ffffff",
+    boxShadow: "0 1px 2px rgba(0, 0, 0, 0.04)",
     flex: 1,
     minHeight: 0,
     display: "flex",
@@ -189,7 +260,8 @@ const useStyles = makeStyles({
     ...shorthands.border("1px", "solid", BORDER_COLOR),
     ...shorthands.borderRadius("8px"),
     ...shorthands.padding("8px"),
-    backgroundColor: SECTION_BG,
+    backgroundColor: "#ffffff",
+    boxShadow: "0 1px 2px rgba(0, 0, 0, 0.04)",
     flex: "0 0 auto",
     minHeight: "200px",
     maxHeight: "360px",
@@ -447,6 +519,12 @@ export interface ReportExplorerProps {
   /** Optional resolved Fabric report id. Skips name-based lookup. */
   reportId?: string;
   onNavigateToModel?: (key: string) => void;
+  /** Inline connection picker (Workspace + Report) injected by
+   *  PbiFixerPage so it sits between the description and the Load Report
+   *  toolbar instead of in the page-level chrome. */
+  connectionSlot?: React.ReactNode;
+  /** Version badge shown next to the eyebrow ("POWER BI FIXER"). */
+  version?: string;
 }
 
 export const ReportExplorer: React.FC<ReportExplorerProps> = ({
@@ -455,6 +533,8 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
   reportName,
   reportId,
   onNavigateToModel,
+  connectionSlot,
+  version,
 }) => {
   const styles = useStyles();
 
@@ -783,6 +863,11 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
     }
   }, [auth, workspace, reportName, reportId]);
 
+  // v0.91 — Auto-load on selection (mirrors Memory Analyzer / Model BPA pattern).
+  // The Load Report button has been removed; selecting a workspace + report in
+  // the shared picker triggers handleLoad automatically.
+  useEffect(() => { void handleLoad(); }, [handleLoad]);
+
   const handleToggleNode = useCallback((key: string) => {
     const parts = key.split(":");
     const nodeType = parts[0];
@@ -839,17 +924,24 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
 
   return (
     <div className={styles.root}>
+      <div className={styles.hero}>
+        <div className={styles.heroEyebrowRow}>
+          <div className={styles.heroEyebrow}>Power BI Fixer</div>
+          {version && <span className={styles.heroVersion}>{version}</span>}
+        </div>
+        <h1 className={styles.heroTitle}>Report Explorer</h1>
+        <p className={styles.heroSubtitle}>
+          Browse pages and visuals of the loaded report. Inspect properties,
+          edit visual settings, and run report fixes.
+        </p>
+      </div>
+      {connectionSlot && (
+        <div className={styles.inlineConnection}>{connectionSlot}</div>
+      )}
       <div className={styles.toolbar}>
         <Button
           appearance="primary"
-          onClick={handleLoad}
-          disabled={loading}
-          icon={loading ? <Spinner size="tiny" /> : undefined}
-        >
-          {loading ? "Loading Report" : "Load Report"}
-        </Button>
-        <Button
-          appearance="subtle"
+          className={styles.loadCta}
           icon={<ArrowExpand20Regular />}
           onClick={handleExpandAll}
           disabled={!reportData}
@@ -857,7 +949,8 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
           Expand All
         </Button>
         <Button
-          appearance="subtle"
+          appearance="primary"
+          className={styles.loadCta}
           icon={<ArrowCollapseAll20Regular />}
           onClick={handleCollapseAll}
           disabled={!reportData}
@@ -865,13 +958,19 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
           Collapse All
         </Button>
         <Button
-          appearance="subtle"
+          appearance="primary"
+          className={styles.loadCta}
           icon={fixerScanning ? <Spinner size="tiny" /> : <Wrench20Regular />}
           onClick={handleScanReportFixers}
           disabled={!reportData || fixerScanning}
         >
           {fixerScanning ? "Scanning" : "Scan report fixes"}
         </Button>
+        {loading && (
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: GRAY_COLOR, fontSize: 12 }}>
+            <Spinner size="tiny" /> Loading report...
+          </span>
+        )}
         {/* v0.69 — toolbar status pill is reserved for ERRORS only.
             Loading state is conveyed by the primary button's spinner + label;
             success/info messages would just clutter the toolbar. */}
@@ -909,7 +1008,7 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
             })}
             {filteredOptions.length === 0 && !loading && (
               <div style={{ padding: "20px", color: GRAY_COLOR, textAlign: "center", fontStyle: "italic" }}>
-                {reportData ? "No matching items" : "Click Load Report to explore"}
+                {reportData ? "No matching items" : "Pick a workspace and report to load"}
               </div>
             )}
           </div>
