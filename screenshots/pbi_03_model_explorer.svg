@@ -1,0 +1,136 @@
+<svg viewBox="0 0 1200 700" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .bg { fill: #f5f5f5; }
+      .header { fill: #1f2937; }
+      .header-text { fill: white; font-size: 16px; font-weight: bold; }
+      .panel-bg { fill: white; stroke: #e5e7eb; stroke-width: 1; }
+      .section-title { fill: #1f2937; font-size: 14px; font-weight: 600; }
+      .tree-item { font-size: 12px; fill: #1f2937; }
+      .tree-muted { fill: #6b7280; }
+      .type-tag { font-size: 9px; font-weight: 600; fill: white; }
+      .column { fill: #3b82f6; }
+      .measure { fill: #f59e0b; }
+      .table { fill: #059669; }
+      .code-block { fill: #1f2937; font-family: monospace; font-size: 10px; }
+      .formula { fill: #2563eb; font-family: monospace; font-size: 11px; }
+    </style>
+  </defs>
+  
+  <!-- Background -->
+  <rect class="bg" width="1200" height="700"/>
+  
+  <!-- Header -->
+  <rect class="header" width="1200" height="60"/>
+  <text class="header-text" x="20" y="38">Model Explorer — Semantic Model Structure &amp; DAX</text>
+  
+  <!-- Left Panel: Tree View -->
+  <rect class="panel-bg" x="20" y="80" width="320" height="600"/>
+  <text class="section-title" x="30" y="105">Semantic Model: SalesAnalytics</text>
+  
+  <!-- Search Box -->
+  <rect fill="#f3f4f6" x="25" y="115" width="310" height="30" rx="3" stroke="#e5e7eb" stroke-width="1"/>
+  <text style="font-size: 12px; fill: #6b7280;" x="35" y="136">Search tables, columns, measures...</text>
+  
+  <!-- Tree Structure -->
+  <g style="font-family: monospace;">
+    <!-- Table 1: Customers -->
+    <text style="font-size: 12px; font-weight: 600; fill: #059669;" x="30" y="170">📦 Customers</text>
+    <rect class="table" x="25" y="160" width="16" height="16" rx="2"/>
+    
+    <text class="tree-item" x="50" y="190">└─ 📊 CustomerID (int)</text>
+    <text class="tree-muted" x="70" y="202" style="font-size: 10px;">PK • Hidden</text>
+    
+    <text class="tree-item" x="50" y="220">├─ 📝 CustomerName (string)</text>
+    <text class="tree-muted" x="70" y="232" style="font-size: 10px;">Sort by: CustomerID</text>
+    
+    <text class="tree-item" x="50" y="250">├─ 📝 Country (string)</text>
+    
+    <text class="tree-item" x="50" y="270">└─ 📅 DateCreated (datetime)</text>
+    <text class="tree-muted" x="70" y="282" style="font-size: 10px;">Format: yyyy-MM-dd</text>
+    
+    <!-- Table 2: Sales -->
+    <text style="font-size: 12px; font-weight: 600; fill: #059669;" x="30" y="310">📦 Sales</text>
+    <rect class="table" x="25" y="300" width="16" height="16" rx="2"/>
+    
+    <text class="tree-item" x="50" y="330">├─ 📊 SalesID (int)</text>
+    <text class="tree-muted" x="70" y="342" style="font-size: 10px;">PK</text>
+    
+    <text class="tree-item" x="50" y="360">├─ 📊 CustomerID (int)</text>
+    <text class="tree-muted" x="70" y="372" style="font-size: 10px;">FK → Customers</text>
+    
+    <text class="tree-item" x="50" y="390">├─ 📅 OrderDate (datetime)</text>
+    
+    <text class="tree-item" x="50" y="410">├─ 💰 Amount (decimal)</text>
+    <text class="tree-muted" x="70" y="422" style="font-size: 10px;">Format: $#,##0.00</text>
+    
+    <text style="font-size: 12px; font-weight: 600; fill: #f59e0b;" x="50" y="445">⚙️ Total Sales (Measure)</text>
+    <text class="tree-muted" x="70" y="457" style="font-size: 10px;">DAX formula inline →</text>
+    
+    <text style="font-size: 12px; font-weight: 600; fill: #f59e0b;" x="50" y="480">⚙️ Avg Order Value</text>
+    
+    <text class="tree-item" x="50" y="500">└─ 📊 Quantity (int)</text>
+  </g>
+  
+  <!-- Right Panel: Details -->
+  <rect class="panel-bg" x="350" y="80" width="830" height="600"/>
+  
+  <!-- Tabs -->
+  <g>
+    <rect fill="#3b82f6" x="360" y="90" width="100" height="30" rx="3"/>
+    <text style="font-size: 12px; fill: white; font-weight: 600;" x="375" y="110">DAX Formula</text>
+    
+    <rect fill="#f3f4f6" x="470" y="90" width="100" height="30" rx="3" stroke="#e5e7eb" stroke-width="1"/>
+    <text style="font-size: 12px; fill: #1f2937;" x="485" y="110">Statistics</text>
+    
+    <rect fill="#f3f4f6" x="580" y="90" width="100" height="30" rx="3" stroke="#e5e7eb" stroke-width="1"/>
+    <text style="font-size: 12px; fill: #1f2937;" x="595" y="110">Relationships</text>
+    
+    <rect fill="#f3f4f6" x="690" y="90" width="120" height="30" rx="3" stroke="#e5e7eb" stroke-width="1"/>
+    <text style="font-size: 12px; fill: #1f2937;" x="705" y="110">Usage Analytics</text>
+  </g>
+  
+  <!-- DAX Formula Content -->
+  <rect fill="#f3f4f6" x="360" y="130" width="800" height="540" rx="3"/>
+  
+  <text style="font-size: 12px; font-weight: 600; fill: #1f2937;" x="370" y="155">Measure: Total Sales</text>
+  
+  <rect fill="white" x="365" y="165" width="790" height="180" rx="2" stroke="#e5e7eb" stroke-width="1"/>
+  <text class="code-block" x="375" y="185" style="font-family: 'Courier New', monospace; font-size: 12px; fill: #059669;">DEFINE</text>
+  <text class="code-block" x="375" y="203" style="font-family: 'Courier New', monospace; font-size: 12px;">MEASURE Sales[Total Sales] =</text>
+  <text class="code-block" x="395" y="221" style="font-family: 'Courier New', monospace; font-size: 12px; fill: #2563eb;">SUMX</text><text class="code-block" x="430" y="221" style="font-family: 'Courier New', monospace; font-size: 12px;">( Sales,</text>
+  <text class="code-block" x="415" y="239" style="font-family: 'Courier New', monospace; font-size: 12px;">Sales[Quantity] * Sales[Amount]</text>
+  <text class="code-block" x="395" y="257" style="font-family: 'Courier New', monospace; font-size: 12px;">)</text>
+  <text class="code-block" x="375" y="275" style="font-family: 'Courier New', monospace; font-size: 12px; fill: #6b7280;">-- Calculates line item total</text>
+  
+  <!-- Metadata -->
+  <text style="font-size: 12px; font-weight: 600; fill: #1f2937;" x="370" y="365">Metadata</text>
+  
+  <g>
+    <rect fill="white" x="365" y="375" width="250" height="140" rx="2" stroke="#e5e7eb" stroke-width="1"/>
+    <text style="font-size: 11px; font-weight: 600; fill: #1f2937;" x="375" y="395">Display Folder:</text>
+    <text style="font-size: 11px; fill: #2563eb;" x="375" y="410">Financial • Sales Metrics</text>
+    
+    <text style="font-size: 11px; font-weight: 600; fill: #1f2937; margin-top: 10;" x="375" y="430">Format String:</text>
+    <text class="code-block" x="375" y="445">$#,##0.00</text>
+    
+    <text style="font-size: 11px; font-weight: 600; fill: #1f2937;" x="375" y="465">Description:</text>
+    <text style="font-size: 10px; fill: #6b7280;" x="375" y="480">"Sum of all sales</text>
+    <text style="font-size: 10px; fill: #6b7280;" x="375" y="495">amounts by order"</text>
+  </g>
+  
+  <!-- Relationships -->
+  <g>
+    <rect fill="white" x="625" y="375" width="530" height="140" rx="2" stroke="#e5e7eb" stroke-width="1"/>
+    <text style="font-size: 12px; font-weight: 600; fill: #1f2937;" x="635" y="395">Relationships Involving This Table</text>
+    
+    <text style="font-size: 11px; fill: #1f2937;" x="635" y="415">• Sales.CustomerID → Customers.CustomerID</text>
+    <text style="font-size: 10px; fill: #6b7280;" x="655" y="428">Type: Many-to-One • Cross-filter: Both • Status: Active</text>
+    
+    <text style="font-size: 11px; fill: #1f2937;" x="635" y="450">• Sales.ProductID → Products.ProductID</text>
+    <text style="font-size: 10px; fill: #6b7280;" x="655" y="463">Type: Many-to-One • Cross-filter: Single • Status: Active</text>
+    
+    <text style="font-size: 11px; fill: #1f2937;" x="635" y="485">• Sales.OrderDate → Calendar.Date</text>
+    <text style="font-size: 10px; fill: #6b7280;" x="655" y="498">Type: Many-to-One • Cross-filter: Both • Status: Active</text>
+  </g>
+</svg>

@@ -1,0 +1,131 @@
+<svg viewBox="0 0 1200 700" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .bg { fill: #f5f5f5; }
+      .header { fill: #1f2937; }
+      .header-text { fill: white; font-size: 16px; font-weight: bold; }
+      .panel-bg { fill: white; stroke: #e5e7eb; stroke-width: 1; }
+      .section-title { fill: #1f2937; font-size: 14px; font-weight: 600; }
+      .stat-box { stroke: #e5e7eb; stroke-width: 1; }
+      .stat-label { font-size: 11px; fill: #6b7280; }
+      .stat-value { font-size: 20px; font-weight: bold; }
+      .bar-bg { fill: #e5e7eb; }
+      .bar-fill { fill: #3b82f6; }
+      .bar-warn { fill: #f59e0b; }
+      .bar-hot { fill: #ef4444; }
+      .bar-label { font-size: 10px; fill: #374151; }
+      .metric-text { font-size: 11px; fill: #1f2937; }
+    </style>
+  </defs>
+  
+  <!-- Background -->
+  <rect class="bg" width="1200" height="700"/>
+  
+  <!-- Header -->
+  <rect class="header" width="1200" height="60"/>
+  <text class="header-text" x="20" y="38">VertiPaq Analyzer — Compression &amp; Memory Optimization</text>
+  
+  <!-- Top Stats -->
+  <g>
+    <!-- Total Size -->
+    <rect class="panel-bg stat-box" x="20" y="80" width="180" height="70" rx="3"/>
+    <text class="stat-label" x="30" y="100">Total Model Size</text>
+    <text class="stat-value" style="fill: #3b82f6;" x="30" y="130">42.3 MB</text>
+    
+    <!-- Compression Ratio -->
+    <rect class="panel-bg stat-box" x="210" y="80" width="180" height="70" rx="3"/>
+    <text class="stat-label" x="220" y="100">Compression Ratio</text>
+    <text class="stat-value" style="fill: #10b981;" x="220" y="130">89.2%</text>
+    
+    <!-- Row Count -->
+    <rect class="panel-bg stat-box" x="400" y="80" width="180" height="70" rx="3"/>
+    <text class="stat-label" x="410" y="100">Total Rows</text>
+    <text class="stat-value" style="fill: #6366f1;" x="410" y="130">2.1M</text>
+    
+    <!-- Redundancy -->
+    <rect class="panel-bg stat-box" x="590" y="80" width="180" height="70" rx="3"/>
+    <text class="stat-label" x="600" y="100">Data Redundancy</text>
+    <text class="stat-value" style="fill: #f59e0b;" x="600" y="130">12.4%</text>
+    
+    <!-- Calc Fields -->
+    <rect class="panel-bg stat-box" x="780" y="80" width="180" height="70" rx="3"/>
+    <text class="stat-label" x="790" y="100">Calculated Columns</text>
+    <text class="stat-value" style="fill: #8b5cf6;" x="790" y="130">18</text>
+    
+    <!-- Measures -->
+    <rect class="panel-bg stat-box" x="970" y="80" width="210" height="70" rx="3"/>
+    <text class="stat-label" x="980" y="100">Calculated Measures</text>
+    <text class="stat-value" style="fill: #ec4899;" x="980" y="130">23</text>
+  </g>
+  
+  <!-- Column-Level Breakdown -->
+  <g>
+    <rect class="panel-bg" x="20" y="165" width="1160" height="300"/>
+    <text class="section-title" x="30" y="190">Table: Sales — Column Compression Analysis</text>
+    
+    <!-- Column 1: SalesAmount -->
+    <text class="metric-text" x="30" y="220">SalesAmount (Decimal)</text>
+    <rect class="bar-bg" x="30" y="225" width="400" height="15" rx="2"/>
+    <rect class="bar-fill" x="30" y="225" width="356" height="15" rx="2"/>
+    <text class="bar-label" x="440" y="235">8.9 MB (89%)</text>
+    <text style="font-size: 9px; fill: #059669;" x="30" y="248">✓ Well compressed • Distinct: 18,456 values</text>
+    
+    <!-- Column 2: CustomerID -->
+    <text class="metric-text" x="30" y="275">CustomerID (Int32)</text>
+    <rect class="bar-bg" x="30" y="280" width="400" height="15" rx="2"/>
+    <rect class="bar-fill" x="30" y="280" width="240" height="15" rx="2"/>
+    <text class="bar-label" x="440" y="290">6.0 MB (60%)</text>
+    <text style="font-size: 9px; fill: #059669;" x="30" y="303">✓ Good compression • Distinct: 15,234 values</text>
+    
+    <!-- Column 3: OrderDate -->
+    <text class="metric-text" x="30" y="330">OrderDate (DateTime)</text>
+    <rect class="bar-bg" x="30" y="335" width="400" height="15" rx="2"/>
+    <rect class="bar-fill" x="30" y="335" width="120" height="15" rx="2"/>
+    <text class="bar-label" x="440" y="345">3.0 MB (30%)</text>
+    <text style="font-size: 9px; fill: #059669;" x="30" y="358">✓ Excellent compression • Only 745 distinct dates</text>
+    
+    <!-- Column 4: Quantity (Redundant) -->
+    <text class="metric-text" x="30" y="385">Quantity (Int32) — REDUNDANT</text>
+    <rect class="bar-bg" x="30" y="390" width="400" height="15" rx="2"/>
+    <rect class="bar-hot" x="30" y="390" width="200" height="15" rx="2"/>
+    <text class="bar-label" x="440" y="400">5.0 MB (50%) ⚠️</text>
+    <text style="font-size: 9px; fill: #991b1b;" x="30" y="413">⚠️ Redundancy detected: Correlated with Amount • Suggestion: Create calculated column</text>
+    
+    <!-- Column 5: InternalCode (Not Used) -->
+    <text class="metric-text" x="30" y="440">InternalCode (String) — ORPHANED</text>
+    <rect class="bar-bg" x="30" y="445" width="400" height="15" rx="2"/>
+    <rect class="bar-hot" x="30" y="445" width="160" height="15" rx="2"/>
+    <text class="bar-label" x="440" y="455">4.0 MB (40%) ❌</text>
+    <text style="font-size: 9px; fill: #991b1b;" x="30" y="468">❌ No reports use this column • Recommendation: Remove for 4MB savings</text>
+  </g>
+  
+  <!-- Bottom: Optimization Recommendations -->
+  <g>
+    <rect class="panel-bg" x="20" y="475" width="1160" height="210" rx="3"/>
+    <text class="section-title" x="30" y="500">Optimization Recommendations &amp; Impact Estimate</text>
+    
+    <!-- Recommendation 1 -->
+    <rect fill="#eff6ff" x="25" y="515" width="550" height="85" rx="2"/>
+    <text style="font-size: 12px; font-weight: 600; fill: #1e40af;" x="35" y="535">🎯 High Priority: Remove Orphaned Column</text>
+    <text style="font-size: 11px; fill: #1e40af;" x="35" y="552">Column: InternalCode (unused in all reports)</text>
+    <text style="font-size: 11px; fill: #1e40af;" x="35" y="568">Impact: Save 4.0 MB (9.4% reduction)</text>
+    <text style="font-size: 11px; fill: #1e40af;" x="35" y="584">Status: Safe to remove • No dependencies</text>
+    <rect fill="#3b82f6" x="35" y="590" width="140" height="22" rx="2"/>
+    <text style="font-size: 11px; fill: white; font-weight: 600;" x="55" y="607">Remove Column</text>
+    
+    <!-- Recommendation 2 -->
+    <rect fill="#fef3c7" x="585" y="515" width="550" height="85" rx="2"/>
+    <text style="font-size: 12px; font-weight: 600; fill: #92400e;" x="595" y="535">⚠️ Medium Priority: Address Redundancy</text>
+    <text style="font-size: 11px; fill: #92400e;" x="595" y="552">Column: Quantity (correlated with Amount)</text>
+    <text style="font-size: 11px; fill: #92400e;" x="595" y="568">Impact: Potential 2-3 MB savings</text>
+    <text style="font-size: 11px; fill: #92400e;" x="595" y="584">Status: Review usage in 8 reports first</text>
+    <rect fill="#f59e0b" x="595" y="590" width="140" height="22" rx="2"/>
+    <text style="font-size: 11px; fill: white; font-weight: 600;" x="615" y="607">Review Reports</text>
+    
+    <!-- Summary -->
+    <rect fill="#d1fae5" x="25" y="608" width="1105" height="70" rx="2"/>
+    <text style="font-size: 12px; font-weight: 600; fill: #065f46;" x="35" y="630">✓ Summary: Potential 6-7 MB savings (14.8% reduction)</text>
+    <text style="font-size: 11px; fill: #065f46;" x="35" y="648">Apply quick win (remove InternalCode) → Estimated new size: 36.3 MB</text>
+    <text style="font-size: 11px; fill: #059669;" x="35" y="667">Review and optimize redundant Quantity column for additional gains</text>
+  </g>
+</svg>

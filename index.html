@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Fabric Developer Hub — Enterprise AI Agent Orchestration for Microsoft Fabric</title>
+  <meta name="description" content="Fabric Developer Hub is a next-generation platform to monitor, orchestrate, and deploy enterprise-grade AI agents across the Microsoft Fabric ecosystem — built around a skill-based agent composition model." />
+  <meta name="author" content="Lukasz Obst, Alexander Korn" />
+  <meta property="og:title" content="Fabric Developer Hub — Agent Orchestration on Microsoft Fabric" />
+  <meta property="og:description" content="Skill-based AI agents, plan-review workflows, human-in-the-loop approvals, and live streaming execution — natively integrated with Microsoft Fabric." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://lukaszobst.github.io/fabric_developer_hub/" />
+  <meta property="og:image" content="assets/img/developer-hub-logo.png" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="assets/css/style.css" />
+  <link rel="icon" type="image/png" href="assets/img/developer-hub-logo.png" />
+</head>
+<body>
+
+<!-- ═══════════════ Navigation ═══════════════ -->
+<nav class="nav">
+  <div class="container">
+    <a href="#" class="nav-logo">
+      <img class="logo-mark" src="assets/img/developer-hub-logo.png" alt="Fabric Developer Hub logo" />
+      Fabric Developer Hub
+    </a>
+    <ul class="nav-links" id="navLinks">
+      <li><a href="#concepts">Concepts</a></li>
+      <li><a href="#workflow">Workflow</a></li>
+      <li><a href="#features">Features</a></li>
+      <li><a href="#screenshots">Screenshots</a></li>
+      <li><a href="#tools">The Two Tools</a></li>
+      <li><a href="#pbi-fixer">PBI Fixer</a></li>
+      <li><a href="#getting-started">Getting Started</a></li>
+      <li><a href="https://github.com/LukaszObst/fabric_developer_hub" target="_blank" rel="noopener">GitHub ↗</a></li>
+    </ul>
+    <button class="nav-hamburger" onclick="document.getElementById('navLinks').classList.toggle('open')" aria-label="Toggle navigation">
+      <span></span><span></span><span></span>
+    </button>
+  </div>
+</nav>
+
+<!-- ═══════════════ Hero ═══════════════ -->
+<section class="hero" id="hero">
+  <div class="container">
+    <img class="hero-logo" src="assets/img/developer-hub-logo.png" alt="Fabric Developer Hub logo" />
+    <span class="hero-tagline">Microsoft Fabric · Workload Preview</span>
+    <h1>Compose, Orchestrate &amp;<br/><span class="accent">Deploy AI Agents on Fabric</span></h1>
+    <p class="subtitle">
+      Fabric Developer Hub is a next-generation workload that lets you monitor, orchestrate,
+      and deploy enterprise-grade AI agents directly inside Microsoft Fabric — built around
+      a skill-based agent composition model with human-in-the-loop approvals and live streaming execution.
+    </p>
+
+    <div class="btn-group">
+      <a href="#getting-started" class="btn btn-primary">Get Started →</a>
+      <a href="https://github.com/LukaszObst/fabric_developer_hub" target="_blank" rel="noopener" class="btn btn-outline">View on GitHub</a>
+    </div>
+
+    <div class="hero-badges">
+      <span class="badge badge-blue">⚙ Native Fabric Workload</span>
+      <span class="badge badge-blue">🧩 Skill-Based Agents</span>
+      <span class="badge badge-green">✓ Human-in-the-Loop</span>
+      <span class="badge badge-blue">⚡ Streaming Execution</span>
+      <span class="badge badge-amber">🛡 Responsible AI</span>
+    </div>
+
+    <p style="margin-top:1.5rem;font-size:0.85rem;color:var(--text-muted);">
+      Co-maintained by <a href="https://github.com/LukaszObst" target="_blank" rel="noopener">Lukasz Obst</a> &amp;
+      <a href="https://www.linkedin.com/in/alexanderkorn/" target="_blank" rel="noopener">Alexander Korn</a>
+    </p>
+  </div>
+</section>
+
+<!-- ═══════════════ Stats ═══════════════ -->
+<section class="section" style="padding-top:2.5rem;padding-bottom:1rem;">
+  <div class="container">
+    <div class="stats">
+      <div class="stat"><div class="stat-number">4+</div><div class="stat-label">Pre-built Agents</div></div>
+      <div class="stat"><div class="stat-number">9</div><div class="stat-label">Composable Skills</div></div>
+      <div class="stat"><div class="stat-number">3</div><div class="stat-label">Step Workflow</div></div>
+      <div class="stat"><div class="stat-number">∞</div><div class="stat-label">Custom Agents</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════ Two Tools (Agent Hub + PBI Fixer) ═══════════════ -->
+<section class="distinction" id="tools">
+  <div class="container">
+    <div class="section-header">
+      <h2>One Hub, Two Tools</h2>
+      <p>Fabric Developer Hub is the umbrella platform. It bundles <strong>two complementary tools</strong> under one Fabric workload: <strong>Agent Hub</strong> for AI-agent orchestration, and <strong>Power BI Fixer</strong> for Power BI engineering. The previously standalone Power BI Fixer was <strong>merged into the Developer Hub</strong> and is now shipped as a first-class tool inside it.</p>
+    </div>
+
+    <div class="distinction-grid">
+      <div class="distinction-card is-hub">
+        <h3>Agent Hub <span class="pill">Tool 1</span></h3>
+        <p><strong>An agent orchestration platform</strong> that runs as a native Fabric workload. Build, run, and govern AI agents that touch Lakehouses, Warehouses, Pipelines and Reports.</p>
+        <ul>
+          <li>Skill-based composition model</li>
+          <li>Multi-agent orchestrator with plan review</li>
+          <li>Live streaming execution + HITL approvals</li>
+          <li>Workspace branching for safe experimentation</li>
+          <li>Microsoft Fabric workload (iframe + REST APIs)</li>
+        </ul>
+        <a href="#concepts" class="card-link">Explore Agent Hub →</a>
+      </div>
+
+      <div class="distinction-card is-fixer">
+        <h3>Power BI Fixer <span class="pill">Tool 2</span></h3>
+        <p><strong>A Power BI engineering toolkit</strong> for scanning, fixing and exploring semantic models and reports. Originally a notebook-native tool, now <strong>fully merged into the Developer Hub</strong> as its second built-in tool.</p>
+        <ul>
+          <li>50+ automated fixers for SM &amp; Reports</li>
+          <li>Model BPA with one-click auto-fix</li>
+          <li>Translations, perspectives, prototypes</li>
+          <li>Memory analyzer, Vertipaq, Delta Analyzer</li>
+          <li>Ships natively inside the Developer Hub workload</li>
+        </ul>
+        <a href="#pbi-fixer" class="card-link">Explore Power BI Fixer →</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════ Concepts ═══════════════ -->
+<section class="section" id="concepts">
+  <div class="container">
+    <div class="section-header">
+      <h2>Skill-Based Agent Composition</h2>
+      <p>Agents are not monolithic. They are <strong>composed from modular skills</strong> — discrete capabilities that can be mixed, matched, and reused across teams.</p>
+    </div>
+
+    <h3 style="margin-bottom:1rem;font-size:1.1rem;">Skill Catalog</h3>
+    <table class="skills-table">
+      <thead><tr><th>Skill Type</th><th>Examples</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><span class="pill pill-authoring">Authoring</span></td>
+          <td><code>spark-authoring</code>, <code>sqldw-authoring</code>, <code>eventhouse-authoring</code>, <code>powerbi-authoring</code></td>
+          <td>Create and modify Fabric items — notebooks, SQL scripts, pipelines, reports</td>
+        </tr>
+        <tr>
+          <td><span class="pill pill-consumption">Consumption</span></td>
+          <td><code>spark-consumption</code>, <code>sqldw-consumption</code>, <code>eventhouse-consumption</code>, <code>powerbi-consumption</code></td>
+          <td>Query and analyze data from Fabric endpoints</td>
+        </tr>
+        <tr>
+          <td><span class="pill pill-utility">Utility</span></td>
+          <td><code>check-updates</code></td>
+          <td>Administrative and maintenance operations</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3 style="margin-top:2.5rem;margin-bottom:1rem;font-size:1.1rem;">Pre-Built Agents</h3>
+    <table class="agents-table">
+      <thead><tr><th>Agent</th><th>Provider</th><th>Skills</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><strong>FabricDataEngineer</strong></td><td><span class="provider provider-ms">Microsoft</span></td><td>4</td><td>Medallion architectures (Bronze → Silver → Gold), ETL/ELT pipelines, data migration, quality checks</td></tr>
+        <tr><td><strong>FabricAdmin</strong></td><td><span class="provider provider-ms">Microsoft</span></td><td>3</td><td>Capacity planning, governance, security validation, cost optimization, observability</td></tr>
+        <tr><td><strong>RealtimeAnalytics</strong></td><td><span class="provider provider-custom">Custom</span></td><td>4</td><td>KQL-based real-time monitoring with Spark ingestion and Power BI dashboarding</td></tr>
+        <tr><td><strong>SalesReporter</strong></td><td><span class="provider provider-custom">Custom</span></td><td>3</td><td>Weekly sales report generation with Power BI semantic model queries (cloned from FabricDataEngineer)</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ═══════════════ Workflow ═══════════════ -->
+<section class="section section-alt" id="workflow">
+  <div class="container">
+    <div class="section-header">
+      <h2>Three-Step Orchestrator Workflow</h2>
+      <p>From natural-language goal to deployed result — with full visibility and control at every stage.</p>
+    </div>
+
+    <div class="workflow">
+      <div class="workflow-step">
+        <span class="step-num">1</span>
+        <h3>Compose</h3>
+        <p>Describe your goal in plain language and attach Fabric context.</p>
+        <ul>
+          <li>NL prompt with autosuggestions</li>
+          <li>Lakehouses, warehouses, workspaces as context</li>
+          <li>Branching configuration</li>
+          <li>Approval requirements</li>
+        </ul>
+      </div>
+      <div class="workflow-step">
+        <span class="step-num">2</span>
+        <h3>Plan Review</h3>
+        <p>Inspect and edit the AI-decomposed plan before launch.</p>
+        <ul>
+          <li>Step list with agent + Fabric items</li>
+          <li>Approval gates on critical steps</li>
+          <li>Edit, reorder, reject steps</li>
+          <li>Cost &amp; risk indicators</li>
+        </ul>
+      </div>
+      <div class="workflow-step">
+        <span class="step-num">3</span>
+        <h3>Execute (Streaming)</h3>
+        <p>Watch agents work step-by-step with live reasoning and code output.</p>
+        <ul>
+          <li>Streaming reasoning &amp; code blocks</li>
+          <li>Approval cards mid-run</li>
+          <li>Artifacts linked back to workspace</li>
+          <li>Full audit trail</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════ Key Features ═══════════════ -->
+<section class="section" id="features">
+  <div class="container">
+    <div class="section-header">
+      <h2>What's Inside</h2>
+      <p>Eight pillars built around a Fabric-native, agent-first design.</p>
+    </div>
+
+    <div class="feature-grid">
+      <div class="feature-card">
+        <div class="feature-icon">🧩</div>
+        <div class="feature-content">
+          <h3>Skill Composition</h3>
+          <p>Build agents from reusable, version-controlled skills. Mix Microsoft-provided skills with custom ones from your team.</p>
+        </div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🛡</div>
+        <div class="feature-content">
+          <h3>Human-in-the-Loop</h3>
+          <p>Approval gates on production-impacting steps. Agent decision cards show reasoning and let you approve, modify or reject.</p>
+        </div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🌿</div>
+        <div class="feature-content">
+          <h3>Workspace Branching</h3>
+          <p>Create isolated branches in Fabric workspaces, let agents work there safely, then merge back when validated.</p>
+        </div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">⚡</div>
+        <div class="feature-content">
+          <h3>Streaming Execution</h3>
+          <p>Step-by-step progress with timestamps and durations. Terminal-style code output and typing-cursor reasoning.</p>
+        </div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🔍</div>
+        <div class="feature-content">
+          <h3>Discovery &amp; Insights</h3>
+          <p>AI-powered suggestions based on workspace activity — cost optimization, security audit, lineage tracing.</p>
+        </div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🧠</div>
+        <div class="feature-content">
+          <h3>Power BI Fixer Built-In</h3>
+          <p>The full Power BI Fixer toolkit is one of the Hub&rsquo;s two core tools — 50+ automated fixers, BPA, translations, prototypes.</p>
+        </div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🔐</div>
+        <div class="feature-content">
+          <h3>Responsible AI &amp; Security</h3>
+          <p>Azure AD auth, no stored secrets, prompt-injection safe, no arbitrary code execution, OWASP LLM Top 10 aligned.</p>
+        </div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🔗</div>
+        <div class="feature-content">
+          <h3>Fabric-Native Integration</h3>
+          <p>First-class support for Lakehouses, Warehouses, Pipelines, Notebooks and Reports — color-coded throughout the UI.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════ PBI Fixer Deep Dive ═══════════════ -->
+<section class="section pbi-fixer-section" id="pbi-fixer">
+  <div class="container">
+    <div class="section-header">
+      <span class="section-eyebrow">Tool 2 · Power BI Engineering</span>
+      <h2>Power BI Fixer — 12 Tabs, 50+ Automated Fixes</h2>
+      <p>The full Power BI Fixer toolkit ships as the second built-in tool inside Developer Hub. Originally a notebook-native tool (<code>from sempy_labs import pbi_fixer</code>), now fully merged into the Hub workload — same engine, native UI, same one-click fixes for semantic models and reports.</p>
+    </div>
+
+    <div class="stats fixer-stats">
+      <div class="stat"><div class="stat-number">12</div><div class="stat-label">Interactive Tabs</div></div>
+      <div class="stat"><div class="stat-number">50+</div><div class="stat-label">Automated Fixers</div></div>
+      <div class="stat"><div class="stat-number">19</div><div class="stat-label">Model BPA Rules</div></div>
+      <div class="stat"><div class="stat-number">15</div><div class="stat-label">Unique Auto-Fixes</div></div>
+      <div class="stat"><div class="stat-number">0</div><div class="stat-label">License Cost</div></div>
+    </div>
+
+    <h3 class="subsection-title">The 12 Tabs</h3>
+    <div class="fixer-tabs-grid">
+      <div class="fixer-tab"><div class="fixer-tab-icon">⚡</div><h4>Fix All</h4><p>One-click scan &amp; fix across report fixers, model fixers, Model BPA and Report BPA. Grouped results with selective execution.</p></div>
+      <div class="fixer-tab"><div class="fixer-tab-icon">📄</div><h4>Model Explorer</h4><p>Browse tables, columns, measures, hierarchies, relationships. Edit DAX, properties, display folders. Create measures, calc columns, calc tables.</p></div>
+      <div class="fixer-tab"><div class="fixer-tab-icon">📊</div><h4>Report Explorer</h4><p>Navigate pages &amp; visuals with live preview. Scan for violations, fix chart formatting, convert to PBIR, align visuals.</p></div>
+      <div class="fixer-tab"><div class="fixer-tab-icon">📋</div><h4>Model BPA</h4><p>19 best-practice rules across 6 categories with one-click auto-fix. <strong>15 of 19</strong> rules have no auto-fix equivalent in any other tool.</p></div>
+      <div class="fixer-tab"><div class="fixer-tab-icon">📄</div><h4>Report BPA</h4><p>Report-level analysis with automatic PBIRLegacy → PBIR conversion. Catches unused custom visuals, report-level measures and more.</p></div>
+      <div class="fixer-tab"><div class="fixer-tab-icon">💾</div><h4>Memory Analyzer</h4><p>Vertipaq stats by tables, columns, partitions, relationships. Color-coded size bars, cardinality, encoding, Direct Lake support.</p></div>
+      <div class="fixer-tab"><div class="fixer-tab-icon">🌐</div><h4>Translations</h4><p>Manage metadata translations across all model objects. One-click auto-translate via Azure AI Translator — no API key needed.</p></div>
+      <div class="fixer-tab"><div class="fixer-tab-icon">👁</div><h4>Perspectives</h4><p>Create, edit, delete model perspectives with tri-state checkboxes. Visual table-level summaries with one-click save.</p></div>
+      <div class="fixer-tab"><div class="fixer-tab-icon">📐</div><h4>Delta Analyzer</h4><p>Inspect delta tables — parquet files, row groups, column chunks, column statistics. Essential for Direct Lake optimization.</p></div>
+      <div class="fixer-tab"><div class="fixer-tab-icon">✏️</div><h4>Prototype</h4><p>Capture page screenshots with navigation detection. Export to Excalidraw or SVG. Auto-detects drillthrough and button links.</p></div>
+      <div class="fixer-tab"><div class="fixer-tab-icon">🗺</div><h4>Model Diagram</h4><p>Auto-generated SVG relationship diagram with table boxes, columns, measures and nearest-edge connection lines.</p></div>
+      <div class="fixer-tab"><div class="fixer-tab-icon">ℹ️</div><h4>About</h4><p>Version info, credits and links to source code, documentation and the legacy notebook site.</p></div>
+    </div>
+
+    <h3 class="subsection-title">Highlighted Capabilities</h3>
+    <div class="fixer-highlight-grid">
+      <div class="fixer-highlight">
+        <h4>🎨 Report Fixers (15)</h4>
+        <p>Pie/Bar/Column/Line chart cleanup, IBCS Variance, Column → Bar (IBCS), Page Size to Full HD, Hide Visual Filters, Visual Alignment, Remove Unused Custom Visuals, and more — all one click.</p>
+      </div>
+      <div class="fixer-highlight">
+        <h4>🧠 Model BPA Auto-Fix</h4>
+        <p>Categories: Data Types · MDX · Documentation · Formatting · Schema · Naming. Fix All / Fix Rule / Fix Row granularity with severity indicators and finding counts.</p>
+      </div>
+      <div class="fixer-highlight">
+        <h4>⚡ IBCS Implementation</h4>
+        <p>International Business Communication Standards built in — proper variance bars with green/red coloring, IBCS theme application, standardized axis &amp; data label formatting.</p>
+      </div>
+      <div class="fixer-highlight">
+        <h4>🌐 AI Translations</h4>
+        <p>20 common language codes built in. Auto-translate via Azure AI / SynapseML, preview diff before applying — no API keys, no cost.</p>
+      </div>
+      <div class="fixer-highlight">
+        <h4>💾 Vertipaq Memory Analysis</h4>
+        <p>Model summary, partition &amp; column-level breakdown with color-coded % bars (red &gt;30 %, orange &gt;10 %, green ≤10 %). Direct Lake residency &amp; temperature included.</p>
+      </div>
+      <div class="fixer-highlight">
+        <h4>✏️ Prototype → Excalidraw</h4>
+        <p>Capture every report page as a screenshot with auto-detected page navigation and drillthrough arrows. Export the whole flow to <code>.excalidraw</code> or <code>.svg</code>.</p>
+      </div>
+    </div>
+
+    <div class="fixer-callout">
+      <div>
+        <h4>Built on Semantic Link Labs</h4>
+        <p>The Power BI Fixer engine is open source and built on top of <a href="https://github.com/microsoft/semantic-link-labs" target="_blank" rel="noopener">Semantic Link Labs</a> by <a href="https://www.linkedin.com/in/michaelkovalsky/" target="_blank" rel="noopener">Michael Kovalsky</a>. The same engine that powers the standalone notebook now ships natively inside Developer Hub.</p>
+      </div>
+      <div class="fixer-callout-actions">
+        <a href="https://kornalexander.github.io/pbi_fixer/" target="_blank" rel="noopener" class="btn btn-primary btn-fixer">Legacy Notebook Site ↗</a>
+        <a href="https://github.com/microsoft/semantic-link-labs" target="_blank" rel="noopener" class="btn btn-outline">sempy-labs on GitHub ↗</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════ Screenshots ═══════════════ -->
+<section class="section section-alt" id="screenshots">
+  <div class="container">
+    <div class="section-header">
+      <h2>Agent Hub — See It in Action</h2>
+      <p>A visual tour through the Agent Hub experience inside the Developer Hub workload.</p>
+    </div>
+
+    <div class="screenshot-section">
+      <div class="screenshot-row">
+        <div class="screenshot-text">
+          <h3>🏠 Home Dashboard</h3>
+          <p>Monitor active agents, track job status, and view recent execution history at a glance.</p>
+          <ul>
+            <li>Active agent tiles with health indicators</li>
+            <li>Recent jobs with duration &amp; status</li>
+            <li>Workspace-level quick filters</li>
+            <li>Discovery recommendations panel</li>
+          </ul>
+        </div>
+        <div class="screenshot-img">
+          <img src="screenshots/01_home_dashboard.png" alt="Home Dashboard showing active agents and job status overview" loading="lazy" />
+        </div>
+      </div>
+    </div>
+
+    <div class="screenshot-section">
+      <div class="screenshot-row reverse">
+        <div class="screenshot-text">
+          <h3>🧩 Agents &amp; Skills Marketplace</h3>
+          <p>Browse Microsoft-provided and custom agents, inspect skill composition, and clone agents for customization.</p>
+          <ul>
+            <li>Microsoft + custom agent gallery</li>
+            <li>Skill composition detail panel</li>
+            <li>One-click clone &amp; customize</li>
+            <li>Provider &amp; capability badges</li>
+          </ul>
+        </div>
+        <div class="screenshot-img">
+          <img src="screenshots/02_agent_marketplace.png" alt="Agent Marketplace with skill composition detail" loading="lazy" />
+        </div>
+      </div>
+    </div>
+
+    <div class="screenshot-section">
+      <div class="screenshot-row">
+        <div class="screenshot-text">
+          <h3>📝 Orchestrator — Task Composer</h3>
+          <p>Describe your goal in natural language. Attach Fabric items as context. Configure branching and approval workflows.</p>
+          <ul>
+            <li>NL prompt with examples</li>
+            <li>Fabric item picker (Lakehouse, Warehouse, …)</li>
+            <li>Workspace branching toggle</li>
+            <li>Approval policy selector</li>
+          </ul>
+        </div>
+        <div class="screenshot-img">
+          <img src="screenshots/03_orchestrator_compose.png" alt="Orchestrator Compose step with NL prompt and context" loading="lazy" />
+        </div>
+      </div>
+    </div>
+
+    <div class="screenshot-section">
+      <div class="screenshot-row reverse">
+        <div class="screenshot-text">
+          <h3>🗺 Orchestrator — Plan Review</h3>
+          <p>Inspect the AI-generated execution plan before launch. Each step shows which Fabric items are touched and which gates require approval.</p>
+          <ul>
+            <li>Step-by-step decomposition</li>
+            <li>Approval gates highlighted</li>
+            <li>Editable plan ordering</li>
+            <li>Per-step Fabric item map</li>
+          </ul>
+        </div>
+        <div class="screenshot-img">
+          <img src="screenshots/04_orchestrator_plan_review.png" alt="Orchestrator plan review with approval gates" loading="lazy" />
+        </div>
+      </div>
+    </div>
+
+    <div class="screenshot-section">
+      <div class="screenshot-row">
+        <div class="screenshot-text">
+          <h3>⚡ Job Execution — Streaming</h3>
+          <p>Watch agents work in real time with streaming reasoning, code output, and decision cards. Approval prompts pause execution when production changes are proposed.</p>
+          <ul>
+            <li>Live reasoning stream</li>
+            <li>Terminal-style code blocks</li>
+            <li>Inline approval cards</li>
+            <li>Artifact tracker with workspace links</li>
+          </ul>
+        </div>
+        <div class="screenshot-img">
+          <img src="screenshots/05_job_execution_streaming.png" alt="Live streaming execution with HITL approval cards" loading="lazy" />
+        </div>
+      </div>
+    </div>
+
+    <div class="screenshot-section">
+      <div class="screenshot-row reverse">
+        <div class="screenshot-text">
+          <h3>🤖 Fully Automatic Mode</h3>
+          <p>When approvals and branching are disabled, the plan runs end-to-end without manual intervention. Ideal for trusted, repeatable workflows.</p>
+          <ul>
+            <li>One-click "Run automatically"</li>
+            <li>Same plan-review surface, no gates</li>
+            <li>Perfect for scheduled / repeating jobs</li>
+            <li>Full audit log preserved</li>
+          </ul>
+        </div>
+        <div class="screenshot-img">
+          <img src="screenshots/06_orchestrator_no_approvals.png" alt="Fully automatic orchestrator mode without approval gates" loading="lazy" />
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════ Example Workflow ═══════════════ -->
+<!-- ═══════════════ PBI Fixer Features ═══════════════ -->
+<section class="section" id="pbi-fixer">
+  <div class="container">
+    <div class="section-header">
+      <h2>Power BI Fixer — The Developer's Toolkit</h2>
+      <p>Automate Power BI model governance, fix quality issues, generate translations, explore lineage, and validate reports — all without leaving Fabric.</p>
+    </div>
+
+    <div class="screenshot-section">
+      <div class="screenshot-row">
+        <div class="screenshot-text">
+          <h3>🔧 BPA &amp; Automated Fixes</h3>
+          <p>Run Best Practice Analyzer rules on Power BI models. Auto-fix 50+ common issues like missing descriptions, formatting inconsistencies, hidden columns, and naming violations.</p>
+          <ul>
+            <li>50+ Microsoft BPA rules + custom rules</li>
+            <li>One-click "Fix All" for auto-remediable issues</li>
+            <li>Before/after diff viewer with rollback</li>
+            <li>Fixes applied via DirectQuery TMDL updates</li>
+          </ul>
+        </div>
+        <div class="screenshot-img">
+          <img src="screenshots/pbi_01_bpa_fixes.svg" alt="BPA scanner showing issues and one-click auto-fix for Power BI models" loading="lazy" />
+        </div>
+      </div>
+    </div>
+
+    <div class="screenshot-section">
+      <div class="screenshot-row reverse">
+        <div class="screenshot-text">
+          <h3>🌍 AI Translation Editor</h3>
+          <p>Translate captions, descriptions, and display strings to any language using GitHub Copilot LLM. Maintain culture-aware terminology with per-language glossaries.</p>
+          <ul>
+            <li>Copilot-powered batch translation</li>
+            <li>Culture codes for localized strings (ja-JP, de-DE, etc.)</li>
+            <li>Custom glossaries per language</li>
+            <li>Side-by-side source/target editor</li>
+          </ul>
+        </div>
+        <div class="screenshot-img">
+          <img src="screenshots/pbi_02_translations.svg" alt="Translation editor with Copilot batch translation and glossary support" loading="lazy" />
+        </div>
+      </div>
+    </div>
+
+    <div class="screenshot-section">
+      <div class="screenshot-row">
+        <div class="screenshot-text">
+          <h3>📊 Model Explorer</h3>
+          <p>Interactive tree view of all tables, columns, measures, roles, and relationships in your Semantic Model. Search, filter, and drill into metadata with one click.</p>
+          <ul>
+            <li>Hierarchical table/column browser</li>
+            <li>DAX formula inspector</li>
+            <li>Column statistics &amp; data types</li>
+            <li>Relationship mapping with cardinality</li>
+          </ul>
+        </div>
+        <div class="screenshot-img">
+          <img src="screenshots/pbi_03_model_explorer.svg" alt="Model Explorer showing semantic model structure, measures, and relationships" loading="lazy" />
+        </div>
+      </div>
+    </div>
+
+    <div class="screenshot-section">
+      <div class="screenshot-row reverse">
+        <div class="screenshot-text">
+          <h3>🔗 Report &amp; Lineage Explorer</h3>
+          <p>Trace column usage from reports down to the underlying data model. Identify orphaned measures, unused columns, and data lineage in a visual dependency graph.</p>
+          <ul>
+            <li>Report → Model lineage visualization</li>
+            <li>Usage analytics (column hot spots)</li>
+            <li>Orphaned measure detection</li>
+            <li>Workspace-wide impact analysis</li>
+          </ul>
+        </div>
+        <div class="screenshot-img">
+          <img src="screenshots/pbi_04_lineage.svg" alt="Lineage explorer showing report column usage flowing down to semantic model" loading="lazy" />
+        </div>
+      </div>
+    </div>
+
+    <div class="screenshot-section">
+      <div class="screenshot-row">
+        <div class="screenshot-text">
+          <h3>📋 Metadata Browser</h3>
+          <p>Browse semantic model internals in a tabular format — tables, columns, hierarchies, and roles. Export metadata as JSON or CSV for documentation and audit trails.</p>
+          <ul>
+            <li>Tabular metadata view (filterable)</li>
+            <li>Export to JSON / CSV / Excel</li>
+            <li>Column-level statistics</li>
+            <li>Audit trail for compliance</li>
+          </ul>
+        </div>
+        <div class="screenshot-img">
+          <img src="screenshots/pbi_05_metadata.svg" alt="Metadata browser showing tables, columns, and export options" loading="lazy" />
+        </div>
+      </div>
+    </div>
+
+    <div class="screenshot-section">
+      <div class="screenshot-row reverse">
+        <div class="screenshot-text">
+          <h3>⚙️ Vertipaq Analyzer</h3>
+          <p>Deep-dive compression analysis using the VertiPaq Analyzer engine. Identify memory inefficiencies, column redundancy, and optimization opportunities in milliseconds.</p>
+          <ul>
+            <li>Column compression ratios</li>
+            <li>Redundancy detection</li>
+            <li>Memory footprint by table/column</li>
+            <li>Optimization recommendations</li>
+          </ul>
+        </div>
+        <div class="screenshot-img">
+          <img src="screenshots/pbi_06_vertipaq.svg" alt="Vertipaq Analyzer showing column compression, memory usage, and optimization tips" loading="lazy" />
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+<section class="section">
+  <div class="container">
+    <div class="section-header">
+      <h2>Example: Weekly Sales Ingestion</h2>
+      <p>From natural-language goal to deployed pipeline in three steps.</p>
+    </div>
+
+    <div class="code-block">
+<span class="cm"># Goal (entered in Compose step):</span><br/>
+"Automate the weekly ingestion of regional sales data from our<br/>
+&nbsp;OneLake raw zone, normalize the schema for Gold-layer reporting,<br/>
+&nbsp;and generate SQL-based views for the Finance dashboard."<br/><br/>
+<span class="cm"># Context attached:</span><br/>
+&nbsp;&nbsp;Lakehouse:&nbsp;&nbsp;corporate-sales-raw<br/>
+&nbsp;&nbsp;Warehouse:&nbsp;&nbsp;Gold_Sales_DW<br/>
+&nbsp;&nbsp;Workspace:&nbsp;&nbsp;Marketing Analytics<br/>
+&nbsp;&nbsp;Branch:&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;agent/sales-ingestion-pipeline<br/><br/>
+<span class="cm"># Generated plan (5 steps):</span><br/>
+&nbsp;&nbsp;1. Discover Sources&nbsp;&nbsp;&nbsp;&nbsp;<span class="kw">→</span> spark-consumption<br/>
+&nbsp;&nbsp;2. Resolve Schema&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="kw">→</span> sqldw-authoring<br/>
+&nbsp;&nbsp;3. Create Pipeline&nbsp;&nbsp;&nbsp;&nbsp;<span class="kw">→</span> spark-authoring &nbsp;<span class="str">[approval gate]</span><br/>
+&nbsp;&nbsp;4. Validate Output&nbsp;&nbsp;&nbsp;&nbsp;<span class="kw">→</span> sqldw-consumption<br/>
+&nbsp;&nbsp;5. Generate Report&nbsp;&nbsp;&nbsp;&nbsp;<span class="kw">→</span> powerbi-authoring
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════ Getting Started ═══════════════ -->
+<section class="section section-alt" id="getting-started">
+  <div class="container">
+    <div class="section-header">
+      <h2>Getting Started</h2>
+      <p>Run the full Developer Hub stack locally with Docker — backend, frontend, Fabric DevGateway and SLL sidecar.</p>
+    </div>
+
+    <div class="code-block" style="margin-bottom:2rem;">
+<span class="cm"># 1. Clone the repo</span><br/>
+git clone https://github.com/LukaszObst/fabric_developer_hub.git<br/>
+<span class="kw">cd</span> fabric_developer_hub<br/><br/>
+<span class="cm"># 2. Configure environment</span><br/>
+<span class="kw">cd</span> <span class="str">"Developer Hub"</span><br/>
+cp .env.example .env&nbsp;&nbsp;<span class="cm"># fill in tenant, app, workspace IDs</span><br/><br/>
+<span class="cm"># 3. Start the stack</span><br/>
+docker compose up -d<br/><br/>
+<span class="cm"># 4. Open Fabric and sideload via the dev-gateway</span><br/>
+<span class="cm"># Follow device-code prompt printed by dev-gateway logs</span><br/>
+docker compose logs -f dev-gateway
+    </div>
+
+    <h3 style="margin-bottom:1rem;font-size:1.1rem;">Platform Notes</h3>
+    <ul style="font-size:0.95rem;color:var(--text-muted);padding-left:1.5rem;line-height:1.8;">
+      <li><strong>ARM64 hosts</strong> (Apple Silicon, Snapdragon): register QEMU emulation once with <code>docker run --privileged --rm tonistiigi/binfmt --install amd64</code></li>
+      <li><strong>Corporate VPN</strong> (Zscaler / GlobalProtect): pin Docker to the IANA benchmarking range (<code>198.18.0.0/16</code>) to avoid bridge subnet conflicts</li>
+      <li><strong>AAD app</strong>: a multi-tenant app registration is required; the dev-gateway uses device-code flow on first start</li>
+      <li><strong>Fabric Developer Mode</strong>: must be toggled on per browser profile in the Fabric admin portal</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ═══════════════ Footer ═══════════════ -->
+<footer class="footer">
+  <div class="container">
+    <div class="footer-links">
+      <a href="https://github.com/LukaszObst/fabric_developer_hub" target="_blank" rel="noopener">GitHub Repository</a>
+      <a href="https://kornalexander.github.io/pbi_fixer/" target="_blank" rel="noopener">Power BI Fixer (legacy notebook site)</a>
+      <a href="https://github.com/microsoft/skills-for-fabric" target="_blank" rel="noopener">skills-for-fabric</a>
+      <a href="https://learn.microsoft.com/fabric/" target="_blank" rel="noopener">Microsoft Fabric docs</a>
+    </div>
+    <p>
+      Fabric Developer Hub is in active development. Status: <strong>Design + Workload Preview</strong>.<br/>
+      Co-maintained by <a href="https://github.com/LukaszObst" target="_blank" rel="noopener">Lukasz Obst</a> &amp;
+      <a href="https://www.linkedin.com/in/alexanderkorn/" target="_blank" rel="noopener">Alexander Korn</a>
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>
