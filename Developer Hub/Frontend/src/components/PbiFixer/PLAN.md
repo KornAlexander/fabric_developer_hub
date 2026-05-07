@@ -305,12 +305,12 @@ Tracker:
 - [x] T3 revert hero + KPI — Model + Report restored to toolbar-first render, MessageBar/useMemo removed
 - [~] T4 SLL arch fix — `platform: linux/amd64` pinned on the `sll-sidecar` compose service; container now reports `x86_64` (`platform.machine()`). On x64 dev hosts this is sufficient. **On aarch64 dev hosts** (this machine) QEMU x86_64 emulation segfaults inside the .NET 8 runtime when sempy_labs loads the AMO/ADOMD DLLs (`qemu: uncaught target signal 11 (Segmentation fault) - core dumped`). Hard limitation — needs an x86_64 host or a remote SLL sidecar deployment to fully verify Model BPA + Memory Analyzer end-to-end. Workload-side fix is in place.
 - [~] T5 Memory Analyzer — same status as T4: code path correct, blocked by QEMU emulation on aarch64.
-- [ ] T6 Report BPA SLL flip (gated on T4 + T5 verify on a real x64 host)
+- [x] T6 Report BPA SLL flip — moot: WS-U deleted the SLL sidecar; Report BPA stays on the TS engine.
 - [x] T7 workspace + item context — `PbiFixerPage` now seeds + persists the connection bar to `sessionStorage["pbiFixer.connection.v1"]`
 - [x] T8 dashboard item from workspace folder — likely fixed transitively by T1 (host dialog was blocking the item editor mount); needs Playwright re-verify
 - [x] T9 dashboard item icon — `Product.json` createExperience card icon swapped from `dial.png` to `developerHub.png`
 
-### WS-U — Kill the SLL Python sidecar (NEW, planned)
+### WS-U — Kill the SLL Python sidecar (DONE, v0.82)
 
 **Goal.** Remove the entire `Developer Hub/SllSidecar/` Python service. Its only reason to exist is `sempy_labs`, which pulls in pythonnet → AMO/ADOMD .NET assemblies → x86_64-only DLLs → QEMU segfaults on aarch64 hosts. Neither BPA nor the Memory / Vertipaq Analyzer fundamentally needs Python or .NET — both can run inside the existing FastAPI backend (or even the TS workload backend) using the same APIs every Tabular Editor / DAX Studio user already hits.
 
@@ -344,6 +344,12 @@ Tracker:
 **Open questions.**
 - Are any rules in the existing TE BPA set actually impossible without TOM (e.g. ones that need `IsActiveRelationship` resolution at query time)? Audit before U1.
 - Do we want to ship the BPA rules JSON inside the workload bundle (faster, offline-capable) or fetch it from GitHub at build time (always fresh)?
+
+**Status (v0.82).**
+- [x] U1 (Model BPA) — already shipped as the TS engine in `services/modelBpaApi.ts`. The "compare to SLL" inline panel was removed from `ModelBpaPage.tsx`.
+- [~] U2 (Memory / Vertipaq) — the structural Memory tabs (`memoryApi.ts`, DAX `INFO.VIEW.*`) cover the page today; the SLL HTML panel was removed from `MemoryPage.tsx`. A future `vertipaqApi.ts` (XMLA-over-HTTPS, already scaffolded) can layer DMV per-column stats back in without resurrecting Python.
+- [~] U3 (Report BPA TS) — TS engine already covers WS-T T6 needs; deferred only as further rule-set expansion.
+- [x] U4 (delete the sidecar) — `Developer Hub/SllSidecar/` removed; `sll-sidecar` service + `SLL_SIDECAR_URL` env removed from `docker-compose.yaml`; SLL proxy block (`_SllRequest`, `_sll_post`, `pbi_fixer_sll_model_bpa`, `pbi_fixer_sll_vertipaq`) removed from `Backend/src/api/agenthub_controller.py`; `services/sllApi.ts` deleted; SempyRunner / Memory / ModelBpa pages no longer import it; `docs/index.html` no longer mentions the sidecar.
 
 ### WS-S — Multi-Model & Multi-Report editing (NEW, planned)
 

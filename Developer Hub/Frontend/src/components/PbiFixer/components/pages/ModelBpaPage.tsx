@@ -22,12 +22,11 @@ import {
   shorthands,
   tokens,
 } from "@fluentui/react-components";
-import { ArrowClockwise20Regular, ArrowDownload20Regular, Play20Regular, Wrench20Regular } from "@fluentui/react-icons";
+import { ArrowClockwise20Regular, ArrowDownload20Regular, Wrench20Regular } from "@fluentui/react-icons";
 import type { PageProps } from "../../types/shared";
 import type { ModelData } from "../../types";
 import { loadModelData } from "../../services/fabricApi";
 import { runModelBpa, BPA_RULES, type BpaFinding, type BpaSeverity } from "../../services/modelBpaApi";
-import { runSllModelBpa, type SllModelBpaResponse } from "../../services/sllApi";
 
 const SEVERITY_ORDER: BpaSeverity[] = ["Error", "Warning", "Info"];
 
@@ -114,25 +113,6 @@ export const ModelBpaPage: React.FC<PageProps> = ({ auth, workspaceId, datasetId
   const [filterText, setFilterText] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("severity");
   const [sortDesc, setSortDesc] = useState(false);
-
-  // v0.74 — SLL (sempy_labs.run_model_bpa) live result.
-  const [sll, setSll] = useState<SllModelBpaResponse | null>(null);
-  const [sllLoading, setSllLoading] = useState(false);
-  const [sllErr, setSllErr] = useState("");
-
-  const handleRunSll = useCallback(async () => {
-    if (!workspaceId || !datasetId) return;
-    setSllLoading(true);
-    setSllErr("");
-    try {
-      const r = await runSllModelBpa(auth, workspaceId, datasetId);
-      setSll(r);
-    } catch (e) {
-      setSllErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setSllLoading(false);
-    }
-  }, [auth, workspaceId, datasetId]);
 
   const loadModel = useCallback(async () => {
     if (!workspaceId || !datasetId) return;
@@ -237,68 +217,6 @@ export const ModelBpaPage: React.FC<PageProps> = ({ auth, workspaceId, datasetId
 
   return (
     <div className={styles.root}>
-      {/* ── v0.74 SLL panel (Michael Kovalsky's run_model_bpa) ── */}
-      <div style={{
-        display: "flex", flexDirection: "column", gap: 8,
-        padding: "10px 12px",
-        border: `1px solid ${tokens.colorNeutralStroke2}`,
-        borderRadius: tokens.borderRadiusMedium,
-        backgroundColor: tokens.colorNeutralBackground2,
-      }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <Title3 style={{ margin: 0 }}>semantic-link-labs · run_model_bpa</Title3>
-          <span style={{ color: tokens.colorNeutralForeground3, fontSize: 12 }}>
-            Michael Kovalsky · executed via the SLL sidecar (Service Principal)
-          </span>
-          <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
-            {sllLoading && <Spinner size="tiny" label="Running…" />}
-            <Button appearance="primary" icon={<Play20Regular />} onClick={handleRunSll} disabled={sllLoading || !workspaceId || !datasetId}>
-              {sll ? "Re-run" : "Run"}
-            </Button>
-          </div>
-        </div>
-        {sllErr && (
-          <MessageBar intent="error">
-            <MessageBarBody><MessageBarTitle>SLL run failed</MessageBarTitle> {sllErr}</MessageBarBody>
-          </MessageBar>
-        )}
-        {sll && sll.rows.length > 0 && (
-          <div style={{ maxHeight: 360, overflow: "auto", border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusSmall, backgroundColor: tokens.colorNeutralBackground1 }}>
-            <table className={styles.table}>
-              <thead>
-                <tr>
-                  {sll.columns.map((c) => <th key={c} className={styles.th}>{c}</th>)}
-                </tr>
-              </thead>
-              <tbody>
-                {sll.rows.map((row, i) => (
-                  <tr key={i}>
-                    {sll.columns.map((c) => (
-                      <td key={c} className={styles.td} title={String(row[c] ?? "")}>
-                        {String(row[c] ?? "")}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-        {sll && sll.rows.length === 0 && !sllErr && (
-          <Text>No violations reported by run_model_bpa — model is clean.</Text>
-        )}
-        {!sll && !sllErr && !sllLoading && (
-          <Text style={{ color: tokens.colorNeutralForeground3 }}>
-            Click <strong>Run</strong> to execute Michael Kovalsky&apos;s actual
-            <code> run_model_bpa</code> against this semantic model and display
-            its raw findings.
-          </Text>
-        )}
-      </div>
-
-      <Text style={{ color: tokens.colorNeutralForeground3, fontSize: 11, marginTop: 4 }}>
-        Below: built-in client-side rule engine (offline, no SP required).
-      </Text>
       <div className={styles.toolbar}>
         <Field label="Severity">
           <Combobox

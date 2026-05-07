@@ -98,7 +98,21 @@ Six P2 semantic-model fixers ported from `pbi_fixer/src/`. All are property-muta
 
 Frontend adds six `backendFixer({...})` entries; backend `pbi_fixer_handlers.py` adds six handlers + registry rows. No new API endpoints.
 
-### v0.60 — Explorer parity batch 2: DAX formatting + editable column / table / relationship props (May 5 2026)
+### v0.82 — WS-U done: SLL Python sidecar deleted (May 2026)
+The standalone `sll-sidecar` Python container is gone for good. Memory Analyzer keeps using its DAX `INFO.VIEW.*` path via `memoryApi.ts`; Model BPA keeps using the TS rule engine in `modelBpaApi.ts` — both already worked without the sidecar. The "compare with semantic-link-labs" inline panels on `MemoryPage.tsx` (HTML capture of `vertipaq_analyzer()`) and `ModelBpaPage.tsx` (raw `run_model_bpa` rows) were the last consumers and were removed. With no callers left, this bump deletes:
+
+- `Developer Hub/SllSidecar/` (whole dir: `app.py`, `Dockerfile`, `requirements.txt`)
+- `sll-sidecar` service + `SLL_SIDECAR_URL` env line in `docker-compose.yaml`
+- SLL proxy block in `Backend/src/api/agenthub_controller.py` (`_SllRequest`, `_SllVertipaqRequest`, `_sll_base_url`, `_sll_post`, `POST /api/pbi-fixer/sll/model-bpa`, `POST /api/pbi-fixer/sll/vertipaq`)
+- `Frontend/src/components/PbiFixer/services/sllApi.ts`
+- "SLL sidecar" mention in `docs/index.html` Local Dev card
+
+`docker compose --profile prod up` now starts only `backend` + `frontend` + `dev-gateway`; no more QEMU x86_64 emulation requirement on aarch64 dev hosts. Closes WS-U U1/U2/U3/U4 and supersedes WS-T T4/T5/T6 (which all depended on the sidecar staying alive).
+
+### v0.81 — WS-U start: SLL Sempy Runner inline path removed (May 2026)
+First slice of WS-U. The Sempy Runner page no longer offers "Run inline (SLL sidecar)"; every function goes through the notebook path (Fabric Spark already ships `sempy` + `sempy-labs` preinstalled). Removed from `SempyRunnerPage.tsx`: `sllApi` imports, all `sll*` state + `onRunSll` handler, the inline-run button, the dual helper-text variant, the SLL error MessageBar, the BPA results table, and the Vertipaq HTML pane (-126 / +6 lines).
+
+
 Second parity batch on top of v0.59. **DAX formatting**: new `formatDax(dax)` in `fabricApi.ts` POSTs to `https://www.daxformatter.com/api/daxformatter/DaxFormat` (form-urlencoded). "Format DAX" button in the Expression header runs it on the selected measure's pending expression. CORS / network failure path falls back to copying the expression to the clipboard and opening daxformatter.com in a new tab so the user can paste manually. **Editable column / table / relationship properties**: new `ColumnEdit` / `TableEdit` / `RelationshipEdit` types + new patchers (`patchColumnInTmdl`, `patchTableInTmdl`, `patchRelationshipInTmdl`) factored on top of a generic `patchTmdlBlockProps` helper (header regex + indent unit detection + two-pass replace+insert; mirrors the measure version minus the expression-rewrite pass). Relationships are matched in TMDL by `fromColumn:`/`toColumn:` body lines (the GUID header isn't surfaced in `ModelData`); the patcher tries both `definition/relationships.tmdl` and `definition/model.tmdl` and mutates whichever part actually contains the matching block. New `pendingColumnEdits` / `pendingTableEdits` / `pendingRelEdits` state + `setColumnEdit` / `setTableEdit` / `setRelEdit` helpers + a unified `handleSaveEdits` that runs all four `update*Properties` calls in parallel and post-patches local `ModelData` so the UI reflects saved values immediately. Properties panel switched to `PropEditRow` for editable fields (column: summarizeBy / displayFolder / dataCategory / isHidden; table: description / isHidden; relationship: isActive / crossFilteringBehavior). Also: `parseTmdlDefinition` now captures table-level `description:` / `isHidden:` lines (previously dropped on the floor) so initial values populate correctly. Save button / pending counter now sums across all four object kinds (`totalPendingEdits`).
 
 ### v0.59 — Explorer parity batch 1: hierarchies, partitions, preview, perspective filter, context menu, JSON preview (May 5 2026)

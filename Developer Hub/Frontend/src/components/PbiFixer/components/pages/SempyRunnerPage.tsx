@@ -200,9 +200,8 @@ export const SempyRunnerPage: React.FC<PageProps> = ({
 
   // v0.81 — sidecar inline execution removed. Every function in the
   // catalog now goes through the notebook path (Fabric Spark already
-  // ships sempy + sempy-labs preinstalled). The native Vertipaq /
-  // Model BPA pages have their own dedicated UIs that don't touch the
-  // SLL Python sidecar.
+  // ships sempy + sempy-labs preinstalled). The Vertipaq / Model BPA
+  // pages have their own dedicated UIs.
 
   const onCreateNotebook = async () => {
     if (!fn || !workspaceId) return;
