@@ -1,7 +1,7 @@
 // ModelExplorer — React component (FluentUI)
 // Mirrors model_explorer_tab() from _sm_explorer.py
 
-import React, { useState, useCallback, useMemo, useEffect } from "react";
+import React, { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import {
   Button,
   Input,
@@ -21,6 +21,7 @@ import {
   ArrowCollapseAll20Regular,
   Copy20Regular,
   Wrench20Regular,
+  Table20Regular,
 } from "@fluentui/react-icons";
 import {
   ModelData,
@@ -61,6 +62,9 @@ import {
   type PerspectiveMember,
 } from "../services/perspectivesApi";
 import { FIXERS, type Fixer, type FixerResult, type FixerContext } from "../fixers";
+import { runModelBpa, type BpaFinding } from "../services/modelBpaApi";
+import { runVertipaqAnalyzer, type VertipaqAnalyzerResult } from "../services/vertipaqApi";
+import { ModelScanResults } from "./ModelScanResults";
 
 // ---------------------------------------------------------------------------
 // Styles
@@ -73,8 +77,8 @@ const useStyles = makeStyles({
     height: "100%",
     ...shorthands.gap("12px"),
     backgroundColor: "#faf9f8",
-    ...shorthands.padding("20px", "24px"),
-    ...shorthands.margin("-24px"),
+    ...shorthands.padding("4px", "24px", "20px", "24px"),
+    ...shorthands.margin("-8px", "-24px", "-24px", "-24px"),
     overflowY: "auto",
   },
   hero: {
@@ -169,7 +173,7 @@ const useStyles = makeStyles({
     overflowX: "hidden",
     ...shorthands.border("1px", "solid", BORDER_COLOR),
     ...shorthands.borderRadius("8px"),
-    backgroundColor: SECTION_BG,
+    backgroundColor: "#ffffff",
     fontSize: "12px",
   },
   treeItem: {
@@ -265,6 +269,9 @@ export interface ModelExplorerProps {
   connectionSlot?: React.ReactNode;
   /** Version badge shown next to the eyebrow ("POWER BI FIXER"). */
   version?: string;
+  /** Imperative nav request — used by the BPA "Fix it" button to jump
+   *  to the Fixer page. Wired by PbiFixerPage. */
+  onNavigate?: (key: string) => void;
 }
 
 export const ModelExplorer: React.FC<ModelExplorerProps> = ({
@@ -274,6 +281,7 @@ export const ModelExplorer: React.FC<ModelExplorerProps> = ({
   datasetId,
   connectionSlot,
   version,
+  onNavigate,
 }) => {
   const styles = useStyles();
 
@@ -309,6 +317,16 @@ export const ModelExplorer: React.FC<ModelExplorerProps> = ({
   const [scanning, setScanning] = useState(false);
   const [scanRanOnce, setScanRanOnce] = useState(false);
   const [applyingFixerId, setApplyingFixerId] = useState<string | null>(null);
+  // v0.102 — unified Scan Model results. handleScanModel runs three
+  // phases in order (model fixers → BPA → Memory Analyzer); each phase
+  // pushes its result into the corresponding state slot so the
+  // <ModelScanResults> panel below mainLayout can render incrementally.
+  const [bpaFindings, setBpaFindings] = useState<BpaFinding[] | null>(null);
+  const [vertipaq, setVertipaq] = useState<VertipaqAnalyzerResult | null>(null);
+  const [vertipaqLoading, setVertipaqLoading] = useState(false);
+  const [vertipaqError, setVertipaqError] = useState("");
+  const [scanStep, setScanStep] = useState<"" | "fixers" | "bpa" | "memory">("");
+  const resultsRef = useRef<HTMLDivElement | null>(null);
   // Total pending edit count across all object kinds.
   const totalPendingEdits =
     Object.keys(pendingMeasureEdits).length +
@@ -387,7 +405,7 @@ export const ModelExplorer: React.FC<ModelExplorerProps> = ({
 
   // Build tree
   const treeResult = useMemo<TreeBuildResult>(() => {
-    if (!modelData) return { options: [], keyMap: {} };
+    if (!modelData) return { options: [], keyMap: {}, iconMap: {} };
     return buildModelTree(modelData, expanded, {}, pendingChanges);
   }, [modelData, expanded, pendingChanges]);
 
@@ -883,14 +901,18 @@ export const ModelExplorer: React.FC<ModelExplorerProps> = ({
     };
   }, [auth, resolvedIds, modelData]);
 
-  const handleScanFixers = useCallback(async () => {
+  const handleScanModel = useCallback(async () => {
     const ctx = buildFixerCtx();
     if (!ctx) {
       setStatus({ msg: "Load a model first", color: "#ff3b30" });
       return;
     }
     setScanning(true);
+
+    // Phase 1 — backend semantic-model fixers (scan-only).
+    setScanStep("fixers");
     setStatus({ msg: `Scanning ${modelFixers.length} model fixer(s)…`, color: GRAY_COLOR });
+    let withFindings = 0;
     try {
       const entries = await Promise.all(
         modelFixers.map(async (fx) => {
@@ -898,7 +920,8 @@ export const ModelExplorer: React.FC<ModelExplorerProps> = ({
             const res = await fx.scan(ctx);
             return [fx.id, res] as const;
           } catch (err) {
-            return [fx.id, { findings: [], applied: false, log: [`scan error: ${err instanceof Error ? err.message : String(err)}`] }] as const;
+            const fail: FixerResult = { findings: [], applied: false, log: [`scan error: ${err instanceof Error ? err.message : String(err)}`] };
+            return [fx.id, fail] as const;
           }
         })
       );
@@ -906,17 +929,78 @@ export const ModelExplorer: React.FC<ModelExplorerProps> = ({
       for (const [id, res] of entries) next[id] = res;
       setScanResults(next);
       setScanRanOnce(true);
-      const withFindings = entries.filter(([, r]) => r.findings.length > 0).length;
+      withFindings = entries.filter(([, r]) => r.findings.length > 0).length;
+    } catch (err) {
       setStatus({
-        msg: withFindings === 0
-          ? "Scan complete — no model issues found"
-          : `Scan complete — ${withFindings} fixer(s) with issues`,
-        color: withFindings === 0 ? "#34c759" : "#ff9500",
+        msg: `Fixer scan failed: ${err instanceof Error ? err.message : String(err)}`,
+        color: "#ff3b30",
       });
-    } finally {
       setScanning(false);
+      setScanStep("");
+      return;
     }
-  }, [buildFixerCtx, modelFixers]);
+
+    // Phase 2 — Best Practice Analyzer (synchronous, runs on already-loaded model).
+    setScanStep("bpa");
+    setStatus({ msg: "Running Best Practice Analyzer…", color: GRAY_COLOR });
+    let bpaCount = 0;
+    try {
+      if (modelData) {
+        const findings = runModelBpa(modelData);
+        setBpaFindings(findings);
+        bpaCount = findings.length;
+      } else {
+        setBpaFindings([]);
+      }
+    } catch (err) {
+      setBpaFindings([]);
+      setStatus({
+        msg: `BPA failed: ${err instanceof Error ? err.message : String(err)}`,
+        color: "#ff9500",
+      });
+    }
+
+    // Phase 3 — Memory Analyzer (Vertipaq). Permission-sensitive — degrade gracefully.
+    setScanStep("memory");
+    setVertipaqLoading(true);
+    setVertipaqError("");
+    setStatus({ msg: "Loading memory statistics…", color: GRAY_COLOR });
+    try {
+      const v = await runVertipaqAnalyzer(
+        auth,
+        ctx.workspaceId,
+        ctx.datasetId,
+        typeof workspace === "string" ? workspace : undefined,
+        datasetName,
+      );
+      setVertipaq(v);
+    } catch (err) {
+      setVertipaq(null);
+      setVertipaqError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setVertipaqLoading(false);
+    }
+
+    // Final consolidated status line.
+    const memHint = vertipaqError ? " (memory unavailable)" : "";
+    setStatus({
+      msg: withFindings === 0 && bpaCount === 0
+        ? `Scan complete — no fixer or BPA issues${memHint}`
+        : `Scan complete — ${withFindings} fixer issue(s), ${bpaCount} BPA finding(s)${memHint}`,
+      color: (withFindings === 0 && bpaCount === 0) ? "#34c759" : "#ff9500",
+    });
+    setScanning(false);
+    setScanStep("");
+  }, [buildFixerCtx, modelFixers, modelData, auth, workspace, datasetName, vertipaqError]);
+
+  // Smooth-scroll to the new results panel as soon as a scan completes.
+  useEffect(() => {
+    if (scanRanOnce && !scanning && resultsRef.current) {
+      requestAnimationFrame(() => {
+        resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    }
+  }, [scanRanOnce, scanning]);
 
   const handleApplyFixer = useCallback(async (fx: Fixer) => {
     const ctx = buildFixerCtx();
@@ -1283,11 +1367,13 @@ export const ModelExplorer: React.FC<ModelExplorerProps> = ({
                 width: "100%",
                 flex: 1,
                 minHeight: "160px",
+                maxHeight: "none",
                 display: "flex",
               }}
               textarea={{
                 style: {
                   height: "100%",
+                  maxHeight: "none",
                   fontFamily: "Consolas, 'Cascadia Code', monospace",
                   fontSize: "12px",
                 },
@@ -1378,10 +1464,18 @@ export const ModelExplorer: React.FC<ModelExplorerProps> = ({
           appearance="primary"
           className={styles.loadCta}
           icon={scanning ? <Spinner size="tiny" /> : <Wrench20Regular />}
-          onClick={handleScanFixers}
+          onClick={handleScanModel}
           disabled={!resolvedIds || scanning}
         >
-          {scanning ? "Scanning" : "Scan model fixes"}
+          {scanning
+            ? scanStep === "fixers"
+              ? "Scanning fixers…"
+              : scanStep === "bpa"
+                ? "Running BPA…"
+                : scanStep === "memory"
+                  ? "Loading memory…"
+                  : "Scanning…"
+            : "Scan Model"}
         </Button>
         {loading && (
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: GRAY_COLOR, fontSize: 12 }}>
@@ -1430,7 +1524,11 @@ export const ModelExplorer: React.FC<ModelExplorerProps> = ({
           <div className={styles.treeList}>
             {perspectiveFilteredOptions.map((option) => {
               const key = treeResult.keyMap[option];
+              const iconKey = treeResult.iconMap[option];
               const isSelected = key === selectedKey;
+              const indentMatch = option.match(/^[\u00A0]*/);
+              const indent = indentMatch ? indentMatch[0] : "";
+              const labelText = option.slice(indent.length);
               return (
                 <div
                   key={option}
@@ -1443,8 +1541,20 @@ export const ModelExplorer: React.FC<ModelExplorerProps> = ({
                       setCtxMenu({ x: e.clientX, y: e.clientY, key });
                     }
                   }}
+                  style={{ display: "flex", alignItems: "center", gap: "4px" }}
                 >
-                  {option}
+                  {iconKey === "table" ? (
+                    <>
+                      <span style={{ whiteSpace: "pre" }}>{indent}</span>
+                      <Table20Regular
+                        primaryFill={ICON_ACCENT}
+                        style={{ flexShrink: 0 }}
+                      />
+                      <span>{labelText}</span>
+                    </>
+                  ) : (
+                    option
+                  )}
                 </div>
               );
             })}
@@ -1517,59 +1627,28 @@ export const ModelExplorer: React.FC<ModelExplorerProps> = ({
                 </Button>
               </div>
             )}
-            {/* v0.73 — Quick fixer scan results. Surfaces only fixers
-                that reported findings; "clean" fixers are hidden so the
-                panel acts like a to-do list of remaining issues. */}
-            {scanRanOnce && (
-              <div style={{ marginTop: "16px", paddingTop: "8px", borderTop: `1px solid ${BORDER_COLOR}` }}>
-                <div className={styles.sectionLabel} style={{ marginBottom: 6 }}>
-                  Quick fixes {scanRanOnce && `— ${fixersWithFindings.length} issue type(s)`}
-                </div>
-                {fixersWithFindings.length === 0 ? (
-                  <div style={{ fontSize: 12, color: GRAY_COLOR, fontStyle: "italic" }}>
-                    No model issues found.
-                  </div>
-                ) : (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                    {fixersWithFindings.map((fx) => {
-                      const r = scanResults[fx.id];
-                      const count = r?.findings.length ?? 0;
-                      const busy = applyingFixerId === fx.id;
-                      return (
-                        <div key={fx.id} style={{ display: "flex", flexDirection: "column", gap: 2, padding: "6px 8px", background: SECTION_BG, borderRadius: 4 }}>
-                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                            <span style={{ fontSize: 12, fontWeight: 600, flex: 1 }}>{fx.title}</span>
-                            <span style={{ fontSize: 11, color: GRAY_COLOR }}>{count} finding{count === 1 ? "" : "s"}</span>
-                            <Button
-                              appearance="primary"
-                              size="small"
-                              disabled={busy || applyingFixerId !== null}
-                              icon={busy ? <Spinner size="tiny" /> : undefined}
-                              onClick={() => void handleApplyFixer(fx)}
-                            >
-                              Apply
-                            </Button>
-                          </div>
-                          {r && r.findings.length > 0 && (
-                            <div style={{ fontSize: 11, color: GRAY_COLOR, fontFamily: "monospace", maxHeight: 110, overflow: "auto" }}>
-                              {r.findings.slice(0, 5).map((f, i) => (
-                                <div key={i}>• {f.objectPath}{f.detail ? ` — ${f.detail}` : ""}</div>
-                              ))}
-                              {r.findings.length > 5 && (
-                                <div style={{ fontStyle: "italic" }}>… +{r.findings.length - 5} more</div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            )}
+            {/* v0.102 — Quick fixes panel relocated to the unified
+                <ModelScanResults> section below mainLayout. */}
           </div>
         </div>
       </div>
+
+      <ModelScanResults
+        ref={resultsRef}
+        scanRanOnce={scanRanOnce}
+        fixersWithFindings={fixersWithFindings}
+        scanResults={scanResults}
+        applyingFixerId={applyingFixerId}
+        onApplyFixer={(fx) => void handleApplyFixer(fx)}
+        bpaFindings={bpaFindings}
+        vertipaq={vertipaq}
+        vertipaqLoading={vertipaqLoading}
+        vertipaqError={vertipaqError}
+        onReloadVertipaq={() => void handleScanModel()}
+        datasetName={datasetName}
+        datasetId={resolvedIds?.datasetId}
+        onNavigate={onNavigate}
+      />
       {ctxMenu && (
         <div
           style={{ position: "fixed", inset: 0, zIndex: 1000 }}

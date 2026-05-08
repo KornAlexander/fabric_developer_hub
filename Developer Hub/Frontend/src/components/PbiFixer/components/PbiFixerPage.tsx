@@ -6,13 +6,14 @@
 // Page components are chosen by `activeNav` and remounted (via `key`)
 // whenever workspace or the selection relevant to that page changes.
 
-import React, { useState, useCallback, useEffect, useMemo } from "react";
+import React, { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import {
   Combobox,
   Option,
   OptionGroup,
   Field,
   Button,
+  Checkbox,
   Spinner,
   Text,
   makeStyles,
@@ -20,9 +21,10 @@ import {
   shorthands,
   tokens,
 } from "@fluentui/react-components";
-import { ArrowSync20Regular } from "@fluentui/react-icons";
+import { ArrowSync20Regular, Play20Regular } from "@fluentui/react-icons";
 import { WorkloadClientAPI } from "@ms-fabric/workload-client";
 import { ModelExplorer } from "./ModelExplorer";
+import { StackedSection } from "./common/StackedSection";
 import { ReportExplorer } from "./ReportExplorer";
 import {
   FixerPage,
@@ -59,7 +61,7 @@ const useStyles = makeStyles({
     alignItems: "center",
     ...shorthands.gap("12px"),
     ...shorthands.padding("0", "24px"),
-    height: "48px",
+    height: "36px",
     flexShrink: 0,
     backgroundColor: "#faf9f8",
     borderBottomStyle: "solid",
@@ -117,8 +119,8 @@ const useStyles = makeStyles({
     flex: 1,
     minWidth: 0,
     overflowY: "auto",
-    ...shorthands.padding("24px"),
-    backgroundColor: tokens.colorNeutralBackground1,
+    ...shorthands.padding("8px", "24px", "24px", "24px"),
+    backgroundColor: "#faf9f8",
   },
   contentFade: {
     animationDuration: "160ms",
@@ -181,7 +183,15 @@ function readNavKey(): NavKey {
         // nav value (e.g. ``nav=report?experience=fabric-developer``).
         // Strip it down to the first alphanumeric token.
         const m = fromUrl.match(/^[A-Za-z0-9_-]+/);
-        if (m) return m[0] as NavKey;
+        if (m) {
+          // v0.102 — Model BPA + Memory Analyzer + Report BPA were
+          // consolidated into the Model / Report Explorer "Scan" panel.
+          // Re-route any cached deep-links so they don't 404.
+          const raw = m[0];
+          if (raw === "modelBpa" || raw === "memory") return "model" as NavKey;
+          if (raw === "reportBpa") return "report" as NavKey;
+          return raw as NavKey;
+        }
       }
     }
   } catch { /* ignore */ }
@@ -204,6 +214,7 @@ export const PbiFixerPage: React.FC<PbiFixerPageProps> = ({
   // Each PBI Fixer tab spawns its own PbiFixerPage instance; without
   // this the connection bar starts empty in every tab.
   const PBIFIXER_CONN_STORAGE_KEY = "pbiFixer.connection.v1";
+  const PBIFIXER_MULTI_STORAGE_KEY = "pbiFixer.multiMode.v1";
   type PersistedConnection = {
     workspaceId: string;
     workspaceInput: string;
@@ -211,15 +222,33 @@ export const PbiFixerPage: React.FC<PbiFixerPageProps> = ({
     datasetInput: string;
     reportId: string;
     reportInput: string;
+    /** v0.93+: arrays of every selected id/name in Multi mode. Optional
+     *  for backwards compatibility with v0.92 sessionStorage payloads. */
+    datasetIds?: string[];
+    datasetNames?: string[];
+    reportIds?: string[];
+    reportNames?: string[];
   };
   const readPersistedConn = (): Partial<PersistedConnection> => {
-    try {
-      const raw = sessionStorage.getItem(PBIFIXER_CONN_STORAGE_KEY);
-      if (!raw) return {};
-      const obj = JSON.parse(raw);
-      if (obj && typeof obj === "object") return obj as PersistedConnection;
-    } catch { /* ignore parse / quota errors */ }
-    return {};
+    const tryRead = (store: Storage | undefined): Partial<PersistedConnection> | null => {
+      try {
+        if (!store) return null;
+        const raw = store.getItem(PBIFIXER_CONN_STORAGE_KEY);
+        if (!raw) return null;
+        const obj = JSON.parse(raw);
+        if (obj && typeof obj === "object") return obj as PersistedConnection;
+      } catch { /* ignore parse / quota errors */ }
+      return null;
+    };
+    // v0.93+: each PBI Fixer sub-tab is its own iframe with isolated
+    // ``sessionStorage`` (the workload-client mounts each tab in a
+    // fresh browsing context). To propagate selections across tabs we
+    // mirror to ``localStorage`` (shared across all same-origin
+    // iframes) and prefer it on read; sessionStorage stays as a
+    // secondary fallback for the in-tab case.
+    return tryRead(typeof window !== "undefined" ? window.localStorage : undefined)
+      ?? tryRead(typeof window !== "undefined" ? window.sessionStorage : undefined)
+      ?? {};
   };
   const persistedConn = readPersistedConn();
 
@@ -231,22 +260,167 @@ export const PbiFixerPage: React.FC<PbiFixerPageProps> = ({
   const [datasetInput, setDatasetInput] = useState(persistedConn.datasetInput ?? "");
   const [reportInput, setReportInput] = useState(persistedConn.reportInput ?? "");
 
-  // Persist on every change so the next sub-tab to mount picks it up.
+  // v0.93 Multi mode — when ON the user can pick multiple datasets and/or
+  // reports. The Combobox swaps to multiselect, an Apply button appears
+  // in the connection bar, and pages render stacked sections (one per
+  // loaded item). When OFF (default) behaviour is identical to v0.92:
+  // single selection, auto-load on selection change, no Apply button.
+  const readPersistedMulti = (): boolean => {
+    try {
+      return sessionStorage.getItem(PBIFIXER_MULTI_STORAGE_KEY) === "1";
+    } catch { return false; }
+  };
+  const [multiMode, setMultiMode] = useState<boolean>(readPersistedMulti);
+  // Pending (= staged in the picker) and committed (= last Apply) lists.
+  // In single mode pending and committed are kept in lockstep with the
+  // primary scalar id so existing pages keep working unchanged.
+  const seedIds = (single: string | undefined, arr: string[] | undefined): string[] => {
+    if (arr && arr.length) return arr;
+    return single ? [single] : [];
+  };
+  const seedNames = (single: string | undefined, arr: string[] | undefined): string[] => {
+    if (arr && arr.length) return arr;
+    return single ? [single] : [];
+  };
+  const [pendingDatasetIds, setPendingDatasetIds] = useState<string[]>(
+    () => seedIds(persistedConn.datasetId, persistedConn.datasetIds),
+  );
+  const [pendingDatasetNames, setPendingDatasetNames] = useState<string[]>(
+    () => seedNames(persistedConn.datasetInput, persistedConn.datasetNames),
+  );
+  const [pendingReportIds, setPendingReportIds] = useState<string[]>(
+    () => seedIds(persistedConn.reportId, persistedConn.reportIds),
+  );
+  const [pendingReportNames, setPendingReportNames] = useState<string[]>(
+    () => seedNames(persistedConn.reportInput, persistedConn.reportNames),
+  );
+  // Committed = the list pages actually see. Bumped on Apply (multi) or
+  // immediately on selection change (single). Starts equal to pending.
+  const [committedDatasetIds, setCommittedDatasetIds] = useState<string[]>(pendingDatasetIds);
+  const [committedDatasetNames, setCommittedDatasetNames] = useState<string[]>(pendingDatasetNames);
+  const [committedReportIds, setCommittedReportIds] = useState<string[]>(pendingReportIds);
+  const [committedReportNames, setCommittedReportNames] = useState<string[]>(pendingReportNames);
+  const [commitToken, setCommitToken] = useState(0);
+  // True when Multi-mode pending differs from committed → Apply is "dirty".
+  const arrayEq = (a: string[], b: string[]): boolean =>
+    a.length === b.length && a.every((v, i) => v === b[i]);
+  const pendingDirty = !arrayEq(pendingDatasetIds, committedDatasetIds)
+    || !arrayEq(pendingReportIds, committedReportIds);
+
+  // SINGLE mode: keep pending/committed locked to the scalar primary
+  // selection. Selection-change handlers update the scalars; this effect
+  // mirrors them into the arrays so pages always see consistent props.
+  useEffect(() => {
+    if (multiMode) return;
+    const dsIds = datasetId ? [datasetId] : [];
+    const dsNames = datasetId ? [datasetInput] : [];
+    const rpIds = reportId ? [reportId] : [];
+    const rpNames = reportId ? [reportInput] : [];
+    setPendingDatasetIds(dsIds);
+    setPendingDatasetNames(dsNames);
+    setPendingReportIds(rpIds);
+    setPendingReportNames(rpNames);
+    setCommittedDatasetIds(dsIds);
+    setCommittedDatasetNames(dsNames);
+    setCommittedReportIds(rpIds);
+    setCommittedReportNames(rpNames);
+    setCommitToken((t) => t + 1);
+  }, [multiMode, datasetId, datasetInput, reportId, reportInput]);
+
+  // MULTI mode: keep the scalar primary id pointing at the FIRST committed
+  // entry so pages that haven't migrated yet still receive a usable
+  // datasetId / reportId. Pure mirror — does not bump commitToken.
+  useEffect(() => {
+    if (!multiMode) return;
+    const firstDsId = committedDatasetIds[0] ?? "";
+    const firstDsName = committedDatasetNames[0] ?? "";
+    const firstRpId = committedReportIds[0] ?? "";
+    const firstRpName = committedReportNames[0] ?? "";
+    if (firstDsId !== datasetId) setDatasetId(firstDsId);
+    if (firstDsName !== datasetInput) setDatasetInput(firstDsName);
+    if (firstRpId !== reportId) setReportId(firstRpId);
+    if (firstRpName !== reportInput) setReportInput(firstRpName);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [multiMode, committedDatasetIds, committedDatasetNames, committedReportIds, committedReportNames]);
+
+  const applyMulti = useCallback(() => {
+    setCommittedDatasetIds(pendingDatasetIds);
+    setCommittedDatasetNames(pendingDatasetNames);
+    setCommittedReportIds(pendingReportIds);
+    setCommittedReportNames(pendingReportNames);
+    setCommitToken((t) => t + 1);
+  }, [pendingDatasetIds, pendingDatasetNames, pendingReportIds, pendingReportNames]);
+
+  // Persist Multi mode separately from the connection blob so toggling it
+  // while everything else is empty still survives a reload.
   useEffect(() => {
     try {
-      sessionStorage.setItem(
-        PBIFIXER_CONN_STORAGE_KEY,
-        JSON.stringify({
-          workspaceId,
-          workspaceInput,
-          datasetId,
-          datasetInput,
-          reportId,
-          reportInput,
-        }),
-      );
-    } catch { /* quota / disabled storage — silently ignore */ }
-  }, [workspaceId, workspaceInput, datasetId, datasetInput, reportId, reportInput]);
+      sessionStorage.setItem(PBIFIXER_MULTI_STORAGE_KEY, multiMode ? "1" : "0");
+    } catch { /* ignore */ }
+  }, [multiMode]);
+
+  // Persist on every change so the next sub-tab to mount picks it up.
+  // v0.96: write to both localStorage (cross-iframe) and sessionStorage
+  // (back-compat). Two anti-clobber guards:
+  //   1) skip if our state is fully empty (initial mount race);
+  //   2) merge with whatever is already in localStorage — never write
+  //      an EMPTY field over an EXISTING non-empty one. This protects
+  //      against the v0.95 failure where the destination tab cleared
+  //      datasets/reports on its first workspaceId-change effect run
+  //      and then the persist effect wiped the source tab's value.
+  useEffect(() => {
+    const allEmpty =
+      !workspaceId && !datasetId && !reportId &&
+      !workspaceInput && !datasetInput && !reportInput &&
+      !committedDatasetIds.length && !committedReportIds.length;
+    if (allEmpty) return;
+    let existing: Partial<PersistedConnection> = {};
+    try {
+      const raw = window.localStorage.getItem(PBIFIXER_CONN_STORAGE_KEY);
+      if (raw) existing = JSON.parse(raw) as PersistedConnection;
+    } catch { /* ignore */ }
+    const merged = {
+      workspaceId: workspaceId || existing.workspaceId || "",
+      workspaceInput: workspaceInput || existing.workspaceInput || "",
+      datasetId: datasetId || existing.datasetId || "",
+      datasetInput: datasetInput || existing.datasetInput || "",
+      reportId: reportId || existing.reportId || "",
+      reportInput: reportInput || existing.reportInput || "",
+      datasetIds: committedDatasetIds.length ? committedDatasetIds : (existing.datasetIds || []),
+      datasetNames: committedDatasetNames.length ? committedDatasetNames : (existing.datasetNames || []),
+      reportIds: committedReportIds.length ? committedReportIds : (existing.reportIds || []),
+      reportNames: committedReportNames.length ? committedReportNames : (existing.reportNames || []),
+    };
+    const payload = JSON.stringify(merged);
+    try { window.localStorage.setItem(PBIFIXER_CONN_STORAGE_KEY, payload); } catch { /* ignore */ }
+    try { window.sessionStorage.setItem(PBIFIXER_CONN_STORAGE_KEY, payload); } catch { /* ignore */ }
+  }, [
+    workspaceId, workspaceInput, datasetId, datasetInput, reportId, reportInput,
+    committedDatasetIds, committedDatasetNames, committedReportIds, committedReportNames,
+  ]);
+
+  // v0.93: cross-iframe propagation — listen for ``storage`` events so
+  // a tab that was already mounted when a sibling persisted a selection
+  // updates its own pickers. The event only fires in OTHER documents
+  // (never the one that wrote), which is exactly what we want. Only
+  // adopt fields that are still empty in THIS tab so we never yank a
+  // value the user is actively editing.
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== PBIFIXER_CONN_STORAGE_KEY || !e.newValue) return;
+      try {
+        const obj = JSON.parse(e.newValue) as PersistedConnection;
+        setWorkspaceId((cur) => cur || obj.workspaceId || "");
+        setWorkspaceInput((cur) => cur || obj.workspaceInput || "");
+        setDatasetId((cur) => cur || obj.datasetId || "");
+        setDatasetInput((cur) => cur || obj.datasetInput || "");
+        setReportId((cur) => cur || obj.reportId || "");
+        setReportInput((cur) => cur || obj.reportInput || "");
+      } catch { /* ignore malformed payload */ }
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
 
   const [workspaces, setWorkspaces] = useState<api.Workspace[]>([]);
   const [workspacesLoading, setWorkspacesLoading] = useState(false);
@@ -457,12 +631,57 @@ export const PbiFixerPage: React.FC<PbiFixerPageProps> = ({
     return () => { cancelled = true; };
   }, [workspaceId, accessToken, githubToken]);
 
+  // v0.96: this effect clears the dataset/report selection when the
+  // user CHANGES workspace. It must NOT run on initial mount, otherwise
+  // it wipes the dataset/report ids that were just hydrated from
+  // localStorage when the destination sub-tab mounts (root cause of
+  // the v0.95 test failure: switching from Model to Report sub-page
+  // mounted the Report iframe with both ids hydrated, then this effect
+  // immediately fired with workspaceId="Demo" and cleared them, then
+  // the persist effect wrote the empty payload to localStorage, also
+  // wiping the source tab's value).
+  const lastWorkspaceIdRef = useRef<string>(workspaceId);
   useEffect(() => {
+    if (lastWorkspaceIdRef.current === workspaceId) {
+      // First run on mount, or workspaceId did not actually change.
+      lastWorkspaceIdRef.current = workspaceId;
+      return;
+    }
+    lastWorkspaceIdRef.current = workspaceId;
     setDatasetId("");
     setDatasetInput("");
     setReportId("");
     setReportInput("");
+    setPendingDatasetIds([]);
+    setPendingDatasetNames([]);
+    setPendingReportIds([]);
+    setPendingReportNames([]);
+    setCommittedDatasetIds([]);
+    setCommittedDatasetNames([]);
+    setCommittedReportIds([]);
+    setCommittedReportNames([]);
   }, [workspaceId]);
+
+  // v0.93: auto-pair must NOT fire when the user is in Multi mode — they
+  // are explicitly picking multiple items and a magic counterpart pick
+  // would be surprising and would clobber their staged selection.
+  useEffect(() => {
+    if (multiMode) return;
+    if (itemsLoading) return;
+    if (datasetId && !reportId) {
+      const pair = pairItems.find((p) => p.datasetId === datasetId);
+      if (pair && pair.reportId) {
+        setReportId(pair.reportId);
+        setReportInput(pair.name);
+      }
+    } else if (reportId && !datasetId) {
+      const pair = pairItems.find((p) => p.reportId === reportId);
+      if (pair && pair.datasetId) {
+        setDatasetId(pair.datasetId);
+        setDatasetInput(pair.name);
+      }
+    }
+  }, [pairItems, itemsLoading, datasetId, reportId]);
 
   const datasetName = useMemo(
     () => datasets.find((d) => d.id === datasetId)?.name ?? datasetInput,
@@ -487,6 +706,12 @@ export const PbiFixerPage: React.FC<PbiFixerPageProps> = ({
     reportId: reportId || undefined,
     reportName,
     reportType: reports.find((r) => r.id === reportId)?.type,
+    datasetIds: committedDatasetIds,
+    datasetNames: committedDatasetNames,
+    reportIds: committedReportIds,
+    reportNames: committedReportNames,
+    multiMode,
+    commitToken,
     onNavigate: (key: string) => setActiveNav(key as NavKey),
   };
 
@@ -502,7 +727,91 @@ export const PbiFixerPage: React.FC<PbiFixerPageProps> = ({
     }
     if (!accessToken) return null;
 
-    const remountKey = `${activeNav}::${workspaceId}::${datasetId}::${reportId}`;
+    const remountKey = `${activeNav}::${workspaceId}::${datasetId}::${reportId}::${commitToken}`;
+
+    // v0.95: Multi mode for SM Explorer / Report Explorer.
+    //
+    // When Multi is ON and the user has committed >=1 selections via Apply,
+    // render one StackedSection per committed entry, each holding its own
+    // independent <ModelExplorer> / <ReportExplorer> instance with its own
+    // load state. The shared picker (connectionSlot) is hoisted to the top
+    // so it isn't duplicated inside every section.
+    if (multiMode && activeNav === "model") {
+      const ids = committedDatasetIds;
+      const names = committedDatasetNames;
+      if (ids.length === 0) {
+        return (
+          <div>
+            <div className={styles.connectionBar}>{pickerFields}</div>
+            <div className={styles.empty}>
+              <Text size={400}>
+                Multi mode is on. Pick one or more semantic models above and click Apply.
+              </Text>
+            </div>
+          </div>
+        );
+      }
+      return (
+        <div>
+          <div className={styles.connectionBar}>{pickerFields}</div>
+          {names.map((name, i) => (
+            <StackedSection
+              key={`${ids[i] || name}::${commitToken}`}
+              title={name}
+              defaultExpanded={i === 0}
+            >
+              <ModelExplorer
+                auth={pageProps.auth}
+                workspace={workspaceId}
+                datasetName={name}
+                datasetId={ids[i] || undefined}
+                version={PBI_FIXER_VERSION}
+                onNavigate={(k) => setActiveNav(k as NavKey)}
+              />
+            </StackedSection>
+          ))}
+        </div>
+      );
+    }
+    if (multiMode && activeNav === "report") {
+      const ids = committedReportIds;
+      const names = committedReportNames;
+      if (ids.length === 0) {
+        return (
+          <div>
+            <div className={styles.connectionBar}>{pickerFields}</div>
+            <div className={styles.empty}>
+              <Text size={400}>
+                Multi mode is on. Pick one or more reports above and click Apply.
+              </Text>
+            </div>
+          </div>
+        );
+      }
+      return (
+        <div>
+          <div className={styles.connectionBar}>{pickerFields}</div>
+          {names.map((name, i) => (
+            <StackedSection
+              key={`${ids[i] || name}::${commitToken}`}
+              title={name}
+              defaultExpanded={i === 0}
+            >
+              <ReportExplorer
+                auth={pageProps.auth}
+                workspace={workspaceId}
+                reportName={name}
+                reportId={ids[i] || undefined}
+                onNavigateToModel={() => setActiveNav("model")}
+                version={PBI_FIXER_VERSION}
+                onNavigate={(k) => setActiveNav(k as NavKey)}
+              />
+            </StackedSection>
+          ))}
+        </div>
+      );
+    }
+
     switch (activeNav) {
       case "model":
         return (
@@ -512,6 +821,9 @@ export const PbiFixerPage: React.FC<PbiFixerPageProps> = ({
             workspace={workspaceId}
             datasetName={datasetName}
             datasetId={datasetId || undefined}
+            connectionSlot={pickerFields}
+            version={PBI_FIXER_VERSION}
+            onNavigate={(k) => setActiveNav(k as NavKey)}
           />
         );
       case "report":
@@ -523,9 +835,16 @@ export const PbiFixerPage: React.FC<PbiFixerPageProps> = ({
             reportName={reportName}
             reportId={reportId || undefined}
             onNavigateToModel={() => setActiveNav("model")}
+            connectionSlot={pickerFields}
+            version={PBI_FIXER_VERSION}
+            onNavigate={(k) => setActiveNav(k as NavKey)}
           />
         );
       case "fixer":        return <FixerPage        key={remountKey} {...pageProps} />;
+      // v0.102 — Model BPA / Memory Analyzer / Report BPA were folded
+      // into the Model / Report Explorer "Scan" panels. The standalone
+      // pages remain as redirect stubs so cached deep-links land on the
+      // correct explorer tab instead of crashing.
       case "modelBpa":     return <ModelBpaPage     key={remountKey} {...pageProps} />;
       case "reportBpa":    return <ReportBpaPage    key={remountKey} {...pageProps} />;
       case "memory":       return <MemoryPage       key={remountKey} {...pageProps} />;
@@ -553,11 +872,262 @@ export const PbiFixerPage: React.FC<PbiFixerPageProps> = ({
   const showReportPicker = !needsBothPickers && isReportScoped;
   const showPairPicker = needsBothPickers;
 
+  // v0.89: Workspace + Semantic Model / Report pickers used to live in
+  // the page-level chrome bar above every PBI Fixer sub-page. For the
+  // Model Explorer and Report Explorer pages the picker now renders
+  // INLINE inside the page (between the description text and the Load
+  // Model / Load Report toolbar) — extracted as a JSX node so the
+  // connection state stays owned by `PbiFixerPage` and survives sub-tab
+  // switches. Other pages keep the picker in the chrome bar.
+  const inlinePickerActive = activeNav === "model" || activeNav === "report";
+
+  const pickerFields = (
+    <>
+      <Field label="Workspace" style={{ flex: "0 0 260px" }}>
+        <Combobox
+          value={workspaceInput}
+          selectedOptions={workspaceId ? [workspaceId] : []}
+          placeholder={workspacesLoading ? "Loading workspaces…" : "Select a workspace"}
+          onOptionSelect={(_, data) => {
+            setWorkspaceId(data.optionValue || "");
+            setWorkspaceInput(data.optionText || "");
+          }}
+          onChange={(e) => setWorkspaceInput((e.target as HTMLInputElement).value)}
+          disabled={workspacesLoading || !accessToken}
+          freeform
+        >
+          {workspaceGroups.map((w) => (
+            <Option key={w.id} value={w.id} text={w.name}>
+              {w.name}
+            </Option>
+          ))}
+        </Combobox>
+      </Field>
+
+      {showPairPicker && (
+        <Field label="Semantic Model / Report" style={{ flex: "0 0 320px" }}>
+          <Combobox
+            key="pair-picker"
+            value={pairInput}
+            selectedOptions={selectedPair ? [pairKey(selectedPair)] : []}
+            placeholder={
+              !workspaceId
+                ? "Pick a workspace first"
+                : itemsLoading
+                ? "Loading…"
+                : pairItems.length
+                ? "Select a semantic model or report"
+                : "No semantic models or reports found"
+            }
+            onOptionSelect={(_, data) => {
+              const k = data.optionValue || "";
+              const found = pairItems.find((p) => pairKey(p) === k);
+              if (found) {
+                setDatasetId(found.datasetId || "");
+                setDatasetInput(found.datasetId ? found.name : "");
+                setReportId(found.reportId || "");
+                setReportInput(found.reportId ? found.name : "");
+                setPairInput(found.name);
+              } else {
+                setPairInput(data.optionText || "");
+              }
+            }}
+            onChange={(e) => setPairInput((e.target as HTMLInputElement).value)}
+            disabled={!workspaceId || itemsLoading}
+            freeform
+          >
+            {pairGroups.length === 1 && pairGroups[0].folder === ""
+              ? pairGroups[0].items.map((p) => (
+                  <Option key={pairKey(p)} value={pairKey(p)} text={p.name}>
+                    {p.name}
+                    {p.datasetId && p.reportId
+                      ? ""
+                      : p.datasetId
+                      ? " · model only"
+                      : " · report only"}
+                  </Option>
+                ))
+              : pairGroups.map((g) => (
+                  <OptionGroup key={g.folder || "__root"} label={g.folder || "Root"}>
+                    {g.items.map((p) => (
+                      <Option key={pairKey(p)} value={pairKey(p)} text={p.name}>
+                        {p.name}
+                        {p.datasetId && p.reportId
+                          ? ""
+                          : p.datasetId
+                          ? " · model only"
+                          : " · report only"}
+                      </Option>
+                    ))}
+                  </OptionGroup>
+                ))}
+          </Combobox>
+        </Field>
+      )}
+
+      {showDatasetPicker && (
+        <Field label={multiMode ? "Semantic Models" : "Semantic Model"} style={{ flex: "0 0 260px" }}>
+          <Combobox
+            key={multiMode ? "model-picker-multi" : "model-picker"}
+            multiselect={multiMode || undefined}
+            value={multiMode
+              ? (pendingDatasetNames.join(", "))
+              : datasetInput}
+            selectedOptions={multiMode
+              ? pendingDatasetIds
+              : (datasetId ? [datasetId] : [])}
+            placeholder={
+              !workspaceId
+                ? "Pick a workspace first"
+                : itemsLoading
+                ? "Loading…"
+                : datasets.length
+                ? (multiMode ? "Pick one or more semantic models" : "Select a semantic model")
+                : "No semantic models found"
+            }
+            onOptionSelect={(_, data) => {
+              if (multiMode) {
+                const ids = data.selectedOptions || [];
+                const names = ids.map((id) => {
+                  const found = datasets.find((d) => d.id === id);
+                  return found?.name ?? "";
+                }).filter(Boolean);
+                setPendingDatasetIds(ids);
+                setPendingDatasetNames(names);
+                return;
+              }
+              const id = data.optionValue || "";
+              const name = data.optionText || "";
+              setDatasetId(id);
+              setDatasetInput(name);
+              const pair = pairItems.find((p) => p.datasetId === id);
+              if (pair && pair.reportId) {
+                setReportId(pair.reportId);
+                setReportInput(pair.name);
+              }
+            }}
+            onChange={(e) => {
+              if (multiMode) return;
+              setDatasetInput((e.target as HTMLInputElement).value);
+            }}
+            disabled={!workspaceId || itemsLoading}
+            freeform={!multiMode}
+          >
+            {datasetGroups.length === 1 && datasetGroups[0].folder === ""
+              ? datasetGroups[0].items.map((d) => (
+                  <Option key={d.id} value={d.id} text={d.name}>
+                    {d.name}
+                  </Option>
+                ))
+              : datasetGroups.map((g) => (
+                  <OptionGroup key={g.folder || "__root"} label={g.folder || "Root"}>
+                    {g.items.map((d) => (
+                      <Option key={d.id} value={d.id} text={d.name}>
+                        {d.name}
+                      </Option>
+                    ))}
+                  </OptionGroup>
+                ))}
+          </Combobox>
+        </Field>
+      )}
+
+      {showReportPicker && (
+        <Field label={multiMode ? "Reports" : "Report"} style={{ flex: "0 0 260px" }}>
+          <Combobox
+            key={multiMode ? "report-picker-multi" : "report-picker"}
+            multiselect={multiMode || undefined}
+            value={multiMode
+              ? (pendingReportNames.join(", "))
+              : reportInput}
+            selectedOptions={multiMode
+              ? pendingReportIds
+              : (reportId ? [reportId] : [])}
+            placeholder={
+              !workspaceId
+                ? "Pick a workspace first"
+                : itemsLoading
+                ? "Loading…"
+                : reports.length
+                ? (multiMode ? "Pick one or more reports" : "Select a report")
+                : "No reports found"
+            }
+            onOptionSelect={(_, data) => {
+              if (multiMode) {
+                const ids = data.selectedOptions || [];
+                const names = ids.map((id) => {
+                  const found = reports.find((r) => r.id === id);
+                  return found?.name ?? "";
+                }).filter(Boolean);
+                setPendingReportIds(ids);
+                setPendingReportNames(names);
+                return;
+              }
+              const id = data.optionValue || "";
+              const name = data.optionText || "";
+              setReportId(id);
+              setReportInput(name);
+              const pair = pairItems.find((p) => p.reportId === id);
+              if (pair && pair.datasetId) {
+                setDatasetId(pair.datasetId);
+                setDatasetInput(pair.name);
+              }
+            }}
+            onChange={(e) => {
+              if (multiMode) return;
+              setReportInput((e.target as HTMLInputElement).value);
+            }}
+            disabled={!workspaceId || itemsLoading}
+            freeform={!multiMode}
+          >
+            {reportGroups.length === 1 && reportGroups[0].folder === ""
+              ? reportGroups[0].items.map((r) => (
+                  <Option key={r.id} value={r.id} text={r.name}>
+                    {r.name}
+                  </Option>
+                ))
+              : reportGroups.map((g) => (
+                  <OptionGroup key={g.folder || "__root"} label={g.folder || "Root"}>
+                    {g.items.map((r) => (
+                      <Option key={r.id} value={r.id} text={r.name}>
+                        {r.name}
+                      </Option>
+                    ))}
+                  </OptionGroup>
+                ))}
+          </Combobox>
+        </Field>
+      )}
+      {multiMode && (
+        <Field label="\u00A0" style={{ flex: "0 0 auto" }}>
+          <Button
+            appearance="primary"
+            size="medium"
+            icon={<Play20Regular />}
+            onClick={applyMulti}
+            disabled={!workspaceId || itemsLoading || (!pendingDirty && commitToken > 0)}
+            title={pendingDirty
+              ? "Apply the staged selection — pages will (re)load each item"
+              : "Selection unchanged since last Apply"}
+          >
+            Apply
+          </Button>
+        </Field>
+      )}
+      <Field label="\u00A0" style={{ flex: "0 0 auto" }}>
+        <Checkbox
+          label="Multi"
+          checked={multiMode}
+          onChange={(_, data) => setMultiMode(!!data.checked)}
+          title="Pick multiple semantic models / reports and load them all at once"
+        />
+      </Field>
+    </>
+  );
+
   return (
     <div className={styles.root}>
       <div className={styles.header}>
-        <span className={styles.title}>PBI Fixer</span>
-        <span className={styles.version}>{PBI_FIXER_VERSION}</span>
         <div className={styles.headerRight}>
           {tokenLoading && <Spinner size="tiny" />}
           {accessToken && (
@@ -585,173 +1155,9 @@ export const PbiFixerPage: React.FC<PbiFixerPageProps> = ({
         </div>
       </div>
 
-      <div className={styles.connectionBar}>
-        <Field label="Workspace" style={{ flex: "0 0 260px" }}>
-          <Combobox
-            value={workspaceInput}
-            selectedOptions={workspaceId ? [workspaceId] : []}
-            placeholder={workspacesLoading ? "Loading workspaces…" : "Select a workspace"}
-            onOptionSelect={(_, data) => {
-              setWorkspaceId(data.optionValue || "");
-              setWorkspaceInput(data.optionText || "");
-            }}
-            onChange={(e) => setWorkspaceInput((e.target as HTMLInputElement).value)}
-            disabled={workspacesLoading || !accessToken}
-            freeform
-          >
-            {workspaceGroups.map((w) => (
-              <Option key={w.id} value={w.id} text={w.name}>
-                {w.name}
-              </Option>
-            ))}
-          </Combobox>
-        </Field>
-
-        {showPairPicker && (
-          <Field label="Semantic Model / Report" style={{ flex: "0 0 320px" }}>
-            <Combobox
-              key="pair-picker"
-              value={pairInput}
-              selectedOptions={selectedPair ? [pairKey(selectedPair)] : []}
-              placeholder={
-                !workspaceId
-                  ? "Pick a workspace first"
-                  : itemsLoading
-                  ? "Loading…"
-                  : pairItems.length
-                  ? "Select a semantic model or report"
-                  : "No semantic models or reports found"
-              }
-              onOptionSelect={(_, data) => {
-                const k = data.optionValue || "";
-                const found = pairItems.find((p) => pairKey(p) === k);
-                if (found) {
-                  setDatasetId(found.datasetId || "");
-                  setDatasetInput(found.datasetId ? found.name : "");
-                  setReportId(found.reportId || "");
-                  setReportInput(found.reportId ? found.name : "");
-                  setPairInput(found.name);
-                } else {
-                  setPairInput(data.optionText || "");
-                }
-              }}
-              onChange={(e) => setPairInput((e.target as HTMLInputElement).value)}
-              disabled={!workspaceId || itemsLoading}
-              freeform
-            >
-              {pairGroups.length === 1 && pairGroups[0].folder === ""
-                ? pairGroups[0].items.map((p) => (
-                    <Option key={pairKey(p)} value={pairKey(p)} text={p.name}>
-                      {p.name}
-                      {p.datasetId && p.reportId
-                        ? ""
-                        : p.datasetId
-                        ? " · model only"
-                        : " · report only"}
-                    </Option>
-                  ))
-                : pairGroups.map((g) => (
-                    <OptionGroup key={g.folder || "__root"} label={g.folder || "Root"}>
-                      {g.items.map((p) => (
-                        <Option key={pairKey(p)} value={pairKey(p)} text={p.name}>
-                          {p.name}
-                          {p.datasetId && p.reportId
-                            ? ""
-                            : p.datasetId
-                            ? " · model only"
-                            : " · report only"}
-                        </Option>
-                      ))}
-                    </OptionGroup>
-                  ))}
-            </Combobox>
-          </Field>
-        )}
-
-        {showDatasetPicker && (
-          <Field label="Semantic Model" style={{ flex: "0 0 260px" }}>
-            <Combobox
-              key="model-picker"
-              value={datasetInput}
-              selectedOptions={datasetId ? [datasetId] : []}
-              placeholder={
-                !workspaceId
-                  ? "Pick a workspace first"
-                  : itemsLoading
-                  ? "Loading…"
-                  : datasets.length
-                  ? "Select a semantic model"
-                  : "No semantic models found"
-              }
-              onOptionSelect={(_, data) => {
-                setDatasetId(data.optionValue || "");
-                setDatasetInput(data.optionText || "");
-              }}
-              onChange={(e) => setDatasetInput((e.target as HTMLInputElement).value)}
-              disabled={!workspaceId || itemsLoading}
-              freeform
-            >
-              {datasetGroups.length === 1 && datasetGroups[0].folder === ""
-                ? datasetGroups[0].items.map((d) => (
-                    <Option key={d.id} value={d.id} text={d.name}>
-                      {d.name}
-                    </Option>
-                  ))
-                : datasetGroups.map((g) => (
-                    <OptionGroup key={g.folder || "__root"} label={g.folder || "Root"}>
-                      {g.items.map((d) => (
-                        <Option key={d.id} value={d.id} text={d.name}>
-                          {d.name}
-                        </Option>
-                      ))}
-                    </OptionGroup>
-                  ))}
-            </Combobox>
-          </Field>
-        )}
-
-        {showReportPicker && (
-          <Field label="Report" style={{ flex: "0 0 260px" }}>
-            <Combobox
-              key="report-picker"
-              value={reportInput}
-              selectedOptions={reportId ? [reportId] : []}
-              placeholder={
-                !workspaceId
-                  ? "Pick a workspace first"
-                  : itemsLoading
-                  ? "Loading…"
-                  : reports.length
-                  ? "Select a report"
-                  : "No reports found"
-              }
-              onOptionSelect={(_, data) => {
-                setReportId(data.optionValue || "");
-                setReportInput(data.optionText || "");
-              }}
-              onChange={(e) => setReportInput((e.target as HTMLInputElement).value)}
-              disabled={!workspaceId || itemsLoading}
-              freeform
-            >
-              {reportGroups.length === 1 && reportGroups[0].folder === ""
-                ? reportGroups[0].items.map((r) => (
-                    <Option key={r.id} value={r.id} text={r.name}>
-                      {r.name}
-                    </Option>
-                  ))
-                : reportGroups.map((g) => (
-                    <OptionGroup key={g.folder || "__root"} label={g.folder || "Root"}>
-                      {g.items.map((r) => (
-                        <Option key={r.id} value={r.id} text={r.name}>
-                          {r.name}
-                        </Option>
-                      ))}
-                    </OptionGroup>
-                  ))}
-            </Combobox>
-          </Field>
-        )}
-      </div>
+      {!inlinePickerActive && (
+        <div className={styles.connectionBar}>{pickerFields}</div>
+      )}
 
       <div className={styles.body}>
         <div className={styles.content}>
