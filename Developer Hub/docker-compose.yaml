@@ -132,6 +132,12 @@ services:
       # Persist the AgentHub SQLite DB to the host so you can inspect it
       # directly (./Backend/.data/agenthub.db). Folder is gitignored.
       - ./Backend/.data:/app/data
+      # Surface the WS-E PBI Fixer TMDL templates (committed at
+      # Backend/data/templates) at /app/data/templates so the
+      # template-fixer handlers can read them at runtime without
+      # rebuilding the backend image. Sub-mount overlays the .data
+      # mount above and is read-only.
+      - ./Backend/data/templates:/app/data/templates:ro
       # Mount the host .env so bootstrap.py can locate + log it (the values
       # are also injected via env_file: above; this mount just makes the
       # file visible inside the container for transparency / debugging).
