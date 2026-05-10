@@ -463,6 +463,26 @@ export interface MeasureEdit {
   isHidden?: boolean;
 }
 
+/** Fetch the raw PBIR/PBIR-Legacy definition parts for a report.
+ *  WS-LOCAL Step #1 — used by the "Save edits to disk" Seed flow to
+ *  mirror the live report into a local PBIP folder. Symmetric to
+ *  `getSemanticModelDefinition` so both halves of a `.pbip` project can
+ *  be written from a single click. */
+export async function getReportDefinitionParts(
+  auth: PbiAuth,
+  workspaceId: string,
+  reportId: string,
+): Promise<{ path: string; payload: string; payloadType: string }[]> {
+  const def = await fabricPost<{
+    definition: { parts: { path: string; payload: string; payloadType: string }[] };
+  }>(
+    auth,
+    `/workspaces/${workspaceId}/reports/${reportId}/getDefinition`,
+    null,
+  );
+  return def.definition?.parts ?? [];
+}
+
 /** UTF-8 safe base64 encode (the TMDL payload may contain non-ASCII). */
 function utf8ToBase64(s: string): string {
   // encodeURIComponent → percent escapes → unescape to binary string → btoa

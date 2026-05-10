@@ -21,7 +21,7 @@ import {
   shorthands,
   tokens,
 } from "@fluentui/react-components";
-import { ArrowSync20Regular, Play20Regular } from "@fluentui/react-icons";
+import { ArrowSync20Regular, Play20Regular, Save20Regular } from "@fluentui/react-icons";
 import { WorkloadClientAPI } from "@ms-fabric/workload-client";
 import { ModelExplorer } from "./ModelExplorer";
 import { StackedSection } from "./common/StackedSection";
@@ -44,6 +44,15 @@ import type { PageProps } from "../types/shared";
 import * as api from "../../../controller/AgentHubApi";
 import { getFabricTokenCached } from "../../../controller/AgentHubController";
 import { PBI_FIXER_VERSION } from "../utils/version";
+import {
+  isFsaSupported,
+  pickPbipFolder,
+  seedPbipToDisk,
+} from "../utils/localPbipSeed";
+import {
+  getSemanticModelDefinition,
+  getReportDefinitionParts,
+} from "../services/fabricApi";
 
 const useStyles = makeStyles({
   root: {
@@ -431,6 +440,13 @@ export const PbiFixerPage: React.FC<PbiFixerPageProps> = ({
   const [tokenLoading, setTokenLoading] = useState(false);
   const [tokenError, setTokenError] = useState("");
 
+  // WS-LOCAL Step #1 — Seed-only "Save edits to disk" status.
+  // `idle` → `working` while the picker / fetch / write runs;
+  // `done`/`error` carries the message we surface in the header chip.
+  const [seedStatus, setSeedStatus] = useState<"idle" | "working" | "done" | "error">("idle");
+  const [seedMessage, setSeedMessage] = useState("");
+  const fsaSupported = useMemo(() => isFsaSupported(), []);
+
   const githubToken = sessionStorage.getItem("github_token") || "";
 
   // WS-O #6: URL ``?nav=`` is the single source of truth. Listen for
@@ -695,6 +711,118 @@ export const PbiFixerPage: React.FC<PbiFixerPageProps> = ({
     () => workspaces.find((w) => w.id === workspaceId)?.name ?? workspaceInput,
     [workspaces, workspaceId, workspaceInput],
   );
+
+  // WS-LOCAL Step #1 — Seed-only "Save edits to disk" click handler.
+  // Must stay synchronous up to the `pickPbipFolder()` await so the
+  // browser sees this as a user-activated call (FSA permission rule).
+  // Pulls the live TMDL / PBIR parts from Fabric and mirrors them 1:1
+  // under `<displayName>.SemanticModel/` and `<displayName>.Report/`.
+  // No diff dialog, no overwrite logic, no PBIX export — those land
+  // in later WS-LOCAL ship steps.
+  const handleSaveToDisk = useCallback(async () => {
+    if (!fsaSupported) {
+      setSeedStatus("error");
+      setSeedMessage("Use Edge or Chrome (File System Access API required)");
+      return;
+    }
+    if (!accessToken) {
+      setSeedStatus("error");
+      setSeedMessage("Not authenticated to Fabric");
+      return;
+    }
+    if (!workspaceId || (!datasetId && !reportId)) {
+      setSeedStatus("error");
+      setSeedMessage("Pick a workspace and at least one model or report first");
+      return;
+    }
+
+    let dirHandle: FileSystemDirectoryHandle;
+    try {
+      dirHandle = await pickPbipFolder();
+    } catch (e) {
+      // AbortError = user dismissed the picker — silent reset.
+      if (e instanceof Error && e.name === "AbortError") {
+        setSeedStatus("idle");
+        setSeedMessage("");
+        return;
+      }
+      setSeedStatus("error");
+      setSeedMessage(e instanceof Error ? e.message : String(e));
+      return;
+    }
+
+    setSeedStatus("working");
+    setSeedMessage("Pulling definition…");
+
+    const auth = { githubToken, fabricToken: accessToken };
+    try {
+      const [modelParts, reportParts] = await Promise.all([
+        datasetId
+          ? getSemanticModelDefinition(auth, workspaceId, datasetId).catch(
+              (err) => {
+                // eslint-disable-next-line no-console
+                console.warn("[PBI Fixer] model getDefinition failed", err);
+                return [];
+              },
+            )
+          : Promise.resolve([]),
+        reportId
+          ? getReportDefinitionParts(auth, workspaceId, reportId).catch(
+              (err) => {
+                // eslint-disable-next-line no-console
+                console.warn("[PBI Fixer] report getDefinition failed", err);
+                return [];
+              },
+            )
+          : Promise.resolve([]),
+      ]);
+
+      if (modelParts.length === 0 && reportParts.length === 0) {
+        setSeedStatus("error");
+        setSeedMessage("No definition parts returned from Fabric");
+        return;
+      }
+
+      // displayName preference: dataset → report → workspace. Drives
+      // the PBIP subfolder names + .pbip shortcut filename.
+      const displayName =
+        (datasetId && datasetName) ||
+        (reportId && reportName) ||
+        workspaceName ||
+        "PbiFixer";
+
+      setSeedMessage("Writing files…");
+      const result = await seedPbipToDisk({
+        dirHandle,
+        displayName,
+        modelParts,
+        reportParts,
+      });
+
+      if (result.errors.length > 0) {
+        setSeedStatus("error");
+        setSeedMessage(
+          `Wrote ${result.written} files, ${result.errors.length} failed (${result.errors[0].path})`,
+        );
+      } else {
+        setSeedStatus("done");
+        setSeedMessage(`Wrote ${result.written} files`);
+      }
+    } catch (e) {
+      setSeedStatus("error");
+      setSeedMessage(e instanceof Error ? e.message : String(e));
+    }
+  }, [
+    fsaSupported,
+    accessToken,
+    githubToken,
+    workspaceId,
+    datasetId,
+    reportId,
+    datasetName,
+    reportName,
+    workspaceName,
+  ]);
 
   const pageProps: PageProps = {
     auth: { githubToken, fabricToken: accessToken },
@@ -1099,7 +1227,7 @@ export const PbiFixerPage: React.FC<PbiFixerPageProps> = ({
         </Field>
       )}
       {multiMode && (
-        <Field label="\u00A0" style={{ flex: "0 0 auto" }}>
+        <Field label={<>&nbsp;</>} style={{ flex: "0 0 auto" }}>
           <Button
             appearance="primary"
             size="medium"
@@ -1114,11 +1242,35 @@ export const PbiFixerPage: React.FC<PbiFixerPageProps> = ({
           </Button>
         </Field>
       )}
-      <Field label="\u00A0" style={{ flex: "0 0 auto" }}>
+      <Field label={<>&nbsp;</>} style={{ flex: "0 0 auto" }}>
         <Checkbox
           label="Multi"
           checked={multiMode}
-          onChange={(_, data) => setMultiMode(!!data.checked)}
+          onChange={(_, data) => {
+            const next = !!data.checked;
+            // Seed from current single selection so the page doesn't blank
+            // out with the empty-state placeholder when toggling Multi on.
+            if (next) {
+              if (datasetId && committedDatasetIds.length === 0) {
+                const ids = [datasetId];
+                const names = [datasetInput || datasetId];
+                setPendingDatasetIds(ids);
+                setPendingDatasetNames(names);
+                setCommittedDatasetIds(ids);
+                setCommittedDatasetNames(names);
+              }
+              if (reportId && committedReportIds.length === 0) {
+                const ids = [reportId];
+                const names = [reportInput || reportId];
+                setPendingReportIds(ids);
+                setPendingReportNames(names);
+                setCommittedReportIds(ids);
+                setCommittedReportNames(names);
+              }
+              setCommitToken((t) => t + 1);
+            }
+            setMultiMode(next);
+          }}
           title="Pick multiple semantic models / reports and load them all at once"
         />
       </Field>
@@ -1152,6 +1304,41 @@ export const PbiFixerPage: React.FC<PbiFixerPageProps> = ({
           >
             Refresh Token
           </Button>
+          {/* WS-LOCAL Step #1 — Seed-only "Save edits to disk" button.
+              Single click: pick folder → pull live definition → mirror
+              parts under <displayName>.SemanticModel/.Report. Disabled
+              until a workspace + dataset/report are picked or while a
+              seed is in flight. */}
+          <Button
+            appearance="subtle"
+            size="small"
+            icon={<Save20Regular />}
+            onClick={handleSaveToDisk}
+            disabled={
+              seedStatus === "working" ||
+              !accessToken ||
+              !workspaceId ||
+              (!datasetId && !reportId)
+            }
+            title={
+              !fsaSupported
+                ? "File System Access API not available — use Edge or Chrome"
+                : "Pick a folder and write the live PBIP definition to disk (Seed)"
+            }
+          >
+            Save edits to disk
+          </Button>
+          {seedStatus !== "idle" && seedMessage && (
+            <span
+              className={mergeClasses(
+                styles.tokenStatus,
+                seedStatus === "error" ? styles.tokenErr : styles.tokenOk,
+              )}
+              title={seedMessage}
+            >
+              {seedStatus === "working" ? "Saving…" : seedMessage}
+            </span>
+          )}
         </div>
       </div>
 
