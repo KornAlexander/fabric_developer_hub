@@ -1,0 +1,53 @@
+# Source: https://fabsnippets.com/snippet/14  Author: Martyn Booth
+table '_DAX Measures'
+	isHidden
+	lineageTag: 77777777-7777-7777-7777-777777777721
+
+	column 'Table'
+		dataType: string
+		lineageTag: 77777777-7777-7777-7777-777777777722
+		summarizeBy: none
+		sourceColumn: Table
+
+	column 'Name'
+		dataType: string
+		lineageTag: 77777777-7777-7777-7777-777777777723
+		summarizeBy: none
+		sourceColumn: Name
+
+	column 'Expression'
+		dataType: string
+		lineageTag: 77777777-7777-7777-7777-777777777724
+		summarizeBy: none
+		sourceColumn: Expression
+
+	column 'FormatString'
+		dataType: string
+		lineageTag: 77777777-7777-7777-7777-777777777725
+		summarizeBy: none
+		sourceColumn: FormatString
+
+	column 'DisplayFolder'
+		dataType: string
+		lineageTag: 77777777-7777-7777-7777-777777777726
+		summarizeBy: none
+		sourceColumn: DisplayFolder
+
+	column 'IsHidden'
+		dataType: boolean
+		formatString: """TRUE"";""TRUE"";""FALSE"""
+		lineageTag: 77777777-7777-7777-7777-777777777727
+		summarizeBy: none
+		sourceColumn: IsHidden
+
+	column 'Description'
+		dataType: string
+		lineageTag: 77777777-7777-7777-7777-777777777728
+		summarizeBy: none
+		sourceColumn: Description
+
+	partition '_DAX Measures' = calculated
+		mode: import
+		source = INFO.VIEW.MEASURES()
+
+	annotation PBI_Id = _DAX_Measures

@@ -1,15 +1,17 @@
-// WS-C — Model BPA rule engine.
-// A minimal TypeScript implementation of the most impactful rules from
-// the official Best-Practice-Analyzer ruleset (subset of what
-// `sempy_labs.run_model_bpa()` ships). Implemented client-side against
-// the already-loaded `ModelData` so the page works without waiting for
-// the backend sempy-labs bridge to land (separate backend workstream).
+// Public Model BPA surface — wraps the local `bpa/` engine which is a
+// faithful TypeScript port of `sempy_labs.run_model_bpa` (54 rules).
 //
-// When the backend bridge ships, `ModelBpaPage` can swap to the remote
-// result and leave this file in place for offline demos / tests — the
-// finding shape is stable.
+// Replaces the original 10-rule client-side stub. The previous public
+// shape (BpaSeverity / BpaRule / BpaFinding / BPA_RULES / runModelBpa)
+// is preserved so consumers (`ModelBpaPage`, `FixerPage` dispatcher)
+// keep compiling unchanged. `objectType` is widened from a closed
+// 5-value enum to `string` because the engine emits richer scopes
+// (Partition, Hierarchy, Calculation Item, Row Level Security, …).
 
-import type { ModelData, MeasureInfo, ColumnInfo, TableInfo, RelationshipInfo } from "../types";
+import type { ModelData } from "../types";
+import { runBpa, ruleSlug } from "../bpa/engine";
+import { MODEL_BPA_RULES } from "../bpa/rules";
+import type { BpaRule as EngineRule } from "../bpa/types";
 
 export type BpaSeverity = "Error" | "Warning" | "Info";
 
@@ -19,177 +21,63 @@ export interface BpaRule {
   severity: BpaSeverity;
   name: string;
   description: string;
-  /** Stable kind so the Fixer page knows which automated fix applies.
-   *  Backend TOM-write actions are a separate future workstream. */
+  url?: string;
+  /** Fixer kind: only the small subset of rules wired to a backend fixer
+   *  carries this. The 54 ported rules are read-only for now. */
   fixKind?: string;
 }
 
 export interface BpaFinding {
   rule: BpaRule;
-  objectType: "Table" | "Column" | "Measure" | "Relationship" | "Model";
+  objectType: string;
   objectPath: string;
   detail?: string;
 }
 
-const RULES: BpaRule[] = [
-  {
-    id: "DAX.MeasureNoFormat",
-    category: "DAX",
-    severity: "Warning",
-    name: "Measures without a format string",
-    description: "Measures should declare an explicit format string so client tools render values consistently.",
-    fixKind: "SetMeasureFormat",
-  },
-  {
-    id: "DAX.MeasureNoDescription",
-    category: "Documentation",
-    severity: "Info",
-    name: "Measures without a description",
-    description: "Measures should have a description explaining their business meaning.",
-    fixKind: "SetMeasureDescription",
-  },
-  {
-    id: "DAX.MeasureDivideAnti",
-    category: "DAX",
-    severity: "Warning",
-    name: "Avoid division with '/' operator",
-    description: "Use DIVIDE() to safely handle division-by-zero instead of the '/' operator.",
-    fixKind: "RewriteDivideToDIVIDE",
-  },
-  {
-    id: "Model.ColumnKeyHidden",
-    category: "Modeling",
-    severity: "Warning",
-    name: "Key columns should be hidden",
-    description: "Primary key columns used in relationships should be hidden from report authors.",
-    fixKind: "HideColumn",
-  },
-  {
-    id: "Model.ColumnSummarizeBySum",
-    category: "Modeling",
-    severity: "Warning",
-    name: "Numeric columns with implicit SUM",
-    description: "Numeric columns default to SummarizeBy=Sum; set it to None unless the column is meant to aggregate automatically.",
-    fixKind: "SetSummarizeByNone",
-  },
-  {
-    id: "Perf.TooManyColumns",
-    category: "Performance",
-    severity: "Info",
-    name: "Tables with many columns",
-    description: "Tables with more than 50 columns are harder to maintain and may hurt Vertipaq compression.",
-  },
-  {
-    id: "Model.RelationshipInactive",
-    category: "Modeling",
-    severity: "Info",
-    name: "Inactive relationships",
-    description: "Inactive relationships need USERELATIONSHIP() in DAX; confirm each one is intentional.",
-  },
-  {
-    id: "Model.RelationshipManyToMany",
-    category: "Modeling",
-    severity: "Warning",
-    name: "Many-to-many relationships",
-    description: "Many-to-many relationships can be slow; prefer a bridge table or a single-direction relationship.",
-  },
-  {
-    id: "Naming.CamelCaseMeasure",
-    category: "Naming",
-    severity: "Info",
-    name: "Measure names should not start with a lowercase letter",
-    description: "Measure names are user-facing; start each name with an uppercase letter.",
-    fixKind: "CapitalizeMeasure",
-  },
-  {
-    id: "Naming.TableSpace",
-    category: "Naming",
-    severity: "Info",
-    name: "Avoid spaces in technical table names",
-    description: "Tables exposed to tooling and DAX benefit from no embedded spaces; hidden tables can use them freely.",
-  },
-];
+// Map sempy_labs rule names → fixKind values that the existing Fixer
+// dispatcher already knows how to apply. Names that don't appear here
+// stay read-only (no Fix It button).
+const FIX_KINDS: Record<string, string> = {
+  "Provide format string for measures": "SetMeasureFormat",
+  "Visible objects with no description": "SetMeasureDescription",
+  "Use the DIVIDE function for division": "RewriteDivideToDIVIDE",
+  "Hide foreign keys": "HideColumn",
+  "Do not summarize numeric columns": "SetSummarizeByNone",
+  "First letter of objects must be capitalized": "CapitalizeMeasure",
+};
+
+function publicRule(r: EngineRule): BpaRule {
+  return {
+    id: ruleSlug(r.name),
+    category: r.category,
+    severity: r.severity,
+    name: r.name,
+    description: r.description,
+    url: r.url,
+    fixKind: FIX_KINDS[r.name],
+  };
+}
+
+const RULES: BpaRule[] = MODEL_BPA_RULES.map(publicRule);
+const RULE_BY_NAME = new Map<string, BpaRule>(RULES.map((r) => [r.name, r]));
 
 export const BPA_RULES: ReadonlyArray<BpaRule> = RULES;
 
-/** Run the built-in rule set against `model` and return findings. */
+/** Run the full 54-rule BPA against `model` and return findings.
+ *  This is a synchronous, in-browser pass against TMDL-derived model
+ *  data. Rules that depend on DAX-only extras (calc dependencies, RLS
+ *  filter expressions, row counts) degrade silently to no-ops. */
 export function runModelBpa(model: ModelData): BpaFinding[] {
-  const findings: BpaFinding[] = [];
-  const rule = (id: string) => RULES.find((r) => r.id === id)!;
-
-  // Pre-compute the set of columns participating in relationships — used
-  // by several modelling rules below.
-  const relCols = new Set<string>();
-  for (const r of model.relationships) {
-    relCols.add(`${r.fromTable}[${r.fromColumn}]`);
-    relCols.add(`${r.toTable}[${r.toColumn}]`);
+  const violations = runBpa(model, MODEL_BPA_RULES);
+  const out: BpaFinding[] = [];
+  for (const v of violations) {
+    const rule = RULE_BY_NAME.get(v.ruleName);
+    if (!rule) continue;
+    out.push({
+      rule,
+      objectType: v.objectType,
+      objectPath: v.objectName,
+    });
   }
-
-  for (const [tName, t] of Object.entries(model.tables)) {
-    // Column-level rules
-    for (const [cName, c] of Object.entries(t.columns)) {
-      const path = `${tName}[${cName}]`;
-      if (relCols.has(path) && !c.isHidden) {
-        findings.push({ rule: rule("Model.ColumnKeyHidden"), objectType: "Column", objectPath: path });
-      }
-      const numeric = ["Int64", "Double", "Decimal", "Currency"].includes(c.dataType);
-      if (numeric && (c.summarizeBy || "").toLowerCase() === "sum" && !c.isHidden) {
-        findings.push({
-          rule: rule("Model.ColumnSummarizeBySum"),
-          objectType: "Column",
-          objectPath: path,
-          detail: `SummarizeBy = ${c.summarizeBy}`,
-        });
-      }
-    }
-
-    // Measure-level rules
-    for (const [mName, m] of Object.entries(t.measures)) {
-      const path = `${tName}[${mName}]`;
-      if (!m.formatString || m.formatString.trim().length === 0) {
-        findings.push({ rule: rule("DAX.MeasureNoFormat"), objectType: "Measure", objectPath: path });
-      }
-      if (!m.description || m.description.trim().length === 0) {
-        findings.push({ rule: rule("DAX.MeasureNoDescription"), objectType: "Measure", objectPath: path });
-      }
-      if (/[^\w]\/[^\w]/.test(m.expression || "") && !/DIVIDE\s*\(/i.test(m.expression || "")) {
-        findings.push({
-          rule: rule("DAX.MeasureDivideAnti"),
-          objectType: "Measure",
-          objectPath: path,
-          detail: "Contains '/' without DIVIDE()",
-        });
-      }
-      if (mName && mName[0] !== mName[0].toUpperCase() && /^[a-z]/.test(mName)) {
-        findings.push({ rule: rule("Naming.CamelCaseMeasure"), objectType: "Measure", objectPath: path });
-      }
-    }
-
-    // Table-level rules
-    const colCount = Object.keys(t.columns).length;
-    if (colCount > 50) {
-      findings.push({
-        rule: rule("Perf.TooManyColumns"),
-        objectType: "Table",
-        objectPath: tName,
-        detail: `${colCount} columns`,
-      });
-    }
-    if (!t.isHidden && /\s/.test(tName)) {
-      findings.push({ rule: rule("Naming.TableSpace"), objectType: "Table", objectPath: tName });
-    }
-  }
-
-  // Relationship rules
-  for (const r of model.relationships) {
-    const path = `${r.fromTable}[${r.fromColumn}] -> ${r.toTable}[${r.toColumn}]`;
-    if (r.isActive === false) {
-      findings.push({ rule: rule("Model.RelationshipInactive"), objectType: "Relationship", objectPath: path });
-    }
-    if ((r.multiplicity || "").toLowerCase().includes("many_to_many") || r.multiplicity === "m:m") {
-      findings.push({ rule: rule("Model.RelationshipManyToMany"), objectType: "Relationship", objectPath: path });
-    }
-  }
-
-  return findings;
+  return out;
 }

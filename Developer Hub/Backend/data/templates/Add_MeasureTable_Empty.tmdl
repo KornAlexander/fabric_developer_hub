@@ -1,0 +1,21 @@
+# Source: https://fabsnippets.com/snippet/9  Author: fabsnippets community
+# Smallest measure-organisation seed: a single Measure calc-table.
+table 'Measure'
+	lineageTag: 11111111-1111-1111-1111-111111111111
+
+	column 'Value'
+		dataType: int64
+		isHidden
+		formatString: 0
+		lineageTag: 11111111-1111-1111-1111-111111111112
+		summarizeBy: sum
+		sourceColumn: Value
+
+		annotation SummarizationSetBy = Automatic
+
+	measure 'Sample Measure' = NOW()
+		lineageTag: 11111111-1111-1111-1111-111111111113
+
+	partition 'Measure' = calculated
+		mode: import
+		source = ROW("Value", BLANK())

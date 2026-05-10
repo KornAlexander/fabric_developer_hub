@@ -1,0 +1,17 @@
+# Source: https://community.fabric.microsoft.com/t5/TMDL-Gallery/3-quot-Measure-Tables-quot-With-Icons/td-p/4774031  Author: Fabric community TMDL Gallery
+table '🎯Measures | 2. #⃣ Variables'
+	lineageTag: 66666666-6666-6666-6666-666666666611
+
+	column 'Value'
+		dataType: int64
+		isHidden
+		formatString: 0
+		lineageTag: 66666666-6666-6666-6666-666666666612
+		summarizeBy: sum
+		sourceColumn: Value
+
+		annotation SummarizationSetBy = Automatic
+
+	partition '🎯Measures | 2. #⃣ Variables' = calculated
+		mode: import
+		source = ROW("Value", BLANK())

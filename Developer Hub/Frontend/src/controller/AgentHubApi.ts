@@ -708,7 +708,34 @@ export async function pbiFixerProxy<T>(
     return (await res.json()) as T;
 }
 
-// ── Attachments ─────────────────────────────────────────────────────
+// ── PBI Fixer Memory / Vertipaq Analyzer ────────────────────────────
+
+export interface VertipaqAnalyzerRequest {
+    workspaceId: string;
+    datasetId: string;
+    workspaceName?: string;
+    datasetName?: string;
+}
+
+export async function runVertipaqAnalyzer<T = unknown>(
+    payload: VertipaqAnalyzerRequest,
+    opts: FetchOpts,
+): Promise<T> {
+    const res = await fetch(`${BE}/api/pbi-fixer/memory/vertipaq`, {
+        method: "POST",
+        headers: headers(opts),
+        body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+        const text = await res.text();
+        const err: Error & { status?: number } = new Error(
+            `Vertipaq Analyzer failed (${res.status}): ${text}`,
+        );
+        err.status = res.status;
+        throw err;
+    }
+    return (await res.json()) as T;
+}
 
 /** Mint a single-use download URL for attachment bytes.
  *

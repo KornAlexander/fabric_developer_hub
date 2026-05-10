@@ -1,0 +1,238 @@
+# Source: https://community.fabric.microsoft.com/t5/TMDL-Gallery/Calc-Table-Calendar/td-p/4798025  Author: Fabric community TMDL Gallery
+# Rich CalcCalendar with hierarchies + display folders + 20+ flag/key columns.
+# MonthStartFiscalYear defaults to 10 (October).
+table 'CalcCalendar'
+	lineageTag: 33333333-3333-3333-3333-333333333301
+
+	column 'Date'
+		dataType: dateTime
+		formatString: Short Date
+		isKey
+		lineageTag: 33333333-3333-3333-3333-333333333302
+		summarizeBy: none
+		sourceColumn: Date
+		displayFolder: 2. Calendar Date
+
+	column 'Year'
+		dataType: int64
+		formatString: 0
+		lineageTag: 33333333-3333-3333-3333-333333333303
+		summarizeBy: none
+		sourceColumn: Year
+		displayFolder: 2. Calendar Date
+
+	column 'Quarter'
+		dataType: string
+		lineageTag: 33333333-3333-3333-3333-333333333304
+		summarizeBy: none
+		sourceColumn: Quarter
+		displayFolder: 2. Calendar Date
+
+	column 'Month'
+		dataType: string
+		lineageTag: 33333333-3333-3333-3333-333333333305
+		summarizeBy: none
+		sourceColumn: Month
+		sortByColumn: 'MonthNumber'
+		displayFolder: 2. Calendar Date
+
+	column 'MonthNumber'
+		dataType: int64
+		formatString: 0
+		isHidden
+		lineageTag: 33333333-3333-3333-3333-333333333306
+		summarizeBy: none
+		sourceColumn: MonthNumber
+		displayFolder: 2. Calendar Date
+
+	column 'YearMonth'
+		dataType: string
+		lineageTag: 33333333-3333-3333-3333-333333333307
+		summarizeBy: none
+		sourceColumn: YearMonth
+		sortByColumn: 'YearMonthKey'
+		displayFolder: 2. Calendar Date
+
+	column 'YearMonthKey'
+		dataType: int64
+		formatString: 0
+		isHidden
+		lineageTag: 33333333-3333-3333-3333-333333333308
+		summarizeBy: none
+		sourceColumn: YearMonthKey
+		displayFolder: 2. Calendar Date
+
+	column 'DayOfMonth'
+		dataType: int64
+		formatString: 0
+		lineageTag: 33333333-3333-3333-3333-333333333309
+		summarizeBy: none
+		sourceColumn: DayOfMonth
+		displayFolder: 2. Calendar Date
+
+	column 'DayOfWeek'
+		dataType: string
+		lineageTag: 33333333-3333-3333-3333-33333333330a
+		summarizeBy: none
+		sourceColumn: DayOfWeek
+		sortByColumn: 'DayOfWeekNumber'
+		displayFolder: 2. Calendar Date
+
+	column 'DayOfWeekNumber'
+		dataType: int64
+		formatString: 0
+		isHidden
+		lineageTag: 33333333-3333-3333-3333-33333333330b
+		summarizeBy: none
+		sourceColumn: DayOfWeekNumber
+		displayFolder: 2. Calendar Date
+
+	column 'WeekOfYear'
+		dataType: int64
+		formatString: 0
+		lineageTag: 33333333-3333-3333-3333-33333333330c
+		summarizeBy: none
+		sourceColumn: WeekOfYear
+		displayFolder: 2. Calendar Date
+
+	column 'FiscalYear'
+		dataType: int64
+		formatString: 0
+		lineageTag: 33333333-3333-3333-3333-33333333330d
+		summarizeBy: none
+		sourceColumn: FiscalYear
+		displayFolder: 3. Fiscal Date
+
+	column 'FiscalQuarter'
+		dataType: string
+		lineageTag: 33333333-3333-3333-3333-33333333330e
+		summarizeBy: none
+		sourceColumn: FiscalQuarter
+		displayFolder: 3. Fiscal Date
+
+	column 'FiscalMonth'
+		dataType: int64
+		formatString: 0
+		lineageTag: 33333333-3333-3333-3333-33333333330f
+		summarizeBy: none
+		sourceColumn: FiscalMonth
+		displayFolder: 3. Fiscal Date
+
+	column 'IsWeekend'
+		dataType: boolean
+		formatString: """TRUE"";""TRUE"";""FALSE"""
+		lineageTag: 33333333-3333-3333-3333-333333333310
+		summarizeBy: none
+		sourceColumn: IsWeekend
+		displayFolder: 4. Flags
+
+	column 'IsCurrentMonth'
+		dataType: boolean
+		formatString: """TRUE"";""TRUE"";""FALSE"""
+		lineageTag: 33333333-3333-3333-3333-333333333311
+		summarizeBy: none
+		sourceColumn: IsCurrentMonth
+		displayFolder: 4. Flags
+
+	column 'IsCurrentYear'
+		dataType: boolean
+		formatString: """TRUE"";""TRUE"";""FALSE"""
+		lineageTag: 33333333-3333-3333-3333-333333333312
+		summarizeBy: none
+		sourceColumn: IsCurrentYear
+		displayFolder: 4. Flags
+
+	column 'DateInt'
+		dataType: int64
+		formatString: 0
+		lineageTag: 33333333-3333-3333-3333-333333333313
+		summarizeBy: none
+		sourceColumn: DateInt
+		displayFolder: 1. Favorites
+
+	hierarchy 'Date Hierarchy'
+		lineageTag: 33333333-3333-3333-3333-333333333314
+
+		level 'Year'
+			lineageTag: 33333333-3333-3333-3333-333333333315
+			column: 'Year'
+
+		level 'Quarter'
+			lineageTag: 33333333-3333-3333-3333-333333333316
+			column: 'Quarter'
+
+		level 'Month'
+			lineageTag: 33333333-3333-3333-3333-333333333317
+			column: 'Month'
+
+		level 'Date'
+			lineageTag: 33333333-3333-3333-3333-333333333318
+			column: 'Date'
+
+	hierarchy 'Fiscal Date Hierarchy'
+		lineageTag: 33333333-3333-3333-3333-333333333319
+
+		level 'FiscalYear'
+			lineageTag: 33333333-3333-3333-3333-33333333331a
+			column: 'FiscalYear'
+
+		level 'FiscalQuarter'
+			lineageTag: 33333333-3333-3333-3333-33333333331b
+			column: 'FiscalQuarter'
+
+		level 'FiscalMonth'
+			lineageTag: 33333333-3333-3333-3333-33333333331c
+			column: 'FiscalMonth'
+
+		level 'Date'
+			lineageTag: 33333333-3333-3333-3333-33333333331d
+			column: 'Date'
+
+	hierarchy 'Calendar Hierarchy'
+		lineageTag: 33333333-3333-3333-3333-33333333331e
+
+		level 'YearMonth'
+			lineageTag: 33333333-3333-3333-3333-33333333331f
+			column: 'YearMonth'
+
+		level 'WeekOfYear'
+			lineageTag: 33333333-3333-3333-3333-333333333320
+			column: 'WeekOfYear'
+
+		level 'Date'
+			lineageTag: 33333333-3333-3333-3333-333333333321
+			column: 'Date'
+
+	partition 'CalcCalendar' = calculated
+		mode: import
+		source = ```
+				VAR _MonthStartFiscalYear = 10
+				VAR _Min = MINX(ALL('CalcCalendar'[Date]), [Date])
+				VAR _Today = TODAY()
+				VAR _Start = DATE(YEAR(MIN(_Min, DATE(YEAR(_Today)-2,1,1))), 1, 1)
+				VAR _End   = DATE(YEAR(_Today)+1, 12, 31)
+				VAR _Dates = CALENDAR(_Start, _End)
+				RETURN
+				ADDCOLUMNS(
+				    _Dates,
+				    "Year",            YEAR([Date]),
+				    "Quarter",         "Q" & FORMAT([Date], "Q"),
+				    "Month",           FORMAT([Date], "MMMM"),
+				    "MonthNumber",     MONTH([Date]),
+				    "YearMonth",       FORMAT([Date], "YYYY-MM"),
+				    "YearMonthKey",    YEAR([Date])*100 + MONTH([Date]),
+				    "DayOfMonth",      DAY([Date]),
+				    "DayOfWeek",       FORMAT([Date], "dddd"),
+				    "DayOfWeekNumber", WEEKDAY([Date], 2),
+				    "WeekOfYear",      WEEKNUM([Date], 2),
+				    "FiscalYear",      IF(MONTH([Date]) >= _MonthStartFiscalYear, YEAR([Date])+1, YEAR([Date])),
+				    "FiscalQuarter",   "FQ" & FORMAT(EDATE([Date], 13 - _MonthStartFiscalYear), "Q"),
+				    "FiscalMonth",     MOD(MONTH([Date]) - _MonthStartFiscalYear + 12, 12) + 1,
+				    "IsWeekend",       WEEKDAY([Date], 2) > 5,
+				    "IsCurrentMonth",  YEAR([Date]) = YEAR(TODAY()) && MONTH([Date]) = MONTH(TODAY()),
+				    "IsCurrentYear",   YEAR([Date]) = YEAR(TODAY()),
+				    "DateInt",         YEAR([Date])*10000 + MONTH([Date])*100 + DAY([Date])
+				)
+				```
+
+	annotation PBI_Id = CalcCalendar

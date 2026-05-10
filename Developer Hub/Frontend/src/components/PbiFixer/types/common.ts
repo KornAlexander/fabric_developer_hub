@@ -10,6 +10,7 @@ export interface TreeItem {
 export interface TreeBuildResult {
   options: string[];
   keyMap: Record<string, string>;
+  iconMap: Record<string, string>;
 }
 
 export interface ScanResult {

@@ -19,8 +19,10 @@ from __future__ import annotations
 
 import base64
 import re
+import uuid
 from dataclasses import dataclass, field
-from typing import Callable
+from pathlib import Path
+from typing import Callable, Iterable
 
 # ---------------------------------------------------------------------------
 # Public dataclasses
@@ -1652,11 +1654,567 @@ def fix_default_datasource_version(parts: list[Part], scan_only: bool) -> Handle
 
 
 # ---------------------------------------------------------------------------
+# WS-E-TEMPLATES (v0.52) — community TMDL templates
+# ---------------------------------------------------------------------------
+# Each fixer is a one-liner over ``inject_tmdl_fragment``. Template TMDL
+# bodies live in ``Backend/data/templates/<fixerId>[__variant].tmdl`` so
+# the build is reproducible (no live fetch from community sites). Every
+# template carries a ``# Source: <url>  Author: <name>`` attribution
+# header at the top.
+#
+# The injection helper handles three concerns:
+#   1) **Collision detection** — skip-with-finding if the target table
+#      part (or expression part) already exists in ``parts``.
+#   2) **lineageTag rewriting** — regenerate every ``lineageTag: <uuid>``
+#      in the fragment so two installs of the same template never clash.
+#   3) **Atomic multi-part injects** — pass a list of fragments, all-or-
+#      nothing semantics if any collide.
+#
+# The template directory is computed relative to this file:
+#   Backend/src/services/agenthub/pbi_fixer_handlers.py
+#       parents[0] = agenthub
+#       parents[1] = services
+#       parents[2] = src
+#       parents[3] = Backend → /data/templates
+
+_TEMPLATE_DIR = Path(__file__).resolve().parents[3] / "data" / "templates"
+
+_LINEAGE_RE = re.compile(r"(lineageTag:\s*)([0-9a-fA-F-]{36})")
+_TABLE_HEADER_RE = re.compile(r"^table\s+(['\"]?)(.+?)\1\s*$", re.MULTILINE)
+_EXPR_HEADER_RE = re.compile(r"^expression\s+(['\"]?)(.+?)\1\s*=", re.MULTILINE)
+_ATTRIBUTION_RE = re.compile(r"^#.*$\n?", re.MULTILINE)
+
+_EXPR_PART_PREFIX = "definition/expressions/"
+
+
+def _load_template(name: str) -> str:
+    """Load ``Backend/data/templates/<name>`` as text. Strips the
+    ``# Source:`` attribution header lines (those are author metadata,
+    not valid TMDL inside the file body)."""
+    path = _TEMPLATE_DIR / name
+    text = path.read_text(encoding="utf-8")
+    # Strip leading attribution comment lines (`# ...`) that are not TMDL.
+    out_lines: list[str] = []
+    seen_non_comment = False
+    for line in text.splitlines(keepends=True):
+        if not seen_non_comment and line.lstrip().startswith("#"):
+            continue
+        seen_non_comment = True
+        out_lines.append(line)
+    return "".join(out_lines)
+
+
+def _rewrite_lineage_tags(text: str) -> str:
+    """Replace every ``lineageTag: <uuid>`` with a fresh UUID4 so two
+    injections of the same template never collide on lineage."""
+    return _LINEAGE_RE.sub(lambda _: f"lineageTag: {uuid.uuid4()}", text)
+
+
+def _extract_table_name(fragment: str) -> str | None:
+    m = _TABLE_HEADER_RE.search(fragment)
+    return m.group(2) if m else None
+
+
+def _extract_expression_name(fragment: str) -> str | None:
+    m = _EXPR_HEADER_RE.search(fragment)
+    return m.group(2) if m else None
+
+
+def _existing_table_names(parts: list[Part]) -> set[str]:
+    names: set[str] = set()
+    for p in parts:
+        if not _TABLE_PART.match(p.get("path", "")):
+            continue
+        names.add(_table_name(p))
+    return names
+
+
+def _existing_expression_paths(parts: list[Part]) -> set[str]:
+    return {p.get("path", "") for p in parts if p.get("path", "").startswith(_EXPR_PART_PREFIX)}
+
+
+def _table_name_collides(target: str, existing: Iterable[str]) -> bool:
+    """Case-insensitive table name comparison."""
+    target_l = target.lower()
+    return any(e.lower() == target_l for e in existing)
+
+
+@dataclass
+class _Fragment:
+    """One template fragment to inject."""
+
+    template_file: str
+    target: str  # "tables" or "expressions"
+
+
+def inject_tmdl_fragment(
+    parts: list[Part],
+    fragments: list[_Fragment],
+    *,
+    scan_only: bool,
+    fixer_label: str,
+) -> HandlerResult:
+    """Inject one or more TMDL fragments atomically.
+
+    All-or-nothing: if any fragment's target name collides with an
+    existing part, NO fragment is added and a single skip-with-finding is
+    emitted listing the collisions. lineageTag UUIDs are regenerated.
+    """
+    new_parts = [{**p} for p in parts]
+    findings: list[Finding] = []
+    log: list[str] = []
+
+    existing_tables = _existing_table_names(new_parts)
+    existing_expr_paths = _existing_expression_paths(new_parts)
+
+    prepared: list[tuple[str, str]] = []  # (path, body)
+    collisions: list[str] = []
+
+    for frag in fragments:
+        body = _rewrite_lineage_tags(_load_template(frag.template_file))
+        if frag.target == "tables":
+            tname = _extract_table_name(body)
+            if not tname:
+                log.append(f"WARN: template {frag.template_file!r} has no table header — skipped.")
+                continue
+            if _table_name_collides(tname, existing_tables):
+                collisions.append(f"table '{tname}'")
+                continue
+            path = f"definition/tables/{tname}.tmdl"
+            prepared.append((path, body))
+        elif frag.target == "expressions":
+            ename = _extract_expression_name(body)
+            if not ename:
+                log.append(f"WARN: template {frag.template_file!r} has no expression header — skipped.")
+                continue
+            path = f"{_EXPR_PART_PREFIX}{ename}.tmdl"
+            if path in existing_expr_paths:
+                collisions.append(f"expression '{ename}'")
+                continue
+            prepared.append((path, body))
+        else:  # pragma: no cover — defensive
+            log.append(f"WARN: unknown target {frag.target!r} for {frag.template_file!r}.")
+
+    if collisions:
+        findings.append(Finding(
+            object_path=f"[{fixer_label}]",
+            detail=f"already present — skipped: {', '.join(collisions)}",
+            before="(existing)",
+            after="(no change — collision)",
+        ))
+        log.append(f"{fixer_label}: skipped because collisions: {', '.join(collisions)}.")
+        return HandlerResult(parts=new_parts, findings=findings, log=log)
+
+    if not prepared:
+        log.append(f"{fixer_label}: no fragments to add.")
+        return HandlerResult(parts=new_parts, findings=findings, log=log)
+
+    for path, _body in prepared:
+        kind = "table" if path.startswith("definition/tables/") else "expression"
+        name = path.rsplit("/", 1)[-1].removesuffix(".tmdl")
+        findings.append(Finding(
+            object_path=f"'{name}'",
+            detail=f"add {kind} part {path}",
+            before="(missing)",
+            after=f"{kind} '{name}'",
+        ))
+
+    if scan_only:
+        return HandlerResult(parts=new_parts, findings=findings, log=log)
+
+    for path, body in prepared:
+        new_parts.append({
+            "path": path,
+            "payload": _encode(body),
+            "payloadType": "InlineBase64",
+        })
+
+    log.append(f"{fixer_label}: added {len(prepared)} part(s).")
+    return HandlerResult(parts=new_parts, findings=findings, log=log)
+
+
+# ---- 7 template handlers ---------------------------------------------------
+#
+# Ship order from PLAN.md §WS-E-TEMPLATES:
+#  1. Add_MeasureTable_Empty       (smallest)
+#  2. Add_LastRefresh_LocalNow
+#  3. Add_CalcCalendar_Rich
+#  4. Add_LastRefresh_EuropeMEZ    (table + shared expression)
+#  5. Add_PqCalendar_LarsSchreiber (shared expression only)
+#  6. Add_MeasureTables_3WithIcons (atomic multi-table)
+#  7. Add_ModelDocumentation       (largest, 4 calc-tables)
+
+
+def add_measure_table_empty(parts: list[Part], scan_only: bool) -> HandlerResult:
+    return inject_tmdl_fragment(
+        parts,
+        [_Fragment("Add_MeasureTable_Empty.tmdl", "tables")],
+        scan_only=scan_only,
+        fixer_label="Add_MeasureTable_Empty",
+    )
+
+
+def add_last_refresh_local_now(parts: list[Part], scan_only: bool) -> HandlerResult:
+    return inject_tmdl_fragment(
+        parts,
+        [_Fragment("Add_LastRefresh_LocalNow.tmdl", "tables")],
+        scan_only=scan_only,
+        fixer_label="Add_LastRefresh_LocalNow",
+    )
+
+
+def add_calc_calendar_rich(parts: list[Part], scan_only: bool) -> HandlerResult:
+    return inject_tmdl_fragment(
+        parts,
+        [_Fragment("Add_CalcCalendar_Rich.tmdl", "tables")],
+        scan_only=scan_only,
+        fixer_label="Add_CalcCalendar_Rich",
+    )
+
+
+def add_last_refresh_europe_mez(parts: list[Part], scan_only: bool) -> HandlerResult:
+    return inject_tmdl_fragment(
+        parts,
+        [
+            _Fragment("Add_LastRefresh_EuropeMEZ.expression.tmdl", "expressions"),
+            _Fragment("Add_LastRefresh_EuropeMEZ.tmdl", "tables"),
+        ],
+        scan_only=scan_only,
+        fixer_label="Add_LastRefresh_EuropeMEZ",
+    )
+
+
+def add_pq_calendar_lars_schreiber(parts: list[Part], scan_only: bool) -> HandlerResult:
+    return inject_tmdl_fragment(
+        parts,
+        [_Fragment("Add_PqCalendar_LarsSchreiber.tmdl", "expressions")],
+        scan_only=scan_only,
+        fixer_label="Add_PqCalendar_LarsSchreiber",
+    )
+
+
+def add_measure_tables_3_with_icons(parts: list[Part], scan_only: bool) -> HandlerResult:
+    return inject_tmdl_fragment(
+        parts,
+        [
+            _Fragment("Add_MeasureTables_3WithIcons__1_KPIs.tmdl", "tables"),
+            _Fragment("Add_MeasureTables_3WithIcons__2_Variables.tmdl", "tables"),
+            _Fragment("Add_MeasureTables_3WithIcons__3_TitlesLabels.tmdl", "tables"),
+        ],
+        scan_only=scan_only,
+        fixer_label="Add_MeasureTables_3WithIcons",
+    )
+
+
+def add_model_documentation(parts: list[Part], scan_only: bool) -> HandlerResult:
+    return inject_tmdl_fragment(
+        parts,
+        [
+            _Fragment("Add_ModelDocumentation__Tables.tmdl", "tables"),
+            _Fragment("Add_ModelDocumentation__Columns.tmdl", "tables"),
+            _Fragment("Add_ModelDocumentation__DAXMeasures.tmdl", "tables"),
+            _Fragment("Add_ModelDocumentation__Relationships.tmdl", "tables"),
+        ],
+        scan_only=scan_only,
+        fixer_label="Add_ModelDocumentation",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
 # Each handler's scope tells the API which definition to fetch
 # ("sm" → semantic model, "report" → report).
+# ---------------------------------------------------------------------------
+# Report fixer — IBCS Variance (WS-E-IBCS step #6, lean V1 — v0.103)
+# ---------------------------------------------------------------------------
+#
+# Lean V1 of the 771-line `_Fix_IBCSVariance.py` original. Operates entirely
+# in PBIR JSON (no sidecar / no XMLA write) so it ships through the existing
+# /api/pbi-fixer/fixers/apply pipeline.
+#
+# Trigger: bar/column visuals with >=2 Y projections (first treated as AC,
+# rest treated as PY/variance series). Single-Y visuals are reported as
+# candidates needing PY measures (which step #2 of the IBCS chain will add
+# once the sidecar lands) but not mutated.
+#
+# Mutations per qualifying visual:
+#   - Stacked → Clustered (visualType swap)
+#   - objects.error  : red `#FF0000` bars on the AC series, green `#92D050`
+#                      on PY — IBCS variance signature
+#   - objects.dataPoint : AC=#404040, PY=#A0A0A0 (IBCS palette)
+#   - objects.labels : AC visible w/ white background, PY hidden,
+#                      `horizontalAlignment: 'right'` for the % data-label
+#                      alignment requirement
+#   - objects.categoryAxis.gridlineShow=false, valueAxis.show=false (chart
+#     cleanup carried over from `Fix_BarChart` / `Fix_ColumnChart`)
+#
+# Constants mirror the Python source (_AC_COLOR / _PY_COLOR / _ERROR_RED /
+# _ERROR_GREEN). Calc-group / `Max Red AC` / `Max Green PY` measure refs
+# from the original are deferred to the post-sidecar full port.
+
+_IBCS_TARGET_TYPES = {
+    "barChart", "clusteredBarChart", "stackedBarChart",
+    "columnChart", "clusteredColumnChart", "stackedColumnChart",
+}
+_IBCS_STACKED_TO_CLUSTERED = {
+    "stackedBarChart": "clusteredBarChart",
+    "stackedColumnChart": "clusteredColumnChart",
+    "barChart": "clusteredBarChart",
+    "columnChart": "clusteredColumnChart",
+}
+
+_IBCS_AC_COLOR = "#404040"
+_IBCS_PY_COLOR = "#A0A0A0"
+_IBCS_ERROR_RED = "#FF0000"
+_IBCS_ERROR_GREEN = "#92D050"
+
+
+def _ibcs_literal(value: str) -> dict:
+    return {"expr": {"Literal": {"Value": value}}}
+
+
+def _ibcs_color(hex_color: str) -> dict:
+    return {"solid": {"color": {"expr": {"Literal": {"Value": f"'{hex_color}'"}}}}}
+
+
+def _ibcs_measure_ref(table: str, measure: str) -> dict:
+    return {
+        "expr": {
+            "Measure": {
+                "Expression": {"SourceRef": {"Entity": table}},
+                "Property": measure,
+            }
+        }
+    }
+
+
+def _ibcs_y_projections(visual: dict) -> list[dict]:
+    return (
+        ((visual.get("visual") or {}).get("query") or {})
+        .get("queryState", {})
+        .get("Y", {})
+        .get("projections", [])
+    ) or []
+
+
+def _ibcs_measure_from_proj(proj: dict) -> tuple[str, str] | None:
+    measure = (proj.get("field") or {}).get("Measure") or {}
+    if not measure:
+        return None
+    table = ((measure.get("Expression") or {}).get("SourceRef") or {}).get("Entity")
+    name = measure.get("Property")
+    if table and name:
+        return (table, name)
+    return None
+
+
+def _ibcs_build_error_objects(
+    ac_table: str, ac_measure: str, py_table: str, py_measure: str,
+) -> list[dict]:
+    """Red error bars on AC, green on PY — V1 uses each series' own measure
+    as the upperBound (full port replaces this with `Max Red AC` /
+    `Max Green PY` after step #2 ships)."""
+    ac_metadata = f"{ac_table}.{ac_measure}"
+    py_metadata = f"{py_table}.{py_measure}"
+    return [
+        {
+            "properties": {
+                "errorRange": {
+                    "kind": "ErrorRange",
+                    "explicit": {
+                        "isRelative": _ibcs_literal("false"),
+                        "upperBound": _ibcs_measure_ref(py_table, py_measure),
+                    },
+                },
+            },
+            "selector": {
+                "data": [{"dataViewWildcard": {"matchingOption": 0}}],
+                "metadata": ac_metadata,
+                "highlightMatching": 1,
+            },
+        },
+        {
+            "properties": {
+                "enabled": _ibcs_literal("true"),
+                "barColor": _ibcs_color(_IBCS_ERROR_RED),
+                "barWidth": _ibcs_literal("10D"),
+                "markerShow": _ibcs_literal("false"),
+                "tooltipShow": _ibcs_literal("false"),
+                "barBorderSize": _ibcs_literal("0L"),
+            },
+            "selector": {"metadata": ac_metadata},
+        },
+        {
+            "properties": {
+                "errorRange": {
+                    "kind": "ErrorRange",
+                    "explicit": {
+                        "isRelative": _ibcs_literal("false"),
+                        "upperBound": _ibcs_measure_ref(ac_table, ac_measure),
+                    },
+                },
+            },
+            "selector": {
+                "data": [{"dataViewWildcard": {"matchingOption": 0}}],
+                "metadata": py_metadata,
+                "highlightMatching": 1,
+            },
+        },
+        {
+            "properties": {
+                "enabled": _ibcs_literal("true"),
+                "barColor": _ibcs_color(_IBCS_ERROR_GREEN),
+                "barWidth": _ibcs_literal("10D"),
+                "markerShow": _ibcs_literal("false"),
+                "barBorderColor": _ibcs_color(_IBCS_ERROR_GREEN),
+                "barBorderSize": _ibcs_literal("0L"),
+                "tooltipShow": _ibcs_literal("false"),
+            },
+            "selector": {"metadata": py_metadata},
+        },
+    ]
+
+
+def _ibcs_build_label_objects(ac_metadata: str, py_metadata: str) -> list[dict]:
+    return [
+        {
+            "properties": {
+                "show": _ibcs_literal("true"),
+                "enableBackground": _ibcs_literal("true"),
+                "backgroundColor": _ibcs_color("#FFFFFF"),
+                "backgroundTransparency": _ibcs_literal("50D"),
+                # The % data-label alignment requirement called out in PLAN
+                # rank #1 — ensures Δ PY % overlay reads as right-aligned.
+                "horizontalAlignment": _ibcs_literal("'right'"),
+            },
+        },
+        {
+            "properties": {"showSeries": _ibcs_literal("false")},
+            "selector": {"metadata": py_metadata},
+        },
+    ]
+
+
+def _ibcs_build_datapoint_objects(ac_metadata: str, py_metadata: str) -> list[dict]:
+    return [
+        {
+            "properties": {"fill": _ibcs_color(_IBCS_AC_COLOR)},
+            "selector": {"metadata": ac_metadata},
+        },
+        {
+            "properties": {"fill": _ibcs_color(_IBCS_PY_COLOR)},
+            "selector": {"metadata": py_metadata},
+        },
+    ]
+
+
+def fix_ibcs_variance(parts: list[Part], scan_only: bool) -> HandlerResult:
+    """Apply IBCS variance formatting to bar/column charts.
+
+    Lean V1 — visuals must already have >=2 Y measures (AC + PY-like). Single-
+    measure visuals are listed as candidates but not mutated. See module
+    docstring above for the full mutation contract.
+    """
+    new_parts = [{**p} for p in parts]
+    findings: list[Finding] = []
+    log: list[str] = []
+
+    for p in new_parts:
+        if not re.match(r"^definition/pages/[^/]+/visuals/[^/]+/visual\.json$", p.get("path", "")):
+            continue
+        try:
+            doc = _json.loads(_decode(p))
+        except Exception:
+            continue
+        vt = (doc.get("visual") or {}).get("visualType")
+        if vt not in _IBCS_TARGET_TYPES:
+            continue
+
+        path_match = re.match(r"definition/pages/([^/]+)/visuals/([^/]+)/", p["path"])
+        page = path_match.group(1) if path_match else "?"
+        vname = path_match.group(2) if path_match else "?"
+
+        projections = _ibcs_y_projections(doc)
+        measures = [m for proj in projections if (m := _ibcs_measure_from_proj(proj))]
+
+        if len(measures) < 2:
+            findings.append(Finding(
+                object_path=f"{page} › {vname}",
+                detail=f"{vt}: needs >=2 Y measures (has {len(measures)}). Run Add_PYMeasures first.",
+            ))
+            continue
+
+        ac_table, ac_measure = measures[0]
+        py_table, py_measure = measures[1]
+        ac_metadata = f"{ac_table}.{ac_measure}"
+        py_metadata = f"{py_table}.{py_measure}"
+
+        new_vt = _IBCS_STACKED_TO_CLUSTERED.get(vt, vt)
+        before = (
+            f"{vt}; objects: {','.join(((doc.get('visual') or {}).get('objects') or {}).keys()) or '∅'}"
+        )
+        after = (
+            f"{new_vt}; objects: error,labels,dataPoint,categoryAxis,valueAxis (IBCS V1)"
+        )
+        findings.append(Finding(
+            object_path=f"{page} › {vname}",
+            detail=f"AC={ac_metadata}, PY={py_metadata}",
+            before=before,
+            after=after,
+        ))
+
+        if scan_only:
+            continue
+
+        visual = doc.setdefault("visual", {})
+        visual["visualType"] = new_vt
+        objects = visual.setdefault("objects", {})
+        objects["error"] = _ibcs_build_error_objects(
+            ac_table, ac_measure, py_table, py_measure,
+        )
+        objects["labels"] = _ibcs_build_label_objects(ac_metadata, py_metadata)
+        objects["dataPoint"] = _ibcs_build_datapoint_objects(ac_metadata, py_metadata)
+        # Chart cleanup carried over from Fix_BarChart / Fix_ColumnChart
+        # so the variance reads cleanly even if those weren't run first.
+        objects["categoryAxis"] = [{"properties": {
+            "gridlineShow": _ibcs_literal("false"),
+            "showAxisTitle": _ibcs_literal("false"),
+        }}]
+        objects["valueAxis"] = [{"properties": {
+            "show": _ibcs_literal("false"),
+            "showAxisTitle": _ibcs_literal("false"),
+            "gridlineShow": _ibcs_literal("false"),
+        }}]
+
+        p["payload"] = _encode(_json.dumps(doc, indent=2))
+        p["payloadType"] = p.get("payloadType") or "InlineBase64"
+
+    if not findings:
+        log.append("No bar/column charts found that match IBCS variance criteria.")
+    return HandlerResult(parts=new_parts, findings=findings, log=log)
+
+
+# ---------------------------------------------------------------------------
+# Macro fixer registry helper (WS-E-IBCS step #7)
+# ---------------------------------------------------------------------------
+#
+# IBCS_MACRO_STEPS is consumed by the /api/pbi-fixer/ibcs/apply-all endpoint
+# in agenthub_controller.py to dispatch existing fixers in order. Listed here
+# (rather than in the controller) so the registry stays alongside the
+# handlers it references — single source of truth for what "Apply IBCS"
+# actually does.
+
+IBCS_MACRO_STEPS: list[str] = [
+    # Step #5 in PLAN — chart cleanup (gridlines, axes, data labels).
+    "Fix_BarChart",
+    "Fix_ColumnChart",
+    # Step #6 in PLAN — IBCS variance signature (this PR).
+    "Fix_IBCSVariance",
+]
+
+
 FIXER_HANDLERS: dict[str, tuple[str, Callable[[list[Part], bool], HandlerResult]]] = {
     # Semantic-model fixers (TMDL)
     "Fix_FloatingPointDataType": ("sm", fix_floating_point_datatype),
@@ -1670,6 +2228,14 @@ FIXER_HANDLERS: dict[str, tuple[str, Callable[[list[Part], bool], HandlerResult]
     "Fix_AvoidAdding0": ("sm", fix_avoid_adding_zero),
     "Add_LastRefreshTable": ("sm", add_last_refresh_table),
     "Add_MeasuresFromColumns": ("sm", add_measures_from_columns),
+    # WS-E-TEMPLATES (v0.52) — community TMDL templates
+    "Add_MeasureTable_Empty": ("sm", add_measure_table_empty),
+    "Add_LastRefresh_LocalNow": ("sm", add_last_refresh_local_now),
+    "Add_CalcCalendar_Rich": ("sm", add_calc_calendar_rich),
+    "Add_LastRefresh_EuropeMEZ": ("sm", add_last_refresh_europe_mez),
+    "Add_PqCalendar_LarsSchreiber": ("sm", add_pq_calendar_lars_schreiber),
+    "Add_MeasureTables_3WithIcons": ("sm", add_measure_tables_3_with_icons),
+    "Add_ModelDocumentation": ("sm", add_model_documentation),
     # P2 SM fixers (v0.51)
     "Fix_DateColumnFormat": ("sm", fix_date_column_format),
     "Fix_DataCategory": ("sm", fix_data_category),
@@ -1686,4 +2252,6 @@ FIXER_HANDLERS: dict[str, tuple[str, Callable[[list[Part], bool], HandlerResult]
     "Fix_BarChart": ("report", fix_bar_chart),
     "Fix_ColumnChart": ("report", fix_column_chart),
     "Fix_VisualAlignment": ("report", fix_visual_alignment),
+    # IBCS Variance — WS-E-IBCS step #6, lean V1 (v0.103)
+    "Fix_IBCSVariance": ("report", fix_ibcs_variance),
 }

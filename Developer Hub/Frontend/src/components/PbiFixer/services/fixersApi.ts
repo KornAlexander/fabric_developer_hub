@@ -127,3 +127,48 @@ export async function reorderPages(
   }
   return await res.json();
 }
+
+// ---------------------------------------------------------------------------
+// WS-E-IBCS step #7 (v0.103) — one-click "Apply IBCS" macro.
+// Runs Fix_BarChart → Fix_ColumnChart → Fix_IBCSVariance in sequence
+// against a single report. V1: NO transactional rollback — first failure
+// stops the chain; prior steps stay applied.
+// ---------------------------------------------------------------------------
+
+export interface IbcsMacroRequest {
+  workspaceId: string;
+  reportId: string;
+  scanOnly: boolean;
+}
+
+export interface IbcsMacroStepResult {
+  fixerId: string;
+  ok: boolean;
+  applied: boolean;
+  findings: FixerFindingDto[];
+  log: string[];
+  error?: string | null;
+}
+
+export interface IbcsMacroResponse {
+  ok: boolean;
+  scanOnly: boolean;
+  totalFindings: number;
+  steps: IbcsMacroStepResult[];
+}
+
+export async function applyIbcsMacro(
+  auth: PbiAuth,
+  req: IbcsMacroRequest,
+): Promise<IbcsMacroResponse> {
+  const res = await fetch(`${BE}/api/pbi-fixer/ibcs/apply-all`, {
+    method: "POST",
+    headers: headers(auth),
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`applyIbcsMacro failed (${res.status}): ${text}`);
+  }
+  return await res.json();
+}

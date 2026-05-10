@@ -1,0 +1,39 @@
+# Source: https://fabsnippets.com/snippet/13  Author: Lars Schreiber (THE-SELF-SERVICE-BI-BLOG)
+# Shared M expression: full calendar table function with ISO weeks, fiscal year,
+# relative units, "2 Go" flags, German + culture-aware day/month names.
+# Usage from any new query:
+#     = fnKalender(2019, 1, "de-de", "Jul", "Mo")
+expression 'Kalenderfunktion' = (StartJahr as number, NumberOfYears as number, optional Culture as nullable text, optional FYStartMonth as nullable text, optional WeekStart as nullable text) as table =>
+	let
+		Culture          = if Culture        = null then "en-us" else Culture,
+		FYStartMonth     = if FYStartMonth   = null then "Jan"   else FYStartMonth,
+		WeekStart        = if WeekStart      = null then "Mo"    else WeekStart,
+		Days             = Number.From(#date(StartJahr + NumberOfYears, 1, 1) - #date(StartJahr, 1, 1)),
+		Source           = List.Dates(#date(StartJahr, 1, 1), Days, #duration(1, 0, 0, 0)),
+		AsTable          = Table.FromList(Source, Splitter.SplitByNothing(), {"Date"}),
+		AddYear          = Table.AddColumn(AsTable, "Year",          each Date.Year([Date]),                            Int64.Type),
+		AddQuarter       = Table.AddColumn(AddYear, "Quarter",       each "Q" & Text.From(Date.QuarterOfYear([Date])),  type text),
+		AddMonth         = Table.AddColumn(AddQuarter, "Month",      each Date.Month([Date]),                           Int64.Type),
+		AddMonthName     = Table.AddColumn(AddMonth, "MonthName",    each Date.MonthName([Date], Culture),              type text),
+		AddWeekIso       = Table.AddColumn(AddMonthName, "ISOWeek",  each
+									let
+										Thu = Date.AddDays([Date], 3 - (Date.DayOfWeek([Date], Day.Monday) + 1) + 1),
+										Y   = Date.Year(Thu)
+									in
+										Number.RoundDown(Number.From(Thu - #date(Y,1,1))/7) + 1, Int64.Type),
+		AddDayOfWeek     = Table.AddColumn(AddWeekIso, "DayOfWeek",  each Date.DayOfWeekName([Date], Culture),          type text),
+		AddDayOfWeekNum  = Table.AddColumn(AddDayOfWeek, "DayOfWeekNumber", each Date.DayOfWeek([Date], if WeekStart = "Mo" then Day.Monday else Day.Sunday) + 1, Int64.Type),
+		FYStart          = if      FYStartMonth = "Jan" then 1 else if FYStartMonth = "Feb" then 2 else if FYStartMonth = "Mar" then 3
+						 else if FYStartMonth = "Apr" then 4 else if FYStartMonth = "May" then 5 else if FYStartMonth = "Jun" then 6
+						 else if FYStartMonth = "Jul" then 7 else if FYStartMonth = "Aug" then 8 else if FYStartMonth = "Sep" then 9
+						 else if FYStartMonth = "Oct" then 10 else if FYStartMonth = "Nov" then 11 else 12,
+		AddFiscalYear    = Table.AddColumn(AddDayOfWeekNum, "FiscalYear", each if Date.Month([Date]) >= FYStart then Date.Year([Date]) else Date.Year([Date]) - 1, Int64.Type),
+		AddIsToday       = Table.AddColumn(AddFiscalYear, "IsToday",      each [Date] = Date.From(DateTime.LocalNow()),    type logical),
+		AddIs2Go         = Table.AddColumn(AddIsToday,    "Is2Go",        each [Date] >= Date.From(DateTime.LocalNow()),   type logical),
+		Result           = AddIs2Go
+	in
+		Result
+		lineageTag: 55555555-5555-5555-5555-55555555f001
+		queryGroup: Helpers
+
+		annotation PBI_NavigationStepName = Navigation

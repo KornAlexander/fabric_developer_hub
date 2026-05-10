@@ -1132,7 +1132,10 @@ function AgentHubShell({
 
                         <div className="sidenav-rail-divider" aria-hidden="true" />
 
-                        <div className="sidenav-section-label sidenav-section-label--spaced">Tools</div>
+                        {/* v1.38: promote Power BI Fixer out of "Tools" so the
+                            Fixer section sits at the same level as Agent Hub
+                            and Tools (per user request 2026-05-09). */}
+                        <div className="sidenav-section-label sidenav-section-label--spaced">Fixer</div>
                         <div className="sidenav-row-with-toggle">
                             <SideNavItem
                                 icon={<Wrench24Regular />}
@@ -1290,6 +1293,11 @@ function AgentHubShell({
                                 })()}
                             </div>
                         )}
+
+                        {/* v1.38: Tools section is its own top-level group now;
+                            currently empty placeholder for future tools. */}
+                        <div className="sidenav-rail-divider" aria-hidden="true" />
+                        <div className="sidenav-section-label sidenav-section-label--spaced">Tools</div>
                     </nav>
 
                     <div className="agenthub-sidebar-footer">

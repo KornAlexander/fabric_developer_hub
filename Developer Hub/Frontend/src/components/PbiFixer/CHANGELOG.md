@@ -4,6 +4,60 @@
 
 ---
 
+## v0.103 — IBCS Variance fixer + one-click "Apply IBCS" macro (V1)
+
+First lean cut of **WS-E-IBCS step #6** (Fix IBCS Variance) and
+**step #7** (Apply IBCS macro) — shipped through the existing
+PBIR-JSON `pbi_fixer_handlers.py` pipeline. The deferred
+`pbi-fixer-tom` (sempy-labs) sidecar is **not** required for this
+release; full port of the 771-line `_Fix_IBCSVariance.py` lands once
+the sidecar is built.
+
+### Backend
+- New handler `fix_ibcs_variance` in
+  `services/agenthub/pbi_fixer_handlers.py`. Mutates bar / column
+  visuals with **≥2 Y measures** (treats the first as AC, the second
+  as PY-like): IBCS palette (AC `#404040`, PY `#A0A0A0`), red / green
+  error bars (`#FF0000` / `#92D050`) with reciprocal-measure bounds,
+  AC label white-bg, PY labels hidden, **% data label alignment**
+  (`horizontalAlignment: 'right'`), Stacked → Clustered swap.
+  Single-measure visuals are surfaced as candidates with
+  `detail="needs >=2 Y measures (has N). Run Add_PYMeasures first."`
+  and **not** mutated.
+- Registered in `FIXER_HANDLERS` as `Fix_IBCSVariance` (scope `report`).
+- New macro endpoint **`POST /api/pbi-fixer/ibcs/apply-all`** —
+  request `IbcsMacroRequest{workspaceId, reportId, scanOnly}`,
+  loops `IBCS_MACRO_STEPS = ["Fix_BarChart", "Fix_ColumnChart",
+  "Fix_IBCSVariance"]` calling the existing per-fixer pipeline
+  (extracted as a shared `_run_one_fixer` helper).
+- **V1 limitation**: NO transactional rollback. First failure stops
+  the chain; previously-applied steps remain. Documented in the
+  endpoint and the UI hero card.
+
+### Frontend
+- `services/fixersApi.ts` — added `applyIbcsMacro(auth, req)` +
+  `IbcsMacroResponse` types.
+- `fixers/index.ts` — registered `fixIbcsVariance`
+  (`appliesTo: bar/column variants`).
+- `FixerPage.tsx` — new **🚀 Apply IBCS** hero card below the
+  Scan/Apply hero with its own Scan-only / Apply switch. Runs the
+  macro server-side and merges per-step findings + logs into the
+  existing run-log panel.
+- Scan-only by default; user must flip the switch + click again to
+  write back.
+
+### Known V1 gaps (tracked in `PLAN.md`)
+- Steps #1–#5 (Add Measure Table, Add PY Measures, Calendar, Theme,
+  Fix Charts batch) still ⬜ — pending `pbi-fixer-tom` sidecar.
+- `Fix_IBCSVariance` uses the opposite-series measure as the
+  variance error-bar bound because `Max Red AC` / `Max Green PY`
+  measures don't exist yet (created by step #2).
+- Macro is **not** transactional — first failure stops the chain.
+- IBCS color palette and trigger thresholds are hard-coded; theme /
+  config knobs land with the sidecar full port.
+
+---
+
 ## v0.102 — Unified "Scan Model" / "Scan Report" panels
 
 Folded **Model BPA**, **Memory Analyzer**, and **Report BPA** into the
