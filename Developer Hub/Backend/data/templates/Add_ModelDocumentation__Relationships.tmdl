@@ -1,0 +1,53 @@
+# Source: https://fabsnippets.com/snippet/14  Author: Martyn Booth
+table '_Relationships'
+	isHidden
+	lineageTag: 77777777-7777-7777-7777-777777777731
+
+	column 'FromTable'
+		dataType: string
+		lineageTag: 77777777-7777-7777-7777-777777777732
+		summarizeBy: none
+		sourceColumn: FromTable
+
+	column 'FromColumn'
+		dataType: string
+		lineageTag: 77777777-7777-7777-7777-777777777733
+		summarizeBy: none
+		sourceColumn: FromColumn
+
+	column 'ToTable'
+		dataType: string
+		lineageTag: 77777777-7777-7777-7777-777777777734
+		summarizeBy: none
+		sourceColumn: ToTable
+
+	column 'ToColumn'
+		dataType: string
+		lineageTag: 77777777-7777-7777-7777-777777777735
+		summarizeBy: none
+		sourceColumn: ToColumn
+
+	column 'Cardinality'
+		dataType: string
+		lineageTag: 77777777-7777-7777-7777-777777777736
+		summarizeBy: none
+		sourceColumn: Cardinality
+
+	column 'CrossFilteringBehavior'
+		dataType: string
+		lineageTag: 77777777-7777-7777-7777-777777777737
+		summarizeBy: none
+		sourceColumn: CrossFilteringBehavior
+
+	column 'IsActive'
+		dataType: boolean
+		formatString: """TRUE"";""TRUE"";""FALSE"""
+		lineageTag: 77777777-7777-7777-7777-777777777738
+		summarizeBy: none
+		sourceColumn: IsActive
+
+	partition '_Relationships' = calculated
+		mode: import
+		source = INFO.VIEW.RELATIONSHIPS()
+
+	annotation PBI_Id = _Relationships

@@ -1,0 +1,163 @@
+<svg viewBox="0 0 1200 700" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .bg { fill: #f5f5f5; }
+      .header { fill: #1f2937; }
+      .header-text { fill: white; font-size: 16px; font-weight: bold; }
+      .panel-bg { fill: white; stroke: #e5e7eb; stroke-width: 1; }
+      .section-title { fill: #1f2937; font-size: 14px; font-weight: 600; }
+      .rule-item { fill: white; stroke: #e5e7eb; stroke-width: 1; }
+      .warning { fill: #fef3c7; stroke: #fcd34d; stroke-width: 1; }
+      .success { fill: #d1fae5; stroke: #6ee7b7; stroke-width: 1; }
+      .error { fill: #fee2e2; stroke: #fca5a5; stroke-width: 1; }
+      .text-sm { font-size: 12px; }
+      .text-bold { font-weight: 600; }
+      .text-muted { fill: #6b7280; }
+      .badge { font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 3px; }
+    </style>
+  </defs>
+  
+  <!-- Background -->
+  <rect class="bg" width="1200" height="700"/>
+  
+  <!-- Header -->
+  <rect class="header" width="1200" height="60"/>
+  <text class="header-text" x="20" y="38">Power BI Fixer — BPA &amp; Automated Fixes</text>
+  
+  <!-- Main Content Area -->
+  <g>
+    <!-- Left Panel: Rule List -->
+    <rect class="panel-bg" x="20" y="80" width="350" height="600"/>
+    <text class="section-title" x="30" y="105">Best Practice Rules (23 issues)</text>
+    
+    <!-- Issue 1 -->
+    <rect class="error" x="25" y="115" width="340" height="50"/>
+    <circle fill="#dc2626" cx="35" cy="130" r="4"/>
+    <text class="text-bold" x="50" y="130" style="fill: #991b1b;">Missing Description</text>
+    <text class="text-sm text-muted" x="50" y="145">Table &quot;Customers&quot; missing description (8 columns)</text>
+    
+    <!-- Issue 2 -->
+    <rect class="warning" x="25" y="170" width="340" height="50"/>
+    <circle fill="#ea580c" cx="35" cy="185" r="4"/>
+    <text class="text-bold" x="50" y="185" style="fill: #92400e;">Naming Convention Violation</text>
+    <text class="text-sm text-muted" x="50" y="200">Column &quot;cust_ID&quot; violates naming convention (12 occurrences)</text>
+    
+    <!-- Issue 3 -->
+    <rect class="success" x="25" y="225" width="340" height="50"/>
+    <circle fill="#059669" cx="35" cy="240" r="4"/>
+    <text class="text-bold" x="50" y="240" style="fill: #065f46;">Redundant Column</text>
+    <text class="text-sm text-muted" x="50" y="255">Column &quot;Total&quot; can be calculated (Suggestion: Remove)</text>
+    
+    <!-- More issues -->
+    <rect class="error" x="25" y="280" width="340" height="50"/>
+    <circle fill="#dc2626" cx="35" cy="295" r="4"/>
+    <text class="text-bold" x="50" y="295" style="fill: #991b1b;">Hidden Column Without Reason</text>
+    <text class="text-sm text-muted" x="50" y="310">Column &quot;InternalID&quot; is hidden (no documentation)</text>
+    
+    <!-- Button -->
+    <rect fill="#3b82f6" x="30" y="600" width="330" height="45" rx="4"/>
+    <text style="fill: white; font-size: 14px; font-weight: 600;" x="140" y="630">Fix All Issues (23)</text>
+  </g>
+  
+  <!-- Right Panel: Before/After -->
+  <g>
+    <!-- Before Section -->
+    <rect class="panel-bg" x="380" y="80" width="380" height="290"/>
+    <text class="section-title" x="390" y="105">Before Fix</text>
+    
+    <rect fill="#fee2e2" x="385" y="115" width="370" height="30" rx="2"/>
+    <text style="font-size: 11px; fill: #991b1b; font-family: monospace;" x="395" y="134">Table: Customers (8 columns, 0 descriptions)</text>
+    
+    <rect fill="white" x="385" y="150" width="370" height="30" rx="2" stroke="#e5e7eb" stroke-width="1"/>
+    <text style="font-size: 11px; fill: #374151; font-family: monospace;" x="395" y="169">Column: cust_ID (Int64) — VISIBILITY: HIDDEN</text>
+    
+    <rect fill="white" x="385" y="185" width="370" height="30" rx="2" stroke="#e5e7eb" stroke-width="1"/>
+    <text style="font-size: 11px; fill: #374151; font-family: monospace;" x="395" y="204">Column: Total (Measure) — LINEAGE: NONE</text>
+    
+    <rect fill="white" x="385" y="220" width="370" height="30" rx="2" stroke="#e5e7eb" stroke-width="1"/>
+    <text style="font-size: 11px; fill: #374151; font-family: monospace;" x="395" y="239">Column: InternalKey (Int64) — HIDDEN</text>
+    
+    <rect fill="white" x="385" y="255" width="370" height="100" rx="2" stroke="#e5e7eb" stroke-width="1"/>
+    <text style="font-size: 9px; fill: #6b7280; font-family: monospace;" x="395" y="270">• Missing format strings (5 columns)</text>
+    <text style="font-size: 9px; fill: #6b7280; font-family: monospace;" x="395" y="283">• Orphaned measure definitions (2)</text>
+    <text style="font-size: 9px; fill: #6b7280; font-family: monospace;" x="395" y="296">• Column naming inconsistencies (8)</text>
+    <text style="font-size: 9px; fill: #6b7280; font-family: monospace;" x="395" y="309">• Missing sort-by column for 3 columns</text>
+    <text style="font-size: 9px; fill: #6b7280; font-family: monospace;" x="395" y="322">• No column descriptions found</text>
+    <text style="font-size: 9px; fill: #6b7280; font-family: monospace;" x="395" y="335">• Excessive hidden objects: 4 total</text>
+    
+    <!-- After Section -->
+    <rect class="panel-bg" x="770" y="80" width="410" height="290"/>
+    <text class="section-title" x="780" y="105">After Fix</text>
+    
+    <rect fill="#d1fae5" x="775" y="115" width="400" height="30" rx="2"/>
+    <text style="font-size: 11px; fill: #065f46; font-family: monospace;" x="785" y="134">Table: Customers (8 columns, 8 descriptions ✓)</text>
+    
+    <rect fill="white" x="775" y="150" width="400" height="30" rx="2" stroke="#e5e7eb" stroke-width="1"/>
+    <text style="font-size: 11px; fill: #374151; font-family: monospace;" x="785" y="169">Column: CustomerId (Int64) — VISIBLE ✓</text>
+    
+    <rect fill="white" x="775" y="185" width="400" height="30" rx="2" stroke="#e5e7eb" stroke-width="1"/>
+    <text style="font-size: 11px; fill: #374151; font-family: monospace;" x="785" y="204">Column: Total (Calculated) — LINKED ✓</text>
+    
+    <rect fill="white" x="775" y="220" width="400" height="30" rx="2" stroke="#e5e7eb" stroke-width="1"/>
+    <text style="font-size: 11px; fill: #374151; font-family: monospace;" x="785" y="239">Column: InternalKey (Int64) — REMOVED</text>
+    
+    <rect fill="white" x="775" y="255" width="400" height="100" rx="2" stroke="#6ee7b7" stroke-width="2"/>
+    <text style="font-size: 9px; fill: #065f46; font-family: monospace;" x="785" y="270">✓ Format strings applied (5 columns)</text>
+    <text style="font-size: 9px; fill: #065f46; font-family: monospace;" x="785" y="283">✓ Measures linked to tables (2)</text>
+    <text style="font-size: 9px; fill: #065f46; font-family: monospace;" x="785" y="296">✓ Names standardized (PascalCase)</text>
+    <text style="font-size: 9px; fill: #065f46; font-family: monospace;" x="785" y="309">✓ Sort-by columns configured (3)</text>
+    <text style="font-size: 9px; fill: #065f46; font-family: monospace;" x="785" y="322">✓ All columns documented</text>
+    <text style="font-size: 9px; fill: #065f46; font-family: monospace;" x="785" y="335">✓ Hidden objects cleaned up: 0</text>
+  </g>
+  
+  <!-- Summary Stats -->
+  <g>
+    <rect fill="#dbeafe" x="380" y="385" width="380" height="155" rx="4"/>
+    <text class="section-title" x="390" y="405">Fix Summary</text>
+    
+    <g>
+      <rect fill="white" x="385" y="415" width="110" height="50" rx="3"/>
+      <text style="font-size: 24px; font-weight: bold; fill: #059669;" x="405" y="442">23</text>
+      <text style="font-size: 12px; fill: #6b7280;" x="395" y="460">Issues Fixed</text>
+    </g>
+    
+    <g>
+      <rect fill="white" x="500" y="415" width="110" height="50" rx="3"/>
+      <text style="font-size: 24px; font-weight: bold; fill: #1f2937;" x="520" y="442">12s</text>
+      <text style="font-size: 12px; fill: #6b7280;" x="510" y="460">Execution Time</text>
+    </g>
+    
+    <g>
+      <rect fill="white" x="615" y="415" width="135" height="50" rx="3"/>
+      <text style="font-size: 14px; font-weight: bold; fill: #3b82f6;" x="625" y="442">✓ Rollback</text>
+      <text style="font-size: 12px; fill: #6b7280;" x="635" y="460">Available (1h)</text>
+    </g>
+    
+    <rect fill="#dbeafe" x="385" y="472" width="365" height="65" rx="3"/>
+    <text class="section-title" x="395" y="495">Applied via TMDL Update:</text>
+    <text style="font-size: 11px; fill: #374151; font-family: monospace;" x="395" y="515">Workspace: Sales Analytics | Semantic Model: DimCustomer</text>
+    <text style="font-size: 11px; fill: #059669; font-family: monospace;" x="395" y="530">Status: ✓ Committed to DirectLake</text>
+  </g>
+  
+  <!-- Right Panel: Recommendations -->
+  <rect class="panel-bg" x="770" y="385" width="410" height="155"/>
+  <text class="section-title" x="780" y="405">Next Steps &amp; Recommendations</text>
+  
+  <g>
+    <rect fill="#eff6ff" x="775" y="415" width="400" height="110" rx="3"/>
+    <circle fill="#3b82f6" cx="785" cy="428" r="3"/>
+    <text style="font-size: 12px; fill: #1f2937;" x="795" y="432">Add Format Strings for date/currency columns</text>
+    
+    <circle fill="#3b82f6" cx="785" cy="450" r="3"/>
+    <text style="font-size: 12px; fill: #1f2937;" x="795" y="454">Create calculated columns for derived data</text>
+    
+    <circle fill="#3b82f6" cx="785" cy="472" r="3"/>
+    <text style="font-size: 12px; fill: #1f2937;" x="795" y="476">Add row-level security (RLS) roles</text>
+    
+    <circle fill="#3b82f6" cx="785" cy="494" r="3"/>
+    <text style="font-size: 12px; fill: #1f2937;" x="795" y="498">Create hierarchies for drill-down analysis</text>
+    
+    <circle fill="#3b82f6" cx="785" cy="516" r="3"/>
+    <text style="font-size: 12px; fill: #1f2937;" x="795" y="520">Run performance analyzer on large tables</text>
+  </g>
+</svg>

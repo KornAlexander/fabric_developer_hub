@@ -7,14 +7,22 @@ import { ICONS, INDENT } from "./theme";
  * Build display options and a key lookup map from structured tree items.
  * Handles deduplication with zero-width spaces (matching Python behavior).
  */
+// Icon keys whose row should render a Fluent SVG instead of a unicode glyph.
+// For these keys we omit the unicode prefix from the formatted string so the
+// renderer can place the SVG without a duplicated emoji.
+const SVG_ICON_KEYS = new Set(["page", "table"]);
+
 export function buildTreeItems(items: TreeItem[]): TreeBuildResult {
   const options: string[] = [];
   const keyMap: Record<string, string> = {};
+  const iconMap: Record<string, string> = {};
   const seen: Record<string, number> = {};
 
   for (const { indent, icon: iconKey, label, key } of items) {
-    const icon = ICONS[iconKey] ?? iconKey;
-    let formatted = `${INDENT.repeat(indent)}${icon} ${label}`;
+    const useSvg = SVG_ICON_KEYS.has(iconKey);
+    const icon = useSvg ? "" : ICONS[iconKey] ?? iconKey;
+    const prefix = icon ? `${icon} ` : "";
+    let formatted = `${INDENT.repeat(indent)}${prefix}${label}`;
 
     if (keyMap[formatted] !== undefined) {
       const count = (seen[formatted] ?? 1) + 1;
@@ -24,9 +32,10 @@ export function buildTreeItems(items: TreeItem[]): TreeBuildResult {
 
     options.push(formatted);
     keyMap[formatted] = key;
+    iconMap[formatted] = iconKey;
   }
 
-  return { options, keyMap };
+  return { options, keyMap, iconMap };
 }
 
 /**

@@ -1,0 +1,44 @@
+# Source: https://fabsnippets.com/snippet/14  Author: Martyn Booth
+# Compact documentation pack: hidden _Tables / _Columns / _DAX Measures / _Relationships
+# calc-tables sourced from INFO.VIEW.* + a Measure host table.
+# WARNING: these calc-tables refresh on every model refresh — adds ~5-20 MB.
+table '_Tables'
+	isHidden
+	lineageTag: 77777777-7777-7777-7777-777777777701
+
+	column 'Name'
+		dataType: string
+		lineageTag: 77777777-7777-7777-7777-777777777702
+		summarizeBy: none
+		sourceColumn: Name
+
+	column 'Type'
+		dataType: string
+		lineageTag: 77777777-7777-7777-7777-777777777703
+		summarizeBy: none
+		sourceColumn: Type
+
+	column 'StorageMode'
+		dataType: string
+		lineageTag: 77777777-7777-7777-7777-777777777704
+		summarizeBy: none
+		sourceColumn: StorageMode
+
+	column 'IsHidden'
+		dataType: boolean
+		formatString: """TRUE"";""TRUE"";""FALSE"""
+		lineageTag: 77777777-7777-7777-7777-777777777705
+		summarizeBy: none
+		sourceColumn: IsHidden
+
+	column 'Description'
+		dataType: string
+		lineageTag: 77777777-7777-7777-7777-777777777706
+		summarizeBy: none
+		sourceColumn: Description
+
+	partition '_Tables' = calculated
+		mode: import
+		source = INFO.VIEW.TABLES()
+
+	annotation PBI_Id = _Tables

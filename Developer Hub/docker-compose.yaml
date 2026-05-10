@@ -124,9 +124,6 @@ services:
       AGENT_NETWORK: developer-hub_default
       MCP_RUNTIME_NETWORK: developer-hub_default
       AGENT_ORCHESTRATOR_ENDPOINT: http://backend:5000
-      # PBI Fixer → SLL sidecar (Michael Kovalsky's run_model_bpa /
-      # vertipaq_analyzer). The backend proxies requests through.
-      SLL_SIDECAR_URL: http://sll-sidecar:5100
     volumes:
       # Mount source for hot reload (uvicorn --reload watches these)
       - ./Backend/src:/app/src
@@ -135,6 +132,12 @@ services:
       # Persist the AgentHub SQLite DB to the host so you can inspect it
       # directly (./Backend/.data/agenthub.db). Folder is gitignored.
       - ./Backend/.data:/app/data
+      # Surface the WS-E PBI Fixer TMDL templates (committed at
+      # Backend/data/templates) at /app/data/templates so the
+      # template-fixer handlers can read them at runtime without
+      # rebuilding the backend image. Sub-mount overlays the .data
+      # mount above and is read-only.
+      - ./Backend/data/templates:/app/data/templates:ro
       # Mount the host .env so bootstrap.py can locate + log it (the values
       # are also injected via env_file: above; this mount just makes the
       # file visible inside the container for transparency / debugging).
@@ -168,47 +171,6 @@ services:
         condition: service_completed_successfully
       mcp-runtime-image:
         condition: service_completed_successfully
-
-  # ── 2b. SLL Sidecar (Michael Kovalsky's semantic-link-labs) ─
-  # Standalone Python service that hosts ``sempy_labs.run_model_bpa``
-  # and ``sempy_labs.vertipaq_analyzer`` against the Fabric XMLA
-  # endpoint via a Service Principal. Kept in a separate image so the
-  # AgentHub backend (slim Python) doesn't pull in the .NET / pythonnet
-  # / TOM stack. The backend proxies requests at
-  # ``/api/pbi-fixer/sll/...`` so the frontend never sees the sidecar
-  # directly.
-  #
-  # Configure in .env:
-  #   SLL_TENANT_ID=<tenant guid>
-  #   SLL_CLIENT_ID=<sp app id>
-  #   SLL_CLIENT_SECRET=<sp secret>
-  # The SP must be added as a member of every workspace it analyses.
-  sll-sidecar:
-    # T4: pin to linux/amd64 so the Microsoft.AnalysisServices.* x64 DLLs
-    # bundled inside sempy_labs can load via pythonnet. On aarch64 hosts
-    # (Apple Silicon, ARM Windows) the sidecar otherwise rejects every
-    # request with "host arch 'aarch64' is not supported". Docker Desktop
-    # transparently runs the image under QEMU emulation when the host
-    # arch differs.
-    platform: linux/amd64
-    build:
-      context: SllSidecar
-      dockerfile: Dockerfile
-    env_file:
-      - .env
-    environment:
-      SLL_TENANT_ID: ${SLL_TENANT_ID:-}
-      SLL_CLIENT_ID: ${SLL_CLIENT_ID:-}
-      SLL_CLIENT_SECRET: ${SLL_CLIENT_SECRET:-}
-      PYTHONUNBUFFERED: "1"
-      FORCE_COLOR: "1"
-    healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5100/health').read()"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-    restart: unless-stopped
 
   # ── 3. Frontend ───────────────────────────────────────────
   #

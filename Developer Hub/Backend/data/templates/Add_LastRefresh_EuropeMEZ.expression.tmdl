@@ -1,0 +1,24 @@
+# Source: https://fabsnippets.com/snippet/12  Author: fabsnippets community
+# Shared M expression: convert a DateTimeZone in UTC to Europe/Berlin (CET/CEST, DST-aware).
+expression 'UTC to CEST/CET' = (utc as datetimezone) as datetimezone =>
+	let
+		// Last Sunday of March (DST start) and last Sunday of October (DST end), 01:00 UTC
+		Year         = Date.Year(DateTimeZone.RemoveZone(utc)),
+		LastSundayOf = (y as number, m as number) as date =>
+			let
+				LastDay = Date.EndOfMonth(#date(y, m, 1)),
+				Wd      = Date.DayOfWeek(LastDay, Day.Sunday)
+			in
+				Date.AddDays(LastDay, -Wd),
+		DstStart  = DateTime.From(LastSundayOf(Year, 3))  + #duration(0, 1, 0, 0),
+		DstEnd    = DateTime.From(LastSundayOf(Year, 10)) + #duration(0, 1, 0, 0),
+		UtcNaive  = DateTimeZone.RemoveZone(utc),
+		IsDst     = UtcNaive >= DstStart and UtcNaive < DstEnd,
+		Offset    = if IsDst then #duration(0, 2, 0, 0) else #duration(0, 1, 0, 0),
+		Result    = DateTimeZone.SwitchZone(utc + Offset, if IsDst then 2 else 1)
+	in
+		Result
+		lineageTag: 44444444-4444-4444-4444-44444444f001
+		queryGroup: Helpers
+
+		annotation PBI_NavigationStepName = Navigation

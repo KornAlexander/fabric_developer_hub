@@ -39,12 +39,6 @@ import {
 import type { PageProps } from "../../types/shared";
 import { createNotebook } from "../../services/fabricApi";
 import {
-  runSllModelBpa,
-  runSllVertipaq,
-  type SllModelBpaResponse,
-  type SllVertipaqResponse,
-} from "../../services/sllApi";
-import {
   SEMPY_CATALOG,
   generateSempyCode,
   codeToNotebookJson,
@@ -145,12 +139,6 @@ export const SempyRunnerPage: React.FC<PageProps> = ({
   const [creating, setCreating] = useState(false);
   const [status, setStatus] = useState<string>("");
   const [errorMsg, setErrorMsg] = useState<string>("");
-  // v0.74 — inline SLL execution for the two functions the sidecar
-  // exposes natively. Other catalog entries still go via notebook.
-  const [sllRunning, setSllRunning] = useState(false);
-  const [sllBpa, setSllBpa] = useState<SllModelBpaResponse | null>(null);
-  const [sllVertipaq, setSllVertipaq] = useState<SllVertipaqResponse | null>(null);
-  const [sllErr, setSllErr] = useState<string>("");
 
   const visibleFns = useMemo(
     () => (category === "All"
@@ -210,39 +198,10 @@ export const SempyRunnerPage: React.FC<PageProps> = ({
     setStatus(`Downloaded ${safeFnName}.py.`);
   };
 
-  // v0.74 — inline run via SLL sidecar. Only enabled for the two
-  // functions the sidecar exposes natively. Reuses the same proxy
-  // endpoints as the Model BPA / Memory pages.
-  const sllSupported = fn?.id === "run_model_bpa" || fn?.id === "vertipaq_analyzer";
-  const datasetForSll = (overrides["dataset"] as string | undefined) || datasetName || "";
-  const workspaceForSll = (overrides["workspace"] as string | undefined) || workspaceName || workspaceId || "";
-  const onRunSll = async () => {
-    if (!fn || !sllSupported) return;
-    setSllRunning(true);
-    setSllErr("");
-    setSllBpa(null);
-    setSllVertipaq(null);
-    setStatus("");
-    try {
-      if (fn.id === "run_model_bpa") {
-        const r = await runSllModelBpa(auth, workspaceForSll, datasetForSll);
-        setSllBpa(r);
-        setStatus(`run_model_bpa returned ${r.rows.length} row(s).`);
-      } else {
-        const readStats =
-          overrides["read_stats_from_data"] === true ||
-          overrides["read_stats_from_data"] === "true" ||
-          overrides["read_stats_from_data"] === "True";
-        const r = await runSllVertipaq(auth, workspaceForSll, datasetForSll, readStats);
-        setSllVertipaq(r);
-        setStatus(`vertipaq_analyzer rendered ${r.html.length.toLocaleString()} chars of HTML.`);
-      }
-    } catch (e: any) {
-      setSllErr(e?.message || String(e));
-    } finally {
-      setSllRunning(false);
-    }
-  };
+  // v0.81 — sidecar inline execution removed. Every function in the
+  // catalog now goes through the notebook path (Fabric Spark already
+  // ships sempy + sempy-labs preinstalled). The Vertipaq / Model BPA
+  // pages have their own dedicated UIs.
 
   const onCreateNotebook = async () => {
     if (!fn || !workspaceId) return;
@@ -309,9 +268,6 @@ export const SempyRunnerPage: React.FC<PageProps> = ({
                 setOverrides({});
                 setStatus("");
                 setErrorMsg("");
-                setSllBpa(null);
-                setSllVertipaq(null);
-                setSllErr("");
               }
             }}
           >
@@ -423,20 +379,8 @@ export const SempyRunnerPage: React.FC<PageProps> = ({
             >
               {creating ? "Creating notebook…" : "Create + open Fabric notebook"}
             </Button>
-            {sllSupported && (
-              <Button
-                appearance="secondary"
-                icon={sllRunning ? <Spinner size="tiny" /> : <PlayCircle20Regular />}
-                onClick={onRunSll}
-                disabled={sllRunning || !datasetForSll || !workspaceForSll}
-              >
-                {sllRunning ? "Running…" : "Run inline (SLL sidecar)"}
-              </Button>
-            )}
             <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
-              {sllSupported
-                ? "Inline run executes against the AgentHub SLL sidecar with the workload Service Principal — no notebook needed."
-                : "Drops a Synapse notebook into the workspace with this code in cell\u00a01. Fabric Spark already has sempy + sempy-labs — no install needed."}
+              Drops a Synapse notebook into the workspace with this code in cell&nbsp;1. Fabric Spark already has sempy + sempy-labs — no install needed.
             </Text>
             {status && (
               <Badge appearance="tint" color="success" icon={<Open20Regular />}>
@@ -444,71 +388,6 @@ export const SempyRunnerPage: React.FC<PageProps> = ({
               </Badge>
             )}
           </div>
-
-          {sllErr && (
-            <MessageBar intent="error">
-              <MessageBarBody>
-                <MessageBarTitle>SLL run failed</MessageBarTitle>
-                {sllErr}
-              </MessageBarBody>
-            </MessageBar>
-          )}
-
-          {sllBpa && (
-            <div style={{
-              border: `1px solid ${tokens.colorNeutralStroke2}`,
-              borderRadius: tokens.borderRadiusMedium,
-              padding: 0,
-              maxHeight: 480,
-              overflow: "auto",
-              backgroundColor: tokens.colorNeutralBackground1,
-            }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                <thead>
-                  <tr>
-                    {sllBpa.columns.map((c) => (
-                      <th key={c} style={{
-                        position: "sticky", top: 0,
-                        backgroundColor: tokens.colorNeutralBackground3,
-                        textAlign: "left",
-                        padding: "6px 10px",
-                        borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-                        whiteSpace: "nowrap",
-                      }}>{c}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {sllBpa.rows.map((row, i) => (
-                    <tr key={i}>
-                      {sllBpa.columns.map((c) => (
-                        <td key={c} style={{
-                          padding: "4px 10px",
-                          borderBottom: `1px solid ${tokens.colorNeutralStroke3}`,
-                          verticalAlign: "top",
-                        }}>{String(row[c] ?? "")}</td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          {sllVertipaq && (
-            <div
-              style={{
-                border: `1px solid ${tokens.colorNeutralStroke2}`,
-                borderRadius: tokens.borderRadiusMedium,
-                padding: "8px 12px",
-                maxHeight: 480,
-                overflow: "auto",
-                backgroundColor: tokens.colorNeutralBackground1,
-              }}
-              // SLL HTML originates from our own controlled sidecar.
-              dangerouslySetInnerHTML={{ __html: sllVertipaq.html }}
-            />
-          )}
 
           {errorMsg && (
             <MessageBar intent="error">

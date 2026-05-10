@@ -4,6 +4,88 @@
 
 ---
 
+## v0.103 — IBCS Variance fixer + one-click "Apply IBCS" macro (V1)
+
+First lean cut of **WS-E-IBCS step #6** (Fix IBCS Variance) and
+**step #7** (Apply IBCS macro) — shipped through the existing
+PBIR-JSON `pbi_fixer_handlers.py` pipeline. The deferred
+`pbi-fixer-tom` (sempy-labs) sidecar is **not** required for this
+release; full port of the 771-line `_Fix_IBCSVariance.py` lands once
+the sidecar is built.
+
+### Backend
+- New handler `fix_ibcs_variance` in
+  `services/agenthub/pbi_fixer_handlers.py`. Mutates bar / column
+  visuals with **≥2 Y measures** (treats the first as AC, the second
+  as PY-like): IBCS palette (AC `#404040`, PY `#A0A0A0`), red / green
+  error bars (`#FF0000` / `#92D050`) with reciprocal-measure bounds,
+  AC label white-bg, PY labels hidden, **% data label alignment**
+  (`horizontalAlignment: 'right'`), Stacked → Clustered swap.
+  Single-measure visuals are surfaced as candidates with
+  `detail="needs >=2 Y measures (has N). Run Add_PYMeasures first."`
+  and **not** mutated.
+- Registered in `FIXER_HANDLERS` as `Fix_IBCSVariance` (scope `report`).
+- New macro endpoint **`POST /api/pbi-fixer/ibcs/apply-all`** —
+  request `IbcsMacroRequest{workspaceId, reportId, scanOnly}`,
+  loops `IBCS_MACRO_STEPS = ["Fix_BarChart", "Fix_ColumnChart",
+  "Fix_IBCSVariance"]` calling the existing per-fixer pipeline
+  (extracted as a shared `_run_one_fixer` helper).
+- **V1 limitation**: NO transactional rollback. First failure stops
+  the chain; previously-applied steps remain. Documented in the
+  endpoint and the UI hero card.
+
+### Frontend
+- `services/fixersApi.ts` — added `applyIbcsMacro(auth, req)` +
+  `IbcsMacroResponse` types.
+- `fixers/index.ts` — registered `fixIbcsVariance`
+  (`appliesTo: bar/column variants`).
+- `FixerPage.tsx` — new **🚀 Apply IBCS** hero card below the
+  Scan/Apply hero with its own Scan-only / Apply switch. Runs the
+  macro server-side and merges per-step findings + logs into the
+  existing run-log panel.
+- Scan-only by default; user must flip the switch + click again to
+  write back.
+
+### Known V1 gaps (tracked in `PLAN.md`)
+- Steps #1–#5 (Add Measure Table, Add PY Measures, Calendar, Theme,
+  Fix Charts batch) still ⬜ — pending `pbi-fixer-tom` sidecar.
+- `Fix_IBCSVariance` uses the opposite-series measure as the
+  variance error-bar bound because `Max Red AC` / `Max Green PY`
+  measures don't exist yet (created by step #2).
+- Macro is **not** transactional — first failure stops the chain.
+- IBCS color palette and trigger thresholds are hard-coded; theme /
+  config knobs land with the sidecar full port.
+
+---
+
+## v0.102 — Unified "Scan Model" / "Scan Report" panels
+
+Folded **Model BPA**, **Memory Analyzer**, and **Report BPA** into the
+Model / Report Explorer pages so the Hub has a single one-click health
+scan per artifact.
+
+- `ModelExplorer` toolbar button **"Scan model fixes" → "Scan Model"**.
+  Now runs three phases in order: model fixers (scan-only) →
+  `runModelBpa(modelData)` → `runVertipaqAnalyzer(...)`.
+  Step-aware label (`Scanning fixers… / Running BPA… / Loading memory…`).
+- `ReportExplorer` toolbar button **"Scan report fixes" → "Scan Report"**.
+  Two phases: report fixers → `runReportBpa(reportData)`.
+- New full-width results section below the existing tree+properties
+  layout in each explorer (`ModelScanResults.tsx`, `ReportScanResults.tsx`).
+  Smooth `scrollIntoView` on completion via a `forwardRef` target.
+- Cards: **Quick fixes** (relocated from the Properties panel),
+  **BPA findings** (full grid + severity/category filters + Fix-it relay
+  + CSV export), and **Memory Analyzer** (Vertipaq summary + tables /
+  partitions / columns / hierarchies / relationships, each with a CSV
+  export — Model only).
+- Memory phase degrades gracefully when REST/XMLA permission errors
+  block Vertipaq — the BPA + Quick-fix cards still render.
+- Sidebar entries `modelBpa`, `memory`, `reportBpa` flipped to
+  `ready: false` in `types/nav.tsx`. The standalone page files remain
+  as thin redirect stubs (`useEffect → onNavigate("model"|"report")`)
+  so cached `?nav=…` deep-links land on the right explorer instead of
+  crashing. `readNavKey()` also normalises the deprecated keys at load.
+
 ## Phase 1 — Initial port (v0.1.0, April 2026)
 
 Migrated from Python (ipywidgets) to TypeScript (React + FluentUI v9).
@@ -98,7 +180,136 @@ Six P2 semantic-model fixers ported from `pbi_fixer/src/`. All are property-muta
 
 Frontend adds six `backendFixer({...})` entries; backend `pbi_fixer_handlers.py` adds six handlers + registry rows. No new API endpoints.
 
-### v0.60 — Explorer parity batch 2: DAX formatting + editable column / table / relationship props (May 5 2026)
+### WS-T — May 5 2026 user-reported bug batch (closure backfill)
+
+Backfill entry. Seven of nine WS-T sub-tasks shipped across v0.78–v0.95 but were tracked only in PLAN.md. Consolidating here.
+
+- **T1. "Could not handle exception: undefined" dialog** (workload v1.37 / PBI Fixer v0.78) — `callItemGet` no longer routes empty exceptions through `handleException`. Dev-loaded items with null `workloadPayload` no longer surface as a host error dialog.
+- **T2. Tab title stuck on "Loading…"** (v0.78) — `agenthub.tab.onInit` falls back to `"Developer Hub Dashboard"` instead of `{}` when the workload-client supplies an empty title payload.
+- **T3. Revert hero + KPI strip on Model + Report explorers** (v0.78) — restored both pages to the toolbar-first render. `MessageBar` import + `useMemo` block removed; pre-redesign vertical density restored above the workspace area.
+- **T6. Report BPA → SLL native** — moot. WS-U deleted the SLL Python sidecar (v0.82 + v0.85 cleanup); Report BPA stays on the TS engine.
+- **T7. Workspace + item name persistence across sub-tab switches** (v0.78 base + v0.95 cross-iframe sync) — `PbiFixerPage` seeds + persists the connection bar to `sessionStorage["pbiFixer.connection.v1"]`. v0.95 added `localStorage` mirror + `storage` event listener so each Fixer sub-tab (separate iframe) sees the others' selections.
+- **T8. Cannot open the DevHub Dashboard item from the workspace folder** — fixed transitively by T1 (the host dialog was blocking the item-editor mount). Verify in production portal as part of WL-1 C4.
+- **T9. DevHub Dashboard item icon** — `Product.json` createExperience card icon swapped from `dial.png` to `developerHub.png`. Item gallery, workspace list, and open-item header all render the workload glyph.
+
+**Deferred — not WS-T anymore:**
+- **T4. Model BPA SLL run failed with `aarch64` arch error** — `platform: linux/amd64` pinned on the now-deleted `sll-sidecar` compose service; container reported `x86_64` correctly on x64 dev hosts. On **aarch64 dev hosts** QEMU x86_64 emulation segfaults inside the .NET 8 runtime when sempy_labs loads AMO/ADOMD DLLs (`qemu: uncaught target signal 11 (Segmentation fault)`). Hard host limitation. **Permanently mooted by WS-U** (v0.82): SLL sidecar deleted entirely, Model BPA stays on the TS engine which has no native dependency. Bug is therefore closed by removal of the broken code path, not by fixing emulation.
+- **T5. Memory Analyzer not working** — same root cause as T4. The structural Memory tabs (`memoryApi.ts`, DAX `INFO.VIEW.*`) cover the page today; the SLL HTML panel was removed from `MemoryPage.tsx` in v0.82. Per-column DMV stats (Vertipaq) deferred to a future `vertipaqApi.ts` (XMLA-over-HTTPS) — see WS-U U2 in CHANGELOG.
+
+
+
+Follow-up to v0.88 (auto-pair) which the Playwright Tester proved did not actually survive sub-tab switches (failure ID `20260507-1830-pbifixer-explorer-pair-sync`). Root cause: each PBI Fixer sub-tab is its own iframe with isolated `sessionStorage`. The destination tab mounted with empty state, immediately overwrote the source tab's persisted selection, so the auto-pair `useEffect` never saw a non-empty `datasetId` / `reportId` to fill the counterpart.
+
+Three changes to `components/PbiFixerPage.tsx`:
+
+- **Mirror to localStorage** — `readPersistedConn` now prefers `localStorage` (shared across all same-origin iframes), falling back to `sessionStorage` for back-compat. The persist `useEffect` writes to BOTH stores on every change.
+- **Skip empty payloads** — the persist `useEffect` no longer writes when every field is empty. This was the actual clobber: the destination tab's first effect cycle on mount used to write `{"":""...}` to sessionStorage, wiping whatever the source tab had just written.
+- **Storage event listener** — new `useEffect` subscribes to `window.storage` events so a tab that was already mounted when a sibling persisted a selection adopts the missing fields. Only fills empty fields (never yanks values the user is actively editing). The `storage` event fires only in OTHER documents (never the writer), which is exactly the cross-iframe channel needed.
+
+The auto-pair logic from v0.88 (and the merged picker from v0.52) is unchanged — it now works as originally intended because the cross-iframe persistence finally delivers `datasetId` / `reportId` to the destination tab.
+
+### v0.100 — Cross-iframe sync hotfix: stop wiping ids on destination tab mount (May 9 2026)
+
+Follow-up to v0.95 which the Tester proved still failed (test ID `20260508-2330-pbifixer-explorer-pair-sync-v2`). Root cause was diagnosed correctly by the Tester: the destination sub-tab mounted with both ids hydrated from `localStorage`, but then the existing `useEffect(() => { setDatasetId(""); setReportId(""); ... }, [workspaceId])` fired on initial mount (React runs every effect on mount, even when the dep value is unchanged) and cleared both. The persist effect then wrote the now-empty state to `localStorage`, wiping the source tab's value.
+
+Two changes to `components/PbiFixerPage.tsx`:
+
+- **First-run guard on workspace-change clear**: a `useRef<string>(workspaceId)` (`lastWorkspaceIdRef`) tracks the previous workspaceId. The clear effect now early-returns when the ref already matches the current workspaceId — i.e. on initial mount and on no-op re-renders. The clear only fires when the user actually picks a different workspace, which is its real purpose.
+- **Merge-not-overwrite persistence**: the persist effect now reads the current `localStorage` value before writing and merges field-by-field, never overwriting an existing non-empty value with an empty one. This is defense-in-depth for any other future code path that might transiently empty a field.
+
+The auto-pair logic (v0.88), localStorage mirroring + storage event listener (v0.95) are unchanged. With the workspace-change effect no longer wiping on mount, the v0.95 cross-iframe channel now actually delivers the ids to the destination tab.
+
+### v0.97 — Re-apply v0.93 partition Textarea max-height fix (lost in merge) (May 8 2026)
+
+Same fix as v0.93. The `maxHeight: "none"` overrides on the partition-branch Textarea root + inner textarea slot were dropped during a parallel-chat merge (file ended up at v0.96 without them, before the Playwright Tester verification of v0.93 even completed). Re-applied verbatim. Same expected outcome: inner `<textarea>` `getComputedStyle.maxHeight` should now be `none`, allowing the editable region to fill the Properties panel.
+
+### v0.93 — Partition Expression editor: defeat Fluent UI textarea max-height cap (May 8 2026)
+
+Follow-up to v0.87. The v0.87 fix expanded the Textarea wrapper SPAN to fill the Properties panel, but the inner editable `<textarea>` element was still capped at Fluent UI's default `max-height: 200px`. Visual result: the wrapper grew but the actual edit area stayed at 200px, leaving 168-254px of empty whitespace inside the wrapper (worse on larger viewports). Fix: also set `maxHeight: "none"` on the Textarea root style AND on the inner `textarea` slot style, so the inner element can grow to `height: 100%` of its now-tall parent. Verified by Playwright Tester (failure ID `20260507-1846-pbifixer-partition-expression-fills-box`).
+
+### v0.92 — Tighter top spacing, white tree panel (May 7 2026)
+
+Two follow-up tweaks to the Model / Report explorer layout:
+
+- **Top spacing**: the chrome strip above the page (which holds the green Authenticated pill + Refresh Token button) was 48 px tall and the page content added another 24 px of top padding, leaving a ~120 px empty band above the blue "POWER BI FIXER" eyebrow. Chrome is now 36 px and the explorer page now renders with 4 px of top padding (was 20 px) and the content slot trims its top padding to 8 px (was 24 px). Net result: the eyebrow sits ~70 px below the editor tab bar instead of ~120 px.
+- **Tree panel background**: the left-hand item tree (`treeList` in both ModelExplorer and ReportExplorer) used `SECTION_BG` (`#fafafa`, soft grey) which now reads as a darker blob inside the warm `#faf9f8` page surface. Switched to pure `#ffffff` so the tree panel matches the white Preview / Properties cards on its right and has clear elevation against the page background.
+
+### v0.91 — Internal version bump only
+
+### v0.90 — Internal version bump only
+
+### v0.89 — De-duplicated header, inline picker on Model & Report (May 7 2026)
+
+Connection-bar / chrome polish in `components/PbiFixerPage.tsx`, `ModelExplorer.tsx` and `ReportExplorer.tsx`. Three small layout fixes that together remove visual duplication and bring the page in line with the AgentHub Sessions surface:
+
+- **Background**: Model Explorer and Report Explorer no longer paint their own cool-grey `#f5f6fa` surface — they now use `#faf9f8`, the same warm off-white as `.agenthub-main` (the New Session / Sessions surface). The `PbiFixerPage` content slot was switched to the same colour so the chrome and the page read as one continuous surface.
+- **No more duplicated "Power BI Fixer" title**: the dark page-level title ("Power BI Fixer" + version pill) in the chrome bar is gone. The blue "POWER BI FIXER" eyebrow inside the Model / Report hero is now the single label, and the version badge (`v0.89`) sits next to it.
+- **Inline connection picker on Model & Report**: the Workspace + Semantic Model / Report pickers now render INSIDE the Model Explorer and Report Explorer pages, between the description text and the Load Model / Load Report toolbar. The pickers are extracted into a `pickerFields` JSX node in `PbiFixerPage` and passed to the page via a new `connectionSlot` prop, so the connection state stays owned by `PbiFixerPage` and survives sub-tab switches. Other PBI Fixer sub-pages (Fixer, Model BPA, Report BPA, Sempy Runner, …) keep the picker in the chrome bar.
+
+No state, API or routing changes — purely visual restructure.
+
+### v0.88 — Connection bar auto-pairs Semantic Model ↔ Report (May 7 2026)
+
+Switching between **Model** and **Report** explorers no longer wipes the user's selection.A semantic model and its report typically share the same name in the same folder (the existing merged-picker `pairItems` map already encodes this). The standalone Semantic Model and Report pickers now use that map to auto-fill the counterpart:
+
+- Picking a semantic model in the **Semantic Model** combobox now also sets `reportId`/`reportInput` to the matching report (if one exists in the workspace).
+- Picking a report in the **Report** combobox now also sets `datasetId`/`datasetInput` to the matching semantic model (if one exists).
+- A new effect runs after items load: if persisted state has only one side (e.g. `datasetId` from sessionStorage but no `reportId`), it fills in the matching counterpart so a fresh tab on the Report sub-page inherits the previously-selected logical item without re-picking.
+
+No new state, no API changes — purely uses the existing `pairItems` derivation. If no matching counterpart exists, behavior is unchanged (single side stays selected).
+
+### v0.87 — Partition Expression editor fills the Properties panel (May 7 2026)
+
+Tiny but visible UX fix in `components/ModelExplorer.tsx`.When a partition is selected in the Model Explorer tree, the right-hand Properties panel only used the top portion of its container — the `Expression (M / DAX)` Textarea was capped at `minHeight: 160px` (resize: vertical) and the rest of the panel was empty white space below it (visible in the v0.86 screenshot).
+
+Changes:
+- `propertiesPanel` style is now `display: flex; flex-direction: column; min-height: 0` (still scrolls vertically as fallback) so child blocks can flex-grow into the available height instead of stacking at their natural size.
+- Partition case in `propertiesContent` no longer wraps the Expression in `PropEditRow` (which is row-flex with `align-items: center`, capping the textarea). It now renders a column-flex block with `flex: 1; min-height: 0` and a Textarea whose root has `flex: 1; display: flex` and whose inner `textarea` slot has `height: 100%` — so the editor expands to fill the entire remaining vertical space of the Properties panel. Resize handle removed (no longer needed when the editor auto-fills).
+
+No backend / API changes. No PROD ship-list movement.
+
+---
+
+
+
+Brings the client-side Report BPA in `services/reportBpaApi.ts` into full parity with the official `sempy_labs.report._report_bpa_rules.report_bpa_rules()` rule set (see `c:\Users\alkorn\repos\PBI-Fixer\semantic-link-labs\src\sempy_labs\report\_report_bpa_rules.py`). Previous engine had 10 mostly home-grown rules and missed all but one of the official rules. New engine keeps every existing custom rule (Pie/Donut, EmptyPage, OffCanvas, Hidden, Overlap, Title, Size, etc.) and **adds 8 new rules** mirroring sempy:
+
+- **Performance · Visual** — `Report.VisualTooManyObjects` (>5 query projections per visual) — sempy "Reduce the number of objects within visuals".
+- **Performance · Visual** — `Report.ShowItemsWithNoData` — projection has `showAll: true`. Wires the existing `FixDisableShowItemsNoData` fixer.
+- **Performance · Page** — `Report.PageTallScrolling` — page height >720px. Reuses `FixPageSize`.
+- **Performance · Page** — `Report.TooManyVisuals` reworded + counts only **visible** visuals (matches sempy "Visible Visual Count").
+- **Performance · Filter** — `Report.FilterOnMeasure` — page-level and visual-level filter whose `field` is a `Measure`/`Aggregation`.
+- **Performance · Filter** — `Report.TopNFilter` — filters with `type: "TopN"` / `"VisualTopN"`.
+- **Performance · Custom Visual** — `Report.UnusedCustomVisual` (declared but no visual uses the `visualType`) → wires the existing `FixRemoveUnusedCustomVisuals` fixer; plus `Report.AnyCustomVisual` (Info, lists every custom visual).
+- **Maintenance · Report Level Measure** — `Report.ReportLevelMeasure` — every measure in `reportExtensions.json`. Wires the existing `FixMigrateReportLevelMeasures` fixer.
+
+Skipped: `Report.InvalidSemanticModelObject` (Error Prevention) — needs a live cross-check against the connected semantic model and will land with the backend bridge.
+
+Supporting changes:
+- `types/report.ts`: new `CustomVisualInfo` + `ReportLevelMeasureInfo` types; `ReportData` gains `customVisuals?` and `reportLevelMeasures?`.
+- `services/fabricApi.ts` `parseReportDefinition`: now also parses `definition/report.json` (`publicCustomVisuals` + `resourcePackages` of type `CustomVisual`) and `definition/reportExtensions.json` (`entities[].measures[]`). Custom visuals are flagged `usedInReport` by intersecting against the set of `visual.visualType` values found while walking visual.json files.
+- `services/reportBpaApi.ts`: widened `BpaObjectType` to include `Custom Visual` / `Report/Page/Visual Filter` / `Report Level Measure`; added narrow PBIR helpers (`getFilters`, `isMeasureField`, `isTopNFilter`, `describeFilterField`, `countVisualObjects`, `visualHasShowItemsWithNoData`, `visualFilters`).
+
+Net effect: scanning a report now produces the same Performance/Maintenance findings the sempy notebook path produces, so the eventual swap to a backend `run_report_bpa` bridge stays zero-touch on the page UI.
+
+Also re-finishes WS-U: `Frontend/src/components/PbiFixer/services/sllApi.ts`, `Developer Hub/SllSidecar/app.py` and `Developer Hub/SllSidecar/external/` had reappeared as untracked files (regression from a botched merge). Deleted again — `modelBpaApi.ts` no longer imports `sllApi`, and `docker-compose.yaml` has not referenced the sidecar since v0.82, so nothing else references them.
+
+### v0.82 — WS-U done: SLL Python sidecar deleted (May 2026)
+
+The standalone `sll-sidecar` Python container is gone for good. Memory Analyzer keeps using its DAX `INFO.VIEW.*` path via `memoryApi.ts`; Model BPA keeps using the TS rule engine in `modelBpaApi.ts` — both already worked without the sidecar. The "compare with semantic-link-labs" inline panels on `MemoryPage.tsx` (HTML capture of `vertipaq_analyzer()`) and `ModelBpaPage.tsx` (raw `run_model_bpa` rows) were the last consumers and were removed. With no callers left, this bump deletes:
+
+- `Developer Hub/SllSidecar/` (whole dir: `app.py`, `Dockerfile`, `requirements.txt`)
+- `sll-sidecar` service + `SLL_SIDECAR_URL` env line in `docker-compose.yaml`
+- SLL proxy block in `Backend/src/api/agenthub_controller.py` (`_SllRequest`, `_SllVertipaqRequest`, `_sll_base_url`, `_sll_post`, `POST /api/pbi-fixer/sll/model-bpa`, `POST /api/pbi-fixer/sll/vertipaq`)
+- `Frontend/src/components/PbiFixer/services/sllApi.ts`
+- "SLL sidecar" mention in `docs/index.html` Local Dev card
+
+`docker compose --profile prod up` now starts only `backend` + `frontend` + `dev-gateway`; no more QEMU x86_64 emulation requirement on aarch64 dev hosts. Closes WS-U U1/U2/U3/U4 and supersedes WS-T T4/T5/T6 (which all depended on the sidecar staying alive).
+
+### v0.81 — WS-U start: SLL Sempy Runner inline path removed (May 2026)
+First slice of WS-U. The Sempy Runner page no longer offers "Run inline (SLL sidecar)"; every function goes through the notebook path (Fabric Spark already ships `sempy` + `sempy-labs` preinstalled). Removed from `SempyRunnerPage.tsx`: `sllApi` imports, all `sll*` state + `onRunSll` handler, the inline-run button, the dual helper-text variant, the SLL error MessageBar, the BPA results table, and the Vertipaq HTML pane (-126 / +6 lines).
+
+
 Second parity batch on top of v0.59. **DAX formatting**: new `formatDax(dax)` in `fabricApi.ts` POSTs to `https://www.daxformatter.com/api/daxformatter/DaxFormat` (form-urlencoded). "Format DAX" button in the Expression header runs it on the selected measure's pending expression. CORS / network failure path falls back to copying the expression to the clipboard and opening daxformatter.com in a new tab so the user can paste manually. **Editable column / table / relationship properties**: new `ColumnEdit` / `TableEdit` / `RelationshipEdit` types + new patchers (`patchColumnInTmdl`, `patchTableInTmdl`, `patchRelationshipInTmdl`) factored on top of a generic `patchTmdlBlockProps` helper (header regex + indent unit detection + two-pass replace+insert; mirrors the measure version minus the expression-rewrite pass). Relationships are matched in TMDL by `fromColumn:`/`toColumn:` body lines (the GUID header isn't surfaced in `ModelData`); the patcher tries both `definition/relationships.tmdl` and `definition/model.tmdl` and mutates whichever part actually contains the matching block. New `pendingColumnEdits` / `pendingTableEdits` / `pendingRelEdits` state + `setColumnEdit` / `setTableEdit` / `setRelEdit` helpers + a unified `handleSaveEdits` that runs all four `update*Properties` calls in parallel and post-patches local `ModelData` so the UI reflects saved values immediately. Properties panel switched to `PropEditRow` for editable fields (column: summarizeBy / displayFolder / dataCategory / isHidden; table: description / isHidden; relationship: isActive / crossFilteringBehavior). Also: `parseTmdlDefinition` now captures table-level `description:` / `isHidden:` lines (previously dropped on the floor) so initial values populate correctly. Save button / pending counter now sums across all four object kinds (`totalPendingEdits`).
 
 ### v0.59 — Explorer parity batch 1: hierarchies, partitions, preview, perspective filter, context menu, JSON preview (May 5 2026)
@@ -198,3 +409,22 @@ On pages that target either scope (Fixer, Sempy Runner, Script Runner) the conne
 ## WS-Q — Editable visual / page properties (v0.42)
 - Editable type / position / size + preview overlap fix.
 - Files: `ReportExplorer.tsx`, `services/fixersApi.ts`, backend `agenthub_controller.py` `/pbi-fixer/visual/update`.
+
+## WS-R — Multi-Report Mode foundation (v0.94)
+- Shared header gains a Multi checkbox and an Apply button. OFF (default) = single-select with auto-load (WS-O behaviour preserved). ON = multi-select dataset / report Comboboxes; nothing loads until Apply commits.
+- `PageProps` extended with optional `datasetIds`, `datasetNames`, `reportIds`, `reportNames`, `multiMode`, `commitToken`. Singular `datasetId` / `reportId` always reflect the first committed entry, so existing pages keep working unchanged.
+- `PbiFixerPage.tsx` adds pending vs. committed selection arrays, a monotonic `commitToken` (bumped on Apply in multi mode and on every change in single mode), persists everything to `sessionStorage[pbiFixer.connection.v1]` plus `sessionStorage[pbiFixer.multiMode.v1]`, and includes the token in `remountKey` so non-migrated pages reload on Apply.
+- Auto-pair (model ↔ report counterpart fill on selection) is suppressed in Multi mode — explicit selections must not be magically rewritten.
+- Files: `utils/version.ts`, `types/shared.ts`, `components/PbiFixerPage.tsx`.
+
+## WS-R cont. — SM Explorer + Report Explorer Multi mode (v0.95–v0.98)
+- `PbiFixerPage.renderPage()` now branches on `multiMode` for the `model` and `report` sub-tabs. With Multi ON and ≥1 committed selections it renders the shared picker once, then maps each committed entry to a `StackedSection` containing its own independent `<ModelExplorer>` / `<ReportExplorer>` instance. First section is expanded by default, the rest collapsed. Loads, errors, and edits stay isolated per section.
+- With Multi ON but no commit yet, the page shows the picker plus a hint to click Apply.
+- Each section's React `key` includes `commitToken` so a fresh Apply forces a clean remount of the explorers (avoiding stale model/report state from the previous selection).
+- Single mode is untouched — the original single-instance render path remains the default.
+- Files: `components/PbiFixerPage.tsx`.
+
+## WS-R polish — Multi checkbox placement + pair-picker scope (v0.99)
+- `Multi` checkbox moved out of the header (token area) into the connection bar, sitting next to the Semantic Model / Report dropdowns where it belongs visually. The header now only carries auth status + Refresh Token again.
+- Decision (open question from v0.94): the merged Semantic-Model/Report pair-picker used by `FixerPage` and `SempyRunnerPage` stays single-select even when the global Multi toggle is on. Those pages don't consume `multiMode` / `datasetIds` / `reportIds` — they continue to receive the singular `datasetId` / `reportId` (which always points at the first committed entry). Rationale: the pair-picker presents a merged 'paired item' UX (one model+report together) that doesn't translate cleanly to two parallel multi-selections. If multi-pair becomes a need later, it should be a dedicated UX (e.g., a multi-select pair list) rather than reusing the dataset/report arrays.
+- Files: `components/PbiFixerPage.tsx`, `utils/version.ts`.

@@ -1,0 +1,27 @@
+# Source: https://fabsnippets.com/snippet/12  Author: fabsnippets community
+# UTC -> CET/CEST (DST-aware) Last Refresh table.
+table 'Last Refresh'
+	lineageTag: 44444444-4444-4444-4444-444444444401
+
+	column 'Last Refresh'
+		dataType: dateTime
+		formatString: General Date
+		lineageTag: 44444444-4444-4444-4444-444444444402
+		summarizeBy: none
+		sourceColumn: Last Refresh
+
+		annotation SummarizationSetBy = Automatic
+
+	measure 'Last Refresh Measure' = "Last Refresh (CET): " & FORMAT(MAX('Last Refresh'[Last Refresh]), "General Date")
+		lineageTag: 44444444-4444-4444-4444-444444444403
+
+	partition 'Last Refresh' = m
+		mode: import
+		source = ```
+				let
+				    UtcNow = DateTimeZone.UtcNow(),
+				    Cet = #"UTC to CEST/CET"(UtcNow),
+				    Source = #table({"Last Refresh"}, {{DateTime.From(Cet)}})
+				in
+				    Source
+				```

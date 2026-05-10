@@ -17,6 +17,7 @@ import {
   ArrowExpand20Regular,
   ArrowCollapseAll20Regular,
   Wrench20Regular,
+  ChartMultiple20Regular,
 } from "@fluentui/react-icons";
 import {
   ReportData,
@@ -31,8 +32,8 @@ import {
   BORDER_COLOR,
   GRAY_COLOR,
   ICON_ACCENT,
-  SECTION_BG,
 } from "../utils";
+// Hero design ported from AgentHub Sessions tab.
 import {
   listReports,
   loadReportDefinition,
@@ -42,6 +43,8 @@ import {
 } from "../services";
 import { updateVisualProperties } from "../services/fixersApi";
 import { FIXERS, type Fixer, type FixerContext, type FixerResult } from "../fixers";
+import { runReportBpa, type BpaFinding } from "../services/reportBpaApi";
+import { ReportScanResults } from "./ReportScanResults";
 
 // PBIR ``visualType`` catalogue (subset; covers the most common edits
 // like Pie → Clustered Bar). Values are the internal strings the engine
@@ -97,7 +100,76 @@ const useStyles = makeStyles({
     display: "flex",
     flexDirection: "column",
     height: "100%",
+    ...shorthands.gap("12px"),
+    backgroundColor: "#faf9f8",
+    ...shorthands.padding("4px", "24px", "20px", "24px"),
+    ...shorthands.margin("-8px", "-24px", "-24px", "-24px"),
+    overflow: "hidden",
+  },
+  hero: {
+    display: "flex",
+    flexDirection: "column",
+    ...shorthands.gap("4px"),
+    marginBottom: "4px",
+  },
+  heroEyebrowRow: {
+    display: "flex",
+    alignItems: "center",
     ...shorthands.gap("8px"),
+  },
+  heroEyebrow: {
+    fontSize: "12px",
+    fontWeight: 600,
+    letterSpacing: "0.08em",
+    textTransform: "uppercase",
+    color: "#0078d4",
+  },
+  heroVersion: {
+    fontSize: "12px",
+    color: tokens.colorNeutralForeground2,
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+    ...shorthands.padding("2px", "6px"),
+    ...shorthands.border("1px", "solid", "rgba(192, 199, 212, 0.4)"),
+    ...shorthands.borderRadius("4px"),
+    backgroundColor: tokens.colorNeutralBackground3,
+  },
+  inlineConnection: {
+    display: "flex",
+    alignItems: "flex-end",
+    ...shorthands.gap("12px"),
+    flexWrap: "wrap",
+    ...shorthands.margin("4px", "0", "8px", "0"),
+  },
+  heroTitle: {
+    fontSize: "28px",
+    fontWeight: 700,
+    lineHeight: 1.15,
+    margin: 0,
+    backgroundImage: "linear-gradient(95deg, #1a1c1c 0%, #004883 72%, #0078d4 100%)",
+    WebkitBackgroundClip: "text",
+    backgroundClip: "text",
+    color: "transparent",
+  },
+  heroSubtitle: {
+    fontSize: "14px",
+    color: "#5a5e62",
+    margin: 0,
+    maxWidth: "720px",
+  },
+  loadCta: {
+    backgroundImage: "linear-gradient(135deg, #005faa 0%, #0078d4 100%)",
+    backgroundColor: "#0078d4",
+    color: "#ffffff",
+    border: "none",
+    "&:hover": {
+      backgroundImage: "linear-gradient(135deg, #004883 0%, #0066b8 100%)",
+      backgroundColor: "#0066b8",
+      color: "#ffffff",
+    },
+    "&:active": {
+      backgroundImage: "linear-gradient(135deg, #003a6b 0%, #005faa 100%)",
+      color: "#ffffff",
+    },
   },
   toolbar: {
     display: "flex",
@@ -126,7 +198,7 @@ const useStyles = makeStyles({
     overflowX: "hidden",
     ...shorthands.border("1px", "solid", BORDER_COLOR),
     ...shorthands.borderRadius("8px"),
-    backgroundColor: SECTION_BG,
+    backgroundColor: "#ffffff",
     fontSize: "12px",
   },
   treeItem: {
@@ -154,7 +226,8 @@ const useStyles = makeStyles({
     ...shorthands.border("1px", "solid", BORDER_COLOR),
     ...shorthands.borderRadius("8px"),
     ...shorthands.padding("8px"),
-    backgroundColor: SECTION_BG,
+    backgroundColor: "#ffffff",
+    boxShadow: "0 1px 2px rgba(0, 0, 0, 0.04)",
     flex: 1,
     minHeight: 0,
     display: "flex",
@@ -189,7 +262,8 @@ const useStyles = makeStyles({
     ...shorthands.border("1px", "solid", BORDER_COLOR),
     ...shorthands.borderRadius("8px"),
     ...shorthands.padding("8px"),
-    backgroundColor: SECTION_BG,
+    backgroundColor: "#ffffff",
+    boxShadow: "0 1px 2px rgba(0, 0, 0, 0.04)",
     flex: "0 0 auto",
     minHeight: "200px",
     maxHeight: "360px",
@@ -447,6 +521,15 @@ export interface ReportExplorerProps {
   /** Optional resolved Fabric report id. Skips name-based lookup. */
   reportId?: string;
   onNavigateToModel?: (key: string) => void;
+  /** Inline connection picker (Workspace + Report) injected by
+   *  PbiFixerPage so it sits between the description and the Load Report
+   *  toolbar instead of in the page-level chrome. */
+  connectionSlot?: React.ReactNode;
+  /** Version badge shown next to the eyebrow ("POWER BI FIXER"). */
+  version?: string;
+  /** Imperative nav request — used by the BPA "Fix it" button to jump
+   *  to the Fixer page. Wired by PbiFixerPage. */
+  onNavigate?: (key: string) => void;
 }
 
 export const ReportExplorer: React.FC<ReportExplorerProps> = ({
@@ -455,6 +538,9 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
   reportName,
   reportId,
   onNavigateToModel,
+  connectionSlot,
+  version,
+  onNavigate,
 }) => {
   const styles = useStyles();
 
@@ -480,13 +566,19 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
   const [fixerScanResults, setFixerScanResults] = useState<Record<string, FixerResult>>({});
   const [fixerScanning, setFixerScanning] = useState(false);
   const [fixerScanRanOnce, setFixerScanRanOnce] = useState(false);
+  // v0.102 — unified Scan Report results. handleScanReport runs report
+  // fixers (scan_only) followed by Best Practice Analyzer; results are
+  // rendered by <ReportScanResults> below mainLayout.
+  const [reportBpaFindings, setReportBpaFindings] = useState<BpaFinding[] | null>(null);
+  const [scanStep, setScanStep] = useState<"" | "fixers" | "bpa">("");
+  const resultsRef = useRef<HTMLDivElement | null>(null);
   // v0.61–0.65 attempted drag-and-drop page reorder; removed in v0.66 because
   // the Fabric workload-iframe host intercepts/breaks both HTML5 drag and
   // pointer-event-based drag. Backend endpoint kept; UI parked in PLAN.md.
 
   // Build tree
   const treeResult = useMemo<TreeBuildResult>(() => {
-    if (!reportData) return { options: [], keyMap: {} };
+    if (!reportData) return { options: [], keyMap: {}, iconMap: {} };
     return buildReportTree(reportData, expanded, scanResults);
   }, [reportData, expanded, scanResults]);
 
@@ -660,14 +752,18 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
     };
   }, [auth, reportData]);
 
-  const handleScanReportFixers = useCallback(async () => {
+  const handleScanReport = useCallback(async () => {
     const ctx = buildReportFixerCtx();
     if (!ctx) {
       setStatus({ msg: "Load a report first", color: "#ff3b30" });
       return;
     }
     setFixerScanning(true);
+
+    // Phase 1 — backend report fixers (scan-only).
+    setScanStep("fixers");
     setStatus({ msg: `Scanning ${reportFixers.length} report fixer(s)\u2026`, color: GRAY_COLOR });
+    let withFindings = 0;
     try {
       const entries = await Promise.all(
         reportFixers.map(async (fx) => {
@@ -675,7 +771,8 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
             const res = await fx.scan(ctx);
             return [fx.id, res] as const;
           } catch (err) {
-            return [fx.id, { findings: [], applied: false, log: [`scan error: ${err instanceof Error ? err.message : String(err)}`] }] as const;
+            const fail: FixerResult = { findings: [], applied: false, log: [`scan error: ${err instanceof Error ? err.message : String(err)}`] };
+            return [fx.id, fail] as const;
           }
         })
       );
@@ -683,17 +780,55 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
       for (const [id, res] of entries) next[id] = res;
       setFixerScanResults(next);
       setFixerScanRanOnce(true);
-      const withFindings = entries.filter(([, r]) => r.findings.length > 0).length;
+      withFindings = entries.filter(([, r]) => r.findings.length > 0).length;
+    } catch (err) {
       setStatus({
-        msg: withFindings === 0
-          ? "Scan complete \u2014 no report issues found"
-          : `Scan complete \u2014 ${withFindings} fixer(s) with issues`,
-        color: withFindings === 0 ? "#34c759" : "#ff9500",
+        msg: `Fixer scan failed: ${err instanceof Error ? err.message : String(err)}`,
+        color: "#ff3b30",
       });
-    } finally {
       setFixerScanning(false);
+      setScanStep("");
+      return;
     }
-  }, [buildReportFixerCtx, reportFixers]);
+
+    // Phase 2 — Report BPA (synchronous, runs on already-loaded reportData).
+    setScanStep("bpa");
+    setStatus({ msg: "Running Best Practice Analyzer\u2026", color: GRAY_COLOR });
+    let bpaCount = 0;
+    try {
+      if (reportData) {
+        const findings = runReportBpa(reportData);
+        setReportBpaFindings(findings);
+        bpaCount = findings.length;
+      } else {
+        setReportBpaFindings([]);
+      }
+    } catch (err) {
+      setReportBpaFindings([]);
+      setStatus({
+        msg: `BPA failed: ${err instanceof Error ? err.message : String(err)}`,
+        color: "#ff9500",
+      });
+    }
+
+    setStatus({
+      msg: withFindings === 0 && bpaCount === 0
+        ? "Scan complete \u2014 no fixer or BPA issues"
+        : `Scan complete \u2014 ${withFindings} fixer issue(s), ${bpaCount} BPA finding(s)`,
+      color: (withFindings === 0 && bpaCount === 0) ? "#34c759" : "#ff9500",
+    });
+    setFixerScanning(false);
+    setScanStep("");
+  }, [buildReportFixerCtx, reportFixers, reportData]);
+
+  // Smooth-scroll to the new results panel as soon as a scan completes.
+  useEffect(() => {
+    if (fixerScanRanOnce && !fixerScanning && resultsRef.current) {
+      requestAnimationFrame(() => {
+        resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    }
+  }, [fixerScanRanOnce, fixerScanning]);
 
   const handleApplyReportFixer = useCallback(async (fx: Fixer) => {
     const ctx = buildReportFixerCtx();
@@ -783,6 +918,11 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
     }
   }, [auth, workspace, reportName, reportId]);
 
+  // v0.91 — Auto-load on selection (mirrors Memory Analyzer / Model BPA pattern).
+  // The Load Report button has been removed; selecting a workspace + report in
+  // the shared picker triggers handleLoad automatically.
+  useEffect(() => { void handleLoad(); }, [handleLoad]);
+
   const handleToggleNode = useCallback((key: string) => {
     const parts = key.split(":");
     const nodeType = parts[0];
@@ -839,17 +979,24 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
 
   return (
     <div className={styles.root}>
+      <div className={styles.hero}>
+        <div className={styles.heroEyebrowRow}>
+          <div className={styles.heroEyebrow}>Power BI Fixer</div>
+          {version && <span className={styles.heroVersion}>{version}</span>}
+        </div>
+        <h1 className={styles.heroTitle}>Report Explorer</h1>
+        <p className={styles.heroSubtitle}>
+          Browse pages and visuals of the loaded report. Inspect properties,
+          edit visual settings, and run report fixes.
+        </p>
+      </div>
+      {connectionSlot && (
+        <div className={styles.inlineConnection}>{connectionSlot}</div>
+      )}
       <div className={styles.toolbar}>
         <Button
           appearance="primary"
-          onClick={handleLoad}
-          disabled={loading}
-          icon={loading ? <Spinner size="tiny" /> : undefined}
-        >
-          {loading ? "Loading Report" : "Load Report"}
-        </Button>
-        <Button
-          appearance="subtle"
+          className={styles.loadCta}
           icon={<ArrowExpand20Regular />}
           onClick={handleExpandAll}
           disabled={!reportData}
@@ -857,7 +1004,8 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
           Expand All
         </Button>
         <Button
-          appearance="subtle"
+          appearance="primary"
+          className={styles.loadCta}
           icon={<ArrowCollapseAll20Regular />}
           onClick={handleCollapseAll}
           disabled={!reportData}
@@ -865,13 +1013,25 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
           Collapse All
         </Button>
         <Button
-          appearance="subtle"
+          appearance="primary"
+          className={styles.loadCta}
           icon={fixerScanning ? <Spinner size="tiny" /> : <Wrench20Regular />}
-          onClick={handleScanReportFixers}
+          onClick={handleScanReport}
           disabled={!reportData || fixerScanning}
         >
-          {fixerScanning ? "Scanning" : "Scan report fixes"}
+          {fixerScanning
+            ? scanStep === "fixers"
+              ? "Scanning fixers\u2026"
+              : scanStep === "bpa"
+                ? "Running BPA\u2026"
+                : "Scanning\u2026"
+            : "Scan Report"}
         </Button>
+        {loading && (
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: GRAY_COLOR, fontSize: 12 }}>
+            <Spinner size="tiny" /> Loading report...
+          </span>
+        )}
         {/* v0.69 — toolbar status pill is reserved for ERRORS only.
             Loading state is conveyed by the primary button's spinner + label;
             success/info messages would just clutter the toolbar. */}
@@ -896,20 +1056,36 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
           <div className={styles.treeList}>
             {filteredOptions.map((option) => {
               const key = treeResult.keyMap[option];
+              const iconKey = treeResult.iconMap[option];
               const isSelected = key === selectedKey;
+              const indentMatch = option.match(/^[\u00A0]*/);
+              const indent = indentMatch ? indentMatch[0] : "";
+              const labelText = option.slice(indent.length);
               return (
                 <div
                   key={option}
                   className={`${styles.treeItem} ${isSelected ? styles.treeItemSelected : ""}`}
                   onClick={() => handleSelect(option)}
+                  style={{ display: "flex", alignItems: "center", gap: "4px" }}
                 >
-                  {option}
+                  {iconKey === "page" ? (
+                    <>
+                      <span style={{ whiteSpace: "pre" }}>{indent}</span>
+                      <ChartMultiple20Regular
+                        primaryFill={ICON_ACCENT}
+                        style={{ flexShrink: 0 }}
+                      />
+                      <span>{labelText}</span>
+                    </>
+                  ) : (
+                    option
+                  )}
                 </div>
               );
             })}
             {filteredOptions.length === 0 && !loading && (
               <div style={{ padding: "20px", color: GRAY_COLOR, textAlign: "center", fontStyle: "italic" }}>
-                {reportData ? "No matching items" : "Click Load Report to explore"}
+                {reportData ? "No matching items" : "Pick a workspace and report to load"}
               </div>
             )}
           </div>
@@ -1135,58 +1311,22 @@ export const ReportExplorer: React.FC<ReportExplorerProps> = ({
                 </Button>
               </div>
             )}
-            {/* v0.73 — report-wide fixer scan results, rendered below the
-                properties panel content. Only fixers with findings appear. */}
-            {fixerScanRanOnce && (
-              <div style={{ marginTop: "16px", paddingTop: "8px", borderTop: `1px solid ${BORDER_COLOR}` }}>
-                <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>
-                  Quick fixes — {reportFixersWithFindings.length} issue type(s)
-                </div>
-                {reportFixersWithFindings.length === 0 ? (
-                  <div style={{ fontSize: 12, color: GRAY_COLOR, fontStyle: "italic" }}>
-                    No report issues found.
-                  </div>
-                ) : (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                    {reportFixersWithFindings.map((fx) => {
-                      const r = fixerScanResults[fx.id];
-                      const count = r?.findings.length ?? 0;
-                      const busy = runningFixerId === fx.id;
-                      return (
-                        <div key={fx.id} style={{ display: "flex", flexDirection: "column", gap: 2, padding: "6px 8px", background: SECTION_BG, borderRadius: 4 }}>
-                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                            <span style={{ fontSize: 12, fontWeight: 600, flex: 1 }}>{fx.title}</span>
-                            <span style={{ fontSize: 11, color: GRAY_COLOR }}>{count} finding{count === 1 ? "" : "s"}</span>
-                            <Button
-                              appearance="primary"
-                              size="small"
-                              disabled={busy || runningFixerId !== null}
-                              icon={busy ? <Spinner size="tiny" /> : undefined}
-                              onClick={() => void handleApplyReportFixer(fx)}
-                            >
-                              Apply
-                            </Button>
-                          </div>
-                          {r && r.findings.length > 0 && (
-                            <div style={{ fontSize: 11, color: GRAY_COLOR, fontFamily: "monospace", maxHeight: 110, overflow: "auto" }}>
-                              {r.findings.slice(0, 5).map((f, i) => (
-                                <div key={i}>• {f.objectPath}{f.detail ? ` — ${f.detail}` : ""}</div>
-                              ))}
-                              {r.findings.length > 5 && (
-                                <div style={{ fontStyle: "italic" }}>… +{r.findings.length - 5} more</div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            )}
+            {/* v0.102 — Quick fixes panel relocated to the unified
+                <ReportScanResults> section below mainLayout. */}
           </div>
         </div>
       </div>
+
+      <ReportScanResults
+        ref={resultsRef}
+        scanRanOnce={fixerScanRanOnce}
+        fixersWithFindings={reportFixersWithFindings}
+        scanResults={fixerScanResults}
+        runningFixerId={runningFixerId}
+        onApplyFixer={(fx) => void handleApplyReportFixer(fx)}
+        bpaFindings={reportBpaFindings}
+        onNavigate={onNavigate}
+      />
     </div>
   );
 };

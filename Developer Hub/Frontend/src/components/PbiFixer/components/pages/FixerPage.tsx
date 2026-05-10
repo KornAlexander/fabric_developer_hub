@@ -41,6 +41,7 @@ import type { PageProps } from "../../types/shared";
 import type { ReportData } from "../../types/report";
 import type { ModelData } from "../../types";
 import { loadReportDefinition, loadModelData } from "../../services/fabricApi";
+import { applyIbcsMacro, type IbcsMacroResponse } from "../../services/fixersApi";
 import { FIXERS, findFixerForBpaRule, type FixerResult } from "../../fixers";
 
 const useStyles = makeStyles({
@@ -55,6 +56,15 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusMedium,
   },
   heroMsg: { flex: 1, display: "flex", flexDirection: "column", ...shorthands.gap("2px") },
+  ibcsHero: {
+    display: "flex",
+    alignItems: "center",
+    ...shorthands.gap("12px"),
+    ...shorthands.padding("12px", "16px"),
+    backgroundColor: tokens.colorBrandBackground2,
+    ...shorthands.border("1px", "solid", tokens.colorBrandStroke2),
+    borderRadius: tokens.borderRadiusMedium,
+  },
   main: { flex: 1, minHeight: 0, display: "grid", gridTemplateColumns: "1fr 1fr", ...shorthands.gap("12px") },
   panel: {
     display: "flex",
@@ -134,6 +144,8 @@ export const FixerPage: React.FC<PageProps> = ({ auth, workspaceId, datasetId, d
   const [diffReviewed, setDiffReviewed] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [run, setRun] = useState<RunState>(INITIAL_RUN);
+  const [ibcsRunning, setIbcsRunning] = useState(false);
+  const [ibcsScanOnly, setIbcsScanOnly] = useState(true);
   const loadedRef = useRef({ ws: "", rpt: "", ds: "" });
 
   // Load report + model lazily when ids change.
@@ -199,6 +211,80 @@ export const FixerPage: React.FC<PageProps> = ({ auth, workspaceId, datasetId, d
     model: model ?? undefined,
   }), [auth, workspaceId, datasetId, reportId, report, model]);
 
+  // WS-E-IBCS step #7 (v0.103) — one-click "Apply IBCS" macro.
+  // Runs Fix_BarChart → Fix_ColumnChart → Fix_IBCSVariance server-side
+  // through the new /api/pbi-fixer/ibcs/apply-all endpoint. V1 has no
+  // transactional rollback — first failure stops the chain, prior steps
+  // stay applied. Findings + per-step logs are merged into the run log.
+  const runIbcsMacro = useCallback(async () => {
+    if (!auth || !workspaceId || !reportId) {
+      setRun((prev) => ({
+        ...prev,
+        log: [...prev.log, "Apply IBCS — pick a workspace and a report first."],
+      }));
+      return;
+    }
+    const tag = ibcsScanOnly ? "Scan" : "Apply";
+    setIbcsRunning(true);
+    setRun((prev) => ({
+      ...prev,
+      status: ibcsScanOnly ? "scanning" : "applying",
+      log: [...prev.log, `— Apply IBCS (${tag}) started —`],
+    }));
+    try {
+      const resp: IbcsMacroResponse = await applyIbcsMacro(auth, {
+        workspaceId,
+        reportId,
+        scanOnly: ibcsScanOnly,
+      });
+      const log: string[] = [];
+      const merged: Record<string, FixerResult> = {};
+      for (const step of resp.steps) {
+        const findings = step.findings.map((f) => ({
+          objectPath: f.objectPath,
+          detail: f.detail ?? undefined,
+          before: f.before ?? undefined,
+          after: f.after ?? undefined,
+        }));
+        merged[step.fixerId] = {
+          findings,
+          applied: step.applied,
+          log: step.log,
+          diff: findings
+            .filter((f) => f.before || f.after)
+            .map((f) => `- ${f.objectPath}\n    - ${f.before ?? ""}\n    + ${f.after ?? ""}`)
+            .join("\n"),
+        };
+        const status = step.ok
+          ? `applied=${step.applied}`
+          : `FAILED${step.error ? ` (${step.error})` : ""}`;
+        log.push(`[${step.fixerId}] ${status} · ${findings.length} finding(s).`);
+        for (const line of step.log) log.push(`  ${line}`);
+      }
+      const overall = resp.ok ? "OK" : "FAILED (chain stopped)";
+      setRun((prev) => ({
+        results: { ...prev.results, ...merged },
+        log: [
+          ...prev.log,
+          ...log,
+          `— Apply IBCS ${overall} · total ${resp.totalFindings} finding(s) across ${resp.steps.length} step(s) —`,
+        ],
+        status: "done",
+      }));
+    } catch (e) {
+      setRun((prev) => ({
+        ...prev,
+        status: "error",
+        log: [
+          ...prev.log,
+          `Apply IBCS ERROR: ${e instanceof Error ? e.message : String(e)}`,
+        ],
+      }));
+    } finally {
+      setIbcsRunning(false);
+    }
+  }, [auth, workspaceId, reportId, ibcsScanOnly]);
+
   const runScan = useCallback(async () => {
     if (selectedFixers.length === 0) return;
     setRun((prev) => ({ results: {}, log: [...prev.log, `— Scan started (${selectedFixers.length} fixer(s)) —`], status: "scanning" }));
@@ -259,7 +345,14 @@ export const FixerPage: React.FC<PageProps> = ({ auth, workspaceId, datasetId, d
   }
 
   const reportFixers = FIXERS.filter((f) => f.scope === "report");
-  const smFixers = FIXERS.filter((f) => f.scope === "sm");
+  const smFixers = FIXERS.filter((f) => f.scope === "sm" && !f.templateGroup);
+  const templateFixers = FIXERS.filter((f) => f.scope === "sm" && !!f.templateGroup);
+  const templateGroupOrder: Array<{ key: string; label: string }> = [
+    { key: "calendar", label: "📅 Calendar" },
+    { key: "measures", label: "🎯 Measure organisation" },
+    { key: "lastRefresh", label: "🕒 Last refresh" },
+    { key: "documentation", label: "📚 Model documentation" },
+  ];
 
   return (
     <div className={styles.root}>
@@ -300,6 +393,35 @@ export const FixerPage: React.FC<PageProps> = ({ auth, workspaceId, datasetId, d
         )}
       </div>
 
+      {/* WS-E-IBCS step #7 (v0.103) — one-click "Apply IBCS" macro hero.
+          Runs Fix_BarChart → Fix_ColumnChart → Fix_IBCSVariance against
+          the picked report. V1: PBIR-only; sidecar full port pending. */}
+      <div className={styles.ibcsHero} data-testid="ibcs-macro-hero">
+        <Flash20Filled style={{ color: tokens.colorBrandForeground1 }} />
+        <div className={styles.heroMsg}>
+          <Title3>🚀 Apply IBCS</Title3>
+          <Text size={200}>
+            One-click macro: runs Fix_BarChart → Fix_ColumnChart → Fix_IBCSVariance
+            against the picked report. V1 stops on first failure (no rollback).
+            Pick a report above first.
+          </Text>
+        </div>
+        <Switch
+          label={ibcsScanOnly ? "Scan only" : "Apply changes"}
+          checked={!ibcsScanOnly}
+          onChange={(_, d) => setIbcsScanOnly(!d.checked)}
+        />
+        <Button
+          appearance="primary"
+          icon={<Flash20Filled />}
+          disabled={!reportId || ibcsRunning}
+          onClick={runIbcsMacro}
+          data-testid="ibcs-macro-run"
+        >
+          {ibcsRunning ? <Spinner size="tiny" /> : ibcsScanOnly ? "Scan IBCS" : "Apply IBCS"}
+        </Button>
+      </div>
+
       <div className={styles.main}>
         {/* LEFT: fixer list */}
         <div className={styles.panel}>
@@ -330,6 +452,32 @@ export const FixerPage: React.FC<PageProps> = ({ auth, workspaceId, datasetId, d
                 />
               ))}
             </div>
+            {templateFixers.length > 0 && (
+              <>
+                <Divider />
+                <div className={styles.group}>
+                  <div className={styles.groupLabel}>Templates ({templateFixers.length})</div>
+                  {templateGroupOrder.map(({ key, label }) => {
+                    const items = templateFixers.filter((f) => f.templateGroup === key);
+                    if (items.length === 0) return null;
+                    return (
+                      <div key={key} style={{ marginTop: 8 }}>
+                        <div style={{ fontSize: 12, opacity: 0.75, margin: "4px 0 2px 4px" }}>{label}</div>
+                        {items.map((fx) => (
+                          <FixerCheckbox
+                            key={fx.id}
+                            fx={fx}
+                            selected={!!selected[fx.id]}
+                            result={run.results[fx.id]}
+                            onToggle={(v) => setSelected((p) => ({ ...p, [fx.id]: v }))}
+                          />
+                        ))}
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
           </div>
         </div>
 

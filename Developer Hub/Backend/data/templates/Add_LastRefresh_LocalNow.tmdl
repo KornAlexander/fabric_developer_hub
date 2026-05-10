@@ -1,0 +1,25 @@
+# Source: https://fabsnippets.com/snippet/11  Author: fabsnippets community
+# Local-time Last Refresh table (variant of v0.50 Add_LastRefreshTable).
+table 'Last Refresh'
+	lineageTag: 22222222-2222-2222-2222-222222222221
+
+	column 'Last Refresh'
+		dataType: dateTime
+		formatString: General Date
+		lineageTag: 22222222-2222-2222-2222-222222222222
+		summarizeBy: none
+		sourceColumn: Last Refresh
+
+		annotation SummarizationSetBy = Automatic
+
+	measure 'Last Refresh Measure' = "Last Refresh: " & FORMAT(MAX('Last Refresh'[Last Refresh]), "General Date")
+		lineageTag: 22222222-2222-2222-2222-222222222223
+
+	partition 'Last Refresh' = m
+		mode: import
+		source = ```
+				let
+				    Source = #table({"Last Refresh"}, {{DateTime.LocalNow()}})
+				in
+				    Source
+				```

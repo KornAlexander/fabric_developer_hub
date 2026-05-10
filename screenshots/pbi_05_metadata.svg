@@ -1,0 +1,221 @@
+<svg viewBox="0 0 1200 700" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .bg { fill: #f5f5f5; }
+      .header { fill: #1f2937; }
+      .header-text { fill: white; font-size: 16px; font-weight: bold; }
+      .panel-bg { fill: white; stroke: #e5e7eb; stroke-width: 1; }
+      .section-title { fill: #1f2937; font-size: 14px; font-weight: 600; }
+      .table-header { fill: #f3f4f6; stroke: #e5e7eb; stroke-width: 1; }
+      .header-text-cell { font-size: 11px; font-weight: 600; fill: #1f2937; }
+      .table-row { fill: white; stroke: #e5e7eb; stroke-width: 1; }
+      .table-cell { font-size: 10px; fill: #374151; }
+      .export-btn { fill: #3b82f6; }
+      .btn-text { fill: white; font-size: 12px; font-weight: 600; }
+    </style>
+  </defs>
+  
+  <!-- Background -->
+  <rect class="bg" width="1200" height="700"/>
+  
+  <!-- Header -->
+  <rect class="header" width="1200" height="60"/>
+  <text class="header-text" x="20" y="38">Metadata Browser — Export &amp; Audit Trail</text>
+  
+  <!-- Toolbar -->
+  <rect class="panel-bg" x="20" y="80" width="1160" height="50" stroke="#e5e7eb" stroke-width="1"/>
+  
+  <!-- Search & Filter -->
+  <rect fill="#f3f4f6" x="30" y="92" width="200" height="25" rx="3" stroke="#e5e7eb" stroke-width="1"/>
+  <text style="font-size: 11px; fill: #6b7280;" x="40" y="111">🔍 Filter metadata...</text>
+  
+  <!-- Export Buttons -->
+  <g>
+    <rect class="export-btn" x="260" y="92" width="80" height="25" rx="3"/>
+    <text class="btn-text" x="275" y="111">📄 JSON</text>
+    
+    <rect class="export-btn" x="350" y="92" width="80" height="25" rx="3"/>
+    <text class="btn-text" x="365" y="111">📊 CSV</text>
+    
+    <rect class="export-btn" x="440" y="92" width="80" height="25" rx="3"/>
+    <text class="btn-text" x="455" y="111">📋 Excel</text>
+    
+    <rect class="export-btn" x="530" y="92" width="100" height="25" rx="3"/>
+    <text class="btn-text" x="540" y="111">🔄 Refresh</text>
+  </g>
+  
+  <!-- Stats -->
+  <g>
+    <text style="font-size: 11px; font-weight: 600; fill: #1f2937;" x="680" y="111">Tables: 8 • Columns: 124 • Measures: 23 • Roles: 3</text>
+  </g>
+  
+  <!-- Main Table -->
+  <g style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+    <!-- Table Header -->
+    <rect class="table-header" x="20" y="145" width="1160" height="25" rx="2"/>
+    <text class="header-text-cell" x="30" y="162">Table Name</text>
+    <text class="header-text-cell" x="180" y="162">Column Name</text>
+    <text class="header-text-cell" x="380" y="162">Data Type</text>
+    <text class="header-text-cell" x="520" y="162">Format</text>
+    <text class="header-text-cell" x="660" y="162">Hidden</text>
+    <text class="header-text-cell" x="750" y="162">Sort By</text>
+    <text class="header-text-cell" x="850" y="162">Description</text>
+    <text class="header-text-cell" x="1050" y="162">Created Date</text>
+    
+    <!-- Row 1 -->
+    <rect class="table-row" x="20" y="175" width="1160" height="22"/>
+    <text class="table-cell" x="30" y="190">Customers</text>
+    <text class="table-cell" x="180" y="190">CustomerID</text>
+    <text class="table-cell" x="380" y="190">Int64</text>
+    <text class="table-cell" x="520" y="190">—</text>
+    <text style="font-size: 10px; fill: #059669;" x="660" y="190">✓ (PK)</text>
+    <text class="table-cell" x="750" y="190">—</text>
+    <text class="table-cell" x="850" y="190">Unique customer identifier</text>
+    <text class="table-cell" x="1050" y="190">2026-01-15</text>
+    
+    <!-- Row 2 -->
+    <rect class="table-row" x="20" y="200" width="1160" height="22"/>
+    <text class="table-cell" x="30" y="215">Customers</text>
+    <text class="table-cell" x="180" y="215">CustomerName</text>
+    <text class="table-cell" x="380" y="215">String</text>
+    <text class="table-cell" x="520" y="215">—</text>
+    <text class="table-cell" x="660" y="215">No</text>
+    <text class="table-cell" x="750" y="215">CustomerID</text>
+    <text class="table-cell" x="850" y="215">Full customer name</text>
+    <text class="table-cell" x="1050" y="215">2026-01-15</text>
+    
+    <!-- Row 3 -->
+    <rect class="table-row" x="20" y="225" width="1160" height="22"/>
+    <text class="table-cell" x="30" y="240">Customers</text>
+    <text class="table-cell" x="180" y="240">Country</text>
+    <text class="table-cell" x="380" y="240">String</text>
+    <text class="table-cell" x="520" y="240">—</text>
+    <text class="table-cell" x="660" y="240">No</text>
+    <text class="table-cell" x="750" y="240">—</text>
+    <text class="table-cell" x="850" y="240">ISO-3166 country code</text>
+    <text class="table-cell" x="1050" y="240">2026-01-15</text>
+    
+    <!-- Row 4 -->
+    <rect class="table-row" x="20" y="250" width="1160" height="22"/>
+    <text class="table-cell" x="30" y="265">Sales</text>
+    <text class="table-cell" x="180" y="265">SalesID</text>
+    <text class="table-cell" x="380" y="265">Int64</text>
+    <text class="table-cell" x="520" y="265">—</text>
+    <text class="table-cell" x="660" y="265">No</text>
+    <text class="table-cell" x="750" y="265">—</text>
+    <text class="table-cell" x="850" y="265">Unique sales transaction ID</text>
+    <text class="table-cell" x="1050" y="265">2026-01-16</text>
+    
+    <!-- Row 5 -->
+    <rect class="table-row" x="20" y="275" width="1160" height="22"/>
+    <text class="table-cell" x="30" y="290">Sales</text>
+    <text class="table-cell" x="180" y="290">Amount</text>
+    <text class="table-cell" x="380" y="290">Decimal</text>
+    <text class="table-cell" x="520" y="290">$#,##0.00</text>
+    <text class="table-cell" x="660" y="290">No</text>
+    <text class="table-cell" x="750" y="290">—</text>
+    <text class="table-cell" x="850" y="290">Transaction amount in USD</text>
+    <text class="table-cell" x="1050" y="290">2026-01-16</text>
+    
+    <!-- Row 6 -->
+    <rect class="table-row" x="20" y="300" width="1160" height="22"/>
+    <text class="table-cell" x="30" y="315">Sales</text>
+    <text class="table-cell" x="180" y="315">OrderDate</text>
+    <text class="table-cell" x="380" y="315">DateTime</text>
+    <text class="table-cell" x="520" y="315">yyyy-MM-dd</text>
+    <text class="table-cell" x="660" y="315">No</text>
+    <text class="table-cell" x="750" y="315">—</text>
+    <text class="table-cell" x="850" y="315">Order placement date/time</text>
+    <text class="table-cell" x="1050" y="315">2026-01-16</text>
+    
+    <!-- Row 7 -->
+    <rect class="table-row" x="20" y="325" width="1160" height="22"/>
+    <text class="table-cell" x="30" y="340">Sales</text>
+    <text class="table-cell" x="180" y="340">Quantity</text>
+    <text class="table-cell" x="380" y="340">Int32</text>
+    <text class="table-cell" x="520" y="340">0</text>
+    <text class="table-cell" x="660" y="340">No</text>
+    <text class="table-cell" x="750" y="340">—</text>
+    <text class="table-cell" x="850" y="340">Item quantity ordered</text>
+    <text class="table-cell" x="1050" y="340">2026-01-16</text>
+    
+    <!-- Row 8 -->
+    <rect class="table-row" x="20" y="350" width="1160" height="22"/>
+    <text class="table-cell" x="30" y="365">Sales</text>
+    <text class="table-cell" x="180" y="365">TotalSales</text>
+    <text class="table-cell" x="380" y="365">Measure (DAX)</text>
+    <text class="table-cell" x="520" y="365">$#,##0.00</text>
+    <text class="table-cell" x="660" y="365">No</text>
+    <text class="table-cell" x="750" y="365">—</text>
+    <text class="table-cell" x="850" y="365">SUMX(Sales, [Amount])</text>
+    <text class="table-cell" x="1050" y="365">2026-02-01</text>
+    
+    <!-- Row 9 -->
+    <rect class="table-row" x="20" y="375" width="1160" height="22"/>
+    <text class="table-cell" x="30" y="390">Products</text>
+    <text class="table-cell" x="180" y="390">ProductID</text>
+    <text class="table-cell" x="380" y="390">Int32</text>
+    <text class="table-cell" x="520" y="390">—</text>
+    <text style="font-size: 10px; fill: #991b1b;" x="660" y="390">✓ Hidden</text>
+    <text class="table-cell" x="750" y="390">—</text>
+    <text class="table-cell" x="850" y="390">Product identifier (legacy)</text>
+    <text class="table-cell" x="1050" y="390">2025-06-20</text>
+  </g>
+  
+  <!-- Bottom: Summary Stats & Audit -->
+  <g>
+    <rect fill="#f3f4f6" x="20" y="410" width="1160" height="260" rx="3"/>
+    
+    <!-- Column Statistics -->
+    <text style="font-size: 12px; font-weight: 600; fill: #1f2937;" x="30" y="435">Column Statistics &amp; Data Profile</text>
+    
+    <rect class="table-header" x="25" y="445" width="1150" height="20"/>
+    <text class="header-text-cell" x="35" y="459">Column</text>
+    <text class="header-text-cell" x="200" y="459">Distinct Values</text>
+    <text class="header-text-cell" x="380" y="459">Null %</text>
+    <text class="header-text-cell" x="520" y="459">Min</text>
+    <text class="header-text-cell" x="660" y="459">Max</text>
+    <text class="header-text-cell" x="800" y="459">Avg Length</text>
+    <text class="header-text-cell" x="950" y="459">Last Updated</text>
+    
+    <!-- Data rows -->
+    <text class="table-cell" x="35" y="480">CustomerID</text>
+    <text class="table-cell" x="200" y="480">15,234</text>
+    <text class="table-cell" x="380" y="480">0.0%</text>
+    <text class="table-cell" x="520" y="480">1</text>
+    <text class="table-cell" x="660" y="480">999,999</text>
+    <text class="table-cell" x="800" y="480">—</text>
+    <text class="table-cell" x="950" y="480">2026-02-05</text>
+    
+    <text class="table-cell" x="35" y="505">CustomerName</text>
+    <text class="table-cell" x="200" y="505">14,987</text>
+    <text class="table-cell" x="380" y="505">0.2%</text>
+    <text class="table-cell" x="520" y="505">5 chars</text>
+    <text class="table-cell" x="660" y="505">127 chars</text>
+    <text class="table-cell" x="800" y="505">45.3 chars</text>
+    <text class="table-cell" x="950" y="505">2026-02-05</text>
+    
+    <text class="table-cell" x="35" y="530">Amount</text>
+    <text class="table-cell" x="200" y="530">18,456</text>
+    <text class="table-cell" x="380" y="530">1.1%</text>
+    <text class="table-cell" x="520" y="530">0.01</text>
+    <text class="table-cell" x="660" y="530">99,999.99</text>
+    <text class="table-cell" x="800" y="530">—</text>
+    <text class="table-cell" x="950" y="530">2026-02-05</text>
+    
+    <text class="table-cell" x="35" y="555">OrderDate</text>
+    <text class="table-cell" x="200" y="555">745</text>
+    <text class="table-cell" x="380" y="555">0.0%</text>
+    <text class="table-cell" x="520" y="555">2024-01-01</text>
+    <text class="table-cell" x="660" y="555">2026-02-05</text>
+    <text class="table-cell" x="800" y="555">—</text>
+    <text class="table-cell" x="950" y="555">2026-02-05</text>
+    
+    <!-- Audit Trail -->
+    <text style="font-size: 11px; font-weight: 600; fill: #1f2937;" x="30" y="600">Audit Trail — Last Changes</text>
+    
+    <text style="font-size: 10px; fill: #374151;" x="35" y="625">✓ 2026-02-05 14:32:15 | Alexander Korn | Added format string to Amount column (Format: $#,##0.00)</text>
+    <text style="font-size: 10px; fill: #374151;" x="35" y="645">✓ 2026-02-04 09:15:42 | DataOps Team | Updated description for TotalSales measure</text>
+    <text style="font-size: 10px; fill: #374151;" x="35" y="665">✓ 2026-02-01 16:28:09 | Alexander Korn | Created new TotalSales measure (DAX formula)</text>
+  </g>
+</svg>

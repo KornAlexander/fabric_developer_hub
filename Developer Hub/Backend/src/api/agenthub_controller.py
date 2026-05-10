@@ -1116,85 +1116,52 @@ async def _llm_translate_batch(
         return list(captions)
 
 
-# ─────────────────────────────────────────────────────────────────────
-#  PBI Fixer → SLL Sidecar (semantic-link-labs by Michael Kovalsky)
-#
-#  Thin pass-through to the standalone ``sll-sidecar`` container which
-#  hosts ``run_model_bpa`` and ``vertipaq_analyzer`` over a Service
-#  Principal-bound XMLA endpoint. The frontend never talks to the
-#  sidecar directly — these proxies forward the body, surface upstream
-#  errors verbatim, and apply the standard rate-limit / auth gate.
-# ─────────────────────────────────────────────────────────────────────
+# ── PBI Fixer Memory / Vertipaq Analyzer (XMLA-over-HTTPS, no sidecar) ──
 
+class VertipaqAnalyzerRequest(BaseModel):
+    """Run the native Vertipaq Analyzer for a semantic model.
 
-class _SllRequest(BaseModel):
-    workspace: str  # workspace name OR id (sempy_labs accepts both)
-    dataset: str    # dataset name OR id
-
-
-class _SllVertipaqRequest(_SllRequest):
-    read_stats_from_data: bool = False
-
-
-def _sll_base_url() -> str:
-    return os.environ.get("SLL_SIDECAR_URL", "http://sll-sidecar:5100").rstrip("/")
-
-
-async def _sll_post(path: str, body: dict, *, timeout: float = 300.0) -> dict:
-    """POST to the SLL sidecar and surface its JSON response (or
-    HTTPException on failure). vertipaq runs can be slow on large
-    models, hence the generous default timeout."""
-    import httpx
-
-    url = f"{_sll_base_url()}{path}"
-    headers: dict[str, str] = {}
-    token = os.environ.get("SLL_SIDECAR_TOKEN", "").strip()
-    if token:
-        headers["X-Sidecar-Token"] = token
-    try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(url, json=body, headers=headers)
-    except httpx.HTTPError as exc:
-        raise HTTPException(502, f"SLL sidecar unreachable: {exc}") from exc
-    if resp.status_code >= 400:
-        # Forward the sidecar's structured error so the UI can show it.
-        try:
-            detail = resp.json().get("detail", resp.text)
-        except Exception:  # noqa: BLE001
-            detail = resp.text
-        raise HTTPException(resp.status_code, f"SLL sidecar: {detail}")
-    return resp.json()
-
-
-@router.post("/pbi-fixer/sll/model-bpa")
-async def pbi_fixer_sll_model_bpa(
-    payload: _SllRequest,
-    request: Request,
-    ctx: AuthorizationContext | None = Depends(require_user),
-):
-    """Run ``sempy_labs.run_model_bpa`` against the target semantic
-    model and return the raw rule-violation DataFrame as rows + columns.
-
-    Note: the sidecar uses a Service Principal — the user's OBO Fabric
-    token is *not* forwarded. The SP must be a member of the workspace.
+    Replaces the WS-U sempy_labs SLL sidecar call. We resolve the
+    workspace name (the XMLA endpoint is keyed by name, not GUID),
+    then fan out parallel ``Discover`` SOAP calls against
+    ``https://api.powerbi.com/v1.0/myorg/<workspace>`` using the
+    user's OBO PBI token.
     """
-    user_id = _user_key_from_context(ctx)
-    _rate_limit(user_id, "pbi_fixer_sll_model_bpa")
-    return await _sll_post("/sll/model-bpa", payload.model_dump())
+
+    workspaceId: str
+    datasetId: str
+    workspaceName: str | None = None
+    datasetName: str | None = None
 
 
-@router.post("/pbi-fixer/sll/vertipaq")
-async def pbi_fixer_sll_vertipaq(
-    payload: _SllVertipaqRequest,
+@router.post("/pbi-fixer/memory/vertipaq")
+async def pbi_fixer_vertipaq(
+    payload: VertipaqAnalyzerRequest,
     request: Request,
     ctx: AuthorizationContext | None = Depends(require_user),
 ):
-    """Run ``sempy_labs.vertipaq_analyzer`` and return the literal HTML
-    blocks Michael's library renders into a notebook (one concatenated
-    document, sections separated by ``<hr/>``)."""
     user_id = _user_key_from_context(ctx)
-    _rate_limit(user_id, "pbi_fixer_sll_vertipaq")
-    return await _sll_post("/sll/vertipaq", payload.model_dump(), timeout=600.0)
+    _rate_limit(user_id, "pbi_fixer_proxy")
+
+    mcp_tokens = await _mcp_tokens(request)
+    if not mcp_tokens:
+        raise HTTPException(400, "Fabric token required")
+
+    pbi_token = mcp_tokens.get("PBI_API_TOKEN") or mcp_tokens.get("FABRIC_API_TOKEN")
+    fabric_token = mcp_tokens.get("FABRIC_API_TOKEN") or pbi_token
+    if not pbi_token:
+        raise HTTPException(401, "No Power BI OBO token available")
+
+    from services.agenthub.pbi_fixer_vertipaq import run_vertipaq_analyzer
+
+    return await run_vertipaq_analyzer(
+        workspace_id=payload.workspaceId,
+        dataset_id=payload.datasetId,
+        workspace_name=payload.workspaceName,
+        dataset_name=payload.datasetName,
+        fabric_token=fabric_token,
+        pbi_token=pbi_token,
+    )
 
 
 @router.post("/pbi-fixer/translations/propose", response_model=TranslationProposeResponse)
@@ -1494,8 +1461,6 @@ async def pbi_fixer_fixers_apply(
     follow the same Fabric ``getDefinition`` / ``updateDefinition``
     LRO round-trip as ``pbi_fixer_translations_apply`` (v0.40).
     """
-    import httpx
-
     from services.agenthub.pbi_fixer_handlers import FIXER_HANDLERS
 
     user_id = _user_key_from_context(ctx)
@@ -1518,20 +1483,53 @@ async def pbi_fixer_fixers_apply(
     if not fabric_token:
         raise HTTPException(401, "No Fabric OBO token available")
 
+    async with httpx.AsyncClient(timeout=120.0, follow_redirects=False) as client:
+        return await _run_one_fixer(
+            client=client,
+            fabric_token=fabric_token,
+            workspace_id=payload.workspaceId,
+            dataset_id=payload.datasetId,
+            report_id=payload.reportId,
+            fixer_id=payload.fixerId,
+            scope=scope,
+            handler=handler,
+            scan_only=payload.scanOnly,
+        )
+
+
+async def _run_one_fixer(
+    *,
+    client: httpx.AsyncClient,
+    fabric_token: str,
+    workspace_id: str,
+    dataset_id: str | None,
+    report_id: str | None,
+    fixer_id: str,
+    scope: str,
+    handler,
+    scan_only: bool,
+) -> dict:
+    """Execute a single fixer end-to-end against Fabric (getDefinition →
+    handler → updateDefinition).
+
+    Extracted from ``pbi_fixer_fixers_apply`` (v0.103, WS-E-IBCS step #7) so
+    the IBCS macro endpoint can dispatch multiple fixers sequentially in a
+    single request without N HTTP round-trips back to ourselves.
+    """
     if scope == "sm":
         base = (
-            f"{_FABRIC_API_ROOT}/workspaces/{payload.workspaceId}"
-            f"/semanticModels/{payload.datasetId}"
+            f"{_FABRIC_API_ROOT}/workspaces/{workspace_id}"
+            f"/semanticModels/{dataset_id}"
         )
         get_url = f"{base}/getDefinition?format=TMDL"
     else:
         base = (
-            f"{_FABRIC_API_ROOT}/workspaces/{payload.workspaceId}"
-            f"/reports/{payload.reportId}"
+            f"{_FABRIC_API_ROOT}/workspaces/{workspace_id}"
+            f"/reports/{report_id}"
         )
         get_url = f"{base}/getDefinition"
 
-    async def _follow_lro(client: httpx.AsyncClient, resp: httpx.Response) -> httpx.Response:
+    async def _follow_lro(resp: httpx.Response) -> httpx.Response:
         attempts = 0
         while resp.status_code == 202 and attempts < 30:
             attempts += 1
@@ -1575,57 +1573,56 @@ async def pbi_fixer_fixers_apply(
                     pass
         return resp
 
-    async with httpx.AsyncClient(timeout=120.0, follow_redirects=False) as client:
+    try:
+        resp = await client.post(
+            get_url,
+            headers={
+                "Authorization": f"Bearer {fabric_token}",
+                "Content-Type": "application/json",
+            },
+            json={},
+        )
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"getDefinition failed: {exc}") from exc
+    resp = await _follow_lro(resp)
+    if resp.status_code >= 400:
+        raise HTTPException(resp.status_code, f"getDefinition: {resp.text}")
+    try:
+        def_body = resp.json()
+    except Exception as exc:
+        raise HTTPException(502, f"getDefinition returned non-JSON: {exc}") from exc
+
+    parts = (def_body.get("definition") or {}).get("parts") or []
+    if not parts:
+        raise HTTPException(502, "Definition has no parts")
+
+    try:
+        result = handler(parts, scan_only)
+    except Exception as exc:
+        raise HTTPException(500, f"{fixer_id} handler failed: {exc}") from exc
+
+    applied = False
+    if not scan_only and result.findings:
         try:
-            resp = await client.post(
-                get_url,
+            up = await client.post(
+                f"{base}/updateDefinition",
                 headers={
                     "Authorization": f"Bearer {fabric_token}",
                     "Content-Type": "application/json",
                 },
-                json={},
+                json={"definition": {"parts": result.parts}},
             )
         except httpx.HTTPError as exc:
-            raise HTTPException(502, f"getDefinition failed: {exc}") from exc
-        resp = await _follow_lro(client, resp)
-        if resp.status_code >= 400:
-            raise HTTPException(resp.status_code, f"getDefinition: {resp.text}")
-        try:
-            def_body = resp.json()
-        except Exception as exc:
-            raise HTTPException(502, f"getDefinition returned non-JSON: {exc}") from exc
-
-        parts = (def_body.get("definition") or {}).get("parts") or []
-        if not parts:
-            raise HTTPException(502, "Definition has no parts")
-
-        try:
-            result = handler(parts, payload.scanOnly)
-        except Exception as exc:
-            raise HTTPException(500, f"{payload.fixerId} handler failed: {exc}") from exc
-
-        applied = False
-        if not payload.scanOnly and result.findings:
-            try:
-                up = await client.post(
-                    f"{base}/updateDefinition",
-                    headers={
-                        "Authorization": f"Bearer {fabric_token}",
-                        "Content-Type": "application/json",
-                    },
-                    json={"definition": {"parts": result.parts}},
-                )
-            except httpx.HTTPError as exc:
-                raise HTTPException(502, f"updateDefinition failed: {exc}") from exc
-            up = await _follow_lro(client, up)
-            if up.status_code >= 400:
-                raise HTTPException(up.status_code, f"updateDefinition: {up.text}")
-            applied = True
+            raise HTTPException(502, f"updateDefinition failed: {exc}") from exc
+        up = await _follow_lro(up)
+        if up.status_code >= 400:
+            raise HTTPException(up.status_code, f"updateDefinition: {up.text}")
+        applied = True
 
     return {
-        "fixerId": payload.fixerId,
+        "fixerId": fixer_id,
         "scope": scope,
-        "scanOnly": payload.scanOnly,
+        "scanOnly": scan_only,
         "applied": applied,
         "findings": [
             {
@@ -1637,6 +1634,114 @@ async def pbi_fixer_fixers_apply(
             for f in result.findings
         ],
         "log": result.log,
+    }
+
+
+# ---------------------------------------------------------------------------
+# WS-E-IBCS step #7 (v0.103) — One-click "Apply IBCS" macro
+# ---------------------------------------------------------------------------
+#
+# Sequentially runs the IBCS chain (chart cleanup + IBCS Variance) against a
+# single report. V1 is **not** transactional — if step N fails, prior steps
+# stay applied and the response surfaces the per-step status. True rollback
+# (capture + redeploy previous TMDL/PBIR) is deferred until the
+# pbi-fixer-tom sidecar lands.
+
+class IbcsMacroRequest(BaseModel):
+    workspaceId: str
+    reportId: str
+    scanOnly: bool = True
+
+
+@router.post("/pbi-fixer/ibcs/apply-all")
+async def pbi_fixer_ibcs_apply_all(
+    payload: IbcsMacroRequest,
+    request: Request,
+    ctx: AuthorizationContext | None = Depends(require_user),
+):
+    """Orchestrate the IBCS macro (WS-E-IBCS step #7).
+
+    Runs each fixer in ``IBCS_MACRO_STEPS`` against the supplied report.
+    Returns a per-step result list with aggregated finding count and an
+    overall ``ok`` flag (true iff every step ran without raising).
+    """
+    from services.agenthub.pbi_fixer_handlers import (
+        FIXER_HANDLERS,
+        IBCS_MACRO_STEPS,
+    )
+
+    user_id = _user_key_from_context(ctx)
+    _rate_limit(user_id, "pbi_fixer_ibcs_apply_all")
+
+    mcp_tokens = await _mcp_tokens(request)
+    if not mcp_tokens:
+        raise HTTPException(400, "Fabric token required")
+    fabric_token = mcp_tokens.get("FABRIC_API_TOKEN")
+    if not fabric_token:
+        raise HTTPException(401, "No Fabric OBO token available")
+
+    steps: list[dict] = []
+    overall_ok = True
+    total_findings = 0
+
+    async with httpx.AsyncClient(timeout=120.0, follow_redirects=False) as client:
+        for fixer_id in IBCS_MACRO_STEPS:
+            fx = FIXER_HANDLERS.get(fixer_id)
+            if not fx:
+                steps.append({
+                    "fixerId": fixer_id,
+                    "ok": False,
+                    "error": f"Unknown fixerId in IBCS macro: {fixer_id}",
+                })
+                overall_ok = False
+                continue
+            scope, handler = fx
+            if scope != "report":
+                steps.append({
+                    "fixerId": fixer_id,
+                    "ok": False,
+                    "error": f"IBCS macro currently only supports report-scoped fixers (got {scope})",
+                })
+                overall_ok = False
+                continue
+            try:
+                result = await _run_one_fixer(
+                    client=client,
+                    fabric_token=fabric_token,
+                    workspace_id=payload.workspaceId,
+                    dataset_id=None,
+                    report_id=payload.reportId,
+                    fixer_id=fixer_id,
+                    scope=scope,
+                    handler=handler,
+                    scan_only=payload.scanOnly,
+                )
+                total_findings += len(result.get("findings") or [])
+                steps.append({"fixerId": fixer_id, "ok": True, **result})
+            except HTTPException as exc:
+                overall_ok = False
+                steps.append({
+                    "fixerId": fixer_id,
+                    "ok": False,
+                    "error": f"HTTP {exc.status_code}: {exc.detail}",
+                })
+                # Stop the chain on the first hard failure — leaving the
+                # report half-mutated is preferable to compounding the issue.
+                break
+            except Exception as exc:  # noqa: BLE001
+                overall_ok = False
+                steps.append({
+                    "fixerId": fixer_id,
+                    "ok": False,
+                    "error": f"{type(exc).__name__}: {exc}",
+                })
+                break
+
+    return {
+        "ok": overall_ok,
+        "scanOnly": payload.scanOnly,
+        "totalFindings": total_findings,
+        "steps": steps,
     }
 
 

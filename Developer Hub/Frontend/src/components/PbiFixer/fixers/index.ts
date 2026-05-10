@@ -19,6 +19,13 @@ import { runFixer } from "../services/fixersApi";
 export type FixerScope = "report" | "sm";
 export type FixerMode = "backend" | "stub";
 
+/** WS-E-TEMPLATES (v0.52) — community TMDL template grouping. */
+export type TemplateGroup =
+  | "calendar"
+  | "measures"
+  | "lastRefresh"
+  | "documentation";
+
 export interface FixerFinding {
   objectPath: string;
   detail?: string;
@@ -53,6 +60,9 @@ export interface Fixer {
   /** PBIR `visualType` values this report-scoped fixer is relevant for.
    *  Omit (or empty) to mean "applies to any visual" / page-level. v0.61. */
   appliesTo?: string[];
+  /** WS-E-TEMPLATES (v0.52) — when set, the FixerPage groups this entry
+   *  under a "Templates" sub-section instead of plain "Semantic Model". */
+  templateGroup?: TemplateGroup;
   scan(ctx: FixerContext): Promise<FixerResult>;
   apply(ctx: FixerContext): Promise<FixerResult>;
 }
@@ -75,6 +85,7 @@ function backendFixer(meta: {
   scope: FixerScope;
   bpaRuleIds?: string[];
   appliesTo?: string[];
+  templateGroup?: TemplateGroup;
 }): Fixer {
   const call = async (ctx: FixerContext, scanOnly: boolean): Promise<FixerResult> => {
     if (!ctx.auth || !ctx.workspaceId) return emptyResult(["No auth / workspace."]);
@@ -115,6 +126,7 @@ function backendFixer(meta: {
     mode: "backend",
     bpaRuleIds: meta.bpaRuleIds,
     appliesTo: meta.appliesTo,
+    templateGroup: meta.templateGroup,
     scan: (ctx) => call(ctx, true),
     apply: (ctx) => call(ctx, false),
   };
@@ -316,6 +328,75 @@ export const fixDefaultDataSourceVersion = backendFixer({
   scope: "sm",
 });
 
+// WS-E-TEMPLATES (v0.52) — community TMDL templates.
+// Ship order: smallest first to validate the inject helper.
+export const addMeasureTableEmpty = backendFixer({
+  id: "Add_MeasureTable_Empty",
+  title: "Add an empty 'Measure' calc-table (smallest measure-organisation seed)",
+  scope: "sm",
+  templateGroup: "measures",
+});
+
+export const addLastRefreshLocalNow = backendFixer({
+  id: "Add_LastRefresh_LocalNow",
+  title: "Add 'Last Refresh' table — local time (DateTime.LocalNow)",
+  scope: "sm",
+  templateGroup: "lastRefresh",
+});
+
+export const addCalcCalendarRich = backendFixer({
+  id: "Add_CalcCalendar_Rich",
+  title: "Add rich 'CalcCalendar' calc-table (hierarchies, fiscal year, flags)",
+  scope: "sm",
+  templateGroup: "calendar",
+});
+
+export const addLastRefreshEuropeMez = backendFixer({
+  id: "Add_LastRefresh_EuropeMEZ",
+  title: "Add 'Last Refresh' table — Europe time (UTC→CET/CEST, DST-aware)",
+  scope: "sm",
+  templateGroup: "lastRefresh",
+});
+
+export const addPqCalendarLarsSchreiber = backendFixer({
+  id: "Add_PqCalendar_LarsSchreiber",
+  title: "Add shared M expression 'Kalenderfunktion' (Lars Schreiber's calendar fn)",
+  scope: "sm",
+  templateGroup: "calendar",
+});
+
+export const addMeasureTables3WithIcons = backendFixer({
+  id: "Add_MeasureTables_3WithIcons",
+  title: "Add 3 emoji-prefixed measure tables (KPIs / Variables / Titles & Labels)",
+  scope: "sm",
+  templateGroup: "measures",
+});
+
+export const addModelDocumentation = backendFixer({
+  id: "Add_ModelDocumentation",
+  title: "Add model documentation pack (_Tables / _Columns / _DAX Measures / _Relationships)",
+  scope: "sm",
+  templateGroup: "documentation",
+});
+
+// WS-E-IBCS step #6 (v0.103) — IBCS Variance + error bars + % alignment.
+// V1: PBIR-only mutation through the existing handler pipeline. Only
+// mutates visuals with >=2 Y measures (treats first as AC, second as PY).
+// Single-measure visuals are surfaced as candidates that need PY measures.
+export const fixIbcsVariance = backendFixer({
+  id: "Fix_IBCSVariance",
+  title: "Apply IBCS variance styling (colors, red/green error bars, % alignment)",
+  scope: "report",
+  appliesTo: [
+    "barChart",
+    "clusteredBarChart",
+    "stackedBarChart",
+    "columnChart",
+    "clusteredColumnChart",
+    "stackedColumnChart",
+  ],
+});
+
 export const FIXERS: readonly Fixer[] = Object.freeze([
   // Report (backend)
   fixPieChart,
@@ -327,6 +408,7 @@ export const FIXERS: readonly Fixer[] = Object.freeze([
   fixColumnChart,
   fixVisualAlignment,
   fixUpgradeToPbir,
+  fixIbcsVariance,
   // Semantic model (backend)
   fixDiscourageImplicitMeasures,
   fixDoNotSummarize,
@@ -346,6 +428,14 @@ export const FIXERS: readonly Fixer[] = Object.freeze([
   fixMeasureDescriptions,
   fixUseDivideFunction,
   fixDefaultDataSourceVersion,
+  // WS-E-TEMPLATES (v0.52)
+  addMeasureTableEmpty,
+  addLastRefreshLocalNow,
+  addCalcCalendarRich,
+  addLastRefreshEuropeMez,
+  addPqCalendarLarsSchreiber,
+  addMeasureTables3WithIcons,
+  addModelDocumentation,
 ]);
 
 export function findFixerForBpaRule(ruleId: string): Fixer | undefined {

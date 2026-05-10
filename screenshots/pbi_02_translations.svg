@@ -1,0 +1,140 @@
+<svg viewBox="0 0 1200 700" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .bg { fill: #f5f5f5; }
+      .header { fill: #1f2937; }
+      .header-text { fill: white; font-size: 16px; font-weight: bold; }
+      .panel-bg { fill: white; stroke: #e5e7eb; stroke-width: 1; }
+      .section-title { fill: #1f2937; font-size: 14px; font-weight: 600; }
+      .tab-active { fill: white; stroke: #3b82f6; stroke-width: 2; }
+      .tab-inactive { fill: #f3f4f6; stroke: #e5e7eb; stroke-width: 1; }
+      .text-sm { font-size: 12px; }
+      .text-bold { font-weight: 600; }
+      .text-muted { fill: #6b7280; }
+      .language-tag { font-size: 10px; font-weight: 600; fill: white; }
+      .translate-btn { fill: #10b981; }
+      .translate-text { fill: white; font-size: 12px; font-weight: 600; }
+    </style>
+  </defs>
+  
+  <!-- Background -->
+  <rect class="bg" width="1200" height="700"/>
+  
+  <!-- Header -->
+  <rect class="header" width="1200" height="60"/>
+  <text class="header-text" x="20" y="38">Copilot Translation Editor — Multi-Language Support</text>
+  
+  <!-- Top Toolbar -->
+  <rect fill="white" x="20" y="80" width="1160" height="50" stroke="#e5e7eb" stroke-width="1"/>
+  
+  <!-- Language Selector -->
+  <text class="text-bold" x="30" y="105">Target Language:</text>
+  
+  <rect fill="#dbeafe" x="150" y="90" width="80" height="30" rx="4"/>
+  <text style="font-size: 12px; fill: #1e40af; font-weight: 600;" x="160" y="110">🇩🇪 German</text>
+  
+  <rect fill="#f3f4f6" x="240" y="90" width="80" height="30" rx="4"/>
+  <text style="font-size: 12px; fill: #4b5563;" x="255" y="110">🇫🇷 French</text>
+  
+  <rect fill="#f3f4f6" x="330" y="90" width="80" height="30" rx="4"/>
+  <text style="font-size: 12px; fill: #4b5563;" x="345" y="110">🇯🇵 Japanese</text>
+  
+  <!-- Glossary Button -->
+  <rect fill="#f3f4f6" x="450" y="90" width="120" height="30" rx="4" stroke="#e5e7eb" stroke-width="1"/>
+  <text style="font-size: 12px; fill: #1f2937;" x="465" y="110">📚 Glossary (5)</text>
+  
+  <!-- Translate All Button -->
+  <rect class="translate-btn" x="980" y="90" width="190" height="30" rx="4"/>
+  <text class="translate-text" x="1010" y="110">⚡ Translate All (58)</text>
+  
+  <!-- Main Content: Source and Target -->
+  <g>
+    <!-- Left Panel: English Source -->
+    <rect class="panel-bg" x="20" y="145" width="550" height="535"/>
+    <text class="section-title" x="30" y="170">English (Source)</text>
+    
+    <!-- Column/Field List -->
+    <rect fill="#f9fafb" x="25" y="175" width="540" height="495" rx="2"/>
+    
+    <!-- Item 1 -->
+    <rect fill="white" x="30" y="180" width="530" height="60" rx="2" stroke="#e5e7eb" stroke-width="1"/>
+    <text style="font-size: 11px; font-weight: 600; fill: #1f2937;" x="40" y="198">Table: Customers</text>
+    <text style="font-size: 11px; fill: #6b7280;" x="40" y="215">"A dimension table containing customer master data and demographics"</text>
+    <text style="font-size: 10px; fill: #059669;" x="40" y="232">✓ glossary: Business Terms</text>
+    
+    <!-- Item 2 -->
+    <rect fill="white" x="30" y="247" width="530" height="60" rx="2" stroke="#e5e7eb" stroke-width="1"/>
+    <text style="font-size: 11px; font-weight: 600; fill: #1f2937;" x="40" y="265">Column: CustomerName</text>
+    <text style="font-size: 11px; fill: #6b7280;" x="40" y="282">"Full legal name of the customer entity"</text>
+    <text style="font-size: 10px; fill: #059669;" x="40" y="299">✓ glossary: Customer Attributes</text>
+    
+    <!-- Item 3 -->
+    <rect fill="white" x="30" y="314" width="530" height="60" rx="2" stroke="#e5e7eb" stroke-width="1"/>
+    <text style="font-size: 11px; font-weight: 600; fill: #1f2937;" x="40" y="332">Measure: Total Sales Amount</text>
+    <text style="font-size: 11px; fill: #6b7280;" x="40" y="349">"Sum of invoice amounts in USD, excluding tax"</text>
+    <text style="font-size: 10px; fill: #e5e700;" x="40" y="366">⚠ no glossary match</text>
+    
+    <!-- Item 4 -->
+    <rect fill="white" x="30" y="381" width="530" height="60" rx="2" stroke="#e5e7eb" stroke-width="1"/>
+    <text style="font-size: 11px; font-weight: 600; fill: #1f2937;" x="40" y="399">Column: CountryRegion</text>
+    <text style="font-size: 11px; fill: #6b7280;" x="40" y="416">"ISO-3166 country code or region name"</text>
+    <text style="font-size: 10px; fill: #059669;" x="40" y="433">✓ glossary: Geography</text>
+    
+    <!-- Item 5 -->
+    <rect fill="white" x="30" y="448" width="530" height="60" rx="2" stroke="#e5e7eb" stroke-width="1"/>
+    <text style="font-size: 11px; font-weight: 600; fill: #1f2937;" x="40" y="466">Column: DateCreated</text>
+    <text style="font-size: 11px; fill: #6b7280;" x="40" y="483">"Timestamp when the customer record was first created"</text>
+    <text style="font-size: 10px; fill: #059669;" x="40" y="500">✓ glossary: Dates &amp; Time</text>
+    
+    <!-- Item 6 -->
+    <rect fill="white" x="30" y="515" width="530" height="60" rx="2" stroke="#e5e7eb" stroke-width="1"/>
+    <text style="font-size: 11px; font-weight: 600; fill: #1f2937;" x="40" y="533">Column: IsActive</text>
+    <text style="font-size: 11px; fill: #6b7280;" x="40" y="550">"Boolean flag indicating if customer is actively trading"</text>
+    <text style="font-size: 10px; fill: #059669;" x="40" y="567">✓ glossary: Status Fields</text>
+  </g>
+  
+  <!-- Right Panel: German Translation (de-DE) -->
+  <g>
+    <rect class="panel-bg" x="580" y="145" width="600" height="535"/>
+    <text class="section-title" x="590" y="170">🇩🇪 German (de-DE) — Copilot Translated</text>
+    
+    <!-- Copy/Paste translation from source -->
+    <rect fill="#f9fafb" x="585" y="175" width="590" height="495" rx="2"/>
+    
+    <!-- Item 1 -->
+    <rect fill="white" x="590" y="180" width="580" height="60" rx="2" stroke="#e5e7eb" stroke-width="1"/>
+    <text style="font-size: 11px; font-weight: 600; fill: #1f2937;" x="600" y="198">Tabelle: Kunden</text>
+    <text style="font-size: 11px; fill: #2563eb;" x="600" y="215">"Eine Dimensionstabelle mit Kundenstammdaten und demografischen Informationen"</text>
+    <text style="font-size: 10px; fill: #059669;" x="600" y="232">✓ Glossarbegriff: Geschäftsbegriffe</text>
+    
+    <!-- Item 2 -->
+    <rect fill="white" x="590" y="247" width="580" height="60" rx="2" stroke="#e5e7eb" stroke-width="1"/>
+    <text style="font-size: 11px; font-weight: 600; fill: #1f2937;" x="600" y="265">Spalte: Kundenname</text>
+    <text style="font-size: 11px; fill: #2563eb;" x="600" y="282">"Vollständiger rechtlicher Name der Kundenentität"</text>
+    <text style="font-size: 10px; fill: #059669;" x="600" y="299">✓ Glossarbegriff: Kundenattribute</text>
+    
+    <!-- Item 3 -->
+    <rect fill="white" x="590" y="314" width="580" height="60" rx="2" stroke="#e5e7eb" stroke-width="1"/>
+    <text style="font-size: 11px; font-weight: 600; fill: #1f2937;" x="600" y="332">Kennzahl: Gesamtumsatzbetrag</text>
+    <text style="font-size: 11px; fill: #2563eb;" x="600" y="349">"Summe der Rechnungsbeträge in USD, ohne Steuern"</text>
+    <text style="font-size: 10px; fill: #059669;" x="600" y="366">✓ Copilot-generiert</text>
+    
+    <!-- Item 4 -->
+    <rect fill="white" x="590" y="381" width="580" height="60" rx="2" stroke="#e5e7eb" stroke-width="1"/>
+    <text style="font-size: 11px; font-weight: 600; fill: #1f2937;" x="600" y="399">Spalte: LandRegion</text>
+    <text style="font-size: 11px; fill: #2563eb;" x="600" y="416">"ISO-3166-Ländercode oder Regionsname"</text>
+    <text style="font-size: 10px; fill: #059669;" x="600" y="433">✓ Glossarbegriff: Geografie</text>
+    
+    <!-- Item 5 -->
+    <rect fill="white" x="590" y="448" width="580" height="60" rx="2" stroke="#e5e7eb" stroke-width="1"/>
+    <text style="font-size: 11px; font-weight: 600; fill: #1f2937;" x="600" y="466">Spalte: Erstellt</text>
+    <text style="font-size: 11px; fill: #2563eb;" x="600" y="483">"Zeitstempel, wann der Kundendatensatz erstmals erstellt wurde"</text>
+    <text style="font-size: 10px; fill: #059669;" x="600" y="500">✓ Glossarbegriff: Datum &amp; Zeit</text>
+    
+    <!-- Item 6 -->
+    <rect fill="white" x="590" y="515" width="580" height="60" rx="2" stroke="#e5e7eb" stroke-width="1"/>
+    <text style="font-size: 11px; font-weight: 600; fill: #1f2937;" x="600" y="533">Spalte: IstAktiv</text>
+    <text style="font-size: 11px; fill: #2563eb;" x="600" y="550">"Boolesches Flag, das angibt, ob der Kunde aktiv handelt"</text>
+    <text style="font-size: 10px; fill: #059669;" x="600" y="567">✓ Glossarbegriff: Statusfelder</text>
+  </g>
+</svg>

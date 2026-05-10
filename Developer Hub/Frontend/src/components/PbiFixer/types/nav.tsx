@@ -76,16 +76,16 @@ const ALL_NAV_ITEMS: NavItem[] = [
   { key: "model",            label: "Model",             icon: <Database20Regular />,        group: "peer",         ready: true  },
   { key: "report",           label: "Report",            icon: <ChartMultiple20Regular />,   group: "peer",         ready: true  },
 
-  // Model tools
-  { key: "modelBpa",         label: "Model BPA",         icon: <DatabaseSearch20Regular />,  group: "modelTools",   ready: true  },
-  { key: "memory",           label: "Memory Analyzer",   icon: <Storage20Regular />,         group: "modelTools",   ready: true  },
+  // Model tools — modelBpa / memory consolidated into Model Explorer (v0.102)
+  { key: "modelBpa",         label: "Model BPA",         icon: <DatabaseSearch20Regular />,  group: "modelTools",   ready: false },
+  { key: "memory",           label: "Memory Analyzer",   icon: <Storage20Regular />,         group: "modelTools",   ready: false },
   { key: "perspectives",     label: "Perspectives",      icon: <Eye20Regular />,             group: "modelTools",   ready: true  },
   { key: "translations",     label: "Translations",      icon: <Translate20Regular />,       group: "modelTools",   ready: true  },
   { key: "delta",            label: "Delta",             icon: <ArrowSwap20Regular />,       group: "modelTools",   ready: true  },
   { key: "diagram",          label: "Diagram",           icon: <Flowchart20Regular />,       group: "modelTools",   ready: true  },
 
-  // Report tools
-  { key: "reportBpa",        label: "Report BPA",        icon: <DocumentSearch20Regular />,  group: "reportTools",  ready: true  },
+  // Report tools — reportBpa consolidated into Report Explorer (v0.102)
+  { key: "reportBpa",        label: "Report BPA",        icon: <DocumentSearch20Regular />,  group: "reportTools",  ready: false },
   { key: "prototype",        label: "Prototype",         icon: <Beaker20Regular />,          group: "reportTools",  ready: true  },
   { key: "reversePrototype", label: "Reverse Prototype", icon: <ArrowImport20Regular />,     group: "reportTools",  ready: true  },
 

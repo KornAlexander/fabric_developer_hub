@@ -463,6 +463,26 @@ export interface MeasureEdit {
   isHidden?: boolean;
 }
 
+/** Fetch the raw PBIR/PBIR-Legacy definition parts for a report.
+ *  WS-LOCAL Step #1 — used by the "Save edits to disk" Seed flow to
+ *  mirror the live report into a local PBIP folder. Symmetric to
+ *  `getSemanticModelDefinition` so both halves of a `.pbip` project can
+ *  be written from a single click. */
+export async function getReportDefinitionParts(
+  auth: PbiAuth,
+  workspaceId: string,
+  reportId: string,
+): Promise<{ path: string; payload: string; payloadType: string }[]> {
+  const def = await fabricPost<{
+    definition: { parts: { path: string; payload: string; payloadType: string }[] };
+  }>(
+    auth,
+    `/workspaces/${workspaceId}/reports/${reportId}/getDefinition`,
+    null,
+  );
+  return def.definition?.parts ?? [];
+}
+
 /** UTF-8 safe base64 encode (the TMDL payload may contain non-ASCII). */
 function utf8ToBase64(s: string): string {
   // encodeURIComponent → percent escapes → unescape to binary string → btoa
@@ -1493,6 +1513,8 @@ function parseReportDefinition(
     format: "PBIR",
     reportId,
     workspaceId,
+    customVisuals: [],
+    reportLevelMeasures: [],
   };
 
   // Find pages.json for page order
@@ -1506,6 +1528,52 @@ function parseReportDefinition(
       });
     } catch {
       // ignore parse errors
+    }
+  }
+
+  // ---- report.json: custom visuals (publicCustomVisuals + resourcePackages) ----
+  const reportJsonPart = parts.find((p) => p.path.endsWith("definition/report.json"));
+  const declaredCustomVisuals: { name: string; isPublic: boolean }[] = [];
+  if (reportJsonPart) {
+    try {
+      const rj = JSON.parse(atob(reportJsonPart.payload));
+      const publicCv = Array.isArray(rj.publicCustomVisuals) ? rj.publicCustomVisuals : [];
+      for (const item of publicCv) {
+        const name = typeof item === "string" ? item : item?.name;
+        if (name) declaredCustomVisuals.push({ name, isPublic: true });
+      }
+      const rps = Array.isArray(rj.resourcePackages) ? rj.resourcePackages : [];
+      for (const rp of rps) {
+        if (rp?.type === "CustomVisual" && rp?.name) {
+          declaredCustomVisuals.push({ name: rp.name, isPublic: false });
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // ---- reportExtensions.json: report-level measures ----
+  const extensionsPart = parts.find((p) => p.path.endsWith("definition/reportExtensions.json"));
+  if (extensionsPart) {
+    try {
+      const ext = JSON.parse(atob(extensionsPart.payload));
+      const entities = Array.isArray(ext.entities) ? ext.entities : [];
+      for (const e of entities) {
+        const tableName: string = e?.name ?? "";
+        const measures = Array.isArray(e?.measures) ? e.measures : [];
+        for (const m of measures) {
+          if (m?.name) {
+            reportData.reportLevelMeasures!.push({
+              name: m.name,
+              table: tableName,
+              expression: m.expression,
+            });
+          }
+        }
+      }
+    } catch {
+      // ignore
     }
   }
 
@@ -1535,6 +1603,9 @@ function parseReportDefinition(
     }
   }
 
+  // Track visualType usage to mark custom visuals as used.
+  const usedVisualTypes = new Set<string>();
+
   // Parse visual.json files
   for (const part of parts) {
     const visualMatch = part.path.match(
@@ -1547,9 +1618,11 @@ function parseReportDefinition(
         const visualName = visualMatch[2];
         if (reportData.pages[pageName]) {
           const position = visualJson.position ?? {};
+          const vType = visualJson.visual?.visualType ?? "";
+          if (vType) usedVisualTypes.add(vType);
           const visual: VisualInfo = {
-            type: visualJson.visual?.visualType ?? "",
-            displayType: visualJson.visual?.visualType ?? "",
+            type: vType,
+            displayType: vType,
             x: position.x ?? 0,
             y: position.y ?? 0,
             width: position.width ?? 0,
@@ -1569,6 +1642,14 @@ function parseReportDefinition(
       }
     }
   }
+
+  // Resolve custom visual usage now that all visuals are parsed.
+  reportData.customVisuals = declaredCustomVisuals.map((cv) => ({
+    name: cv.name,
+    displayName: cv.name,
+    isPublic: cv.isPublic,
+    usedInReport: usedVisualTypes.has(cv.name),
+  }));
 
   return reportData;
 }
