@@ -28,9 +28,10 @@
       <li><a href="#concepts">Concepts</a></li>
       <li><a href="#workflow">Workflow</a></li>
       <li><a href="#features">Features</a></li>
-      <li><a href="#impressions">Impressions</a></li>
+      <li><a href="#screenshots">Screenshots</a></li>
       <li><a href="#tools">The Two Tools</a></li>
       <li><a href="#pbi-fixer">PBI Fixer</a></li>
+      <li><a href="#screenshots-fixer">Fixer Screens</a></li>
       <li><a href="#getting-started">Getting Started</a></li>
       <li><a href="https://github.com/LukaszObst/fabric_developer_hub" target="_blank" rel="noopener">GitHub ↗</a></li>
     </ul>
@@ -354,64 +355,64 @@
   </div>
 </section>
 
-<!-- ═══════════════ Impressions ═══════════════ -->
-<section class="section section-alt" id="impressions">
+<!-- ═══════════════ Screenshots — Agent Hub ═══════════════ -->
+<section class="section section-alt" id="screenshots">
   <div class="container">
     <div class="section-header">
-      <h2>Agent Hub — Impressions</h2>
-      <p>A visual tour through the Agent Hub experience inside the Developer Hub workload.</p>
+      <h2>Agent Hub — See It in Action</h2>
+      <p>A visual tour through the Agent Hub experience inside the Developer Hub workload, captured live from the running stack.</p>
     </div>
 
     <div class="screenshot-section">
       <div class="screenshot-row">
         <div class="screenshot-text">
-          <h3>🏠 Home Dashboard</h3>
-          <p>Monitor active agents, track job status, and view recent execution history at a glance.</p>
+          <h3>🏠 Orchestrate Your Vision — Compose</h3>
+          <p>Describe what you need done in natural language. Pick a workspace, attach Fabric items, toggle approvals and branching — the Agent Hub does the rest.</p>
           <ul>
-            <li>Active agent tiles with health indicators</li>
-            <li>Recent jobs with duration &amp; status</li>
-            <li>Workspace-level quick filters</li>
-            <li>Discovery recommendations panel</li>
+            <li>NL task prompt with <code>@</code>-mention for Fabric items, files and workspaces</li>
+            <li>Approvals &amp; branching toggles per mission</li>
+            <li>Workspace + model picker (e.g. Claude Opus 4.5)</li>
+            <li>Discovery &amp; recommendations cards below the fold</li>
           </ul>
         </div>
         <div class="screenshot-img">
-          <img src="screenshots/01_home_dashboard.png" alt="Home Dashboard showing active agents and job status overview" loading="lazy" />
+          <img src="screenshots/01_home_dashboard.png" alt="Agent Hub New Session compose page with workspace picker and discovery cards" loading="lazy" />
         </div>
       </div>
     </div>
 
     <div class="screenshot-section">
       <div class="screenshot-row reverse">
+        <div class="screenshot-text">
+          <h3>📋 Sessions Overview</h3>
+          <p>Monitor every running, waiting and failed mission across your workspace. Restart, resume or cancel sessions with one click.</p>
+          <ul>
+            <li>Live counters: Total · Running · Waiting · Errors</li>
+            <li>Active session cards with current goal and status pill</li>
+            <li>Inline Restart / Resume actions</li>
+            <li>Recent Sessions archive</li>
+          </ul>
+        </div>
+        <div class="screenshot-img">
+          <img src="screenshots/02_sessions_overview.png" alt="Sessions overview with active sessions, status counters and inline actions" loading="lazy" />
+        </div>
+      </div>
+    </div>
+
+    <div class="screenshot-section">
+      <div class="screenshot-row">
         <div class="screenshot-text">
           <h3>🧩 Agents &amp; Skills Marketplace</h3>
-          <p>Browse Microsoft-provided and custom agents, inspect skill composition, and clone agents for customization.</p>
+          <p>Browse Microsoft-provided and custom agents, inspect skill composition, personas, authentication and security flags — all powered by <a href="https://github.com/microsoft/skills-for-fabric" target="_blank" rel="noopener">skills-for-fabric</a>.</p>
           <ul>
-            <li>Microsoft + custom agent gallery</li>
-            <li>Skill composition detail panel</li>
-            <li>One-click clone &amp; customize</li>
-            <li>Provider &amp; capability badges</li>
+            <li>My Agents · Skill Library · Marketplace tabs</li>
+            <li>Per-agent detail: personas, skills, AuthN posture</li>
+            <li>34 skills installed out of the box</li>
+            <li>Create or compose new agents from scratch</li>
           </ul>
         </div>
         <div class="screenshot-img">
-          <img src="screenshots/02_agent_marketplace.png" alt="Agent Marketplace with skill composition detail" loading="lazy" />
-        </div>
-      </div>
-    </div>
-
-    <div class="screenshot-section">
-      <div class="screenshot-row">
-        <div class="screenshot-text">
-          <h3>📝 Orchestrator — Task Composer</h3>
-          <p>Describe your goal in natural language. Attach Fabric items as context. Configure branching and approval workflows.</p>
-          <ul>
-            <li>NL prompt with examples</li>
-            <li>Fabric item picker (Lakehouse, Warehouse, …)</li>
-            <li>Workspace branching toggle</li>
-            <li>Approval policy selector</li>
-          </ul>
-        </div>
-        <div class="screenshot-img">
-          <img src="screenshots/03_orchestrator_compose.png" alt="Orchestrator Compose step with NL prompt and context" loading="lazy" />
+          <img src="screenshots/03_agents_and_skills.png" alt="Agents and Skills marketplace with FabricAdmin agent detail panel" loading="lazy" />
         </div>
       </div>
     </div>
@@ -419,17 +420,17 @@
     <div class="screenshot-section">
       <div class="screenshot-row reverse">
         <div class="screenshot-text">
-          <h3>🗺 Orchestrator — Plan Review</h3>
-          <p>Inspect the AI-generated execution plan before launch. Each step shows which Fabric items are touched and which gates require approval.</p>
+          <h3>🗺 Plan Review &amp; Mission Launch</h3>
+          <p>Every mission opens in its own tab with a structured transcript, live status panel and per-step approval gates. Resume waiting missions, send messages to the active agents, or interrupt at any time.</p>
           <ul>
-            <li>Step-by-step decomposition</li>
-            <li>Approval gates highlighted</li>
-            <li>Editable plan ordering</li>
-            <li>Per-step Fabric item map</li>
+            <li>Per-mission transcript with role-tagged turns</li>
+            <li>Sidebar summary: Outputs · Changes · Attention · Active</li>
+            <li>Approval gates surfaced as inline cards</li>
+            <li>Interrupt / Send controls always visible</li>
           </ul>
         </div>
         <div class="screenshot-img">
-          <img src="screenshots/04_orchestrator_plan_review.png" alt="Orchestrator plan review with approval gates" loading="lazy" />
+          <img src="screenshots/04_plan_review.png" alt="Session plan review with mission summary sidebar and queued state" loading="lazy" />
         </div>
       </div>
     </div>
@@ -437,17 +438,45 @@
     <div class="screenshot-section">
       <div class="screenshot-row">
         <div class="screenshot-text">
-          <h3>⚡ Job Execution — Streaming</h3>
-          <p>Watch agents work in real time with streaming reasoning, code output, and decision cards. Approval prompts pause execution when production changes are proposed.</p>
+          <h3>⚡ Live Execution — Streaming Transcript</h3>
+          <p>Watch agents work in real time with streamed reasoning, tool calls and error cards. When something fails, the Needs Attention panel surfaces the exact run, error count and current active specialist.</p>
           <ul>
-            <li>Live reasoning stream</li>
-            <li>Terminal-style code blocks</li>
-            <li>Inline approval cards</li>
-            <li>Artifact tracker with workspace links</li>
+            <li>Streaming agent + system + run rows</li>
+            <li>Live error counters and run state</li>
+            <li>Per-step container exit codes &amp; evidence</li>
+            <li>Inline message input for the active agents</li>
           </ul>
         </div>
         <div class="screenshot-img">
-          <img src="screenshots/05_job_execution_streaming.png" alt="Live streaming execution with HITL approval cards" loading="lazy" />
+          <img src="screenshots/05_session_live_execution.png" alt="Live mission transcript with FabricDataEngineer turns, error cards and Needs Attention sidebar" loading="lazy" />
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════ Screenshots — Power BI Fixer ═══════════════ -->
+<section class="section" id="screenshots-fixer">
+  <div class="container">
+    <div class="section-header">
+      <h2>Power BI Fixer — See It in Action</h2>
+      <p>Live captures from the Power BI Fixer tool inside Developer Hub, running against the <code>Bad Report - Testing</code> reference report.</p>
+    </div>
+
+    <div class="screenshot-section">
+      <div class="screenshot-row">
+        <div class="screenshot-text">
+          <h3>📄 Model Explorer</h3>
+          <p>Browse tables, columns, measures and relationships of the loaded semantic model. Inspect DAX, edit properties, navigate the model exactly like in Power BI Desktop — but in the browser, with one-click model fixes wired in.</p>
+          <ul>
+            <li>Tree + property editor with type, format string, sort by</li>
+            <li>Live DAX expression preview</li>
+            <li>Perspectives filter &amp; full TMDL view</li>
+            <li>Scan Model triggers the bundled BPA rules</li>
+          </ul>
+        </div>
+        <div class="screenshot-img">
+          <img src="screenshots/06_pbi_fixer_model_explorer.png" alt="Power BI Fixer Model Explorer with Bad Report - Testing loaded and Sales column properties open" loading="lazy" />
         </div>
       </div>
     </div>
@@ -455,17 +484,53 @@
     <div class="screenshot-section">
       <div class="screenshot-row reverse">
         <div class="screenshot-text">
-          <h3>🤖 Fully Automatic Mode</h3>
-          <p>When approvals and branching are disabled, the plan runs end-to-end without manual intervention. Ideal for trusted, repeatable workflows.</p>
+          <h3>📊 Report Explorer</h3>
+          <p>Navigate pages and visuals with live previews. Spot questionable charts, page sizes and unused custom visuals before opening Power BI Desktop.</p>
           <ul>
-            <li>One-click "Run automatically"</li>
-            <li>Same plan-review surface, no gates</li>
-            <li>Perfect for scheduled / repeating jobs</li>
-            <li>Full audit log preserved</li>
+            <li>Page &amp; visual tree with type icons</li>
+            <li>Inline preview of every visual on the page</li>
+            <li>One-click PBIR conversion &amp; raw view</li>
+            <li>Scan Report runs the report-level fixers</li>
           </ul>
         </div>
         <div class="screenshot-img">
-          <img src="screenshots/06_orchestrator_no_approvals.png" alt="Fully automatic orchestrator mode without approval gates" loading="lazy" />
+          <img src="screenshots/07_pbi_fixer_report_explorer.png" alt="Power BI Fixer Report Explorer with The Ugly / The Ugly Ext / The Okay pages and visual previews" loading="lazy" />
+        </div>
+      </div>
+    </div>
+
+    <div class="screenshot-section">
+      <div class="screenshot-row">
+        <div class="screenshot-text">
+          <h3>🛠 Fixer — Scan &amp; Apply</h3>
+          <p>Pick the fixers you care about, scan in read-only mode, inspect the diff and apply when ready. Below: a live scan of <code>Fix_PieChart</code> + <code>Fix_FloatingPointDataType</code> against <code>Bad Report - Testing</code> — 3 findings on column data types.</p>
+          <ul>
+            <li>27 fixers grouped Report / Semantic Model</li>
+            <li>Scan-only mode by default — no surprise writes</li>
+            <li>Run log with per-fixer finding counts</li>
+            <li>Diff preview before apply, plus one-click IBCS macro</li>
+          </ul>
+        </div>
+        <div class="screenshot-img">
+          <img src="screenshots/08_pbi_fixer_fixer.png" alt="PBI Fixer page after scanning Fix_PieChart and Fix_FloatingPointDataType with 3 findings in the run log" loading="lazy" />
+        </div>
+      </div>
+    </div>
+
+    <div class="screenshot-section">
+      <div class="screenshot-row reverse">
+        <div class="screenshot-text">
+          <h3>📝 Raw TMDL Editor</h3>
+          <p>Browse and edit the loaded semantic model as raw TMDL — the same view as Power BI Desktop's TMDL editor, but in the browser. Reload to refresh from the workspace, save to push changes back via the XMLA endpoint.</p>
+          <ul>
+            <li>Full <code>definition/</code> tree (model, tables, cultures, perspectives)</li>
+            <li>Syntax-highlighted TMDL editor</li>
+            <li>Soft-blue "Loaded N parts" status banner</li>
+            <li>Reload / Save / Revert / Download from the toolbar</li>
+          </ul>
+        </div>
+        <div class="screenshot-img">
+          <img src="screenshots/09_pbi_fixer_tmdl_view.png" alt="Raw TMDL editor showing model.tmdl content from Bad Report - Testing with 8 parts loaded" loading="lazy" />
         </div>
       </div>
     </div>
@@ -505,7 +570,7 @@
   <div class="container">
     <div class="section-header">
       <h2>Getting Started</h2>
-      <p>Run the full Developer Hub stack locally with Docker — backend, frontend, Fabric DevGateway and SLL sidecar.</p>
+      <p>Run the full Developer Hub stack locally with Docker — backend, frontend and Fabric DevGateway.</p>
     </div>
 
     <div class="code-block" style="margin-bottom:2rem;">
