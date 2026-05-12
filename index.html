@@ -520,17 +520,35 @@
     <div class="screenshot-section">
       <div class="screenshot-row reverse">
         <div class="screenshot-text">
-          <h3>📝 Raw TMDL Editor</h3>
-          <p>Browse and edit the loaded semantic model as raw TMDL — the same view as Power BI Desktop's TMDL editor, but in the browser. Reload to refresh from the workspace, save to push changes back via the XMLA endpoint.</p>
+          <h3>📝 TMDL and PBIR Editor</h3>
+          <p>Browse and edit the loaded semantic model as raw TMDL and report definitions as PBIR — the same views as Power BI Desktop's editors, but in the browser. Reload to refresh from the workspace, save to push changes back via the XMLA / Fabric REST endpoints.</p>
           <ul>
-            <li>Full <code>definition/</code> tree (model, tables, cultures, perspectives)</li>
-            <li>Syntax-highlighted TMDL editor</li>
+            <li>Full <code>definition/</code> tree (model, tables, cultures, perspectives, report pages)</li>
+            <li>Syntax-highlighted TMDL <em>and</em> PBIR JSON editors</li>
             <li>Soft-blue "Loaded N parts" status banner</li>
             <li>Reload / Save / Revert / Download from the toolbar</li>
           </ul>
         </div>
         <div class="screenshot-img">
-          <img src="screenshots/09_pbi_fixer_tmdl_view.png" alt="Raw TMDL editor showing model.tmdl content from Bad Report - Testing with 8 parts loaded" loading="lazy" />
+          <img src="screenshots/09_pbi_fixer_tmdl_view.png" alt="TMDL and PBIR editor showing model.tmdl content from Bad Report - Testing with 8 parts loaded" loading="lazy" />
+        </div>
+      </div>
+    </div>
+
+    <div class="screenshot-section">
+      <div class="screenshot-row">
+        <div class="screenshot-text">
+          <h3>⚡ Sempy Builder</h3>
+          <p>A point-and-click catalog for <code>sempy</code> / <code>sempy-labs</code>. Pick a category, subcategory and function, fill in the parameters, and the page generates a runnable Python snippet — then drops it into a fresh Fabric notebook with one click. No more hunting through docs for the right helper name.</p>
+          <ul>
+            <li>Curated catalog grouped by Model / Report / Workspace</li>
+            <li>Live Python preview that updates as you tweak parameters</li>
+            <li>Copy snippet or download as <code>.py</code></li>
+            <li>"Create + open Fabric notebook" — runs in Fabric Spark with sempy + sempy-labs preinstalled</li>
+          </ul>
+        </div>
+        <div class="screenshot-img">
+          <img src="screenshots/10_pbi_fixer_sempy_builder.png" alt="Sempy Builder catalog with sempy.fabric.list_workspaces selected, Python preview, and Create+open Fabric notebook button" loading="lazy" />
         </div>
       </div>
     </div>
